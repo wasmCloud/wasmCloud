@@ -12,7 +12,7 @@ fn prefix(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
 }
 
 pub fn control_event(lattice_prefix: &str) -> String {
-    format!("{}.{}", EVT_TOPIC_PREFIX, lattice_prefix)
+    format!("{EVT_TOPIC_PREFIX}.{lattice_prefix}")
 }
 
 pub fn provider_auction_subject(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {

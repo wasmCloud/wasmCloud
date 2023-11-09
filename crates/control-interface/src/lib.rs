@@ -4,14 +4,14 @@
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
 
+#![warn(clippy::pedantic)]
+
 mod broker;
 mod otel;
 mod sub_stream;
 mod types;
 
 pub use types::*;
-
-use otel::OtelHeaderInjector;
 
 use core::fmt::{self, Debug};
 use core::time::Duration;
@@ -32,6 +32,7 @@ type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Syn
 pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
+    /// Lattice prefix
     pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
@@ -44,7 +45,7 @@ impl Debug for Client {
             .field("lattice_prefix", &self.lattice_prefix)
             .field("timeout", &self.timeout)
             .field("auction_timeout", &self.auction_timeout)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -61,6 +62,7 @@ pub struct ClientBuilder {
 impl ClientBuilder {
     /// Creates a new client builder using the given client with all configuration values set to
     /// their defaults
+    #[must_use]
     pub fn new(nc: async_nats::Client) -> ClientBuilder {
         ClientBuilder {
             nc,
@@ -73,6 +75,7 @@ impl ClientBuilder {
 
     /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused
     /// with lattice ID/prefix
+    #[must_use]
     pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
             topic_prefix: Some(prefix.into()),
@@ -82,6 +85,7 @@ impl ClientBuilder {
 
     /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will
     /// be set to `default`
+    #[must_use]
     pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
             lattice_prefix: prefix.into(),
@@ -92,18 +96,21 @@ impl ClientBuilder {
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the
     /// default will be 2 seconds
     #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
+    #[must_use]
     pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for control interface requests issued by the client. If not set, the
     /// default will be 2 seconds
+    #[must_use]
     pub fn timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5
     /// seconds
+    #[must_use]
     pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder {
             auction_timeout: timeout,
@@ -112,6 +119,7 @@ impl ClientBuilder {
     }
 
     /// Constructs the client with the given configuration from the builder
+    #[must_use]
     pub fn build(self) -> Client {
         Client {
             nc: self.nc,
@@ -126,6 +134,7 @@ impl ClientBuilder {
 impl Client {
     /// Convenience method for creating a new client with all default settings. This is the same as
     /// calling `ClientBuilder::new(nc).build()`
+    #[must_use]
     pub fn new(nc: async_nats::Client) -> Client {
         ClientBuilder::new(nc).build()
     }
@@ -141,7 +150,7 @@ impl Client {
             timeout,
             self.nc.request_with_headers(
                 subject,
-                OtelHeaderInjector::default_with_span().into(),
+                otel::HeaderInjector::default_with_span().into(),
                 payload.into(),
             ),
         )
@@ -170,7 +179,7 @@ impl Client {
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
+            Err(e) => Err(format!("Did not receive host inventory from target host: {e}").into()),
         }
     }
 
@@ -184,7 +193,7 @@ impl Client {
                 let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
                 Ok(list.claims)
             }
-            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
+            Err(e) => Err(format!("Did not receive claims from lattice: {e}").into()),
         }
     }
 
@@ -284,7 +293,7 @@ impl Client {
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive scale actor acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive scale actor acknowledgement: {e}").into()),
         }
     }
 
@@ -301,12 +310,12 @@ impl Client {
             .nc
             .publish_with_headers(
                 subject,
-                OtelHeaderInjector::default_with_span().into(),
+                otel::HeaderInjector::default_with_span().into(),
                 bytes.into(),
             )
             .await;
         if let Err(e) = resp {
-            Err(format!("Failed to push registry credential map: {}", e).into())
+            Err(format!("Failed to push registry credential map: {e}").into())
         } else {
             Ok(())
         }
@@ -336,7 +345,7 @@ impl Client {
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {e}").into()),
         }
     }
 
@@ -360,7 +369,7 @@ impl Client {
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive remove link acknowledgement: {e}").into()),
         }
     }
 
@@ -376,7 +385,7 @@ impl Client {
                 let list: LinkDefinitionList = json_deserialize(&msg.payload)?;
                 Ok(list.links)
             }
-            Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
+            Err(e) => Err(format!("Did not receive a response to links query: {e}").into()),
         }
     }
 
@@ -407,7 +416,7 @@ impl Client {
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive update actor acknowledgement: {e}").into()),
         }
     }
 
@@ -439,7 +448,7 @@ impl Client {
 
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive start provider acknowledgement: {e}").into()),
         }
     }
 
@@ -468,7 +477,7 @@ impl Client {
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive stop provider acknowledgement: {e}").into()),
         }
     }
 
@@ -493,7 +502,7 @@ impl Client {
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive stop actor acknowledgement: {e}").into()),
         }
     }
 
@@ -517,7 +526,7 @@ impl Client {
 
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive stop host acknowledgement: {}", e).into()),
+            Err(e) => Err(format!("Did not receive stop host acknowledgement: {e}").into()),
         }
     }
 
@@ -532,7 +541,7 @@ impl Client {
             .publish_with_reply_and_headers(
                 subject.clone(),
                 reply,
-                OtelHeaderInjector::default_with_span().into(),
+                otel::HeaderInjector::default_with_span().into(),
                 payload.into(),
             )
             .await?;
@@ -593,6 +602,7 @@ impl Client {
     ///   }
     /// };
     /// ```
+    #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub async fn events_receiver(&self) -> Result<Receiver<Event>> {
         use futures::StreamExt as _;
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
@@ -602,19 +612,16 @@ impl Client {
             .await?;
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                let evt = match json_deserialize::<Event>(&msg.payload) {
-                    Ok(evt) => evt,
-                    Err(_) => {
-                        error!("Object received on event stream was not a CloudEvent");
-                        continue;
-                    }
+                let Ok(evt) = json_deserialize::<Event>(&msg.payload) else {
+                    error!("Object received on event stream was not a CloudEvent");
+                    continue;
                 };
                 trace!("received event: {:?}", evt);
-                // If the channel is disconnected, stop sending events
-                if sender.send(evt).await.is_err() {
+                let Ok(_) = sender.send(evt).await else {
+                    // If the channel is disconnected, stop sending events
                     let _ = sub.unsubscribe().await;
                     break;
-                }
+                };
             }
         });
         Ok(receiver)
@@ -626,12 +633,12 @@ fn json_serialize<T>(item: T) -> Result<Vec<u8>>
 where
     T: Serialize,
 {
-    serde_json::to_vec(&item).map_err(|e| format!("JSON serialization failure: {}", e).into())
+    serde_json::to_vec(&item).map_err(|e| format!("JSON serialization failure: {e}").into())
 }
 
 /// Helper function that deserializes the data and maps the error
 fn json_deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
-    serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
+    serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {e}").into())
 }
 
 #[cfg(test)]
@@ -652,7 +659,7 @@ mod tests {
         let mut receiver = client.events_receiver().await.unwrap();
         tokio::spawn(async move {
             while let Some(evt) = receiver.recv().await {
-                println!("Event received: {:?}", evt);
+                println!("Event received: {evt:?}");
             }
         });
         println!("Listening to Cloud Events for 120 seconds. Then we will quit.");

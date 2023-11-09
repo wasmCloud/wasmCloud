@@ -14,14 +14,14 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
 #[derive(Debug, Default)]
-pub struct OtelHeaderInjector {
+pub struct HeaderInjector {
     inner: HeaderMap,
 }
 
-impl OtelHeaderInjector {
+impl HeaderInjector {
     /// Creates a new injector using the given [`HeaderMap`]
     pub fn new(headers: HeaderMap) -> Self {
-        OtelHeaderInjector { inner: headers }
+        HeaderInjector { inner: headers }
     }
 
     /// Convenience constructor that returns a new injector with the current span context already
@@ -47,26 +47,26 @@ impl OtelHeaderInjector {
     }
 }
 
-impl Injector for OtelHeaderInjector {
+impl Injector for HeaderInjector {
     fn set(&mut self, key: &str, value: String) {
         self.inner.insert(key, value.as_ref());
     }
 }
 
-impl AsRef<HeaderMap> for OtelHeaderInjector {
+impl AsRef<HeaderMap> for HeaderInjector {
     fn as_ref(&self) -> &HeaderMap {
         &self.inner
     }
 }
 
-impl From<HeaderMap> for OtelHeaderInjector {
+impl From<HeaderMap> for HeaderInjector {
     fn from(headers: HeaderMap) -> Self {
-        OtelHeaderInjector::new(headers)
+        HeaderInjector::new(headers)
     }
 }
 
-impl From<OtelHeaderInjector> for HeaderMap {
-    fn from(inj: OtelHeaderInjector) -> Self {
+impl From<HeaderInjector> for HeaderMap {
+    fn from(inj: HeaderInjector) -> Self {
         inj.inner
     }
 }
