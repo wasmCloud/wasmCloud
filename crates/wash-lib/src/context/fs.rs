@@ -1,7 +1,7 @@
 //! Implementations for managing contexts within a directory on a filesystem
 
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -122,19 +122,27 @@ fn initialize_context_dir(context_dir: &Path, default_path: &PathBuf) -> Result<
     }
     // END TEMPORARY (TM)
 
-    let mut default_file =
-        File::create(default_path).context("failed to create default context file")?;
-    default_file
-        .write_all(default_context_name.as_bytes())
-        .context("failed to write to default context file")?;
+    std::fs::write(default_path, default_context_name.as_bytes()).with_context(|| {
+        format!(
+            "failed to write default context to `{}`",
+            default_path.display(),
+        )
+    })?;
 
     let host_config_path = context_dir.join(format!("{default_context_name}.json"));
     if !host_config_path.exists() {
-        let host_config_file =
-            File::create(host_config_path).context("failed to create host_config.json")?;
         let host_config_context = WashContext::named(default_context_name);
-        serde_json::to_writer(host_config_file, &host_config_context)
-            .context("failed to write to host_config.json")?;
+        std::fs::write(
+            &host_config_path,
+            serde_json::to_vec(&host_config_context)
+                .context("failed to serialize host_config context")?,
+        )
+        .with_context(|| {
+            format!(
+                "failed to write host_config context to `{}`",
+                host_config_path.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -152,17 +160,29 @@ impl ContextManager for ContextDir {
     fn set_default_context(&self, name: &str) -> Result<()> {
         self.load_context(name).context("context does not exist")?;
 
-        let mut file =
-            File::create(self.0.join(DEFAULT)).context("failed to write default context")?;
-        file.write_all(name.as_bytes())
-            .context("failed to write default context")
+        let default_path = self.0.join(DEFAULT);
+        std::fs::write(&default_path, name.as_bytes()).with_context(|| {
+            format!(
+                "failed to write default context to `{}`",
+                default_path.display()
+            )
+        })
     }
 
     /// Saves the given context to the context directory. The file will be named `{ctx.name}.json`
     fn save_context(&self, ctx: &WashContext) -> Result<()> {
         let filepath = context_path_from_name(&self.0, &ctx.name);
-        let file = std::fs::File::create(filepath).context("failed to save context")?;
-        serde_json::to_writer(file, ctx).context("failed to save context")
+        std::fs::write(
+            &filepath,
+            serde_json::to_vec(&ctx).context("failed to serialize context")?,
+        )
+        .with_context(|| {
+            format!(
+                "failed to save context `{}` to `{}`",
+                ctx.name,
+                filepath.display()
+            )
+        })
     }
 
     fn delete_context(&self, name: &str) -> Result<()> {
