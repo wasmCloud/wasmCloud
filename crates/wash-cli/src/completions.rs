@@ -1,14 +1,13 @@
 //! Generate shell completion files
 
-use crate::cfg::cfg_dir;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use clap_complete::{generator::generate_to, shells::Shell};
 use wash_lib::cli::CommandOutput;
+use wash_lib::config::cfg_dir;
 
 const TOKEN_FILE: &str = ".completion_suggested";
 const COMPLETION_DOC_URL: &str = "https://github.com/wasmCloud/wash/blob/main/Completions.md";
@@ -45,18 +44,15 @@ pub enum ShellSelection {
 
 /// Displays a message one time after wash install
 pub fn first_run_suggestion() -> Result<Option<String>> {
-    let token = cfg_dir()?.join(TOKEN_FILE);
+    let cfg_dir = cfg_dir()?;
+    let token = cfg_dir.join(TOKEN_FILE);
     if token.is_file() {
         return Ok(None);
     }
-    let _ = std::fs::File::create(token).map_err(|e| {
-        anyhow!(
-            "can't create completion first-run token in {}: {}",
-            // unwrap() ok because cfg_dir worked above
-            cfg_dir().unwrap().display(),
-            e
-        )
-    })?;
+    let _ = std::fs::File::create(token).context(format!(
+        "can't create completion first-run token in {}",
+        cfg_dir.display()
+    ))?;
     Ok(Some(format!(
         "Congratulations on installing wash!  Shell auto-complete is available. {}",
         instructions()

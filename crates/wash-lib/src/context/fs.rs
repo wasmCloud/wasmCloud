@@ -1,15 +1,17 @@
 //! Implementations for managing contexts within a directory on a filesystem
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{ContextManager, DefaultContext, WashContext};
+use crate::config::{cfg_dir, DEFAULT_CTX_DIR_NAME};
 
-const INDEX_JSON: &str = "index.json";
+use super::{ContextManager, WashContext, HOST_CONFIG_NAME};
+
+const DEFAULT: &str = "default";
 
 /// A concrete type representing a path to a context directory
 pub struct ContextDir(PathBuf);
@@ -29,42 +31,64 @@ impl Deref for ContextDir {
 }
 
 impl ContextDir {
-    /// Creates a new ContextDir, erroring if it is unable to access or create the given directory.
-    ///
-    /// This should be the directory and not the file (e.g. "/home/foo/.wash/contexts")
-    pub fn new(path: impl AsRef<Path>) -> Result<ContextDir> {
-        let p = path.as_ref();
-        let exists = p.exists();
-        if exists && !p.is_dir() {
-            anyhow::bail!("{} is not a directory (or cannot be accessed)", p.display())
+    /// Creates a new ContextDir at ~/.wash/contexts
+    pub fn new() -> Result<ContextDir> {
+        Self::new_with_dir(None::<&Path>)
+    }
+
+    /// Creates a new ContextDir at the specified path. If a path is not provided, defaults to ~/.wash/contexts
+    pub fn new_with_dir(path: Option<impl AsRef<Path>>) -> Result<ContextDir> {
+        let path = if let Some(path) = path {
+            path.as_ref().to_path_buf()
+        } else {
+            default_context_dir()?
+        };
+
+        let exists = path.exists();
+        if exists && !path.is_dir() {
+            anyhow::bail!(
+                "{} is not a directory (or cannot be accessed)",
+                path.display()
+            )
         } else if !exists {
-            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(&path).context("failed to create context directory")?;
         }
+
         // Make sure we have the fully qualified path at this point
-        Ok(ContextDir(p.canonicalize()?))
+        let context_dir = path
+            .canonicalize()
+            .context("failed to canonicalize context directory path")?;
+
+        // Initialize the default context if it doesn't exist
+        let default_path = context_dir.join(DEFAULT);
+        if !default_path.exists() {
+            initialize_context_dir(&context_dir, &default_path)?;
+        }
+
+        Ok(ContextDir(context_dir))
     }
 
     /// Returns a list of paths to all contexts in the context directory
     pub fn list_context_paths(&self) -> Result<Vec<PathBuf>> {
-        let paths = std::fs::read_dir(&self.0)?;
+        let entries = std::fs::read_dir(&self.0)?;
 
-        let index = std::ffi::OsString::from(INDEX_JSON);
-        Ok(paths
-            .filter_map(|p| {
-                if let Ok(ctx_entry) = p {
-                    let path = ctx_entry.path();
-                    let ctx_filename = ctx_entry.file_name();
-                    match path.extension().map(|os| os.to_str()).unwrap_or_default() {
-                        // Don't include index in the list of contexts
-                        Some("json") if ctx_filename == index => None,
-                        Some("json") => Some(path),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
+        let paths = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| {
+                path.extension()
+                    .and_then(|os| os.to_str())
+                    .unwrap_or_default()
+                    == "json"
             })
-            .collect())
+            // Filter old index.json files. TODO: remove me after a few releases
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|os| os.to_str())
+                    .unwrap_or_default()
+                    != "index"
+            })
+            .collect();
+        Ok(paths)
     }
 
     /// Returns the full path on disk for the named context
@@ -74,67 +98,93 @@ impl ContextDir {
             .into_iter()
             .find(|p| p.file_stem().unwrap_or_default() == name))
     }
+}
 
-    fn index_path(&self) -> PathBuf {
-        self.0.join(INDEX_JSON)
+fn default_context_dir() -> Result<PathBuf> {
+    Ok(cfg_dir()?.join(DEFAULT_CTX_DIR_NAME))
+}
+
+fn initialize_context_dir(context_dir: &Path, default_path: &PathBuf) -> Result<()> {
+    let mut default_context_name = HOST_CONFIG_NAME.to_string();
+
+    // TEMPORARY (TM): look for and parse existing index.json, to preserve backwards compatibility
+    if let Ok(index_file) = File::open(context_dir.join("index.json")) {
+        #[derive(serde::Deserialize)]
+        struct DefaultContext {
+            name: String,
+        }
+
+        if let Ok(old_default_context) =
+            serde_json::from_reader::<_, DefaultContext>(BufReader::new(index_file))
+        {
+            default_context_name = old_default_context.name;
+        }
     }
+    // END TEMPORARY (TM)
+
+    let mut default_file =
+        File::create(default_path).context("failed to create default context file")?;
+    default_file
+        .write_all(default_context_name.as_bytes())
+        .context("failed to write to default context file")?;
+
+    let host_config_path = context_dir.join(format!("{default_context_name}.json"));
+    if !host_config_path.exists() {
+        let host_config_file =
+            File::create(host_config_path).context("failed to create host_config.json")?;
+        let host_config_context = WashContext::named(default_context_name);
+        serde_json::to_writer(host_config_file, &host_config_context)
+            .context("failed to write to host_config.json")?;
+    }
+
+    Ok(())
 }
 
 impl ContextManager for ContextDir {
     /// Returns the name of the currently set default context
-    fn default_context(&self) -> Result<Option<String>> {
-        let raw = match std::fs::read(self.index_path()) {
-            Ok(b) => b,
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => return Ok(None),
-            Err(e) => return Err(anyhow::Error::from(e)),
-        };
-        let index: DefaultContext = serde_json::from_slice(&raw)?;
-        Ok(Some(index.name.to_owned()))
+    fn default_context_name(&self) -> Result<String> {
+        let raw = std::fs::read(self.0.join(DEFAULT)).context("failed to read default context")?;
+        let name = std::str::from_utf8(&raw).context("failed to read default context")?;
+        Ok(name.to_string())
     }
 
-    /// Sets the current default context to the given name. Will error if it doesn't exist
+    /// Sets the current default context to the given name
     fn set_default_context(&self, name: &str) -> Result<()> {
-        let ctx = self
-            .load_context(name)
-            .context(format!("Couldn't find context with the name of {name}"))?;
+        self.load_context(name).context("context does not exist")?;
 
-        let file = File::create(self.index_path())?;
-        serde_json::to_writer(file, &ctx).map_err(anyhow::Error::from)
+        let mut file =
+            File::create(self.0.join(DEFAULT)).context("failed to write default context")?;
+        file.write_all(name.as_bytes())
+            .context("failed to write default context")
     }
 
     /// Saves the given context to the context directory. The file will be named `{ctx.name}.json`
     fn save_context(&self, ctx: &WashContext) -> Result<()> {
         let filepath = context_path_from_name(&self.0, &ctx.name);
-        let file = std::fs::File::create(filepath)?;
-        serde_json::to_writer(file, ctx).map_err(anyhow::Error::from)
+        let file = std::fs::File::create(filepath).context("failed to save context")?;
+        serde_json::to_writer(file, ctx).context("failed to save context")
     }
 
     fn delete_context(&self, name: &str) -> Result<()> {
         let path = context_path_from_name(&self.0, name);
-        std::fs::remove_file(path)?;
-        let current_context = match self.default_context() {
-            Ok(c) => c.unwrap_or_default(),
-            // This isn't an error we care about. If for some reason we fail, it is fine
-            Err(_) => return Ok(()),
-        };
-        if current_context == name {
-            // Once again, not the end of the world if this fails, so ignore the error
-            let _ = std::fs::remove_file(self.index_path());
+        std::fs::remove_file(path).context("failed to remove context")?;
+        if self.default_context_name()? == name {
+            self.set_default_context(HOST_CONFIG_NAME)?; // reset default
         }
         Ok(())
     }
 
     /// Loads the currently set default context
     fn load_default_context(&self) -> Result<WashContext> {
-        let context = self
-            .default_context()?
-            .ok_or_else(|| anyhow::anyhow!("No default context currently set"))?;
-        load_context(context_path_from_name(&self.0, &context))
+        self.load_context(&self.default_context_name()?)
     }
 
-    /// Loads the named context from disk and deserializes it
+    /// Loads the named context from disk
     fn load_context(&self, name: &str) -> Result<WashContext> {
-        load_context(context_path_from_name(&self.0, name))
+        let path = context_path_from_name(&self.0, name);
+        let file = std::fs::File::open(path).context("failed to open context file")?;
+        let reader = BufReader::new(file);
+        serde_json::from_reader(reader).context("failed to parse context")
     }
 
     fn list_contexts(&self) -> Result<Vec<String>> {
@@ -152,13 +202,6 @@ impl ContextManager for ContextDir {
     }
 }
 
-/// Loads the given file from disk and attempts to deserialize it as a wash context
-pub fn load_context(path: impl AsRef<Path>) -> Result<WashContext> {
-    let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
-    serde_json::from_reader(reader).map_err(anyhow::Error::from)
-}
-
 /// Helper function to properly format the path to a context JSON file
 fn context_path_from_name(dir: impl AsRef<Path>, name: &str) -> PathBuf {
     dir.as_ref().join(format!("{name}.json"))
@@ -172,8 +215,8 @@ mod test {
     fn round_trip_happy_path() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let contexts_path = tempdir.path().join("contexts");
-        let ctx_dir =
-            ContextDir::new(&contexts_path).expect("Should be able to create context dir");
+        let ctx_dir = ContextDir::new_with_dir(Some(&contexts_path))
+            .expect("Should be able to create context dir");
 
         assert!(
             contexts_path.exists() && contexts_path.is_dir(),
@@ -190,22 +233,22 @@ mod test {
             .save_context(&orig_ctx)
             .expect("Should be able to save a context to disk");
 
-        let mut readdir = contexts_path.read_dir().unwrap();
-        let ctx_path = readdir
-            .next()
-            .expect("Should be at least 1 entry in directory")
+        let filenames: std::collections::HashSet<String> = contexts_path
+            .read_dir()
             .unwrap()
-            .path();
+            .filter_map(|entry| entry.unwrap().file_name().to_os_string().into_string().ok())
+            .collect();
+        let expected_filenames: std::collections::HashSet<String> = vec![
+            "default".to_string(),
+            "host_config.json".to_string(),
+            "happy_path.json".to_string(),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(
-            ctx_path,
-            contexts_path.join("happy_path.json"),
+            filenames, expected_filenames,
             "Newly created context should exist"
-        );
-
-        assert!(
-            readdir.next().is_none(),
-            "Only one path should exist in the directory"
         );
 
         // Now load the context from disk and compare
@@ -226,8 +269,8 @@ mod test {
 
         assert_eq!(
             contexts_path.read_dir().unwrap().count(),
-            2,
-            "Directory should have only 2 entries"
+            4,
+            "Directory should have 4 entries"
         );
 
         ctx_dir
@@ -235,9 +278,8 @@ mod test {
             .expect("Should be able to set default context");
         assert_eq!(
             ctx_dir
-                .default_context()
-                .expect("Should be able to load default context")
-                .unwrap(),
+                .default_context_name()
+                .expect("Should be able to load default context"),
             "happy_gilmore",
             "Default context should be correct"
         );
@@ -253,32 +295,23 @@ mod test {
 
         assert_eq!(
             contexts_path.read_dir().unwrap().count(),
-            3,
+            4,
             "Directory should have a new entry from the default context"
         );
 
         assert!(
-            contexts_path.join("index.json").exists(),
-            "index.json file should exist in directory after setting default context"
-        );
-
-        let ctx_from_index_json = load_context(contexts_path.join("index.json"))
-            .expect("Should be able to load index.json file");
-
-        assert!(
-            ctx_from_index_json.name == "happy_gilmore"
-                && ctx_from_index_json.lattice_prefix == "baz",
-            "Should have loaded the correct context from index.json"
+            contexts_path.join("default").exists(),
+            "default file should exist in directory after setting default context"
         );
 
         // List the contexts
         let list = ctx_dir
             .list_contexts()
             .expect("Should be able to list contexts");
-        assert_eq!(list.len(), 2, "Should only list 2 contexts");
+        assert_eq!(list.len(), 3, "Should only list 3 contexts");
         for ctx in list.into_iter() {
             assert!(
-                ctx == "happy_path" || ctx == "happy_gilmore",
+                ctx == "happy_path" || ctx == "happy_gilmore" || ctx == "host_config",
                 "Should have found only the contexts we created"
             );
         }
@@ -289,25 +322,10 @@ mod test {
 
         assert_eq!(
             ctx_dir
-                .default_context()
-                .expect("Should be able to load default context")
-                .unwrap(),
+                .default_context_name()
+                .expect("Should be able to load default context"),
             "happy_path",
             "Default context should be correct"
-        );
-
-        assert!(
-            contexts_path.join("index.json").exists(),
-            "index.json file should exist in directory after setting default context"
-        );
-
-        let ctx_from_index_json = load_context(contexts_path.join("index.json"))
-            .expect("Should be able to load index.json file");
-
-        assert!(
-            ctx_from_index_json.name == "happy_path"
-                && ctx_from_index_json.lattice_prefix == "foobar",
-            "Should have loaded the correct context from index.json"
         );
 
         // Delete a context
@@ -316,10 +334,13 @@ mod test {
             .expect("Should be able to delete context");
 
         assert!(
-            !contexts_path
-                .read_dir()
+            !contexts_path.read_dir().unwrap().any(|p| p
                 .unwrap()
-                .any(|p| p.unwrap().path() == ctx_path),
+                .path()
+                .as_os_str()
+                .to_str()
+                .unwrap()
+                .contains("happy_path")),
             "Context should have been removed from directory"
         );
     }
@@ -327,11 +348,12 @@ mod test {
     #[test]
     fn load_non_existent_contexts() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
-        let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
+        let ctx_dir =
+            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         ctx_dir
             .load_default_context()
-            .expect_err("Loading a non-existent default context should error");
+            .expect("The default context should be automatically created");
 
         ctx_dir
             .load_context("idontexist")
@@ -341,13 +363,14 @@ mod test {
     #[test]
     fn default_context_with_no_settings() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
-        let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
+        let ctx_dir =
+            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
-        assert!(
+        assert_eq!(
             ctx_dir
-                .default_context()
-                .expect("Should be able to get a default context with nothing set")
-                .is_none(),
+                .default_context_name()
+                .expect("Should be able to get a default context with nothing set"),
+            "host_config",
             "Unset context should return none",
         );
 
@@ -366,11 +389,12 @@ mod test {
             PRE_REFACTOR_CONTEXT,
         )
         .expect("Unable to write test data to disk");
-        let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
+        let ctx_dir =
+            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         let ctx = ctx_dir
             .load_context("host_config")
-            .expect("Should not be able to load a pre-existing context");
+            .expect("Should be able to load a pre-existing context");
 
         assert!(
             ctx.name == "host_config" && ctx.ctl_port == 5893,
@@ -381,7 +405,8 @@ mod test {
     #[test]
     fn delete_default_context() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
-        let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
+        let ctx_dir =
+            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         let mut ctx = WashContext {
             name: "deleteme".to_string(),
@@ -402,21 +427,26 @@ mod test {
 
         assert_eq!(
             tempdir.path().read_dir().unwrap().count(),
-            3,
-            "Directory should have 3 entries"
+            4,
+            "Directory should have 4 entries"
         );
 
         ctx_dir
             .delete_context("deleteme")
             .expect("Should be able to delete context");
 
-        assert!(
-            !tempdir
-                .path()
-                .read_dir()
-                .unwrap()
-                .any(|r| r.unwrap().path() == ctx_dir.index_path()),
-            "Index file should no longer exist"
+        assert_eq!(
+            tempdir.path().read_dir().unwrap().count(),
+            3,
+            "Directory should have 3 entries"
+        );
+
+        assert_eq!(
+            ctx_dir
+                .default_context_name()
+                .expect("Should be able to get default context"),
+            "host_config",
+            "default context should be reset"
         );
     }
 }

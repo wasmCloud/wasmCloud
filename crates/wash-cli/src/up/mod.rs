@@ -22,6 +22,8 @@ use tokio::{
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::downloads_dir;
 use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
+use wash_lib::context::fs::ContextDir;
+use wash_lib::context::ContextManager;
 use wash_lib::start::ensure_wadm;
 use wash_lib::start::find_wasmcloud_binary;
 use wash_lib::start::nats_pid_path;
@@ -296,7 +298,11 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     create_dir_all(&install_dir).await?;
     let spinner = Spinner::new(&output_kind)?;
 
-    // Ensure we use the open dashboard port and the supplied NATS host/port if no overrides were supplied
+    let ctx = ContextDir::new()?
+        .load_default_context()
+        .context("failed to load context")?;
+
+    // Ensure we use the the supplied NATS host/port if no overrides were supplied
     let wasmcloud_opts = WasmcloudOpts {
         ctl_host: Some(
             cmd.wasmcloud_opts

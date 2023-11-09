@@ -22,14 +22,10 @@ use serde_json::json;
 
 use crate::{
     config::{
-        cfg_dir, context_dir, WashConnectionOptions, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
+        cfg_dir, WashConnectionOptions, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
         DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
     },
-    context::{
-        default_timeout_ms, ensure_host_config_context,
-        fs::{load_context, ContextDir},
-        ContextManager,
-    },
+    context::{default_timeout_ms, fs::ContextDir, ContextManager},
     keys::{
         fs::{read_key, KeyDir},
         KeyManager,
@@ -185,9 +181,9 @@ pub struct CliConnectionOpts {
     )]
     pub timeout_ms: u64,
 
-    /// Path to a context with values to use for CTL connection and authentication
+    /// Name of a context to use for CTL connection and authentication
     #[clap(long = "context")]
-    pub context: Option<PathBuf>,
+    pub context: Option<String>,
 }
 
 impl Default for CliConnectionOpts {
@@ -223,14 +219,11 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
         }: CliConnectionOpts,
     ) -> Result<WashConnectionOptions> {
         // Attempt to load a context, falling back on the default if not supplied
-        let ctx = if let Some(context) = context {
-            Some(load_context(context)?)
-        } else if let Ok(ctx_dir) = context_dir(None) {
-            let ctx_dir = ContextDir::new(ctx_dir)?;
-            ensure_host_config_context(&ctx_dir)?;
-            Some(ctx_dir.load_default_context()?)
+        let ctx_dir = ContextDir::new()?;
+        let ctx = if let Some(context_name) = context {
+            Some(ctx_dir.load_context(&context_name)?)
         } else {
-            None
+            ctx_dir.load_default_context().ok()
         };
 
         Ok(WashConnectionOptions {
@@ -437,11 +430,11 @@ mod test {
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
         assert_eq!(wash_opts.get_lattice_prefix(), "hal9000".to_string());
 
-        let context_dir = ContextDir::new(
+        let context_dir = ContextDir::new_with_dir(Some(
             tempdir
                 .path()
                 .join(format!("{WASH_DIR}/{DEFAULT_CTX_DIR_NAME}")),
-        )?;
+        ))?;
 
         // when opts.lattice_prefix.is_none() && opts.context.is_some(), use the lattice_prefix from the specified context...
         context_dir.save_context(&WashContext {
@@ -449,9 +442,8 @@ mod test {
             lattice_prefix: "iambatman".to_string(),
             ..Default::default()
         })?;
-        let context_file = context_dir.get_context_path("foo")?.unwrap();
         let cli_opts = CliConnectionOpts {
-            context: Some(context_file.clone()),
+            context: Some("foo".to_string()),
             lattice_prefix: None,
             ..Default::default()
         };

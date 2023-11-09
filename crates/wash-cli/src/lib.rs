@@ -2,7 +2,6 @@ pub mod app;
 pub mod appearance;
 pub mod build;
 pub mod call;
-pub mod cfg;
 pub mod common;
 pub mod completions;
 pub mod ctl;
