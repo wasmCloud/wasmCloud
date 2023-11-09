@@ -6,37 +6,11 @@
 
 use async_nats::header::HeaderMap;
 use opentelemetry::{
-    propagation::{Extractor, Injector, TextMapPropagator},
+    propagation::{Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
 };
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-/// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
-#[derive(Debug)]
-pub struct OtelHeaderExtractor<'a> {
-    inner: &'a HeaderMap,
-}
-
-impl<'a> Extractor for OtelHeaderExtractor<'a> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).map(|s| s.as_str())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.inner
-            .iter()
-            // The underlying type is a string and this should never fail, but we unwrap to an empty string anyway
-            .map(|(k, _)| std::str::from_utf8(k.as_ref()).unwrap_or_default())
-            .collect()
-    }
-}
-
-impl<'a> AsRef<HeaderMap> for OtelHeaderExtractor<'a> {
-    fn as_ref(&self) -> &'a HeaderMap {
-        self.inner
-    }
-}
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
 #[derive(Debug, Default)]
