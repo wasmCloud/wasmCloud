@@ -6,29 +6,16 @@ use std::io::{IsTerminal, StderrLock, Write};
 
 use anyhow::Context;
 use once_cell::sync::OnceCell;
-#[cfg(feature = "otel")]
-use opentelemetry::sdk::{
-    trace::{self, RandomIdGenerator, Sampler, Tracer},
-    Resource,
-};
-#[cfg(feature = "otel")]
-use opentelemetry::trace::TraceError;
-#[cfg(feature = "otel")]
-use opentelemetry_otlp::{Protocol, WithExportConfig};
 use tracing::{Event, Subscriber};
-use tracing_subscriber::fmt::{
-    format::{DefaultFields, Format, Full, Json, JsonFields, Writer},
-    time::SystemTime,
-    FmtContext, FormatEvent, FormatFields,
-};
-use tracing_subscriber::{
-    filter::LevelFilter,
-    layer::{Layered, SubscriberExt},
-    registry::LookupSpan,
-    EnvFilter, Layer, Registry,
-};
-
-use wasmcloud_core::{logging::Level, OtelConfig};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
+use tracing_subscriber::fmt::time::SystemTime;
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::layer::{Layered, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{EnvFilter, Layer, Registry};
+use wasmcloud_core::logging::Level;
+use wasmcloud_core::OtelConfig;
 
 struct LockedWriter<'a> {
     stderr: StderrLock<'a>,
@@ -213,30 +200,33 @@ pub fn configure_tracing(
 }
 
 #[cfg(feature = "otel")]
-fn get_tracer(mut tracing_endpoint: String, service_name: String) -> Result<Tracer, TraceError> {
+fn get_tracer(
+    mut tracing_endpoint: String,
+    service_name: String,
+) -> Result<opentelemetry::sdk::trace::Tracer, opentelemetry::trace::TraceError> {
+    use opentelemetry_otlp::WithExportConfig;
+
     if !tracing_endpoint.ends_with(TRACING_PATH) {
         tracing_endpoint.push_str(TRACING_PATH)
     };
-
     opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .http()
                 .with_endpoint(tracing_endpoint)
-                .with_protocol(Protocol::HttpBinary),
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary),
         )
         .with_trace_config(
-            trace::config()
-                .with_sampler(Sampler::AlwaysOn)
-                .with_id_generator(RandomIdGenerator::default())
+            opentelemetry::sdk::trace::config()
+                .with_sampler(opentelemetry::sdk::trace::Sampler::AlwaysOn)
+                .with_id_generator(opentelemetry::sdk::trace::RandomIdGenerator::default())
                 .with_max_events_per_span(64)
                 .with_max_attributes_per_span(16)
                 .with_max_events_per_span(16)
-                .with_resource(Resource::new(vec![opentelemetry::KeyValue::new(
-                    "service.name",
-                    service_name,
-                )])),
+                .with_resource(opentelemetry::sdk::Resource::new(vec![
+                    opentelemetry::KeyValue::new("service.name", service_name),
+                ])),
         )
         .install_batch(opentelemetry::runtime::Tokio)
 }
