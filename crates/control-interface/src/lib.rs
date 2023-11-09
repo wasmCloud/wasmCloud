@@ -3,14 +3,6 @@
 //! This library provides a client API for consuming the wasmCloud control interface over a
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
-use std::fmt::Debug;
-use std::{collections::HashMap, time::Duration};
-
-use cloudevents::event::Event;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sub_stream::collect_timeout;
-use tokio::sync::mpsc::Receiver;
-use tracing::{debug, error, instrument, trace};
 
 mod broker;
 mod otel;
@@ -19,7 +11,19 @@ mod types;
 
 pub use types::*;
 
-use crate::otel::OtelHeaderInjector;
+use otel::OtelHeaderInjector;
+
+use core::fmt::{self, Debug};
+use core::time::Duration;
+
+use std::collections::HashMap;
+
+use cloudevents::event::Event;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use sub_stream::collect_timeout;
+use tokio::sync::mpsc::Receiver;
+use tracing::{debug, error, instrument, trace};
 
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -34,7 +38,7 @@ pub struct Client {
 }
 
 impl Debug for Client {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("topic_prefix", &self.topic_prefix)
             .field("lattice_prefix", &self.lattice_prefix)
@@ -618,9 +622,7 @@ impl Client {
 }
 
 /// Helper function that serializes the data and maps the error
-fn json_serialize<T>(
-    item: T,
-) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+fn json_serialize<T>(item: T) -> Result<Vec<u8>>
 where
     T: Serialize,
 {
@@ -628,16 +630,13 @@ where
 }
 
 /// Helper function that deserializes the data and maps the error
-fn json_deserialize<'de, T: Deserialize<'de>>(
-    buf: &'de [u8],
-) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
+fn json_deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
     serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     /// Note: This test is a means of manually watching the event stream as CloudEvents are received
     /// It does not assert functionality, and so we've marked it as ignore to ensure it's not run by default
@@ -657,6 +656,6 @@ mod tests {
             }
         });
         println!("Listening to Cloud Events for 120 seconds. Then we will quit.");
-        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        tokio::time::sleep(Duration::from_secs(120)).await;
     }
 }
