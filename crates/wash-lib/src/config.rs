@@ -26,7 +26,8 @@ pub fn cfg_dir() -> Result<PathBuf> {
     let wash = home.join(WASH_DIR);
 
     if !wash.exists() {
-        fs::create_dir_all(&wash).context("failed to create .wash directory")?;
+        fs::create_dir_all(&wash)
+            .with_context(|| format!("failed to create directory `{}`", wash.display()))?;
     }
 
     Ok(wash)
