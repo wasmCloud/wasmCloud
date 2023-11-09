@@ -430,7 +430,7 @@ mod test {
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
         assert_eq!(wash_opts.get_lattice_prefix(), "hal9000".to_string());
 
-        let context_dir = ContextDir::new_with_dir(Some(
+        let context_dir = ContextDir::from_dir(Some(
             tempdir
                 .path()
                 .join(format!("{WASH_DIR}/{DEFAULT_CTX_DIR_NAME}")),
