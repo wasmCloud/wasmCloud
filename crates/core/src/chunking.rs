@@ -41,6 +41,7 @@ pub struct ChunkEndpoint {
 }
 
 impl ChunkEndpoint {
+    #[must_use]
     pub fn new(lattice: &str, js: jetstream::Context) -> Self {
         ChunkEndpoint {
             lattice: lattice.to_string(),
@@ -86,6 +87,7 @@ impl ChunkEndpoint {
     }
 
     /// load response after de-chunking
+    #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub async fn get_unchunkified_response(&self, inv_id: &str) -> anyhow::Result<Vec<u8>> {
         // responses are stored in the object store with '-r' suffix on the object name
         self.get_unchunkified(&format!("{inv_id}-r")).await
@@ -111,6 +113,7 @@ impl ChunkEndpoint {
     }
 
     /// chunkify a portion of a response
+    #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub async fn chunkify_response(
         &self,
         inv_id: &str,
