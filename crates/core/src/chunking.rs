@@ -15,14 +15,12 @@
 //
 // I will always be chunkified ...
 
-use std::{marker::Unpin, time::Duration};
+use std::marker::Unpin;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
-use async_nats::jetstream::{
-    self,
-    object_store::{Config, ObjectStore},
-    Context as JetstreamContext,
-};
+use async_nats::jetstream;
+use async_nats::jetstream::object_store::{self, ObjectStore};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument};
 
@@ -39,11 +37,11 @@ pub const CHUNK_THRESHOLD_BYTES: usize = 1024; // 1KB
 #[derive(Clone, Debug)]
 pub struct ChunkEndpoint {
     lattice: String,
-    js: JetstreamContext,
+    js: jetstream::Context,
 }
 
 impl ChunkEndpoint {
-    pub fn new(lattice: &str, js: JetstreamContext) -> Self {
+    pub fn new(lattice: &str, js: jetstream::Context) -> Self {
         ChunkEndpoint {
             lattice: lattice.to_string(),
             js,
@@ -127,7 +125,7 @@ impl ChunkEndpoint {
             Ok(store) => store,
             Err(_) => self
                 .js
-                .create_object_store(Config {
+                .create_object_store(object_store::Config {
                     bucket: self.lattice.clone(),
                     ..Default::default()
                 })

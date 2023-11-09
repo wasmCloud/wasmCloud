@@ -1,6 +1,8 @@
 pub mod chunking;
 pub mod logging;
 
+use logging::Level;
+
 use core::fmt;
 
 use std::collections::HashMap;
@@ -12,8 +14,6 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
-
-use crate::logging::Level;
 
 /// List of linked actors for a provider
 pub type ActorLinks = Vec<LinkDefinition>;
