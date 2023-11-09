@@ -1,3 +1,6 @@
+#![warn(clippy::pedantic)]
+#![forbid(clippy::unwrap_used)]
+
 pub mod chunking;
 pub mod logging;
 
@@ -9,11 +12,13 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::{KeyPair, KeyPairType};
-use serde::{ser::SerializeMap, Deserialize, Serialize, Serializer};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 use uuid::Uuid;
-use wascap::{jwt, prelude::Claims};
+use wascap::jwt;
+use wascap::prelude::Claims;
 
 /// List of linked actors for a provider
 pub type ActorLinks = Vec<LinkDefinition>;
@@ -147,6 +152,7 @@ impl Invocation {
     /// * `target` - the target of the invocation
     /// * `operation` - the operation being invoked
     /// * `msg` - the raw bytes of the invocation
+    #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub fn new(
         cluster_key: &KeyPair,
         host_key: &KeyPair,
@@ -189,16 +195,19 @@ impl Invocation {
     }
 
     /// A fully-qualified URL indicating the origin of the invocation
+    #[must_use]
     pub fn origin_url(&self) -> String {
         self.origin.url()
     }
 
     /// A fully-qualified URL indicating the target of the invocation
+    #[must_use]
     pub fn target_url(&self) -> String {
         format!("{}/{}", self.target.url(), self.operation)
     }
 
     /// The hash of the invocation's target, origin, and raw bytes
+    #[must_use]
     pub fn hash(&self) -> String {
         invocation_hash(
             self.target_url(),
@@ -210,6 +219,7 @@ impl Invocation {
 
     /// Validates the current invocation to ensure that the invocation claims have
     /// not been forged, are not expired, etc
+    #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub fn validate_antiforgery(&self, valid_issuers: &[String]) -> anyhow::Result<()> {
         match KeyPair::from_public_key(&self.host_id) {
             Ok(kp) if kp.key_pair_type() == KeyPairType::Server => (),
@@ -330,6 +340,7 @@ pub struct WasmCloudEntity {
 
 impl WasmCloudEntity {
     /// The URL of the entity
+    #[must_use]
     pub fn url(&self) -> String {
         if self.public_key.to_uppercase().starts_with('M') {
             format!("wasmbus://{}", self.public_key)
@@ -347,11 +358,13 @@ impl WasmCloudEntity {
     }
 
     /// Returns true if this entity refers to an actor
+    #[must_use]
     pub fn is_actor(&self) -> bool {
         self.link_name.is_empty() || self.contract_id.is_empty()
     }
 
     /// Returns true if this entity refers to a provider
+    #[must_use]
     pub fn is_provider(&self) -> bool {
         !self.is_actor()
     }
@@ -378,7 +391,7 @@ where
     T: Serialize,
 {
     let mut seq = serializer.serialize_map(Some(map.len()))?;
-    for (key, val) in map.iter() {
+    for (key, val) in map {
         seq.serialize_entry(key, val)?;
     }
     seq.end()
