@@ -1,12 +1,15 @@
 use core::time::Duration;
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use clap::Args;
 use log::{debug, error};
+use serde::Deserialize;
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use wash_lib::cli::CommandOutput;
 use wash_lib::config::{context_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
 use wash_lib::context::{
@@ -17,12 +20,81 @@ use wash_lib::context::{
 use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
 use wasmcloud_provider_sdk::rpc_client::RpcClient;
-use wasmcloud_test_util::testing::TestResults;
 
 use crate::util::{
     default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
     nats_client_from_opts,
 };
+
+#[derive(Deserialize)]
+struct TestResult {
+    /// test case name
+    #[serde(default)]
+    pub name: String,
+    /// true if the test case passed
+    #[serde(default)]
+    pub passed: bool,
+    /// (optional) more detailed results, if available.
+    /// data is snap-compressed json
+    /// failed tests should have a firsts-level key called "error".
+    #[serde(rename = "snapData")]
+    #[serde(with = "serde_bytes")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snap_data: Option<Vec<u8>>,
+}
+
+/// Prints test results (with handy color!) to the terminal
+// NOTE(thomastaylor312): We are unwrapping all writing IO errors (which matches the behavior in the
+// println! macro) and swallowing the color change errors as there isn't much we can do if they fail
+// (and a color change isn't the end of the world). We may want to update this function in the
+// future to return an io::Result
+fn print_test_results(results: &[TestResult]) {
+    // structure for deserializing error results
+    #[derive(Deserialize)]
+    struct ErrorReport {
+        error: String,
+    }
+
+    let mut passed = 0u32;
+    let total = results.len() as u32;
+    // TODO(thomastaylor312): We can probably improve this a bit by using the `atty` crate to choose
+    // whether or not to colorize the text
+    let mut stdout = StandardStream::stdout(ColorChoice::Always);
+    let mut green = ColorSpec::new();
+    green.set_fg(Some(Color::Green));
+    let mut red = ColorSpec::new();
+    red.set_fg(Some(Color::Red));
+    for test in results.iter() {
+        if test.passed {
+            let _ = stdout.set_color(&green);
+            write!(&mut stdout, "Pass").unwrap();
+            let _ = stdout.reset();
+            writeln!(&mut stdout, ": {}", test.name).unwrap();
+            passed += 1;
+        } else {
+            let error_msg = test
+                .snap_data
+                .as_ref()
+                .map(|bytes| {
+                    serde_json::from_slice::<ErrorReport>(bytes)
+                        .map(|r| r.error)
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            let _ = stdout.set_color(&red);
+            write!(&mut stdout, "Fail").unwrap();
+            let _ = stdout.reset();
+            writeln!(&mut stdout, ": {}", error_msg).unwrap();
+        }
+    }
+    let status_color = if passed == total { green } else { red };
+    write!(&mut stdout, "Test results: ").unwrap();
+    let _ = stdout.set_color(&status_color);
+    writeln!(&mut stdout, "{}/{} Passed", passed, total).unwrap();
+    // Reset the color settings back to what the user configured
+    let _ = stdout.set_color(&ColorSpec::new());
+    writeln!(&mut stdout).unwrap();
+}
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
 const WASH_ORIGIN_KEY: &str = "__WASH__";
@@ -211,14 +283,15 @@ pub fn call_output(
     }
     if is_test {
         // try to decode it as TestResults, otherwise dump as text
-        let test_results = rmp_serde::from_slice::<TestResults>(&response).with_context(|| {
-            format!(
-                "Error interpreting response as TestResults. Response: {}",
-                String::from_utf8_lossy(&response)
-            )
-        })?;
+        let test_results: Vec<TestResult> =
+            rmp_serde::from_slice(&response).with_context(|| {
+                format!(
+                    "Error interpreting response as TestResults. Response: {}",
+                    String::from_utf8_lossy(&response)
+                )
+            })?;
 
-        wasmcloud_test_util::cli::print_test_results(&test_results);
+        print_test_results(&test_results);
         return Ok(CommandOutput::new(
             "",
             HashMap::<String, serde_json::Value>::new(),

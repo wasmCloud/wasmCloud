@@ -145,6 +145,7 @@ syn = { version = "2", default-features = false }
 sysinfo = { version = "0.27", default-features = false }
 tempfile = { version = "3", default-features = false }
 term-table = { version = "1", default-features = false }
+termcolor = { version = "1", default-features = false }
 test-actors = { version = "0", path = "./tests/actors", default-features = false }
 test-case = { version = "3", default-features = false }
 test-providers = { version = "0", path = "./tests/providers", default-features = false }
@@ -182,7 +183,6 @@ wasmcloud-host = { version = "0", path = "./crates/host", default-features = fal
 wasmcloud-provider-sdk = { version = "0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { version = "0", path = "./crates/provider-wit-bindgen", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
-wasmcloud-test-util = { version = "0.10", default-features = false }
 wasmcloud-tracing = { version = "0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.116", default-features = false }
 wasmtime = { version = "14", git = "https://github.com/rvolosatovs/wasmtime", branch = "release-14.0.0", default-features = false }
