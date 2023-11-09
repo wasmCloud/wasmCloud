@@ -49,10 +49,12 @@ pub fn first_run_suggestion() -> Result<Option<String>> {
     if token.is_file() {
         return Ok(None);
     }
-    let _ = std::fs::File::create(token).context(format!(
-        "can't create completion first-run token in {}",
-        cfg_dir.display()
-    ))?;
+    let _ = std::fs::File::create(token).with_context(|| {
+        format!(
+            "can't create completion first-run token in {}",
+            cfg_dir.display()
+        )
+    })?;
     Ok(Some(format!(
         "Congratulations on installing wash!  Shell auto-complete is available. {}",
         instructions()
