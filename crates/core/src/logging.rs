@@ -1,4 +1,5 @@
 // This would be the generated types from wasi logging when we generate it
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
