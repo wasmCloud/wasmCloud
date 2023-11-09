@@ -172,7 +172,6 @@ wash-lib = { version = "0", path = "./crates/wash-lib", default-features = false
 wasi-common = { version = "14", git = "https://github.com/rvolosatovs/wasmtime", branch = "release-14.0.0", default-features = false }
 wasm-encoder = { version = "0.36", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
-wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
 wasmcloud-actor-macros = { version = "0", path = "./crates/actor/macros", default-features = false }
 wasmcloud-compat = { version = "0", path = "./crates/compat", default-features = false }
