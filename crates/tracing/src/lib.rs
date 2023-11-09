@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 #[cfg(feature = "otel")]
 pub mod context;
 
@@ -111,6 +113,7 @@ pub fn configure_tracing(
 }
 
 #[cfg(feature = "otel")]
+#[allow(clippy::missing_errors_doc)] // TODO: Document errors
 pub fn configure_tracing(
     service_name: String,
     otel_config: &OtelConfig,
@@ -128,26 +131,20 @@ pub fn configure_tracing(
         .traces_exporter
         .as_ref()
         .map(|s| s.to_ascii_lowercase());
-
-    let maybe_tracer = match exporter {
-        Some(exporter) if exporter == "otlp" => {
-            let tracing_endpoint = otel_config.exporter_otlp_endpoint.clone();
-
-            match tracing_endpoint {
-                Some(endpoint) => Some(get_tracer(endpoint, service_name)),
-                None => {
-                    eprintln!(
-                        "OTEL exporter endpoint not set, defaulting to '{DEFAULT_TRACING_ENDPOINT}'"
-                    );
-                    Some(get_tracer(
-                        DEFAULT_TRACING_ENDPOINT.to_string(),
-                        service_name,
-                    ))
-                }
-            }
+    let maybe_tracer = match exporter.as_deref() {
+        Some("otlp") => {
+            let endpoint = if let Some(ref endpoint) = otel_config.exporter_otlp_endpoint {
+                endpoint.clone()
+            } else {
+                eprintln!(
+                    "OTEL exporter endpoint not set, defaulting to '{DEFAULT_TRACING_ENDPOINT}'"
+                );
+                DEFAULT_TRACING_ENDPOINT.to_string()
+            };
+            Some(get_tracer(endpoint, service_name))
         }
         Some(exporter) => {
-            eprintln!("unsupported OTEL exporter: '{}'", exporter);
+            eprintln!("unsupported OTEL exporter: '{exporter}'");
             None
         }
         None => None,
@@ -207,7 +204,7 @@ fn get_tracer(
     use opentelemetry_otlp::WithExportConfig;
 
     if !tracing_endpoint.ends_with(TRACING_PATH) {
-        tracing_endpoint.push_str(TRACING_PATH)
+        tracing_endpoint.push_str(TRACING_PATH);
     };
     opentelemetry_otlp::new_pipeline()
         .tracing()
@@ -266,7 +263,7 @@ fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
         if let Ok(rust_log) = env::var("RUST_LOG") {
             match rust_log
                 .split(',')
-                .map(|dir| dir.parse())
+                .map(str::parse)
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(directives) => {
@@ -288,8 +285,7 @@ fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
 
 fn wasi_level_to_tracing_level(level: &Level) -> LevelFilter {
     match level {
-        Level::Error => LevelFilter::ERROR,
-        Level::Critical => LevelFilter::ERROR,
+        Level::Error | Level::Critical => LevelFilter::ERROR,
         Level::Warn => LevelFilter::WARN,
         Level::Info => LevelFilter::INFO,
         Level::Debug => LevelFilter::DEBUG,
