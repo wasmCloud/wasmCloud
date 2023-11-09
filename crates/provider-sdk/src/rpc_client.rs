@@ -5,7 +5,7 @@ use crate::{
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use async_nats::Client;
+use async_nats::{Client, Subject};
 use futures::{Future, TryFutureExt};
 use sha2::Digest;
 use tracing::{
@@ -268,7 +268,7 @@ impl RpcClient {
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     #[instrument(level = "trace", skip(self, payload))]
-    pub async fn publish(&self, subject: String, payload: Vec<u8>) -> InvocationResult<()> {
+    pub(crate) async fn publish(&self, subject: Subject, payload: Vec<u8>) -> InvocationResult<()> {
         maybe_timeout(
             self.timeout,
             self.client
@@ -289,9 +289,9 @@ impl RpcClient {
         Ok(())
     }
 
-    pub async fn publish_invocation_response(
+    pub(crate) async fn publish_invocation_response(
         &self,
-        reply_to: String,
+        reply_to: Subject,
         response: InvocationResponse,
     ) -> InvocationResult<()> {
         let content_length = response.msg.len() as u64;

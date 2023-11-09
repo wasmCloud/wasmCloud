@@ -274,7 +274,7 @@ impl ProviderConnection {
                                     if let Some(reply) = msg.reply {
                                         // send reply
                                         if let Err(err) = this.rpc_client
-                                            .publish_invocation_response(reply.to_string(), resp).in_current_span().await {
+                                            .publish_invocation_response(reply, resp).in_current_span().await {
                                             error!(%err, "rpc sending response");
                                         }
                                     }
@@ -282,7 +282,7 @@ impl ProviderConnection {
                                 Err(err) => {
                                     error!(%err, "invalid rpc message received (not deserializable)");
                                     if let Some(reply) = msg.reply {
-                                        if let Err(err) = this.rpc_client.publish_invocation_response(reply.to_string(),
+                                        if let Err(err) = this.rpc_client.publish_invocation_response(reply,
                                             InvocationResponse{
                                                 error: Some(format!("Error when attempting to deserialize invocation: {err}")),
                                                 ..Default::default()
@@ -367,7 +367,7 @@ impl ProviderConnection {
                             // in case it needs to do any message passing during shutdown
                             provider.shutdown().await;
                             let data = b"shutting down".to_vec();
-                            if let Err(err) = rpc_client.publish(reply_to.to_string(), data).await {
+                            if let Err(err) = rpc_client.publish(reply_to, data).await {
                                 warn!(%err, "failed to send shutdown ack");
                             }
                             // unsubscribe from shutdown topic
@@ -504,9 +504,7 @@ impl ProviderConnection {
                     match buf {
                         Ok(t) => {
                             if let Some(reply_to) = msg.reply {
-                                if let Err(err) =
-                                    this.rpc_client.publish(reply_to.to_string(), t).await
-                                {
+                                if let Err(err) = this.rpc_client.publish(reply_to, t).await {
                                     error!(%err, "failed sending health check response");
                                 }
                             }
