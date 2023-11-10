@@ -91,11 +91,8 @@ fn print_test_results(results: &[TestResult]) {
     writeln!(&mut stdout).unwrap();
 }
 
-/// fake key (not a real public key)  used to construct origin for invoking actors
-const WASH_ORIGIN_KEY: &str = "__WASH__";
-
 /// hostname used for actor invocations
-const WASH_HOST_ID: &str = "NwashHostCallerId000000000000000000000000000000000000000";
+const WASH_HOST_ID: &str = "NAWASHVALZUZPZNXPIF6HGQ4OMJYLXQ4B2WZZ5AMBCXKWEQPYXDOIWMA"; // "a wash val" :)
 
 #[derive(Debug, Args, Clone)]
 #[clap(name = "call")]
@@ -245,7 +242,7 @@ pub async fn handle_call(
     let InvocationResponse { msg, .. } = client
         .send_timeout(
             WasmCloudEntity {
-                public_key: WASH_ORIGIN_KEY.to_string(),
+                public_key: actor_id.to_string(), // This is "wrong" in the sense that an actor shouldn't be calling itself, but it ensures the receiving host has both the origin and target public keys in its claims
                 ..Default::default()
             },
             WasmCloudEntity {
