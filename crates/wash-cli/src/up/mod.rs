@@ -70,11 +70,7 @@ pub struct NatsOpts {
     pub nats_credsfile: Option<PathBuf>,
 
     /// Optional remote URL of existing NATS infrastructure to extend.
-    #[clap(
-        long = "nats-remote-url",
-        env = "NATS_REMOTE_URL",
-        requires = "nats_credsfile"
-    )]
+    #[clap(long = "nats-remote-url", env = "NATS_REMOTE_URL")]
     pub nats_remote_url: Option<String>,
 
     /// If a connection can't be established, exit and don't start a NATS server. Will be ignored if a remote_url and credsfile are specified
@@ -354,9 +350,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Avoid downloading + starting NATS if the user already runs their own server and we can connect.
     let should_run_nats = !cmd.nats_opts.connect_only && nats_client.is_err();
-    // Ignore connect_only if this server has a remote and credsfile as we have to start a leafnode in that scenario
-    let supplied_remote_credentials =
-        cmd.nats_opts.nats_remote_url.is_some() && cmd.nats_opts.nats_credsfile.is_some();
+    // Ignore connect_only if this server has a remote as we have to start a leafnode in that scenario
+    let supplied_remote_credentials = cmd.nats_opts.nats_remote_url.is_some();
 
     let nats_bin = if should_run_nats || supplied_remote_credentials {
         // Download NATS if not already installed

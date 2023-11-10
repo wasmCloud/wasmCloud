@@ -200,22 +200,28 @@ impl NatsConfig {
     where
         P: AsRef<Path>,
     {
-        let leafnode_section = match (self.remote_url, self.credentials) {
-            (Some(url), Some(creds)) => format!(
+        let leafnode_section = if let Some(url) = self.remote_url {
+            let url_line = format!(r#"url: "{url}""#);
+            let creds_line = self
+                .credentials
+                .as_ref()
+                .map(|c| format!("credentials: {c:?}"))
+                .unwrap_or_default();
+
+            format!(
                 r#"
 leafnodes {{
     remotes = [
         {{
-            url: "{}"
-            credentials: {:?}
+            {url_line}
+            {creds_line}
         }}
     ]
 }}
                 "#,
-                url,
-                creds.to_string_lossy()
-            ),
-            _ => "".to_owned(),
+            )
+        } else {
+            "".to_owned()
         };
         let websocket_section = match self.websocket_port {
             Some(port) => format!(
