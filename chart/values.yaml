@@ -113,7 +113,6 @@ podSecurityContext:
   # fsGroup: 2000
 
 securityContext:
-securityContext:
   runAsUser: 10000
   runAsGroup: 10000
   runAsNonRoot: true
