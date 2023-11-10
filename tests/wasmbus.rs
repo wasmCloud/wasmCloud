@@ -241,10 +241,17 @@ async fn start_redis() -> anyhow::Result<(
     JoinHandle<anyhow::Result<ExitStatus>>,
     oneshot::Sender<()>,
     Url,
+    tempfile::NamedTempFile,
 )> {
     let port = free_port().await?;
     let url =
         Url::parse(&format!("redis://localhost:{port}")).context("failed to parse Redis URL")?;
+    let dump_file =
+        tempfile::NamedTempFile::new().context("failed to create temporary dump file for redis")?;
+    let dump_file_path = dump_file
+        .path()
+        .to_str()
+        .context("failed to retrieve path to created redis dump file")?;
     let (server, stop_tx) = spawn_server(
         Command::new(
             env::var("WASMCLOUD_REDIS")
@@ -260,12 +267,12 @@ async fn start_redis() -> anyhow::Result<(
             "--save",
             "",
             "--dbfilename",
-            format!("test-redis-{port}.rdb").as_str(),
+            dump_file_path,
         ]),
     )
     .await
     .context("failed to start Redis")?;
-    Ok((server, stop_tx, url))
+    Ok((server, stop_tx, url, dump_file))
 }
 
 async fn start_nats() -> anyhow::Result<(
@@ -494,8 +501,13 @@ async fn wasmbus() -> anyhow::Result<()> {
     // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
 
     let (
-        (component_redis_server, component_stop_redis_tx, component_redis_url),
-        (module_redis_server, module_stop_redis_tx, module_redis_url),
+        (
+            component_redis_server,
+            component_stop_redis_tx,
+            component_redis_url,
+            _component_redis_dump_file,
+        ),
+        (module_redis_server, module_stop_redis_tx, module_redis_url, _module_redis_dump_file),
     ) = try_join!(start_redis(), start_redis())?;
 
     let mut component_redis_client =

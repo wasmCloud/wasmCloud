@@ -13,7 +13,6 @@
 .vscode/
 /tests/fixtures
 /tmp/
-dump.rdb
 host_config.json
 node_modules
 target/
