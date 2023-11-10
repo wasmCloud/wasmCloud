@@ -233,6 +233,9 @@ pub struct WasmcloudOpts {
     )]
     pub enable_structured_logging: bool,
 
+    #[clap(short = 'l', long = "label")]
+    pub label: Option<Vec<String>>,
+
     /// Controls the verbosity of JSON structured logs from the wasmCloud host
     #[clap(long = "log-level", alias = "structured-log-level", default_value = DEFAULT_STRUCTURED_LOG_LEVEL, env = WASMCLOUD_LOG_LEVEL)]
     pub structured_log_level: String,
@@ -340,6 +343,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         wasmcloud_js_domain: cmd.wasmcloud_opts.wasmcloud_js_domain.or(ctx.js_domain),
         ..cmd.wasmcloud_opts
     };
+    let host_env = configure_host_env(wasmcloud_opts.clone()).await?;
     let nats_listen_address = format!("{nats_host}:{nats_port}");
 
     let nats_client = nats_client_from_wasmcloud_opts(&wasmcloud_opts).await;
@@ -379,7 +383,6 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     let lattice_prefix = wasmcloud_opts
         .lattice_prefix
-        .clone()
         .context("missing lattice prefix")?;
     let wadm_process = if !cmd.wadm_opts.disable_wadm
         && !is_wadm_running(
@@ -393,7 +396,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     {
         spinner.update_spinner_message(" Starting wadm ...".to_string());
         let config = WadmConfig {
-            structured_logging: cmd.wasmcloud_opts.enable_structured_logging,
+            structured_logging: wasmcloud_opts.enable_structured_logging,
             js_domain: cmd.nats_opts.nats_js_domain.clone(),
             nats_server_url: nats_listen_address.clone(),
             nats_credsfile: cmd.nats_opts.nats_credsfile,
@@ -426,7 +429,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
 
     // Download wasmCloud if not already installed
-    let wasmcloud_executable = if !cmd.wasmcloud_opts.start_only {
+    let wasmcloud_executable = if !wasmcloud_opts.start_only {
         spinner.update_spinner_message(" Downloading wasmCloud ...".to_string());
         ensure_wasmcloud(&wasmcloud_opts.wasmcloud_version, &install_dir).await?
     } else if let Some(wasmcloud_bin) =
@@ -456,9 +459,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     } else {
         Stdio::piped()
     };
-    let version = wasmcloud_opts.wasmcloud_version.clone();
+    let version = wasmcloud_opts.wasmcloud_version;
 
-    let host_env = configure_host_env(wasmcloud_opts).await;
     let mut wasmcloud_child = match start_wasmcloud_host(
         &wasmcloud_executable,
         std::process::Stdio::null(),
