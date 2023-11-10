@@ -369,7 +369,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             host: nats_host.clone(),
             port: nats_port,
             store_dir: std::env::temp_dir().join(format!("wash-jetstream-{nats_port}")),
-            js_domain: wasmcloud_opts.wasmcloud_js_domain.clone(),
+            js_domain: cmd.nats_opts.nats_js_domain,
             remote_url: cmd.nats_opts.nats_remote_url,
             credentials: cmd.nats_opts.nats_credsfile.clone(),
             websocket_port: cmd.nats_opts.nats_websocket_port,
