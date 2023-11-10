@@ -616,7 +616,7 @@ impl Client {
                     continue;
                 };
                 trace!("received event: {:?}", evt);
-                let Ok(_) = sender.send(evt).await else {
+                let Ok(()) = sender.send(evt).await else {
                     // If the channel is disconnected, stop sending events
                     let _ = sub.unsubscribe().await;
                     break;
@@ -668,7 +668,7 @@ pub async fn collect_sub_timeout<T: DeserializeOwned>(
                     }
                 }
             },
-            _ = &mut sleep => { /* timeout */ break; }
+            () = &mut sleep => { /* timeout */ break; }
         }
     }
     items
