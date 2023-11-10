@@ -35,6 +35,41 @@ pub fn publish_registries(topic_prefix: &Option<String>, lattice_prefix: &str) -
     format!("{}.registries.put", prefix(topic_prefix, lattice_prefix))
 }
 
+pub fn put_config(
+    topic_prefix: &Option<String>,
+    lattice_prefix: &str,
+    entity_id: &str,
+    key: &str,
+) -> String {
+    format!(
+        "{}.config.put.{entity_id}.{key}",
+        prefix(topic_prefix, lattice_prefix)
+    )
+}
+
+pub fn delete_config(
+    topic_prefix: &Option<String>,
+    lattice_prefix: &str,
+    entity_id: &str,
+    key: &str,
+) -> String {
+    format!(
+        "{}.config.del.{entity_id}.{key}",
+        prefix(topic_prefix, lattice_prefix)
+    )
+}
+
+pub fn clear_config(
+    topic_prefix: &Option<String>,
+    lattice_prefix: &str,
+    entity_id: &str,
+) -> String {
+    format!(
+        "{}.config.del.{entity_id}",
+        prefix(topic_prefix, lattice_prefix)
+    )
+}
+
 pub mod commands {
     use super::prefix;
 
@@ -106,5 +141,28 @@ pub mod queries {
 
     pub fn hosts(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
         format!("{}.ping.hosts", prefix(topic_prefix, lattice_prefix))
+    }
+
+    pub fn config(
+        topic_prefix: &Option<String>,
+        lattice_prefix: &str,
+        entity_id: &str,
+        key: &str,
+    ) -> String {
+        format!(
+            "{}.get.config.{entity_id}.{key}",
+            prefix(topic_prefix, lattice_prefix),
+        )
+    }
+
+    pub fn all_config(
+        topic_prefix: &Option<String>,
+        lattice_prefix: &str,
+        entity_id: &str,
+    ) -> String {
+        format!(
+            "{}.get.config.{entity_id}",
+            prefix(topic_prefix, lattice_prefix),
+        )
     }
 }

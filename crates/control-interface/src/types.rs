@@ -83,6 +83,15 @@ pub struct GetClaimsResponse {
     pub claims: Vec<HashMap<String, String>>,
 }
 
+/// The response returned when fetching the data for a single config key
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct GetConfigKeyResponse {
+    /// Whether or not the key was found
+    pub found: bool,
+    /// The value of the key, if found
+    pub data: Vec<u8>,
+}
+
 /// A summary representation of a host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {

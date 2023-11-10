@@ -1,3 +1,4 @@
 foobar = "../../../wit/foobar"
 http = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
 io = "../../../../../wit/deps/io" # for compatibility with Wasmtime version used
+wasmcloud = "../../../../../wit"

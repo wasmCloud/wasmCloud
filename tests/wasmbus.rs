@@ -201,6 +201,19 @@ async fn assert_remove_link(
     Ok(())
 }
 
+async fn assert_config_put(
+    client: &wasmcloud_control_interface::Client,
+    actor_claims: &jwt::Claims<jwt::Actor>,
+    key: &str,
+    value: impl Into<Vec<u8>>,
+) -> anyhow::Result<()> {
+    client
+        .put_config(&actor_claims.subject, key, value)
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow!(e).context("failed to put config"))
+}
+
 async fn spawn_server(
     cmd: &mut Command,
 ) -> anyhow::Result<(JoinHandle<anyhow::Result<ExitStatus>>, oneshot::Sender<()>)> {
@@ -320,7 +333,7 @@ async fn assert_handle_http_request(
     http_port: u16,
     nats_client: async_nats::Client,
     redis_client: &mut redis::Client,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(Vec<u8>, HashMap<String, Vec<u8>>)> {
     let (mut nats_publish_sub, mut nats_request_sub, mut nats_request_multi_sub) = try_join!(
         nats_client.subscribe("test-messaging-publish"),
         nats_client.subscribe("test-messaging-request"),
@@ -380,7 +393,9 @@ async fn assert_handle_http_request(
     let http_res = http_client
         .post(format!("http://localhost:{http_port}/foo?bar=baz"))
         .header("test-header", "test-value")
-        .body(format!(r#"{{"min":42,"max":4242,"port":{out_port}}}"#))
+        .body(format!(
+            r#"{{"min":42,"max":4242,"port":{out_port},"config_key":"test-config-data"}}"#
+        ))
         .send()
         .await
         .context("failed to connect to server")?
@@ -403,6 +418,8 @@ async fn assert_handle_http_request(
         random_32: u32,
         #[allow(dead_code)]
         long_value: String,
+        config_value: Vec<u8>,
+        all_config: Vec<(String, Vec<u8>)>,
     }
     let Response {
         get_random_bytes: _,
@@ -411,6 +428,8 @@ async fn assert_handle_http_request(
         random_32: _,
         random_in_range,
         long_value: _,
+        config_value,
+        all_config,
     } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
     ensure!(Uuid::from_str(&guid).is_ok());
     ensure!(
@@ -454,7 +473,7 @@ expected: {expected_redis_keys:?}"#
     http_server
         .await
         .context("failed to join HTTP server task")?;
-    Ok(())
+    Ok((config_value, all_config.into_iter().collect()))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -907,6 +926,22 @@ expected: {expected_labels:?}"#
     .context("failed to advertise links")?;
 
     try_join!(
+        assert_config_put(
+            &ctl_client,
+            &component_actor_claims,
+            "test-config-data",
+            "test-config-value"
+        ),
+        assert_config_put(
+            &ctl_client,
+            &component_actor_claims,
+            "test-config-data2",
+            "test-config-value2"
+        )
+    )
+    .context("failed to put config")?;
+
+    try_join!(
         assert_start_provider(
             &ctl_client,
             &ctl_nats_client,
@@ -1245,13 +1280,26 @@ expected: {expected_labels:?}"#
 
     try_join!(
         async {
-            assert_handle_http_request(
+            let (config_value, all_config) = assert_handle_http_request(
                 component_http_port,
                 component_nats_client.clone(),
                 &mut component_redis_client,
             )
             .await
-            .context("component actor test failed")
+            .context("component actor test failed")?;
+            ensure!(
+                config_value == b"test-config-value",
+                "should have returned the correct config value"
+            );
+            let expected = HashMap::from([
+                ("test-config-data".into(), b"test-config-value".to_vec()),
+                ("test-config-data2".into(), b"test-config-value2".to_vec()),
+            ]);
+            if all_config == expected {
+                Ok(())
+            } else {
+                Err(anyhow!("should have returned all config values.\nExpected: {expected:?}\nGot: {all_config:?}"))
+            }
         },
         async {
             assert_handle_http_request(

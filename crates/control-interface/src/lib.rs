@@ -401,6 +401,108 @@ impl Client {
         }
     }
 
+    /// Puts a config item for the given entity (actor or provider) ID at the given key, replacing
+    /// any data that is already present. Data is stored as a Vec of bytes, so anything that can be
+    /// turned into a vec is accepted as a parameter for the value.
+    ///
+    /// Key names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// NOTE: This operation is currently experimental and may change or be removed at any time
+    #[instrument(level = "debug", skip_all)]
+    pub async fn put_config(
+        &self,
+        entity_id: &str,
+        key: &str,
+        value: impl Into<Vec<u8>>,
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::put_config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        debug!(%subject, "Putting config");
+        match self
+            .request_timeout(subject, value.into(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => Err(format!("Did not receive a response to put config request: {e}").into()),
+        }
+    }
+
+    /// Delete a config item for the given entity (actor or provider) ID at the given key.
+    ///
+    /// Key names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// NOTE: This operation is currently experimental and may change or be removed at any time
+    #[instrument(level = "debug", skip_all)]
+    pub async fn delete_config_key(&self, entity_id: &str, key: &str) -> Result<CtlOperationAck> {
+        let subject =
+            broker::delete_config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        debug!(%subject, %key, "Delete config at key");
+        match self
+            .request_timeout(subject, Vec::default(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => {
+                Err(format!("Did not receive a response to delete config request: {e}").into())
+            }
+        }
+    }
+
+    /// Delete all config items for the given entity (actor or provider) ID.
+    ///
+    /// NOTE: This operation is currently experimental and may change or be removed at any time
+    #[instrument(level = "debug", skip_all)]
+    pub async fn clear_config(&self, entity_id: &str, key: &str) -> Result<CtlOperationAck> {
+        let subject = broker::clear_config(&self.topic_prefix, &self.lattice_prefix, entity_id);
+        debug!(%subject, %key, "Deleting all config at key");
+        match self
+            .request_timeout(subject, Vec::default(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => {
+                Err(format!("Did not receive a response to clear config request: {e}").into())
+            }
+        }
+    }
+
+    /// Get a config item for the given entity (actor or provider) ID at the given key.
+    ///
+    /// Key names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// NOTE: This operation is currently experimental and may change or be removed at any time
+    #[instrument(level = "debug", skip_all)]
+    pub async fn get_config(&self, entity_id: &str, key: &str) -> Result<GetConfigKeyResponse> {
+        let subject =
+            broker::queries::config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        debug!(%subject, %key, "Getting config at key");
+        match self
+            .request_timeout(subject, Vec::default(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => Err(format!("Did not receive a response to get config request: {e}").into()),
+        }
+    }
+
+    /// Get all config items for the given entity (actor or provider) ID.
+    ///
+    /// NOTE: This operation is currently experimental and may change or be removed at any time
+    #[instrument(level = "debug", skip_all)]
+    pub async fn get_all_config(&self, entity_id: &str) -> Result<HashMap<String, Vec<u8>>> {
+        let subject =
+            broker::queries::all_config(&self.topic_prefix, &self.lattice_prefix, entity_id);
+        debug!(%subject, "Getting all config");
+        match self
+            .request_timeout(subject, Vec::default(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => {
+                Err(format!("Did not receive a response to get all config request: {e}",).into())
+            }
+        }
+    }
+
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
     /// this request as soon as it verifies that the target actor is running. This acknowledgement

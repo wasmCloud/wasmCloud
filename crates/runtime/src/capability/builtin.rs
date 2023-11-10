@@ -367,6 +367,17 @@ pub trait Bus {
         Box<dyn AsyncRead + Sync + Send + Unpin>,
     )>;
 
+    /// Handle `wasmcloud:bus/config.get`
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, super::guest_config::ConfigError>>;
+
+    /// Handle `wasmcloud:bus/config.get_all`
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>>;
+
     /// Handle `wasmcloud:bus/host.call` without streaming
     async fn call_sync(
         &self,
@@ -626,6 +637,23 @@ impl Bus for Handler {
     ) -> anyhow::Result<()> {
         self.proxy_bus("wasmcloud:bus/lattice.set-target")?
             .set_target(target, interfaces)
+            .await
+    }
+
+    #[instrument]
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, super::guest_config::ConfigError>> {
+        self.proxy_bus("wasmcloud:bus/config.get")?.get(key).await
+    }
+
+    #[instrument]
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>> {
+        self.proxy_bus("wasmcloud:bus/config.get_all")?
+            .get_all()
             .await
     }
 

@@ -80,6 +80,8 @@ impl HttpHandler for HttpLogRng {
             "random_32": HostRng::random32(),
             "random_in_range": HostRng::random_in_range(min, max),
             "long_value": "1234567890".repeat(1000),
+            "config_value": [],
+            "all_config": [],
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_string(&res).expect("failed to encode response to JSON");

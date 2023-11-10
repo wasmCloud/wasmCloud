@@ -34,6 +34,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             min: u32,
             max: u32,
             port: u16,
+            config_key: String,
         }
 
         assert!(matches!(request.method(), http::types::Method::Post));
@@ -90,7 +91,12 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let request_body = request
             .consume()
             .expect("failed to get incoming request body");
-        let Request { min, max, port } = {
+        let Request {
+            min,
+            max,
+            port,
+            config_key,
+        } = {
             let mut buf = vec![];
             let mut stream = request_body
                 .stream()
@@ -127,6 +133,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             "random_32": HostRng::random32(),
             "random_in_range": HostRng::random_in_range(min, max),
             "long_value": "1234567890".repeat(1000),
+            "config_value": wasmcloud::bus::guest_config::get(&config_key).expect("failed to get config value"),
+            "all_config": wasmcloud::bus::guest_config::get_all().expect("failed to get all config values"),
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");

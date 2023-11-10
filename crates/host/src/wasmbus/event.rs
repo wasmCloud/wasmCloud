@@ -228,7 +228,21 @@ pub fn provider_health_check(
     })
 }
 
-#[instrument(level = "trace", skip(event_builder, ctl_nats, data))]
+pub fn config_set(entity_id: impl AsRef<str>, key: impl AsRef<str>) -> serde_json::Value {
+    json!({
+        "entity_id": entity_id.as_ref(),
+        "key": key.as_ref(),
+    })
+}
+
+pub fn config_deleted(entity_id: impl AsRef<str>, key: impl AsRef<str>) -> serde_json::Value {
+    json!({
+        "entity_id": entity_id.as_ref(),
+        "key": key.as_ref(),
+    })
+}
+
+#[instrument(level = "debug", skip(event_builder, ctl_nats, data))]
 pub(crate) async fn publish(
     event_builder: &EventBuilderV10,
     ctl_nats: &async_nats::Client,
