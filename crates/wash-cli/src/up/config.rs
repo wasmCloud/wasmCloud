@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::{anyhow, Result};
+
 use crate::up::{credsfile::parse_credsfile, WasmcloudOpts};
 
 pub const DOWNLOADS_DIR: &str = "downloads";
@@ -52,7 +54,7 @@ pub const DEFAULT_ALLOW_FILE_LOAD: &str = "true";
 
 /// Helper function to convert WasmcloudOpts to the host environment map.
 /// Takes NatsOpts as well to provide reasonable defaults
-pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String, String> {
+pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap<String, String>> {
     let mut host_config = HashMap::new();
     // NATS isolation configuration variables
     host_config.insert(
@@ -170,6 +172,24 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String
             "true".to_string(),
         );
     }
+
+    let labels: Vec<(String, String)> = wasmcloud_opts
+        .label
+        .unwrap_or_default()
+        .iter()
+        .map(
+            |labelpair| match labelpair.split('=').collect::<Vec<&str>>()[..] {
+                [k, v] => Ok((k.to_string(), v.to_string())),
+                _ => Err(anyhow!(
+                    "invalid label format `{labelpair}`. Expected `key=value`"
+                )),
+            },
+        )
+        .collect::<Result<Vec<(String, String)>>>()?;
+    for (key, value) in labels {
+        host_config.insert(format!("WASMCLOUD_LABEL_{key}"), value.to_string());
+    }
+
     host_config.insert(
         WASMCLOUD_LOG_LEVEL.to_string(),
         wasmcloud_opts.structured_log_level,
@@ -177,5 +197,5 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String
     if wasmcloud_opts.enable_ipv6 {
         host_config.insert(WASMCLOUD_ENABLE_IPV6.to_string(), "1".to_string());
     }
-    host_config
+    Ok(host_config)
 }
