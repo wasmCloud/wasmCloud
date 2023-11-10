@@ -301,6 +301,9 @@ pub struct WadmOpts {
 
     #[clap(long = "disable-wadm")]
     pub disable_wadm: bool,
+
+    #[clap(long = "wadm-js-domain", env = "WADM_JS_DOMAIN")]
+    pub wadm_js_domain: Option<String>,
 }
 
 pub async fn handle_command(command: UpCommand, output_kind: OutputKind) -> Result<CommandOutput> {
@@ -398,7 +401,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         spinner.update_spinner_message(" Starting wadm ...".to_string());
         let config = WadmConfig {
             structured_logging: wasmcloud_opts.enable_structured_logging,
-            js_domain: cmd.nats_opts.nats_js_domain.clone(),
+            js_domain: cmd.wadm_opts.wadm_js_domain.clone(),
             nats_server_url: nats_listen_address.clone(),
             nats_credsfile: cmd.nats_opts.nats_credsfile,
         };
