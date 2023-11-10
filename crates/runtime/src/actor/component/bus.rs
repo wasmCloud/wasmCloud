@@ -1,6 +1,6 @@
 use super::{Ctx, Instance, TableResult};
 
-use crate::capability::bus::{host, lattice};
+use crate::capability::bus::{guest_config, host, lattice};
 use crate::capability::{Bus, TargetInterface};
 
 use core::future::Future;
@@ -193,5 +193,23 @@ impl lattice::HostTargetInterface for Ctx {
     fn drop(&mut self, interface: Resource<TargetInterface>) -> anyhow::Result<()> {
         self.table.delete_resource(interface)?;
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl guest_config::Host for Ctx {
+    #[instrument]
+    async fn get(
+        &mut self,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
+        self.handler.get(&key).await
+    }
+
+    #[instrument]
+    async fn get_all(
+        &mut self,
+    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, guest_config::ConfigError>> {
+        self.handler.get_all().await
     }
 }

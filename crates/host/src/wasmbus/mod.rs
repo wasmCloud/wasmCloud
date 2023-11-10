@@ -27,7 +27,8 @@ use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context as _};
+use anyhow::{anyhow, bail, ensure, Context as ErrContext};
+use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -62,9 +63,9 @@ use wasmcloud_core::{
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
-    KeyValueReadWrite, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
-    TargetInterface,
+    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp,
+    KeyValueAtomic, KeyValueReadWrite, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
+    TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -80,6 +81,7 @@ struct Queue {
     links: async_nats::Subscriber,
     queries: async_nats::Subscriber,
     registries: async_nats::Subscriber,
+    config: async_nats::Subscriber,
 }
 
 impl Stream for Queue {
@@ -118,6 +120,11 @@ impl Stream for Queue {
             Poll::Pending => pending = true,
         }
         match Pin::new(&mut self.pings).poll_next(cx) {
+            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
+            Poll::Ready(None) => {}
+            Poll::Pending => pending = true,
+        }
+        match Pin::new(&mut self.config).poll_next(cx) {
             Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
             Poll::Ready(None) => {}
             Poll::Pending => pending = true,
@@ -181,7 +188,7 @@ impl Queue {
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
-        let (registries, pings, links, queries, auction, commands, inventory) = try_join!(
+        let (registries, pings, links, queries, auction, commands, inventory, config) = try_join!(
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
             nats.queue_subscribe(
@@ -189,12 +196,16 @@ impl Queue {
                 format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
             ),
             nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.get.*"),
+                format!("{topic_prefix}.{lattice_prefix}.get.>"),
                 format!("{topic_prefix}.{lattice_prefix}.get")
             ),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.config.>"),
+                format!("{topic_prefix}.{lattice_prefix}.config"),
+            ),
         )
         .context("failed to subscribe to queues")?;
         Ok(Self {
@@ -205,6 +216,7 @@ impl Queue {
             links,
             queries,
             registries,
+            config,
         })
     }
 }
@@ -238,6 +250,7 @@ impl Deref for ActorInstance {
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
+    config_data: Arc<RwLock<ConfigCache>>,
     lattice_prefix: String,
     cluster_key: Arc<KeyPair>,
     host_key: Arc<KeyPair>,
@@ -729,6 +742,33 @@ impl Bus for Handler {
             }
         }
         Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
+        let conf = self.config_data.read().await;
+        let data = conf
+            .get(&self.claims.subject)
+            .and_then(|conf| conf.get(key))
+            .cloned();
+        Ok(Ok(data))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, guest_config::ConfigError>> {
+        Ok(Ok(self
+            .config_data
+            .read()
+            .await
+            .get(&self.claims.subject)
+            .cloned()
+            .map(|conf| conf.into_iter().collect::<Vec<_>>())
+            .unwrap_or_default()))
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -1491,6 +1531,8 @@ struct Provider {
     image_ref: String,
 }
 
+type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
+
 /// wasmCloud Host
 pub struct Host {
     // TODO: Clean up actors after stop
@@ -1509,8 +1551,10 @@ pub struct Host {
     ctl_nats: async_nats::Client,
     /// NATS client to use for RPC calls
     rpc_nats: async_nats::Client,
-    data: async_nats::jetstream::kv::Store,
+    data: Store,
     data_watch: AbortHandle,
+    config_data: Store,
+    config_data_watch: AbortHandle,
     policy_manager: Arc<PolicyManager>,
     providers: RwLock<HashMap<String, Provider>>,
     registry_config: RwLock<HashMap<String, RegistryConfig>>,
@@ -1523,6 +1567,7 @@ pub struct Host {
     links: RwLock<HashMap<String, LinkDefinition>>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+    config_data_cache: Arc<RwLock<ConfigCache>>,
 }
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
@@ -1603,14 +1648,14 @@ fn linkdef_hash(
 }
 
 #[instrument(level = "debug", skip_all)]
-async fn create_lattice_metadata_bucket(
+async fn create_bucket(
     jetstream: &async_nats::jetstream::Context,
     bucket: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Store> {
     // Don't create the bucket if it already exists
-    if let Ok(_store) = jetstream.get_key_value(bucket).await {
-        info!(%bucket, "lattice metadata bucket already exists. Skipping creation.");
-        return Ok(());
+    if let Ok(store) = jetstream.get_key_value(bucket).await {
+        info!(%bucket, "bucket already exists. Skipping creation.");
+        return Ok(store);
     }
 
     match jetstream
@@ -1620,13 +1665,11 @@ async fn create_lattice_metadata_bucket(
         })
         .await
     {
-        Ok(_) => {
-            info!(%bucket, "created lattice metadata bucket with 1 replica");
-            Ok(())
+        Ok(store) => {
+            info!(%bucket, "created bucket with 1 replica");
+            Ok(store)
         }
-        Err(err) => Err(anyhow!(err).context(format!(
-            "failed to create lattice metadata bucket '{bucket}'"
-        ))),
+        Err(err) => Err(anyhow!(err).context(format!("failed to create bucket '{bucket}'"))),
     }
 }
 
@@ -1941,12 +1984,10 @@ impl Host {
             async_nats::jetstream::new(ctl_nats.clone())
         };
         let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
-        create_lattice_metadata_bucket(&ctl_jetstream, &bucket).await?;
+        let data = create_bucket(&ctl_jetstream, &bucket).await?;
 
-        let data = ctl_jetstream
-            .get_key_value(&bucket)
-            .await
-            .map_err(|e| anyhow!(e).context("failed to acquire data bucket"))?;
+        let config_bucket = format!("CONFIGDATA_{}", config.lattice_prefix);
+        let config_data = create_bucket(&ctl_jetstream, &config_bucket).await?;
 
         let chunk_endpoint = ChunkEndpoint::with_client(
             &config.lattice_prefix,
@@ -1957,6 +1998,7 @@ impl Host {
         let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
+        let (config_data_watch_abort, config_data_watch_abort_reg) = AbortHandle::new_pair();
 
         let supplemental_config = if config.config_service_enabled {
             load_supplemental_config(&ctl_nats, &config.lattice_prefix, &labels).await?
@@ -1997,6 +2039,8 @@ impl Host {
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
+            config_data: config_data.clone(),
+            config_data_watch: config_data_watch_abort.clone(),
             policy_manager,
             providers: RwLock::default(),
             registry_config,
@@ -2009,6 +2053,7 @@ impl Host {
             links: RwLock::default(),
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
+            config_data_cache: Arc::default(),
         };
 
         let host = Arc::new(host);
@@ -2072,6 +2117,43 @@ impl Host {
                 Ok(())
             }
         });
+
+        let config_data_watch: JoinHandle<anyhow::Result<_>> = spawn({
+            let data = config_data.clone();
+            let host = Arc::clone(&host);
+            async move {
+                let data_watch = data
+                    .watch_all()
+                    .await
+                    .context("failed to watch config data bucket")?;
+                let mut data_watch = Abortable::new(data_watch, config_data_watch_abort_reg);
+                data_watch
+                    .by_ref()
+                    .for_each({
+                        let host = Arc::clone(&host);
+                        move |entry| {
+                            let host = Arc::clone(&host);
+                            async move {
+                                match entry {
+                                    Err(error) => {
+                                        error!("failed to watch lattice data bucket: {error}");
+                                    }
+                                    Ok(entry) => host.process_config_entry(entry).await,
+                                }
+                            }
+                        }
+                    })
+                    .await;
+                let deadline = { *host.stop_rx.borrow() };
+                host.stop_tx.send_replace(deadline);
+                if data_watch.is_aborted() {
+                    info!("config data watch task gracefully stopped");
+                } else {
+                    error!("config data watch task unexpectedly stopped");
+                }
+                Ok(())
+            }
+        });
         let heartbeat = spawn({
             let host = Arc::clone(&host);
             async move {
@@ -2121,6 +2203,25 @@ impl Host {
             })
             .await;
 
+        config_data
+            .keys()
+            .await
+            .context("failed to read keys of config data bucket")?
+            .map_err(|e| anyhow!(e).context("failed to read config data stream"))
+            .try_filter_map(|key| async {
+                config_data
+                    .entry(key)
+                    .await
+                    .context("failed to get entry in config data bucket")
+            })
+            .for_each(|res| async {
+                match res {
+                    Ok(entry) => host.process_config_entry(entry).await,
+                    Err(err) => error!(%err, "failed to read entry from config data bucket"),
+                }
+            })
+            .await;
+
         host.publish_event("host_started", start_evt)
             .await
             .context("failed to publish start event")?;
@@ -2133,8 +2234,10 @@ impl Host {
             heartbeat_abort.abort();
             queue_abort.abort();
             data_watch_abort.abort();
+            config_data_watch_abort.abort();
             host.policy_manager.policy_changes.abort();
-            let _ = try_join!(queue, data_watch, heartbeat).context("failed to await tasks")?;
+            let _ = try_join!(queue, data_watch, config_data_watch, heartbeat)
+                .context("failed to await tasks")?;
             host.publish_event(
                 "host_stopped",
                 json!({
@@ -2358,6 +2461,7 @@ impl Host {
         };
         let handler = Handler {
             nats: self.rpc_nats.clone(),
+            config_data: Arc::clone(&self.config_data_cache),
             lattice_prefix: self.host_config.lattice_prefix.clone(),
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
@@ -2565,6 +2669,7 @@ impl Host {
 
         self.heartbeat.abort();
         self.data_watch.abort();
+        self.config_data_watch.abort();
         self.queue.abort();
         self.policy_manager.policy_changes.abort();
         let deadline =
@@ -3556,6 +3661,49 @@ impl Host {
         Ok(res.into())
     }
 
+    #[instrument(level = "trace", skip_all)]
+    async fn handle_config_get_one(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
+        trace!("getting config");
+        let json = match self
+            .config_data_cache
+            .read()
+            .await
+            .get(entity_id)
+            .and_then(|map| map.get(key))
+        {
+            Some(data) => json!({
+                "found": true,
+                "data": data,
+            }),
+            None => {
+                json!({
+                    "found": false,
+                    "data": [],
+                })
+            }
+        };
+        serde_json::to_vec(&json)
+            .map(Bytes::from)
+            .map_err(anyhow::Error::from)
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Bytes> {
+        trace!(%entity_id, "getting all config");
+        self.config_data_cache
+            .read()
+            .await
+            .get(entity_id)
+            .map_or_else(
+                || Ok(Bytes::default()),
+                |data| {
+                    serde_json::to_vec(data)
+                        .map(Bytes::from)
+                        .map_err(anyhow::Error::from)
+                },
+            )
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
@@ -3630,6 +3778,70 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
+    async fn handle_config_put(
+        &self,
+        entity_id: &str,
+        key: &str,
+        data: Bytes,
+    ) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, %key, "handle config entry put");
+        // Simple check for a valid entity key. A valid public nkey is 56 chars and it should start
+        // with the proper character. It isn't worth the overhead of actually parsing the key, but
+        // if that is an issue in the future we can ensure it is a fully parsable nkey.
+        if entity_id.len() != 56 || (!entity_id.starts_with('M') && !entity_id.starts_with('V')) {
+            bail!("Invalid entity ID. The entity ID must be a valid public nkey for an actor or provider");
+        }
+        self.config_data
+            .put(format!("{entity_id}_{key}"), data)
+            .await
+            .context("Unable to store config data")?;
+        // We don't write it into the cached data and instead let the caching thread handle it as we
+        // won't need it immediately.
+
+        self.publish_event("config_set", event::config_set(entity_id, key))
+            .await?;
+
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_config_delete(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, %key, "handle config entry deletion");
+
+        self.config_data
+            .purge(format!("{entity_id}_{key}"))
+            .await
+            .context("Unable to delete config data")?;
+
+        self.publish_event("config_deleted", event::config_deleted(entity_id, key))
+            .await?;
+
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_config_clear(&self, entity_id: &str) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, "handle config clear");
+
+        // NOTE(thomastaylor312): I specifically made the decision not to key the current list of
+        // keys directly from the KV bucket because we'd have to list _all_ keys and then filter
+        // them out. Using the cache lets us get only what we need, at the slight risk of missing a
+        // newly created key
+        let config_cache = self.config_data_cache.read().await;
+        let Some(all_data) = config_cache.get(entity_id) else {
+            return Ok(ACCEPTED.into());
+        };
+        let futs = all_data
+            .keys()
+            .map(|key| self.handle_config_delete(entity_id, key));
+        futures::future::try_join_all(futs)
+            .await
+            .context("Unable to delete all config keys. Some keys may remain")?;
+
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         trace!("replying to ping");
         let uptime = self.start_at.elapsed();
@@ -3653,79 +3865,93 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "trace", skip_all, fields(subject = %message.subject))]
     async fn handle_ctl_message(self: Arc<Self>, message: async_nats::Message) {
-        let async_nats::Message {
-            ref subject,
-            ref reply,
-            ref payload,
-            ..
-        } = message;
-
         // NOTE: if log level is not `trace`, this won't have an effect, since the current span is
         // disabled. In most cases that's fine, since we aren't aware of any control interface
         // requests including a trace context
         opentelemetry_nats::attach_span_context(&message);
         // Skip the topic prefix and then the lattice prefix
         // e.g. `wasmbus.ctl.{prefix}`
-        let mut parts = subject
+        let mut parts = message
+            .subject
             .trim()
             .trim_start_matches(&self.ctl_topic_prefix)
             .trim_start_matches('.')
             .split('.')
             .skip(1);
-        trace!(%subject, "handling control interface request");
+        trace!("handling control interface request");
 
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
-                self.handle_auction_actor(payload).await.map(Some)
+                self.handle_auction_actor(message.payload).await.map(Some)
             }
             (Some("auction"), Some("provider"), None, None) => {
-                self.handle_auction_provider(payload).await
+                self.handle_auction_provider(message.payload).await
             }
             (Some("cmd"), Some(host_id), Some("la"), None) => Arc::clone(&self)
-                .handle_launch_actor(payload, host_id)
+                .handle_launch_actor(message.payload, host_id)
                 .await
                 .map(Some),
             (Some("cmd"), Some(host_id), Some("lp"), None) => Arc::clone(&self)
-                .handle_launch_provider(payload, host_id)
+                .handle_launch_provider(message.payload, host_id)
                 .await
                 .map(Some),
-            (Some("cmd"), Some(host_id), Some("sa"), None) => {
-                self.handle_stop_actor(payload, host_id).await.map(Some)
-            }
+            (Some("cmd"), Some(host_id), Some("sa"), None) => self
+                .handle_stop_actor(message.payload, host_id)
+                .await
+                .map(Some),
             (Some("cmd"), Some(host_id), Some("scale"), None) => Arc::clone(&self)
-                .handle_scale_actor(payload, host_id)
+                .handle_scale_actor(message.payload, host_id)
                 .await
                 .map(Some),
-            (Some("cmd"), Some(host_id), Some("sp"), None) => {
-                self.handle_stop_provider(payload, host_id).await.map(Some)
-            }
-            (Some("cmd"), Some(host_id), Some("stop"), None) => {
-                self.handle_stop_host(payload, host_id).await.map(Some)
-            }
-            (Some("cmd"), Some(host_id), Some("upd"), None) => {
-                self.handle_update_actor(payload, host_id).await.map(Some)
-            }
+            (Some("cmd"), Some(host_id), Some("sp"), None) => self
+                .handle_stop_provider(message.payload, host_id)
+                .await
+                .map(Some),
+            (Some("cmd"), Some(host_id), Some("stop"), None) => self
+                .handle_stop_host(message.payload, host_id)
+                .await
+                .map(Some),
+            (Some("cmd"), Some(host_id), Some("upd"), None) => self
+                .handle_update_actor(message.payload, host_id)
+                .await
+                .map(Some),
             (Some("get"), Some(_host_id), Some("inv"), None) => {
                 self.handle_inventory().await.map(Some)
             }
             (Some("get"), Some("claims"), None, None) => self.handle_claims().await.map(Some),
             (Some("get"), Some("links"), None, None) => self.handle_links().await.map(Some),
+            (Some("get"), Some("config"), Some(entity_id), Some(key)) => {
+                self.handle_config_get_one(entity_id, key).await.map(Some)
+            }
+            (Some("get"), Some("config"), Some(entity_id), None) => {
+                self.handle_config_get(entity_id).await.map(Some)
+            }
             (Some("linkdefs"), Some("put"), None, None) => {
-                self.handle_linkdef_put(payload).await.map(Some)
+                self.handle_linkdef_put(message.payload).await.map(Some)
             }
             (Some("linkdefs"), Some("del"), None, None) => {
-                self.handle_linkdef_del(payload).await.map(Some)
+                self.handle_linkdef_del(message.payload).await.map(Some)
             }
             (Some("registries"), Some("put"), None, None) => {
-                self.handle_registries_put(payload).await.map(Some)
+                self.handle_registries_put(message.payload).await.map(Some)
             }
             (Some("ping"), Some("hosts"), None, None) => {
-                self.handle_ping_hosts(payload).await.map(Some)
+                self.handle_ping_hosts(message.payload).await.map(Some)
+            }
+            (Some("config"), Some("put"), Some(entity_id), Some(key)) => self
+                .handle_config_put(entity_id, key, message.payload)
+                .await
+                .map(Some),
+            (Some("config"), Some("del"), Some(entity_id), Some(key)) => {
+                self.handle_config_delete(entity_id, key).await.map(Some)
+            }
+            (Some("config"), Some("clear"), Some(entity_id), None) => {
+                self.handle_config_clear(entity_id).await.map(Some)
             }
             _ => {
-                warn!(%subject, "received control interface request on unsupported subject");
+                warn!("received control interface request on unsupported subject");
                 Ok(Some(
                     r#"{"accepted":false,"error":"unsupported subject"}"#.to_string().into(),
                 ))
@@ -3733,12 +3959,12 @@ impl Host {
         };
 
         if let Err(err) = &res {
-            error!(%subject, ?err, "failed to handle control interface request");
+            error!(?err, "failed to handle control interface request");
         } else {
-            trace!(%subject, "handled control interface request");
+            trace!("handled control interface request");
         }
 
-        if let Some(reply) = reply {
+        if let Some(reply) = message.reply {
             let headers = injector_to_headers(&TraceContextInjector::default_with_span());
 
             let payload = match res {
@@ -3758,7 +3984,7 @@ impl Host {
                     .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
-                    error!(%subject, ?err, "failed to publish reply to control interface request");
+                    error!(?err, "failed to publish reply to control interface request");
                 }
             }
         }
@@ -3789,7 +4015,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, id, value))]
+    #[instrument(level = "debug", skip_all)]
     async fn process_linkdef_put(
         &self,
         id: impl AsRef<str>,
@@ -3850,7 +4076,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, id, _value))]
+    #[instrument(level = "debug", skip_all)]
     async fn process_linkdef_delete(
         &self,
         id: impl AsRef<str>,
@@ -3976,16 +4202,14 @@ impl Host {
     #[instrument(level = "trace", skip_all)]
     async fn process_entry(
         &self,
-        async_nats::jetstream::kv::Entry {
+        KvEntry {
             key,
             value,
             operation,
             ..
-        }: async_nats::jetstream::kv::Entry,
+        }: KvEntry,
         publish: bool,
     ) {
-        use async_nats::jetstream::kv::Operation;
-
         let mut key_parts = key.split('_');
         let res = match (operation, key_parts.next(), key_parts.next()) {
             (Operation::Put, Some("LINKDEF"), Some(id)) => {
@@ -4012,6 +4236,31 @@ impl Host {
         };
         if let Err(error) = &res {
             error!(key, ?operation, ?error, "failed to process KV bucket entry");
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, fields(bucket = %entry.bucket, key = %entry.key, revision = %entry.revision, operation = ?entry.operation))]
+    async fn process_config_entry(&self, entry: KvEntry) {
+        match (entry.operation, entry.key.split_once('_')) {
+            (Operation::Put, Some((id, key))) => {
+                self.config_data_cache
+                    .write()
+                    .await
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(key.to_owned(), Vec::from(entry.value));
+            }
+            (Operation::Delete | Operation::Purge, Some((id, key))) => {
+                self.config_data_cache
+                    .write()
+                    .await
+                    .entry(id.to_owned())
+                    .or_default()
+                    .remove(key);
+            }
+            (_, None) => {
+                error!(key = %entry.key, "Found key that doesn't match config format");
+            }
         }
     }
 

@@ -10,6 +10,7 @@ world actor {
     import wasi:sockets/udp@0.2.0-rc-2023-10-18;
 
     import test-actors:foobar/foobar;
+    import wasmcloud:bus/guest-config;
 
     export wasi:http/incoming-handler@0.2.0-rc-2023-10-18;
 }

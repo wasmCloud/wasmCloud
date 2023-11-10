@@ -46,6 +46,22 @@ interface lattice {
     set-target: func(target: option<target-entity>, interfaces: list<target-interface>)
 }
 
+/// An interface for getting configuration data for a wasm module
+interface guest-config {
+    /// Errors that can be returned from config sources
+    variant config-error {
+        /// An error occurred on the config source when fetching data
+        upstream(string),
+        /// I/O or connection failure
+        io(string),
+    }
+
+    /// Gets a single opaque config value set at the given key if it exists
+    get: func(key: string) -> result<option<list<u8>>, config-error>
+    /// Gets a list of all set config data
+    get-all: func() -> result<list<tuple<string, list<u8>>>, config-error>
+}
+
 interface host {
     use wasi:io/streams@0.2.0-rc-2023-10-18.{input-stream, output-stream}
     use wasi:io/poll@0.2.0-rc-2023-10-18.{pollable}
