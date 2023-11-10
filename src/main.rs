@@ -214,8 +214,10 @@ struct Args {
         env = "OTEL_EXPORTER_OTLP_ENDPOINT"
     )]
     otel_exporter_otlp_endpoint: Option<String>,
-    #[clap(long = "otel-metric-endpoint", env = "OTEL_EXPORTER_METRICS_ENDPOINT", default_value = metrics::DEFAULT_OTEL_METRICS_ENDPOINT)]
+    #[clap(long = "otel-metrics-endpoint", env = "OTEL_EXPORTER_METRICS_ENDPOINT", default_value = metrics::DEFAULT_OTEL_METRICS_ENDPOINT)]
     otel_metrics_endpoint: String,
+    #[clap(long = "otel-metrics-mode", env = "OTEL_EXPORTER_METRICS_MODE", default_value_t = OtlpMode::Http)]
+    otel_metrics_mode: OtlpMode,
     // Enable metrics
     #[clap(
         long = "enable-metrics",
@@ -235,11 +237,47 @@ struct Args {
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
+enum OtlpMode {
+    Otlp,
+    Http,
+}
+
+impl OtlpMode {
+    fn to_config(&self) -> metrics::OtlpMode {
+        match &self {
+            OtlpMode::Otlp => metrics::OtlpMode::Otlp,
+            OtlpMode::Http => metrics::OtlpMode::Http,
+        }
+    }
+}
+impl std::fmt::Display for OtlpMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Otlp => "otlp",
+            Self::Http => "http",
+        };
+        s.fmt(f)
+    }
+}
+
+impl std::str::FromStr for OtlpMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "http" => Ok(Self::Http),
+            "otlp" => Ok(Self::Otlp),
+            _ => Err(format!("unknown otlp mode: {s}")),
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
 enum MetricType {
     Otlp,
     Prometheus,
     Debug,
 }
+
 impl std::fmt::Display for MetricType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
@@ -250,6 +288,7 @@ impl std::fmt::Display for MetricType {
         s.fmt(f)
     }
 }
+
 impl std::str::FromStr for MetricType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -259,6 +298,24 @@ impl std::str::FromStr for MetricType {
             "debug" => Ok(Self::Debug),
             _ => Err(format!("unknown metrics type: {s}")),
         }
+    }
+}
+
+struct BackendConfig {
+    backend_type: MetricType,
+    otel_metrics_endpoint: String,
+    otel_mode: OtlpMode,
+    prometheus_port: i32,
+}
+
+fn backend(config: &BackendConfig) -> MetricBackend {
+    match config.backend_type {
+        MetricType::Otlp => MetricBackend::Otlp(
+            config.otel_metrics_endpoint.clone(),
+            config.otel_mode.to_config(),
+        ),
+        MetricType::Prometheus => MetricBackend::Prometheus(config.prometheus_port),
+        MetricType::Debug => MetricBackend::Debug,
     }
 }
 
@@ -376,7 +433,12 @@ async fn main() -> anyhow::Result<()> {
         otel_config,
         policy_service_config,
         enable_metrics: args.enable_metrics,
-        metric_backend: MetricBackend::Debug,
+        metric_backend: backend(&BackendConfig {
+            backend_type: args.metrics_type,
+            otel_metrics_endpoint: args.otel_metrics_endpoint,
+            otel_mode: args.otel_metrics_mode,
+            prometheus_port: args.metrics_prometheus_port,
+        }),
     }))
     .await
     .context("failed to initialize host")?;

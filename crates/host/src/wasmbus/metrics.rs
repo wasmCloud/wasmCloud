@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
 use opentelemetry::{
-    global,
-    metrics::{Counter, Histogram, ObservableGauge},
+    metrics::{Counter, Histogram, MeterProvider as _, ObservableGauge},
     runtime,
     sdk::metrics::{MeterProvider, PeriodicReader},
     KeyValue,
 };
 use opentelemetry_otlp::WithExportConfig;
 use prometheus::Registry;
+use tracing::debug;
 
+/// Default to localhost 55681
 pub const DEFAULT_OTEL_METRICS_ENDPOINT: &str = "http://localhost:55681/v1/metrics";
+/// Default listen on localhost 9090
 pub const DEFAULT_PROMETHEUS_PORT: i32 = 9090;
 
 const ACTOR_INVOCATIONS: &str = "wasmcloud_actor_invocations";
@@ -31,16 +33,16 @@ const HOST_INFORMATION: &str = "wasmcloud_host_information";
 #[derive(Clone, Debug)]
 /// `MetricBackend` supports otlp and prometheus exporters
 pub enum MetricBackend {
-    /// OTLP supports an endpoint and port to send metrics to
-    Otlp(String, u32),
+    /// OTLP supports an endpoint to send metrics to
+    Otlp(String, OtlpMode),
     /// Prometheus supports a port to listen on and defaults to 9090
-    Prometheus(u32),
+    Prometheus(i32),
     /// Debug sends metrics to stdout
     Debug,
 }
 
 #[derive(Debug)]
-// Metrics contains the set of metrics wasmcloud can export
+/// Metrics contains the set of metrics wasmcloud can export
 pub struct Metrics {
     meter_provider: MeterProvider,
     /// The number of invocations per actor
@@ -65,23 +67,45 @@ pub struct Metrics {
     pub host_information: Counter<u64>,
 }
 
-fn otlp_metrics() -> MeterProvider {
-    let export_config = opentelemetry_otlp::ExportConfig {
-        endpoint: "http://localhost:4318/v1/metrics".to_string(),
-        ..opentelemetry_otlp::ExportConfig::default()
-    };
-    opentelemetry_otlp::new_pipeline()
-        .metrics(opentelemetry::sdk::runtime::Tokio)
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_export_config(export_config),
-        )
-        .build()
-        .unwrap()
+#[derive(Debug, Clone)]
+/// Configures the protocol for otlp to export metrics in
+pub enum OtlpMode {
+    /// Uses grpc
+    Otlp,
+    /// Uses http
+    Http,
 }
 
-fn prometheus_metrics() -> MeterProvider {
+fn otlp_metrics(endpoint: String, mode: &OtlpMode) -> MeterProvider {
+    debug!("using otel metrics with endpoint: {}", endpoint);
+    let export_config = opentelemetry_otlp::ExportConfig {
+        endpoint,
+        ..opentelemetry_otlp::ExportConfig::default()
+    };
+    match mode {
+        OtlpMode::Otlp => opentelemetry_otlp::new_pipeline()
+            .metrics(opentelemetry::sdk::runtime::Tokio)
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_export_config(export_config),
+            )
+            .build()
+            .unwrap(),
+        OtlpMode::Http => opentelemetry_otlp::new_pipeline()
+            .metrics(opentelemetry::runtime::Tokio)
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .http()
+                    .with_export_config(export_config),
+            )
+            .build()
+            .unwrap(),
+    }
+}
+
+fn prometheus_metrics(port: i32) -> MeterProvider {
+    debug!("using prometheus metrics on port: {}", port);
     let registry = Registry::new();
     let exporter = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
@@ -91,6 +115,7 @@ fn prometheus_metrics() -> MeterProvider {
 }
 
 fn debug_metrics() -> MeterProvider {
+    debug!("using debug metrics");
     MeterProvider::builder()
         .with_reader(
             PeriodicReader::builder(
@@ -104,8 +129,8 @@ fn debug_metrics() -> MeterProvider {
 
 fn provider(backend: MetricBackend) -> MeterProvider {
     match backend {
-        MetricBackend::Otlp(_, _) => otlp_metrics(),
-        MetricBackend::Prometheus(_) => prometheus_metrics(),
+        MetricBackend::Otlp(endpoint, _) => otlp_metrics(endpoint, &OtlpMode::Otlp),
+        MetricBackend::Prometheus(port) => prometheus_metrics(port),
         MetricBackend::Debug => debug_metrics(),
     }
 }
@@ -115,7 +140,7 @@ impl Metrics {
     #[must_use]
     pub fn new(backend: MetricBackend, labels: &HashMap<String, String>) -> Self {
         let provider = provider(backend);
-        let meter = global::meter("wasmcloud");
+        let meter = provider.meter("wasmcloud");
         let host_labels = meter.u64_counter(HOST_LABELS).init();
         let mut otel_labels: Vec<KeyValue> = vec![];
 

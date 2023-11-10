@@ -5,6 +5,7 @@ pub use config::Host as HostConfig;
 
 mod event;
 
+/// wasmcloud metrics using opentelemetry backends
 pub mod metrics;
 
 use crate::{
@@ -1203,10 +1204,10 @@ impl ActorInstance {
         //TODO link_def, lattice_id, source, version
         self.metrics.actor_invocations.add(
             1,
-            &[opentelemetry::KeyValue::new(
-                "actor_id",
-                self.image_reference.clone(),
-            )],
+            &[
+                opentelemetry::KeyValue::new("actor_id", self.image_reference.clone()),
+                opentelemetry::KeyValue::new("actor", "ok".to_string()),
+            ],
         );
         // Validate that the actor has the capability to receive the invocation
         ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
@@ -2583,14 +2584,14 @@ impl Host {
 
         debug!(?timeout, "handling stop host");
 
+        //match m.shutdown() {
+        //    Ok(()) => (),
+        //    Err(e) => error!(e, "error shutting down metrics"),
+        //};
         self.heartbeat.abort();
         self.data_watch.abort();
         self.queue.abort();
         self.policy_manager.policy_changes.abort();
-        match self.metrics.shutdown() {
-            Ok(()) => (),
-            Err(e) => error!(e, "error"),
-        };
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
