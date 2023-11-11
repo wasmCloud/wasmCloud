@@ -76,3 +76,10 @@ pub struct ScaleCommandOutput {
     pub success: bool,
     pub result: String,
 }
+
+/// JSON output representation of the `wash call` command
+#[derive(Debug, Deserialize)]
+pub struct CallCommandOutput {
+    pub success: bool,
+    pub response: serde_json::Value,
+}

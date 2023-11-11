@@ -273,6 +273,7 @@ pub fn call_output(
             HashMap::<String, serde_json::Value>::new(),
         ));
     }
+
     if is_test {
         // try to decode it as TestResults, otherwise dump as text
         let test_results: Vec<TestResult> =
@@ -290,11 +291,13 @@ pub fn call_output(
         ));
     }
 
-    let mut json = HashMap::new();
-    json.insert(
-        "response".to_string(),
-        msgpack_to_json_val(response.clone(), bin),
-    );
+    let json = HashMap::from([
+        (
+            "response".to_string(),
+            msgpack_to_json_val(response.clone(), bin),
+        ),
+        ("success".to_string(), serde_json::json!(true)),
+    ]);
 
     Ok(CommandOutput::new(
         format!(
