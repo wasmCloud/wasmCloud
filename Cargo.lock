@@ -1537,7 +1537,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
+name = "tracing"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -5544,7 +5544,7 @@ dependencies = [
  "cloudevents-sdk",
  "console",
  "dirs",
- "env_logger",
+ "tracing",
  "futures",
  "indicatif",
  "log",

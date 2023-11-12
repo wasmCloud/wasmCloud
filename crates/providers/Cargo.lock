@@ -685,7 +685,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
+name = "tracing"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -3173,7 +3173,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc48258fe9b2c61bf78d21f7fd84a22769de339a79b5ef82bcdf7cebd42b7eb6"
 dependencies = [
  "data-encoding",
- "env_logger",
+ "tracing",
  "humantime",
  "lazy_static",
  "log",

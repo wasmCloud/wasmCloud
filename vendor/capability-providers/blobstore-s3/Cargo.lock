@@ -953,7 +953,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
+name = "tracing"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a12e6657c4c97ebab115a42dcee77225f7f482cdd841cf7088c657a42e9e00e7"
@@ -966,7 +966,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
+name = "tracing"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -3133,7 +3133,7 @@ checksum = "c38c03de923f80027cb62281f520bd97245a38eeb85a53f435a110509d044551"
 dependencies = [
  "base64 0.13.1",
  "data-encoding",
- "env_logger 0.10.0",
+ "tracing 0.10.0",
  "humantime",
  "lazy_static",
  "log",
@@ -3336,7 +3336,7 @@ dependencies = [
  "base64 0.13.1",
  "bytes",
  "crc32fast",
- "env_logger 0.9.3",
+ "tracing 0.9.3",
  "fastrand",
  "futures",
  "futures-util",

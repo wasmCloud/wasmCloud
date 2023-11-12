@@ -70,7 +70,7 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// get and set
 async fn get_set(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
-    env_logger::try_init().ok();
+    tracing::try_init().ok();
 
     // create client and ctx
     let kv = KeyValueSender::via(prov);
@@ -134,7 +134,7 @@ async fn json_values(_opt: &TestOptions) -> RpcResult<()> {
     use std::collections::HashMap;
 
     let prov = test_provider().await;
-    env_logger::try_init().ok();
+    tracing::try_init().ok();
 
     let vault_direct = kv_vault_lib::client::Client::new(kv_vault_lib::config::Config::default())
         .expect("client from defaults");

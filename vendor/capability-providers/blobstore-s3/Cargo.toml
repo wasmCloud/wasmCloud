@@ -35,7 +35,7 @@ wasmbus-rpc = { version = "0.14", features = ["otel"] }
 rand = "0.8"
 fastrand = "1.7"
 crc32fast = "1.3.2"
-env_logger = "0.9"
+tracing = "0.9"
 wasmcloud-test-util = "0.10"
 wasmcloud-interface-blobstore = "0.7"
 
