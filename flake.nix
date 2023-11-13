@@ -19,7 +19,7 @@
   inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters/v0.3.0;
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
-  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.3;
+  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.5-rc1;
 
   outputs = {
     nixify,
@@ -138,7 +138,6 @@
                 buildInputs
                 ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
                   pkgs.darwin.apple_sdk.frameworks.Security
-                  pkgs.libiconv
                   pkgs.xcbuild.xcrun
                 ];
 
@@ -153,6 +152,8 @@
                 depsBuildBuild
                 ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
                   darwin.apple_sdk.frameworks.CoreFoundation
+                  darwin.apple_sdk.frameworks.CoreServices
+                  darwin.apple_sdk.frameworks.SystemConfiguration
                   libiconv
                 ];
 
@@ -177,21 +178,6 @@
           pkgs,
           ...
         }: let
-          mkAdapter = name: src:
-            pkgs.stdenv.mkDerivation {
-              inherit
-                name
-                src
-                ;
-
-              dontUnpack = true;
-              dontBuild = true;
-
-              installPhase = ''
-                install $src $out
-              '';
-            };
-
           pullDebian = {
             imageDigest,
             sha256,
@@ -365,15 +351,16 @@
           ...
         }:
           extendDerivations {
-            buildInputs = [
-              pkgs.buildah
-              pkgs.cargo-audit
-              pkgs.nats-server
-              pkgs.protobuf # prost build dependency
-              pkgs.redis
-              pkgs.tinygo
-              pkgs.wit-deps
-            ];
+            buildInputs =
+              [
+                pkgs.buildah
+                pkgs.cargo-audit
+                pkgs.nats-server
+                pkgs.protobuf # prost build dependency
+                pkgs.redis
+                pkgs.wit-deps
+              ]
+              ++ optional (!(pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64)) pkgs.tinygo; # TinyGo currently fails to buid due to GDB not being supported on aarch64-darwin
           }
           devShells;
       };
