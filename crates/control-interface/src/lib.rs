@@ -173,8 +173,11 @@ impl Client {
     /// Retrieves the contents of a running host
     #[instrument(level = "debug", skip_all)]
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
-        let subject =
-            broker::queries::host_inventory(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let subject = broker::queries::host_inventory(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
+        );
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -209,7 +212,7 @@ impl Client {
     ) -> Result<Vec<ActorAuctionAck>> {
         let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice_prefix);
         let bytes = json_serialize(ActorAuctionRequest {
-            actor_ref: actor_ref.to_string(),
+            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
             constraints,
         })?;
         debug!("actor_auction:publish {}", &subject);
@@ -230,8 +233,8 @@ impl Client {
     ) -> Result<Vec<ProviderAuctionAck>> {
         let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice_prefix);
         let bytes = json_serialize(ProviderAuctionRequest {
-            provider_ref: provider_ref.to_string(),
-            link_name: link_name.to_string(),
+            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
+            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
             constraints,
         })?;
         debug!("provider_auction:publish {}", &subject);
@@ -256,7 +259,13 @@ impl Client {
     ) -> Result<CtlOperationAck> {
         // It makes no logical sense to start 0 actors, so we represent that as an unbounded max instead.
         let max = if count == 0 { None } else { Some(count) };
-        self.scale_actor(host_id, actor_ref, max, annotations).await
+        self.scale_actor(
+            parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
+            parse_identifier(&IdentifierKind::ActorRef, actor_ref)?.as_str(),
+            max,
+            annotations,
+        )
+        .await
     }
 
     /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of
@@ -281,13 +290,17 @@ impl Client {
         max_concurrent: Option<u16>,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::scale_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let subject = broker::commands::scale_actor(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            host_id.as_str(),
+        );
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             max_concurrent,
-            actor_ref: actor_ref.to_string(),
-            host_id: host_id.to_string(),
+            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
+            host_id,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -331,10 +344,10 @@ impl Client {
         values: HashMap<String, String>,
     ) -> Result<CtlOperationAck> {
         let ld = LinkDefinition {
-            actor_id: actor_id.to_string(),
-            provider_id: provider_id.to_string(),
-            contract_id: contract_id.to_string(),
-            link_name: link_name.to_string(),
+            actor_id: parse_identifier(&IdentifierKind::ActorId, actor_id)?,
+            provider_id: parse_identifier(&IdentifierKind::ProviderId, provider_id)?,
+            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
+            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
             values,
         };
 
@@ -360,9 +373,9 @@ impl Client {
         let subject = broker::remove_link(&self.topic_prefix, &self.lattice_prefix);
         debug!("remove_link:request {}", &subject);
         let ld = LinkDefinition {
-            actor_id: actor_id.to_string(),
-            contract_id: contract_id.to_string(),
-            link_name: link_name.to_string(),
+            actor_id: parse_identifier(&IdentifierKind::ActorId, actor_id)?,
+            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
+            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
             ..Default::default()
         };
         let bytes = crate::json_serialize(&ld)?;
@@ -404,13 +417,17 @@ impl Client {
         new_actor_ref: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::update_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let subject = broker::commands::update_actor(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            host_id.as_str(),
+        );
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
-            host_id: host_id.to_string(),
-            actor_id: existing_actor_id.to_string(),
-            new_actor_ref: new_actor_ref.to_string(),
+            host_id,
+            actor_id: parse_identifier(&IdentifierKind::ActorId, existing_actor_id)?,
+            new_actor_ref: parse_identifier(&IdentifierKind::ActorRef, new_actor_ref)?,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -434,13 +451,20 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::start_provider(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let subject = broker::commands::start_provider(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            host_id.as_str(),
+        );
         debug!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
-            host_id: host_id.to_string(),
-            provider_ref: provider_ref.to_string(),
-            link_name: link_name.unwrap_or_else(|| "default".to_string()),
+            host_id,
+            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
+            link_name: parse_identifier(
+                &IdentifierKind::LinkName,
+                link_name.unwrap_or_else(|| "default".to_string()).as_str(),
+            )?,
             annotations,
             configuration: provider_configuration,
         })?;
@@ -464,16 +488,22 @@ impl Client {
         contract_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::stop_provider(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+
+        let subject = broker::commands::stop_provider(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            host_id.as_str(),
+        );
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
-            host_id: host_id.to_string(),
-            provider_ref: provider_ref.to_string(),
-            link_name: link_name.to_string(),
-            contract_id: contract_id.to_string(),
+            host_id,
+            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
+            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
+            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
             annotations,
         })?;
+
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {e}").into()),
@@ -491,12 +521,16 @@ impl Client {
         actor_ref: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::stop_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let subject = broker::commands::stop_actor(
+            &self.topic_prefix,
+            &self.lattice_prefix,
+            host_id.as_str(),
+        );
         debug!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
-            host_id: host_id.to_string(),
-            actor_ref: actor_ref.to_string(),
+            host_id,
+            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -515,11 +549,12 @@ impl Client {
         host_id: &str,
         timeout_ms: Option<u64>,
     ) -> Result<CtlOperationAck> {
+        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
-            broker::commands::stop_host(&self.topic_prefix, &self.lattice_prefix, host_id);
+            broker::commands::stop_host(&self.topic_prefix, &self.lattice_prefix, host_id.as_str());
         debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
-            host_id: host_id.to_owned(),
+            host_id,
             timeout: timeout_ms,
         })?;
 
@@ -674,6 +709,51 @@ pub async fn collect_sub_timeout<T: DeserializeOwned>(
     items
 }
 
+enum IdentifierKind {
+    HostId,
+    ActorId,
+    ActorRef,
+    ProviderId,
+    ProviderRef,
+    ContractId,
+    LinkName,
+}
+
+//NOTE(ahmedtadde): For an initial implementation, we just want to make sure that the identifier is, at very least, not an empty string.
+//This parser should be refined over time as needed.
+fn parse_identifier<T: AsRef<str>>(kind: &IdentifierKind, value: T) -> Result<String> {
+    let value = value.as_ref();
+    let assert_non_empty_string = |input: &str, message: Option<String>| -> Result<String> {
+        if input.trim().is_empty() {
+            Err(format!(
+                "Empty string provided for {}",
+                message.unwrap_or_else(|| "entity identifier".to_string())
+            )
+            .into())
+        } else {
+            Ok(input.trim().to_string())
+        }
+    };
+
+    match kind {
+        IdentifierKind::HostId => assert_non_empty_string(value, Some("Host ID".to_string())),
+        IdentifierKind::ActorId => assert_non_empty_string(value, Some("Actor ID".to_string())),
+        IdentifierKind::ActorRef => {
+            assert_non_empty_string(value, Some("Actor OCI reference".to_string()))
+        }
+        IdentifierKind::ProviderId => {
+            assert_non_empty_string(value, Some("Provider ID".to_string()))
+        }
+        IdentifierKind::ProviderRef => {
+            assert_non_empty_string(value, Some("Provider OCI reference".to_string()))
+        }
+        IdentifierKind::ContractId => {
+            assert_non_empty_string(value, Some("Contract ID".to_string()))
+        }
+        IdentifierKind::LinkName => assert_non_empty_string(value, Some("Link Name".to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +777,31 @@ mod tests {
         });
         println!("Listening to Cloud Events for 120 seconds. Then we will quit.");
         tokio::time::sleep(Duration::from_secs(120)).await;
+    }
+
+    #[test]
+    fn test_parse_identifier() -> Result<()> {
+        assert!(parse_identifier(&IdentifierKind::HostId, "").is_err());
+        assert!(parse_identifier(&IdentifierKind::HostId, " ").is_err());
+        let host_id = parse_identifier(&IdentifierKind::HostId, "             ");
+        assert!(host_id.is_err(), "parsing host id should have failed");
+        assert!(host_id
+            .unwrap_err()
+            .to_string()
+            .contains("Empty string provided for Host ID"));
+        let provider_ref = parse_identifier(&IdentifierKind::ProviderRef, "");
+        assert!(
+            provider_ref.is_err(),
+            "parsing provider ref should have failed"
+        );
+        assert!(provider_ref
+            .unwrap_err()
+            .to_string()
+            .contains("Empty string provided for Provider OCI reference"));
+        assert!(parse_identifier(&IdentifierKind::HostId, "host_id").is_ok());
+        let actor_id = parse_identifier(&IdentifierKind::ActorId, "            iambatman  ")?;
+        assert_eq!(actor_id, "iambatman");
+
+        Ok(())
     }
 }
