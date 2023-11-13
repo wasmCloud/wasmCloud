@@ -113,8 +113,8 @@ podSecurityContext:
   # fsGroup: 2000
 
 securityContext:
-  runAsUser: 10000
-  runAsGroup: 10000
+  runAsUser: 1000
+  runAsGroup: 1000
   runAsNonRoot: true
   allowPrivilegeEscalation: false
   capabilities:
