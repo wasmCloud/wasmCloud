@@ -233,7 +233,8 @@ pub struct WasmcloudOpts {
     )]
     pub enable_structured_logging: bool,
 
-    #[clap(short = 'l', long = "label")]
+    /// A label to apply to the host, in the form of `key=value`. This flag can be repeated to supply multiple labels
+    #[clap(short = 'l', long = "label", alias = "labels")]
     pub label: Option<Vec<String>>,
 
     /// Controls the verbosity of JSON structured logs from the wasmCloud host
