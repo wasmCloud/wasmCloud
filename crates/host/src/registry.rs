@@ -3,7 +3,7 @@ use tracing::warn;
 /// Credentials for a registry containing wasmCloud artifacts
 #[derive(Debug, Default)]
 pub struct Config {
-    /// The type of the registry (either OCI or Bindle)
+    /// The type of the registry (only OCI is supported at this time)
     pub reg_type: Type,
     /// The auth settings for the registry
     pub auth: Auth,
@@ -16,8 +16,6 @@ pub struct Config {
 /// The type of a registry
 #[derive(Debug, Default)]
 pub enum Type {
-    /// Bindle registry
-    Bindle,
     /// OCI registry
     #[default]
     Oci,
@@ -40,7 +38,6 @@ impl From<wasmcloud_control_interface::RegistryCredential> for Config {
         Self {
             reg_type: match creds.registry_type.as_str() {
                 "oci" => Type::Oci,
-                "bindle" => Type::Bindle,
                 registry_type => {
                     warn!(%registry_type, "unknown registry type, defaulting to OCI");
                     Type::Oci

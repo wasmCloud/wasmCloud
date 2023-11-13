@@ -10,9 +10,6 @@ pub mod local;
 /// wasmbus host
 pub mod wasmbus;
 
-/// bindle artifact fetching
-pub mod bindle;
-
 /// OCI artifact fetching
 pub mod oci;
 
@@ -59,7 +56,6 @@ fn socket_pair() -> anyhow::Result<(tokio::io::DuplexStream, tokio::io::DuplexSt
 #[derive(PartialEq)]
 enum ResourceRef<'a> {
     File(PathBuf),
-    Bindle(&'a str),
     Oci(&'a str),
 }
 
@@ -74,12 +70,6 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
                         .to_file_path()
                         .map(Self::File)
                         .map_err(|()| anyhow!("failed to convert `{url}` to a file path")),
-                    "bindle" => {
-                        // Note: bindle is not a scheme, but using this as a prefix takes out the guesswork
-                        s.strip_prefix("bindle://")
-                            .map(Self::Bindle)
-                            .context("invalid Bindle reference")
-                    }
                     "oci" => {
                         // Note: oci is not a scheme, but using this as a prefix takes out the guesswork
                         s.strip_prefix("oci://")
@@ -116,7 +106,7 @@ impl ResourceRef<'_> {
     fn authority(&self) -> Option<&str> {
         match self {
             ResourceRef::File(_) => None,
-            ResourceRef::Bindle(s) | ResourceRef::Oci(s) => {
+            ResourceRef::Oci(s) => {
                 let (l, _) = s.split_once('/')?;
                 Some(l)
             }
@@ -139,14 +129,6 @@ pub async fn fetch_actor(
             );
             fs::read(actor_ref).await.context("failed to read actor")
         }
-        ref bindle_ref @ ResourceRef::Bindle(actor_ref) => bindle_ref
-            .authority()
-            .and_then(|authority| registry_config.get(authority))
-            .map(bindle::Fetcher::from)
-            .unwrap_or_default()
-            .fetch_actor(actor_ref)
-            .await
-            .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
         ref oci_ref @ ResourceRef::Oci(actor_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
@@ -176,16 +158,6 @@ pub async fn fetch_provider(
                 .await
                 .context("failed to read provider")
         }
-        ref bindle_ref @ ResourceRef::Bindle(provider_ref) => bindle_ref
-            .authority()
-            .and_then(|authority| registry_config.get(authority))
-            .map(bindle::Fetcher::from)
-            .unwrap_or_default()
-            .fetch_provider(&provider_ref, link_name)
-            .await
-            .with_context(|| {
-                format!("failed to fetch provider under Bindle reference `{provider_ref}`")
-            }),
         ref oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
@@ -207,14 +179,6 @@ fn parse_references() -> anyhow::Result<()> {
         ResourceRef::try_from(file_url).expect("failed to parse")
             == ResourceRef::File("/tmp/foo_s.wasm".into()),
         "file reference should be parsed as file and converted to path"
-    );
-
-    // bindle:// "scheme" URL
-    ensure!(
-        ResourceRef::try_from("bindle://some-bindle-server/stuff/mybindle/v0.1.2.3")
-            .expect("failed to parse")
-            == ResourceRef::Bindle("some-bindle-server/stuff/mybindle/v0.1.2.3"),
-        "bindle reference should be parsed as Bindle and stripped of scheme"
     );
 
     // oci:// "scheme" URL

@@ -223,7 +223,7 @@ pub struct RegistryCredential {
     /// If supplied, username and password will be used for HTTP Basic authentication
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    /// The type of the registry (either "oci" or "bindle")
+    /// The type of the registry (only "oci" is supported at this time")
     #[serde(rename = "registryType")]
     pub registry_type: String,
 }
