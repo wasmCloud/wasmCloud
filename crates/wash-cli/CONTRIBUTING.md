@@ -10,6 +10,6 @@ start if you're looking to contribute.
 - [Developing `wash` Rust Development Guide](./docs/DEVELOPMENT.md)
 - [Contributing to the Washboard UI](./washboard/CONTRIBUTING.md)
 
-[0]: https://github.com/wasmcloud/wash/issues/new/choose
-[1]: https://github.com/wasmcloud/wash/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
+[0]: https://github.com/wasmCloud/wasmCloud/issues/new/choose
+[1]: https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
 [2]: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md

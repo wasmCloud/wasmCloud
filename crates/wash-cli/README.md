@@ -1,8 +1,8 @@
-[![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wash?color=success&include_prereleases)](https://github.com/wasmCloud/wash/releases)
-[![Rust Build](https://img.shields.io/github/actions/workflow/status/wasmcloud/wash/rust_ci.yml?branch=main)](https://github.com/wasmCloud/wash/actions/workflows/rust_ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/wasmCloud/wasmCloud?filter=wash*)](https://github.com/wasmCloud/wasmCloud/releases)
+[![Rust Build](https://img.shields.io/github/actions/workflow/status/wasmCloud/wasmCloud/wash.yml?branch=main)](https://github.com/wasmCloud/wasmCloud/actions/workflows/wash.yml)
 [![Rust Version](https://img.shields.io/badge/rustc-1.66.0-orange.svg)](https://blog.rust-lang.org/2022/12/15/Rust-1.66.0.html)
-[![Contributors](https://img.shields.io/github/contributors/wasmcloud/wash)](https://github.com/wasmCloud/wash/graphs/contributors)
-[![Good first issues](https://img.shields.io/github/issues/wasmcloud/wash/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wash/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+[![Contributors](https://img.shields.io/github/contributors/wasmCloud/wasmCloud)](https://github.com/wasmCloud/wasmCloud/graphs/contributors)
+[![Good first issues](https://img.shields.io/github/issues/wasmCloud/wasmCloud/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22+label%3A%22wash-cli%22)
 [![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli)
 
 ```

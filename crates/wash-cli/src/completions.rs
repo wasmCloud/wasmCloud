@@ -10,7 +10,8 @@ use wash_lib::cli::CommandOutput;
 use wash_lib::config::cfg_dir;
 
 const TOKEN_FILE: &str = ".completion_suggested";
-const COMPLETION_DOC_URL: &str = "https://github.com/wasmCloud/wash/blob/main/Completions.md";
+const COMPLETION_DOC_URL: &str =
+    "https://github.com/wasmCloud/wasmCloud/blob/main/crates/wash-cli/Completions.md";
 
 fn instructions() -> String {
     format!(
