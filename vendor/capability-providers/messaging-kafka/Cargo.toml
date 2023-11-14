@@ -8,7 +8,7 @@ resolver = "2"
 async-trait = "0.1"
 futures = "0.3"
 serde = {version = "1.0", features = ["derive"] }
-tracing = "0.1.37"
+tracing = "0.1.40"
 wasmbus-rpc = { version = "0.14.0" }
 tokio = { version = "1.0" }
 rskafka = "0.4.0"

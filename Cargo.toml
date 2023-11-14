@@ -95,7 +95,7 @@ console = { version = "0.15", default-features = false }
 data-encoding = { version = "2.3", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 dirs = { version = "4", default-features = false }
-tracing = { version = "0.10", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
 futures = { version = "0.3", default-features = false }
 heck = { version = "0.4", default-features = false }
 hex = { version = "0.4", default-features = false }
@@ -158,7 +158,7 @@ tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
-tracing-opentelemetry = { version = "0.20", default-features = false }
+tracing-opentelemetry = { version = "0.22.0", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }

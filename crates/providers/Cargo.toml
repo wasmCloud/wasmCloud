@@ -41,7 +41,7 @@ serde_json = { version = "1", default-features = false }
 thiserror = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 toml = { version = "0.8", default-features = false }
-tracing = { version = "0.1", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.20", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }

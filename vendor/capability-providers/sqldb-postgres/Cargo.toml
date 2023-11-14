@@ -25,7 +25,7 @@ bb8-postgres = "0.8.1"
 bit-vec = "0.6"
 uuid = "1.1.2"
 toml = "0.5"
-tracing = "0.1"
+tracing = "0.1.40"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wasmbus-rpc = { version = "0.14", features = [ "otel" ] }
 wasmcloud-interface-sqldb = "0.10"
