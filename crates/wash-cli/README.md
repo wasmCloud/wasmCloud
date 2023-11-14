@@ -69,10 +69,15 @@ sudo apt install wash
 sudo snap install wash --edge --devmode
 ```
 
+### Linux (brew)
+
+```
+brew install wash
+```
+
 ### MacOS (brew)
 
 ```
-brew tap wasmcloud/wasmcloud
 brew install wash
 ```
 
