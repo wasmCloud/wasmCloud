@@ -3091,7 +3091,6 @@ dependencies = [
  "serde_bytes",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
@@ -3131,7 +3130,6 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tracing",
- "tracing-subscriber",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
@@ -3155,8 +3153,8 @@ dependencies = [
  "toml",
  "tracing",
  "warp",
- "wasmcloud-compat",
  "wasmcloud-provider-sdk",
+ "wasmcloud-provider-wit-bindgen",
 ]
 
 [[package]]
@@ -3180,7 +3178,6 @@ name = "wasmcloud-provider-kvredis"
 version = "0.21.2"
 dependencies = [
  "async-trait",
- "base64",
  "redis",
  "serde",
  "serde_json",

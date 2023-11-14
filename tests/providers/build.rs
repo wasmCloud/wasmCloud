@@ -153,12 +153,12 @@ async fn main() -> anyhow::Result<()> {
     let mut artifacts = build_artifacts(
         [
             "--manifest-path=../../crates/providers/Cargo.toml",
-            "-p=wasmcloud-provider-blobstore-s3",
             "-p=wasmcloud-provider-blobstore-fs",
+            "-p=wasmcloud-provider-blobstore-s3",
             "-p=wasmcloud-provider-httpclient",
             "-p=wasmcloud-provider-httpserver",
-            "-p=wasmcloud-provider-kvredis",
             "-p=wasmcloud-provider-kv-vault",
+            "-p=wasmcloud-provider-kvredis",
             "-p=wasmcloud-provider-nats",
         ],
         |name, kind| {
@@ -256,8 +256,8 @@ async fn main() -> anyhow::Result<()> {
                     rust_nats,
                 ),
             )?;
-            println!("cargo:rustc-env=RUST_BLOBSTORE_S3_SUBJECT={rust_blobstore_s3_seed}");
             println!("cargo:rustc-env=RUST_BLOBSTORE_FS_SUBJECT={rust_blobstore_fs_seed}");
+            println!("cargo:rustc-env=RUST_BLOBSTORE_S3_SUBJECT={rust_blobstore_s3_seed}");
             println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
             println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");

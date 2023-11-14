@@ -10,7 +10,6 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-base64 = { workspace = true }
 redis = { workspace = true, features = [
     "tokio-comp",
     "aio",
