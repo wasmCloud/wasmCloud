@@ -2594,16 +2594,6 @@ dependencies = [
 
 [[package]]
 name = "nuid"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b61b1710432e483e6a67b20b6c60c6afe0e2fad67aabba3bdb912f3f70ff6ae"
-dependencies = [
- "once_cell",
- "rand",
-]
-
-[[package]]
-name = "nuid"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc895af95856f929163a0aa20c26a78d26bfdc839f51b9d5aa7a5b79e52b7e83"
@@ -4977,7 +4967,7 @@ dependencies = [
  "humantime",
  "log",
  "nkeys",
- "nuid 0.4.1",
+ "nuid 0.5.0",
  "ring 0.17.5",
  "serde",
  "serde_json",
