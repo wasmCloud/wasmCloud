@@ -21,6 +21,5 @@ reqwest = { workspace = true, features = ["rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = [ "std", "fmt", "env-filter", "json", "ansi" ] }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wasmcloud-provider-wit-bindgen = { workspace = true }

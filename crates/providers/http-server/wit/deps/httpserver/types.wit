@@ -1,0 +1,27 @@
+package wasmcloud:httpserver;
+
+interface types {
+    /// Incoming HTTP request
+    record http-request {
+      /// HTTP method
+      method: string,
+      /// Path of the HTTP request
+      path: string,
+      /// Query string sent with the HTTP request
+      query-string: string,
+      /// Headers to accompany the HTTP request
+      header-map: list<tuple<string, list<string>>>,
+      /// Body to send with the HTTP request
+      body: list<u8>,
+    }
+
+    /// Outgoing HTTP response (sent in response to a HTTP request)
+    record http-response {
+      /// HTTP status code
+      status-code: u16,
+      /// Headers to accompany the HTTP response
+      header-map: list<tuple<string, list<string>>>,
+      /// Body to send with the HTTP response
+      body: list<u8>,
+    }
+}

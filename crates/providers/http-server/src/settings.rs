@@ -21,7 +21,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::{collections::HashMap, fmt, io::ErrorKind, net::SocketAddr, ops::Deref, str::FromStr};
 
-use crate::Error;
+use crate::HttpServerError;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8000";
 const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Debug;
@@ -118,19 +118,19 @@ macro_rules! merge {
 
 impl ServiceSettings {
     /// load Settings from a file with .toml or .json extension
-    fn from_file<P: AsRef<Path>>(fpath: P) -> Result<Self, Error> {
+    fn from_file<P: AsRef<Path>>(fpath: P) -> Result<Self, HttpServerError> {
         let data = std::fs::read_to_string(&fpath).map_err(|e| {
-            Error::Settings(format!("reading file {}: {}", &fpath.as_ref().display(), e))
+            HttpServerError::Settings(format!("reading file {}: {}", &fpath.as_ref().display(), e))
         })?;
         if let Some(ext) = fpath.as_ref().extension() {
             let ext = ext.to_string_lossy();
             match ext.as_ref() {
                 "json" => ServiceSettings::from_json(&data),
                 "toml" => ServiceSettings::from_toml(&data),
-                _ => Err(Error::Settings(format!("unrecognized extension {}", ext))),
+                _ => Err(HttpServerError::Settings(format!("unrecognized extension {}", ext))),
             }
         } else {
-            Err(Error::Settings(format!(
+            Err(HttpServerError::Settings(format!(
                 "unrecognized file type {}",
                 &fpath.as_ref().display()
             )))
@@ -138,13 +138,13 @@ impl ServiceSettings {
     }
 
     /// load settings from json
-    fn from_json(data: &str) -> Result<Self, Error> {
-        serde_json::from_str(data).map_err(|e| Error::Settings(format!("invalid json: {}", e)))
+    fn from_json(data: &str) -> Result<Self, HttpServerError> {
+        serde_json::from_str(data).map_err(|e| HttpServerError::Settings(format!("invalid json: {}", e)))
     }
 
     /// load settings from toml file
-    fn from_toml(data: &str) -> Result<Self, Error> {
-        toml::from_str(data).map_err(Error::SettingsToml)
+    fn from_toml(data: &str) -> Result<Self, HttpServerError> {
+        toml::from_str(data).map_err(HttpServerError::SettingsToml)
     }
 
     /// Merge settings from other into self
@@ -158,7 +158,7 @@ impl ServiceSettings {
     /// perform additional validation checks on settings.
     /// Several checks have already been done during deserialization.
     /// All errors found are combined into a single error message
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self) -> Result<(), HttpServerError> {
         let mut errors = Vec::new();
         // 1. amke sure address is valid
         if self.address.is_none() {
@@ -203,7 +203,7 @@ impl ServiceSettings {
             }
         }
         if !errors.is_empty() {
-            Err(Error::Settings(format!(
+            Err(HttpServerError::Settings(format!(
                 "\nInvalid httpserver settings: \n{}\n",
                 errors.join("\n")
             )))
@@ -222,10 +222,10 @@ impl ServiceSettings {
 /// If more than one key is provided, they are processed in the order above.
 ///   (later names override earlier names in the list)
 ///
-pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Error> {
+pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, HttpServerError> {
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
-    let values: HashMap<String, &String> = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(
+    let values: HashMap<String, &String> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
         "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
             .to_string(),
     ))?;
@@ -239,7 +239,7 @@ pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Err
     if let Some(str) = values.get("config_b64") {
         let bytes = BASE64_STANDARD_NO_PAD
             .decode(str)
-            .map_err(|e| Error::Settings(format!("invalid base64 encoding: {}", e)))?;
+            .map_err(|e| HttpServerError::Settings(format!("invalid base64 encoding: {}", e)))?;
         settings.merge(ServiceSettings::from_json(&String::from_utf8_lossy(
             &bytes,
         ))?);
@@ -253,7 +253,7 @@ pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Err
     if let Some(addr) = values.get("address") {
         settings.address = Some(
             SocketAddr::from_str(addr)
-                .map_err(|_| Error::InvalidParameter(format!("invalid address: {}", addr)))?,
+                .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {}", addr)))?,
         );
     }
 
@@ -261,7 +261,7 @@ pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Err
     if let Some(addr) = values.get("port") {
         let port = addr
             .parse::<u16>()
-            .map_err(|_| Error::InvalidParameter(format!("Invalid port: {}", addr)))?;
+            .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {}", addr)))?;
         settings.address = Some(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             port,

@@ -38,8 +38,8 @@ use syn::{
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     visit_mut::{visit_item_mut, VisitMut},
-    FnArg, Item, ItemMod, ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token, TraitItem,
-    TraitItemFn, Type,
+    FnArg, Item, ItemEnum, ItemMod, ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token,
+    TraitItem, TraitItemFn, Type,
 };
 use tracing::{debug, trace, warn};
 use tracing_subscriber::EnvFilter;
@@ -48,6 +48,7 @@ mod vendor;
 use vendor::wasmtime_component_macro::bindgen::{
     expand as expand_wasmtime_component, Config as WitBindgenConfig,
 };
+use wit_parser::{Handle, Result_, Stream, Tuple, TypeDefKind};
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
 const EXPORTS_MODULE_NAME: &str = "exports";
@@ -68,8 +69,14 @@ type LatticeExposedInterface = (WitNamespaceName, WitPackageName, WitFunctionNam
 type StructName = String;
 type StructLookup = HashMap<StructName, (Punctuated<PathSegment, Token![::]>, ItemStruct)>;
 
+type EnumName = String;
+type EnumLookup = HashMap<EnumName, (Punctuated<PathSegment, Token![::]>, ItemEnum)>;
+
 type TypeName = String;
 type TypeLookup = HashMap<TypeName, (Punctuated<PathSegment, Token![::]>, ItemType)>;
+
+type FunctionTokenStream = TokenStream;
+type StructTokenStream = TokenStream;
 
 /// Inputs to the wit_bindgen_wasmcloud::provider::binary::generate! macro
 struct ProviderBindgenConfig {
@@ -146,20 +153,18 @@ impl Parse for WitFnList {
         for name_ident in fns {
             let name = name_ident.value();
             let mut split = name.split(':');
-            match (
-                split.next(),
-                split.nth(1),
-                split.nth(1).and_then(|rhs| rhs.split('/').nth(1)),
-            ) {
-                (Some(ns), Some(pkg), Some(fn_name)) => {
-                    debug!("adding lattice exposed interface {ns}:{pkg}/{fn_name}");
+            let ns = split.next();
+            let package_iface = split.next().and_then(|rhs| rhs.split_once('/'));
+            match (ns, package_iface) {
+                (Some(ns), Some((pkg, fn_name))) => {
+                    debug!("successfully parsed interface {ns}:{pkg}/{fn_name}");
                     inner.push((ns.into(), pkg.into(), fn_name.into()));
                 }
                 _ => {
                     return syn::Result::Err(
                         syn::Error::new(
                             Span::call_site(),
-                            "allow/deny list entries must be of the form \"<ns>:<package>/<interface>\", failed to process [\"{name}\"]"
+                            format!("allow/deny list entries must be of the form \"<ns>:<package>/<interface>\", failed to process [\"{name}\"]")
                         )
                     );
                 }
@@ -673,13 +678,51 @@ impl WitFunctionLatticeTranslationStrategy {
         iface_fn_name: &String,
         iface_fn: &wit_parser::Function,
         cfg: &ProviderBindgenConfig,
-    ) -> anyhow::Result<TokenStream> {
+    ) -> anyhow::Result<(Vec<StructTokenStream>, Vec<FunctionTokenStream>)> {
         match self {
             WitFunctionLatticeTranslationStrategy::Auto => {
                 match &iface_fn.params.as_slice() {
+                    // Handle the no-parameter case
                     [] => {
-                        bail!("exported functions with no arguments are not yet supported");
+                        let lattice_method = LitStr::new(
+                            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+                            Span::call_site(),
+                        );
+                        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
+
+                        let func_ts = quote::quote!(
+                            async fn #iface_fn_name(
+                                &self,
+                            ) -> ::wasmcloud_provider_sdk::error::ProviderInvocationResult<()> {
+                                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+                                let client = connection.get_rpc_client();
+                                let response = client
+                                    .send(
+                                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                            public_key: self.ld.provider_id.clone(),
+                                            link_name: self.ld.link_name.clone(),
+                                            contract_id: #contract_ident.to_string(),
+                                        },
+                                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                            public_key: self.ld.actor_id.clone(),
+                                            ..Default::default()
+                                        },
+                                        #lattice_method,
+                                        ::wasmcloud_provider_sdk::serialize(())?
+                                    )
+                                    .await?;
+
+                                if let Some(err) = response.error {
+                                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                                } else {
+                                    Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
+                                }
+                            }
+                        );
+
+                        Ok((vec![], vec![func_ts]))
                     }
+                    // Handle the single parameter case
                     [(arg_name, arg_type)] => {
                         // If there is one input, we can use it assuming it is the message being sent out onto the lattice
                         Self::translate_export_fn_via_first_arg(
@@ -691,7 +734,8 @@ impl WitFunctionLatticeTranslationStrategy {
                             cfg,
                         )
                     }
-                    // for n > 1 inputs, we can attempt bundling the arguments into one object
+                    // For exported functions with >1 parameters, we must attempt bundling the arguments into one object
+                    // to be sent out over the lattice
                     _ => Self::translate_export_fn_via_bundled_args(
                         iface,
                         iface_fn_name,
@@ -728,46 +772,31 @@ impl WitFunctionLatticeTranslationStrategy {
         arg_type: &wit_parser::Type,
         results: &wit_parser::Results,
         cfg: &ProviderBindgenConfig,
-    ) -> anyhow::Result<TokenStream> {
-        let rust_type = convert_wit_type(arg_type, cfg)
-                    .with_context(|| format!(
-                        r#"
-Un-named type detected on argument while parsing interface [{}].
-Please ensure that types for exported interface functions (normally a single record type representing a message to be sent on the lattice) are specified.
-"#,
-                        iface.name.clone().unwrap_or("<unknown>".into()),
-                    ))?;
-
+    ) -> anyhow::Result<(Vec<StructTokenStream>, Vec<FunctionTokenStream>)> {
+        let rust_type = convert_wit_type(arg_type, cfg)?;
         let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
-
         let lattice_method = LitStr::new(
             format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
             Span::call_site(),
         );
 
         let arg_name_ident = Ident::new(arg_name, Span::call_site());
-        let arg_type_ident = Ident::new(rust_type.as_str(), Span::call_site());
 
         let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
 
-        // Convert the WIT type into a Rust type
-        let result_rust_type_str: String = match results {
-            wit_parser::Results::Named(_params) => panic!("named results not supported"),
-            wit_parser::Results::Anon(t) => convert_wit_type(t, cfg)
-                    .with_context(|| format!(
-                        r#"
-Un-named type detected on argument while parsing interface [{}].
-Please ensure that types for exported interface functions (normally a single record type representing a message to be sent on the lattice) are specified.
-"#,
-                        iface.name.clone().unwrap_or("<unknown>".into()),
-                    ))?
-        };
-        let result_rust_type = format_ident!("{}", result_rust_type_str);
+        // Convert the WIT result type into a Rust type
+        let result_rust_type = results.to_rust_type(cfg).with_context(|| {
+            format!(
+                "Failed to convert WIT function results (returns) while parsing interface [{}]",
+                iface.name.clone().unwrap_or("<unknown>".into()),
+            )
+        })?;
 
-        Ok(quote::quote!(
+        // Return the generated function with appropriate args & return
+        let func_tokens = quote::quote!(
             async fn #fn_name(
                 &self,
-                #arg_name_ident: #arg_type_ident,
+                #arg_name_ident: #rust_type
             ) -> Result<#result_rust_type, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
                 let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
@@ -783,7 +812,7 @@ Please ensure that types for exported interface functions (normally a single rec
                             ..Default::default()
                         },
                         #lattice_method,
-                        ::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?,
+                        ::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?
                     )
                     .await?;
 
@@ -793,22 +822,97 @@ Please ensure that types for exported interface functions (normally a single rec
                     Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
                 }
             }
-        ))
+        );
+
+        Ok((vec![], vec![func_tokens]))
     }
 
     /// Translate an exported WIT function via bundled arguments
     fn translate_export_fn_via_bundled_args(
         iface: &wit_parser::Interface,
-        _iface_fn_name: &str,
-        _iface_fn: &wit_parser::Function,
-        _cfg: &ProviderBindgenConfig,
-    ) -> anyhow::Result<TokenStream> {
-        // TODO: add bundling of exported args to single struct
-        // TODO: handle WIT-map -> Map translation for arguments in iface
-        bail!(
-            r#"[warn] Functions on exported interfaces must only accept one argument, normally a record type that can be sent out on the lattice. Please modify the corresponding WIT file that contains interface [{}]"#,
-            iface.name.clone().unwrap_or("<unknown>".into())
+        iface_fn_name: &str,
+        iface_fn: &wit_parser::Function,
+        cfg: &ProviderBindgenConfig,
+    ) -> anyhow::Result<(Vec<StructTokenStream>, Vec<FunctionTokenStream>)> {
+        let fn_params = &iface_fn.params;
+        let fn_results = &iface_fn.results;
+        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
+        let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
+        let lattice_method = LitStr::new(
+            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+            Span::call_site(),
         );
+        // Build the invocation struct that will be used
+        let invocation_struct_name = format_ident!("{}Args", iface_fn_name.to_upper_camel_case());
+
+        // Build an Args struct for the arguments to this interface function
+        let mut struct_member_tokens: TokenStream = TokenStream::new();
+        for (idx, (name, ty_id)) in fn_params.iter().enumerate() {
+            let raw_type = convert_wit_type(ty_id, cfg)?;
+            let name = format_ident!("{}", name);
+            struct_member_tokens.append_all(quote::quote!(#name: #raw_type));
+            if idx != fn_params.len() - 1 {
+                struct_member_tokens.append(TokenTree::Punct(Punct::new(
+                    ',',
+                    proc_macro2::Spacing::Alone,
+                )));
+            }
+        }
+
+        // Build a struct that will be used to send args across the lattice
+        //
+        // This struct will eventually be written out, before the InvocationHandlers
+        let invocation_struct_tokens = quote::quote!(
+            #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+            pub struct #invocation_struct_name {
+                #struct_member_tokens
+            }
+        );
+
+        // Convert the WIT result type into a Rust type
+        let result_rust_type = fn_results.to_rust_type(cfg).with_context(|| {
+            format!(
+                "Failed to convert WIT function results (returns) while parsing interface [{}]",
+                iface.name.clone().unwrap_or("<unknown>".into()),
+            )
+        })?;
+
+        // Build token stream for the invocation function that can be called
+        //
+        // This function will eventually be written into the impl of an InvocationHandler
+        let func_tokens = quote::quote!(
+            async fn #fn_name(
+                &self,
+                args: #invocation_struct_name,
+            ) -> Result<#result_rust_type, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+
+                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+                let client = connection.get_rpc_client();
+                let response = client
+                    .send(
+                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                            public_key: self.ld.provider_id.clone(),
+                            link_name: self.ld.link_name.clone(),
+                            contract_id: #contract_ident.to_string(),
+                        },
+                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                            public_key: self.ld.actor_id.clone(),
+                            ..Default::default()
+                        },
+                        #lattice_method,
+                        ::wasmcloud_provider_sdk::serialize(&args)?
+                    )
+                    .await?;
+
+                if let Some(err) = response.error {
+                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                } else {
+                    Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
+                }
+            }
+        );
+
+        Ok((vec![invocation_struct_tokens], vec![func_tokens]))
     }
 }
 
@@ -956,7 +1060,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
 
     // Parse the WIT for files (a second time, in addition to what has been done to generate)
+    // and build up a list of exported iface invocation methods and structs related to them
     let mut exported_iface_invocation_methods: Vec<TokenStream> = Vec::new();
+    let mut exported_iface_invocation_structs: Vec<TokenStream> = Vec::new();
 
     // Resolve the WIT bindgen configuration, which at this point should definitely be present
     let wit_bindgen_cfg = cfg
@@ -969,6 +1075,18 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         for (world_item, _) in world.exports.iter() {
             if let wit_parser::WorldKey::Interface(iface_id) = world_item {
                 let iface = &wit_bindgen_cfg.resolve.interfaces[*iface_id];
+
+                // If the interface is in a namespace that we know can't be used coming in from the lattice
+                // then we should ignore it and not generate invocation handlers for it
+                if let Some(pkg) = iface
+                    .package
+                    .map(|p| &wit_bindgen_cfg.resolve.packages[p].name)
+                {
+                    if pkg.namespace == "wasmcloud" && pkg.name == "bus" {
+                        continue;
+                    }
+                }
+
                 for (iface_fn_name, iface_fn) in iface.functions.iter() {
                     // For each function in an exported interface,
                     // we'll need to generate a method on the eventual InvocationHandler
@@ -983,13 +1101,14 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     //       handle-message: func(msg: some-message) -> result<_, string>
                     //   }
                     //  ```
-                    let invocation_method_tokens = cfg
+                    let (invocation_struct_tokens, invocation_method_tokens) = cfg
                         .export_fn_lattice_translation_strategy
                         .translate_export_fn_for_lattice(iface, iface_fn_name, iface_fn, &cfg)
                         .expect("failed to translate export fn");
 
                     // Augment the list of invocation methods that have to be fulfilled
-                    exported_iface_invocation_methods.push(invocation_method_tokens);
+                    exported_iface_invocation_methods.extend(invocation_method_tokens.into_iter());
+                    exported_iface_invocation_structs.extend(invocation_struct_tokens.into_iter());
                 }
             }
         }
@@ -1000,7 +1119,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         expand_wasmtime_component(wit_bindgen_cfg).unwrap_or_else(syn::Error::into_compile_error);
 
     // Parse the bindgen-generated tokens into an AST
-    // NOTE: while we will use these tokens, they will not be in macro output
+    // that will be used in the output (combined with other wasmcloud-specific generated code)
     let mut bindgen_ast: syn::File =
         syn::parse2(bindgen_tokens).expect("failed to parse wit-bindgen generated code as file");
 
@@ -1149,7 +1268,16 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         } else {
                             // If there is more than one arg name, we have a bundle of arguments that was sent over the wire
                             // we must pass the *fields* of that struct in
-                            quote::quote!(ctx, #( #invocation_arg_names )*)
+                            let mut tokens = TokenStream::new();
+                            invocation_arg_names.iter().enumerate().fold(&mut tokens, |ts, (idx, i)| {
+                                // Append input since if we have multiple arguments they'll be coming in as one envelope over the lattice
+                                ts.append_all(quote::quote!(input.#i));
+                                if idx != invocation_arg_names.len() - 1 {
+                                    ts.append(TokenTree::Punct(Punct::new(',', proc_macro2::Spacing::Alone)));
+                                }
+                                ts
+                            });
+                            quote::quote!(ctx, #tokens)
                         });
                     } else {
                         // If a type name is *not* present, we're dealing with a function that takes *no* input.
@@ -1206,6 +1334,13 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .map(|(_, (_, s))| s.to_token_stream())
         .collect();
 
+    // Build a list of enums that should be included
+    let enums: Vec<TokenStream> = visitor
+        .serde_extended_enums
+        .iter()
+        .map(|(_, (_, s))| s.to_token_stream())
+        .collect();
+
     // Build the final chunk of code
     let tokens = quote::quote!(
         // START: per-interface codegen
@@ -1223,6 +1358,12 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             #structs
         )*
         // END: wit-bindgen generated structs
+
+        // START: wit-bindgen generated enums
+        #(
+            #enums
+        )*
+        // END: wit-bindgen generated enums
 
         /// MessageDispatch ensures that your provider can receive and
         /// process messages sent to it over the lattice
@@ -1243,9 +1384,8 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         #interface_dispatch_match_arms
                     )*
                     _ => Err(::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
-                        "Invalid method name {method}",
-                    ))
-                             .into()),
+                        "Invalid method name {method}"
+                    )).into())
                 }
             }
         }
@@ -1285,6 +1425,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// Given the implementation of ProviderHandler and MessageDispatch,
         /// the implementation for your struct is a guaranteed
         impl ::wasmcloud_provider_sdk::Provider for #impl_struct_name {}
+
+        // Structs that are used at Invocation Handling time
+        #( #exported_iface_invocation_structs )*
 
         /// This handler serves to be used for individual invocations of the actor
         /// as performed by the host runtime
@@ -1339,6 +1482,9 @@ struct WitBindgenOutputVisitor {
 
     /// Structs that were modified and extended to derive Serialize/Deserialize
     serde_extended_structs: StructLookup,
+
+    /// Enums that were modified and extended to derive Serialize/Deserialize
+    serde_extended_enums: EnumLookup,
 
     /// Lookup of encountered types that were produced by bindgen, with their fully qualified names
     type_lookup: TypeLookup,
@@ -1406,6 +1552,48 @@ impl WitBindgenOutputVisitor {
     /// Check whether we are currently at a module *below* the 'exports' known module name
     fn at_exported_module(&self) -> bool {
         self.parents.iter().any(|v| v == EXPORTS_MODULE_NAME)
+    }
+
+    /// Check whether the current path matches any known WASI built-ins (ex. wasi::io)
+    ///
+    /// WASI built-ins usually need to be ignored by bindgen
+    fn is_wasi_builtin(&self) -> bool {
+        for builtin in [("wasi", "io")] {
+            match (
+                self.parents.iter().position(|v| v == builtin.0),
+                self.parents.iter().position(|v| v == builtin.1),
+            ) {
+                (Some(n), Some(n1)) if n1 == n + 1 => {
+                    // If we see the path specified above consecutively, we know
+                    // that we're in the path of a builtin
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Check whether the current path matches any known wasmcloud local-only built-ins (ex. wasmcloud::bus::host)
+    ///
+    /// Structs/Enums/etc in the hierarchy that match this cannot be sent across the lattice,
+    /// thus generation should generally not be done for them
+    fn is_wasmcloud_local_only_builtin(&self) -> bool {
+        for builtin in [("wasmcloud", "bus", "host")] {
+            match (
+                self.parents.iter().position(|v| v == builtin.0),
+                self.parents.iter().position(|v| v == builtin.1),
+                self.parents.iter().position(|v| v == builtin.2),
+            ) {
+                (Some(n), Some(n1), Some(n2)) if n2 == n1 + 1 && n1 == n + 1 => {
+                    // If we see the path specified above consecutively, we know
+                    // that we're in the path of a builtin
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
     }
 }
 
@@ -1477,7 +1665,13 @@ impl VisitMut for WitBindgenOutputVisitor {
 
     fn visit_item_mut(&mut self, node: &mut syn::Item) {
         match node {
-            Item::Trait(t) => {
+            Item::Trait(t) => 'visit_trait: {
+                // If the trait is under a WASI built-in (ex. wasi:io),
+                // we don't want to include it for any kind of post processing
+                if self.is_wasi_builtin() {
+                    break 'visit_trait;
+                }
+
                 // Retrieve the interface name from the module hierarchy (immediate parent)
                 let iface = if let Some(iface) = self.parents.last() {
                     iface
@@ -1488,14 +1682,21 @@ impl VisitMut for WitBindgenOutputVisitor {
                     )
                 };
 
-                // Ensure we have the WIT namespace and package available at this point
-                let wit_ns = self.wit_ns.clone().expect(
-                    "WIT namespace missing (failed to auto-detect?) while parsing iface [{iface}]",
-                );
-                let wit_pkg = self.wit_pkg.clone().expect(
-                    "WIT package missing (failed to auto-detect?) while parsing iface [{iface}]",
-                );
-                let full_iface_name = format!("{wit_ns}:{wit_pkg}/{iface}",);
+                let wit_ns = self
+                    .parents
+                    .get(self.parents.len() - 3)
+                    .unwrap_or_else(|| {
+                        panic!("unexpectedly missing ns level package (2 up from [{iface}] in generated bindgen code)")
+                    })
+                    .to_string();
+                let wit_pkg = self
+                    .parents
+                    .get(self.parents.len() - 2)
+                    .unwrap_or_else(|| {
+                        panic!("unexpectedly missing ns level package (1 up from [{iface}] in generated bindgen code)")
+                    })
+                    .to_string();
+                let full_iface_name = format!("{wit_ns}:{wit_pkg}/{iface}");
 
                 // Build the (ns,pkg,interface) triples used to control lattice-exposed interfaces
                 let iface_triple: &LatticeExposedInterface = &(wit_ns, wit_pkg, iface.to_string());
@@ -1618,9 +1819,172 @@ impl VisitMut for WitBindgenOutputVisitor {
                 }
                 import_path.push(syn::PathSegment::from(t.ident.clone()));
 
-                // Add the type to the lookup so it can be used later for fully qualified names
-                self.type_lookup
-                    .insert(t.ident.to_string(), (import_path, t.clone()));
+                // For types generated due to dependencies in WIT (ex. wasm internals like wasi::io::stream, wasmcloud::bus::lattice)
+                // we must replace their convoluted (`super::...` prefixes with `crate::`)
+                let mut cloned_t = t.clone();
+                let ItemType {
+                    ty: ref mut item_ty,
+                    ..
+                } = cloned_t;
+                // If the type that we're about to process has `super::`s attached, we need to translate those
+                // to the actual types they *should* be, which are likely hanging off the crate or some other
+                // dep like `wasmtime` (ex. `wasmtime::component::Resource`)
+                if count_preceeding_supers(item_ty.as_ref()) > 0 {
+                    if let Type::Path(ty_path) = item_ty.as_mut() {
+                        // Create a cloned version fo the original path to use for modifications
+                        let cloned_ty_path = ty_path.clone();
+                        // Clear out the segments on the original type path
+                        ty_path.path.segments.clear();
+
+                        // Push in `crate`
+                        ty_path
+                            .path
+                            .segments
+                            .push_value(PathSegment::from(quote::format_ident!("crate")));
+                        ty_path
+                            .path
+                            .segments
+                            .push_punct(Token![::](Span::call_site()));
+
+                        // Push in all non-"super" segments
+                        cloned_ty_path
+                            .path
+                            .segments
+                            .iter()
+                            .filter(|s| s.ident != "super")
+                            .for_each(|s| {
+                                if !ty_path.path.segments.empty_or_trailing() {
+                                    ty_path
+                                        .path
+                                        .segments
+                                        .push_punct(Token![::](Span::call_site()));
+                                }
+                                ty_path.path.segments.push_value(s.clone());
+                            });
+                    }
+                };
+
+                // We should only add this type to the type lookup if it is *not* already a processed struct
+                // or enum, as those will be output at the top level in the bind-gen'd code.
+                //
+                // Having both the type declaration and the top level struct/enum declaration would cause a conflict
+                if !self.serde_extended_enums.contains_key(&t.ident.to_string())
+                    && !self
+                        .serde_extended_structs
+                        .contains_key(&t.ident.to_string())
+                // We exclude built-in wasi types here because they *should*
+                // be implemented & brought in as enums/structs
+                    && !self.is_wasi_builtin()
+                {
+                    // Add the type to the lookup so it can be used later for fully qualified names
+                    self.type_lookup
+                        .insert(t.ident.to_string(), (import_path, cloned_t));
+                }
+            }
+
+            Item::Enum(e) => {
+                // If this is a generated enum (from a WIT record), add serde Serialize/Deserialize
+                //
+                // NOTE: we MUST allow in built-in wasi enums, since they are used by higher level code
+                //
+                // exclude top level structs, since they indirectly include the exported module
+                if self.current_module_level() != 0
+                    // Ensure the enum has not already been processed
+                    && !self.serde_extended_enums.contains_key(&e.ident.to_string())
+                    // Ensure that the enum is not already aliased to something else
+                    // enums that are aliases have types that are already defined elsewhere
+                    && !self.type_lookup.contains_key(&e.ident.to_string())
+                {
+                    // Clear all pre-existing attributes (i.e. [component])
+                    e.attrs.clear();
+
+                    // Clear all pre-existing attributes from fields (mostly [component])
+                    for v in &mut e.variants {
+                        v.attrs.clear();
+
+                        // Process all fields in every variant to perform standard replacements
+                        for f in &mut v.fields {
+                            // If the type of a particular field is a Vec<u8>,
+                            // opt in to serde's specialized handling since this is what the
+                            // implementation written in the host currently expects
+                            if f.ty == syn::parse_str::<Type>("Vec<u8>").expect("failed to parse") {
+                                f.attrs.push(parse_quote!(#[serde(with = "::serde_bytes")]));
+                            }
+
+                            // If an enum contains a type that is a resource (i.e. a wasmtime::component::Resource),
+                            // we can't actually send that across the lattice, we can only send a *reference* to it.
+                            //
+                            // For now, resources are converted to u32s (i.e. their `rep()` or pointer), and sent across the lattice that way.
+                            match &f
+                                .ty
+                                .to_token_stream()
+                                .into_iter()
+                                .collect::<Vec<TokenTree>>()[..] {
+                                    [
+                                        TokenTree::Ident(w), // wasmtime
+                                        TokenTree::Punct(_), // :
+                                        TokenTree::Punct(_), // :
+                                        TokenTree::Ident(w1), // component
+                                        TokenTree::Punct(_), // :
+                                        TokenTree::Punct(_), // :
+                                        TokenTree::Ident(w2), // Resource
+                                        TokenTree::Punct(b1), // <
+                                        _inner @ ..,
+                                        TokenTree::Punct(b2), // >
+                                    ] if w == "wasmtime"
+                                        && w1 == "component"
+                                        && w2 == "Resource"
+                                        && b1.to_string() == "<"
+                                        && b2.to_string() == ">" => {
+                                        f.ty = syn::parse_str::<Type>("u32").expect("failed to parse");
+                                    }
+                                    _ => {}
+                                }
+
+                            // If the struct field is a WIT-ified map, then we should replace
+                            // it with a proper hash map type
+                            if self.replace_witified_maps
+                                && f.ident
+                                    .as_ref()
+                                    .is_some_and(|i| i.to_string().ends_with("_map"))
+                            {
+                                if let Some((k, v)) = extract_witified_map_types(
+                                    &f.ty
+                                        .to_token_stream()
+                                        .into_iter()
+                                        .collect::<Vec<TokenTree>>(),
+                                ) {
+                                    f.ty = parse_quote!(::std::collections::HashMap<#k,#v>);
+                                    f.ident = f.ident.as_mut().map(|i| {
+                                        Ident::new(i.to_string().trim_end_matches("_map"), i.span())
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Add the attributes we want to be present to the enum
+                    e.attrs.append(&mut vec![parse_quote!(
+                        #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+                    )]);
+
+                    // Save the enum by name to the tally of structs that have been extended
+                    // this is used later to generate interfaces, when generating interfaces, as a import path lookup
+                    // so that types can be resolved (i.e. T -> path::to::T)
+                    let mut import_path = Punctuated::<syn::PathSegment, Token![::]>::new();
+                    for p in self.parents.iter() {
+                        import_path.push(syn::PathSegment::from(p.clone()));
+                    }
+                    import_path.push(syn::PathSegment::from(e.ident.clone()));
+
+                    // Disallow the case where two identically named enums exist under different paths
+                    if self.serde_extended_enums.contains_key(&e.ident.to_string()) {
+                        panic!("found duplicate instances of enum [${}]", e.ident);
+                    }
+
+                    self.serde_extended_enums
+                        .insert(e.ident.to_string(), (import_path, e.clone()));
+                }
             }
 
             // Process struct declarations that appear in the bindgen output
@@ -1631,6 +1995,9 @@ impl VisitMut for WitBindgenOutputVisitor {
                     && !self
                         .serde_extended_structs
                         .contains_key(&s.ident.to_string())
+                    // We must exclude structs that are wasmcloud builtins, since we know some of them to be
+                    // impossible to pass over the lattice in a  easy manner
+                    && !self.is_wasmcloud_local_only_builtin()
                     // Exclude structs that are named exactly the same as the module,
                     // since that's the struct that we'll be replacing with the InvocationHandler
                     //
@@ -1784,22 +2151,28 @@ fn build_lattice_methods_by_wit_interface(
     Ok(methods_by_name)
 }
 
-/// Convert a wit type into a rust named type
-fn convert_wit_type(t: &wit_parser::Type, cfg: &ProviderBindgenConfig) -> anyhow::Result<String> {
+/// Convert a WIT type into a TokenStream that contains a Rust type
+///
+/// This function is co-recursive with `convert_wit_typedef`, since type defs
+/// and types can be recursively intertwined
+fn convert_wit_type(
+    t: &wit_parser::Type,
+    cfg: &ProviderBindgenConfig,
+) -> anyhow::Result<TokenStream> {
     match t {
-        wit_parser::Type::Bool => Ok("bool".into()),
-        wit_parser::Type::U8 => Ok("u8".into()),
-        wit_parser::Type::U16 => Ok("u16".into()),
-        wit_parser::Type::U32 => Ok("u32".into()),
-        wit_parser::Type::U64 => Ok("u64".into()),
-        wit_parser::Type::S8 => Ok("s8".into()),
-        wit_parser::Type::S16 => Ok("s16".into()),
-        wit_parser::Type::S32 => Ok("s32".into()),
-        wit_parser::Type::S64 => Ok("s64".into()),
-        wit_parser::Type::Float32 => Ok("f32".into()),
-        wit_parser::Type::Float64 => Ok("f64".into()),
-        wit_parser::Type::Char => Ok("char".into()),
-        wit_parser::Type::String => Ok("String".into()),
+        wit_parser::Type::Bool => Ok(quote::quote!(bool)),
+        wit_parser::Type::U8 => Ok(quote::quote!(u8)),
+        wit_parser::Type::U16 => Ok(quote::quote!(u16)),
+        wit_parser::Type::U32 => Ok(quote::quote!(u32)),
+        wit_parser::Type::U64 => Ok(quote::quote!(u64)),
+        wit_parser::Type::S8 => Ok(quote::quote!(s8)),
+        wit_parser::Type::S16 => Ok(quote::quote!(s16)),
+        wit_parser::Type::S32 => Ok(quote::quote!(s32)),
+        wit_parser::Type::S64 => Ok(quote::quote!(s64)),
+        wit_parser::Type::Float32 => Ok(quote::quote!(f32)),
+        wit_parser::Type::Float64 => Ok(quote::quote!(f64)),
+        wit_parser::Type::Char => Ok(quote::quote!(char)),
+        wit_parser::Type::String => Ok(quote::quote!(String)),
         wit_parser::Type::Id(tydef) => {
             // Look up the type in the WIT resolver
             let type_def = &cfg
@@ -1808,15 +2181,130 @@ fn convert_wit_type(t: &wit_parser::Type, cfg: &ProviderBindgenConfig) -> anyhow
                 .context("WIT bindgen config missing")?
                 .resolve
                 .types[*tydef];
-            if let Some(wit_type_name) = &type_def.name {
-                // Since we get the wit type name here (in kebab case)
-                // we'll expect the custom oxidized type to be upper camel case
-                // (e.x. `chunk` -> `Chunk`)
-                Ok(wit_type_name.to_upper_camel_case())
-            } else {
-                bail!("failed to parse wit type def for type {t:#?}");
-            }
+
+            convert_wit_typedef(type_def, cfg)
         }
+    }
+}
+
+/// Convert a [`wit_parser::TypeDef`] (which can be found inside a [`wit_parser::Type`])
+/// into a [`TokenStream`] which corresponds to a Rust type
+///
+/// This function is co-recursive with `convert_wit_type`, since type defs
+/// and types can be recursively intertwined
+fn convert_wit_typedef(
+    type_def: &wit_parser::TypeDef,
+    cfg: &ProviderBindgenConfig,
+) -> anyhow::Result<TokenStream> {
+    // For nested types, the type_def.name is None and the kind goes deeper
+    match &type_def.kind {
+        // Nested type case (Option<...>)
+        TypeDefKind::Option(ty_id) => {
+            let ty = convert_wit_type(ty_id, cfg)?;
+            Ok(quote::quote!(Option<#ty>))
+        }
+        // Nested type case (Result<...>)
+        TypeDefKind::Result(Result_ { ok, err }) => {
+            let ok_ty = if let Some(ty_id) = ok {
+                convert_wit_type(ty_id, cfg)?
+            } else {
+                quote::quote!(())
+            };
+            let err_ty = if let Some(ty_id) = err {
+                convert_wit_type(ty_id, cfg)?
+            } else {
+                quote::quote!(())
+            };
+            Ok(quote::quote!(Result<#ok_ty, #err_ty>))
+        }
+        // Nested type case (List<...>)
+        TypeDefKind::List(ty_id) => {
+            let ty = convert_wit_type(ty_id, cfg)?;
+            Ok(quote::quote!(Vec<#ty>))
+        }
+        // Nested type case (owned data)
+        TypeDefKind::Handle(Handle::Own(ty_idx)) => {
+            let ty_def = cfg
+                .wit_bindgen_cfg
+                .as_ref()
+                .context("missing WIT bindgen cfg resolver")?
+                .resolve
+                .types
+                .get(*ty_idx)
+                .context("failed to find type with given ID in WIT resolver")?;
+            convert_wit_typedef(ty_def, cfg)
+        }
+        // Nested type case (borrowed data)
+        TypeDefKind::Handle(Handle::Borrow(ty_idx)) => {
+            let ty_def = cfg
+                .wit_bindgen_cfg
+                .as_ref()
+                .context("missing WIT bindgen cfg resolver")?
+                .resolve
+                .types
+                .get(*ty_idx)
+                .context("failed to find type with given ID in WIT resolver")?;
+            convert_wit_typedef(ty_def, cfg)
+        }
+        // Nested type case (Tuple)
+        TypeDefKind::Tuple(Tuple { types }) => {
+            let mut tuple_types = TokenStream::new();
+            for (idx, tokens) in types
+                .iter()
+                .map(|t| convert_wit_type(t, cfg))
+                .collect::<anyhow::Result<Vec<TokenStream>>>()
+                .context("failed to parse all types in Tuple w/ types {types:?}")?
+                .iter()
+                .enumerate()
+            {
+                tuple_types.append_all(quote::quote!(#tokens));
+                if idx != types.len() - 1 {
+                    tuple_types.append(TokenTree::Punct(Punct::new(
+                        ',',
+                        proc_macro2::Spacing::Alone,
+                    )));
+                }
+            }
+            Ok(
+                proc_macro2::Group::new(proc_macro2::Delimiter::Parenthesis, tuple_types)
+                    .to_token_stream(),
+            )
+        }
+        TypeDefKind::Stream(Stream { element, .. }) => {
+            let element_ty = convert_wit_type(&element.context("missing type for stream")?, cfg)?;
+            Ok(quote::quote!(impl Stream<Item=#element_ty>))
+        }
+        // Nested types that come through can run through
+        // there's a potential for a cycle here, but it's unlikely
+        TypeDefKind::Type(t) => convert_wit_type(t, cfg),
+        // In the straight-forward cases below, we must just use the
+        // name of the type and hope for the best:
+        //
+        // Since we get the wit type name here (in kebab case)
+        // we'll expect the custom oxidized type to be upper camel case
+        // (e.x. `chunk` -> `Chunk`)
+        TypeDefKind::Variant(_) | TypeDefKind::Resource | TypeDefKind::Unknown => type_def
+            .name
+            .as_ref()
+            .map(|v| v.to_upper_camel_case())
+            .map(|v| Ident::new(&v, Span::call_site()).to_token_stream())
+            .with_context(|| format!("failed to parse wit type def for type_def: {type_def:?}")),
+
+        // For records that we encounter, they will be translated to Rust Structs by bindgen
+        // we can pretend the struct exists because by the time the macro is done, it will.
+        TypeDefKind::Record(_) => {
+            let struct_name = format_ident!(
+                "{}",
+                type_def
+                    .name
+                    .as_ref()
+                    .context("unexpectedly missing name for typedef")?
+                    .to_upper_camel_case()
+            );
+            Ok(struct_name.to_token_stream())
+        }
+
+        _ => bail!("unsupported type kind {type_def:#?}"),
     }
 }
 
@@ -1896,6 +2384,60 @@ fn process_fn_arg(arg: &FnArg) -> anyhow::Result<(Ident, TokenStream)> {
     };
 
     Ok((arg_name, type_name))
+}
+
+/// A trait that represents things that can be converted to a Rust type
+trait ToRustType {
+    /// Convert to a Rust type
+    fn to_rust_type(&self, cfg: &ProviderBindgenConfig) -> anyhow::Result<TokenStream>;
+}
+
+impl ToRustType for wit_parser::Results {
+    fn to_rust_type(&self, cfg: &ProviderBindgenConfig) -> anyhow::Result<TokenStream> {
+        match self {
+            // Convert a named return (usually simple, either empty or tuple)
+            wit_parser::Results::Named(params) => {
+                match params[..] {
+                    // No results
+                    // i.e. `func(arg: string)`
+                    [] => Ok(quote::quote!(())),
+                    // One or more results:
+                    //
+                    // e.x. `func(arg: string) -> string`
+                    // e.x. `func(arg: string) -> ( string, string )`
+                    ref params => {
+                        let mut types: Vec<Ident> = Vec::new();
+                        for (_, ty) in params.iter() {
+                            types.push(syn::parse2::<Ident>(
+                                convert_wit_type(ty, cfg).with_context(|| {
+                                    format!("failed to convert WIT type [{ty:?}] to rust type]")
+                                })?,
+                            )?);
+                        }
+                        Ok(quote::quote!(( #( #types )* )))
+                    }
+                }
+            }
+            // Convert a return with arbitrary complexity
+            wit_parser::Results::Anon(t) => {
+                convert_wit_type(t, cfg).context("failed to find anonymous WIT type")
+            }
+        }
+    }
+}
+
+/// Count the number of preceeding "super" calls a given [`syn::Type`] has,
+/// if it is a [`syn::Type::Path`]
+fn count_preceeding_supers(t: &Type) -> usize {
+    if let Type::Path(t) = t {
+        t.path
+            .segments
+            .iter()
+            .filter(|s| s.ident == "super")
+            .count()
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]

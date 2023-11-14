@@ -382,7 +382,8 @@ impl TestWashInstance {
                 format!("failed to call operation [{operation}] on actor [{actor_id}]")
             })?;
         ensure!(output.status.success(), "wash call invocation failed");
-        serde_json::from_slice(&output.stdout).context("failed to parse wash call output")
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash call` output")
     }
 
     /// Trigger the equivalent of `wash stop actor` on a [`TestWashInstance`]

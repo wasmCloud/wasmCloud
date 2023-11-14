@@ -20,7 +20,7 @@ interface http-client {
 
     /// Response received over HTTP
     record http-response {
-      /// HTTP method
+      /// HTTP status code
       status-code: u16,
       /// Headers that were received with the response
       header-map: list<tuple<string, list<string>>>,
