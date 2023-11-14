@@ -761,7 +761,6 @@ fn parse_identifier<T: AsRef<str>>(kind: &IdentifierKind, value: T) -> Result<St
     };
 
     match kind {
-        IdentifierKind::HostId => assert_non_empty_string(value, Some("Host ID".to_string())),
         IdentifierKind::ActorId => assert_non_empty_string(value, Some("Actor ID".to_string())),
         IdentifierKind::ActorRef => {
             assert_non_empty_string(value, Some("Actor OCI reference".to_string()))
@@ -802,31 +801,5 @@ mod tests {
         });
         println!("Listening to Cloud Events for 120 seconds. Then we will quit.");
         tokio::time::sleep(Duration::from_secs(120)).await;
-    }
-
-    #[test]
-    fn test_parse_identifier() -> Result<()> {
-        assert!(parse_identifier(&IdentifierKind::HostId, "").is_err());
-        assert!(parse_identifier(&IdentifierKind::HostId, " ").is_err());
-        let host_id = parse_identifier(&IdentifierKind::HostId, "             ");
-        assert!(host_id.is_err(), "parsing host id should have failed");
-        assert!(host_id
-            .unwrap_err()
-            .to_string()
-            .contains("Empty string provided for Host ID"));
-        let provider_ref = parse_identifier(&IdentifierKind::ProviderRef, "");
-        assert!(
-            provider_ref.is_err(),
-            "parsing provider ref should have failed"
-        );
-        assert!(provider_ref
-            .unwrap_err()
-            .to_string()
-            .contains("Empty string provided for Provider OCI reference"));
-        assert!(parse_identifier(&IdentifierKind::HostId, "host_id").is_ok());
-        let actor_id = parse_identifier(&IdentifierKind::ActorId, "            iambatman  ")?;
-        assert_eq!(actor_id, "iambatman");
-
-        Ok(())
     }
 }
