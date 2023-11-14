@@ -51,5 +51,5 @@ wash up --nats-websocket-port 4001
 Otherwise, verify the port you are using to connect to the NATS server. Visit [NATS Websocket Configuration][1] for more
 information.
 
-[0]: https://github.com/wasmCloud/wash/blob/a74b50297496578e5e6c0ee806304a3ff05cd073/packages/washboard/src/lattice/lattice-service.ts#L70
+[0]: https://github.com/wasmCloud/wasmCloud/blob/5fbc982aea164a738b9254952ca91b0a5fd3bb82/washboard-ui/src/lattice/lattice-service.ts#L70
 [1]: https://docs.nats.io/running-a-nats-service/configuration/websocket/websocket_conf

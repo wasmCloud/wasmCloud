@@ -96,7 +96,7 @@ async fn find_event<T>(
             // Should only happen due to an internal failure with the events receiver
             Ok(None) => {
                 return Ok(FindEventOutcome::Failure(anyhow!(
-                    "Channel dropped before event was received, please report this at https://github.com/wasmCloud/wash/issues with details to reproduce"
+                    "Channel dropped before event was received, please report this at https://github.com/wasmCloud/wasmCloud/issues with details to reproduce"
                 )))
             }
 
