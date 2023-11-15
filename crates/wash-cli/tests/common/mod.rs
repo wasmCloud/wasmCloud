@@ -136,9 +136,34 @@ impl Drop for TestWashInstance {
     }
 }
 
+/// Arguments for creating a new TestWashInstance
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TestWashInstanceNewArgs {
+    /// Extra arguments to feed to `wash up`
+    pub extra_args: Vec<String>,
+}
+
+#[allow(unused)]
 impl TestWashInstance {
-    #[allow(unused)]
+    /// Create a new [`TestWashInstance`]
     pub async fn create() -> Result<TestWashInstance> {
+        Self::new(TestWashInstanceNewArgs::default()).await
+    }
+
+    /// Create a new [`TestWashInstance`], with extra arguments to `wash up`
+    pub async fn create_with_extra_args(
+        args: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self> {
+        Self::new(TestWashInstanceNewArgs {
+            extra_args: args
+                .into_iter()
+                .map(|v| v.as_ref().to_string())
+                .collect::<Vec<String>>(),
+        })
+        .await
+    }
+
+    async fn new(args: TestWashInstanceNewArgs) -> Result<Self> {
         let test_id: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(6)
@@ -165,23 +190,34 @@ impl TestWashInstance {
         let host_seed_str = &host_seed.seed().context("failed to generate host seed")?;
         let host_id = host_seed.public_key();
 
-        // Build and spawn the wash subprocess
+        // Start building the `wash up` command
         let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_wash"));
         cmd.kill_on_drop(true);
+
+        // Compile list of arguments to `wash up`
+        let mut cmd_args = [
+            "up",
+            "--nats-port",
+            nats_port.to_string().as_ref(),
+            "--nats-connect-only",
+            "--output",
+            "json",
+            "--detached",
+            "--host-seed",
+            host_seed_str,
+            "--cluster-seed",
+            cluster_seed_str,
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>();
+        for arg in args.extra_args {
+            cmd_args.push(arg);
+        }
+
+        // Run `wash up` command
         let mut up_cmd = cmd
-            .args([
-                "up",
-                "--nats-port",
-                nats_port.to_string().as_str(),
-                "--nats-connect-only",
-                "--output",
-                "json",
-                "--detached",
-                "--host-seed",
-                host_seed_str,
-                "--cluster-seed",
-                cluster_seed_str,
-            ])
+            .args(cmd_args)
             .stdout(stdout.into_std().await)
             .kill_on_drop(true)
             .spawn()
@@ -233,7 +269,6 @@ impl TestWashInstance {
     }
 
     /// Trigger a equivalent of `wash start actor` on a [`TestWashInstance`]
-    #[allow(unused)]
     pub(crate) async fn start_actor(&self, oci_ref: impl AsRef<str>) -> Result<StartCommandOutput> {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
@@ -254,8 +289,25 @@ impl TestWashInstance {
         serde_json::from_slice(&output.stdout).context("failed to parse output")
     }
 
+    /// Trigger a equivalent of `wash get hosts` on a [`TestWashInstance`]
+    pub(crate) async fn get_hosts(&self) -> Result<GetHostsCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "get",
+                "hosts",
+                "--output",
+                "json",
+                "--ctl-port",
+                &self.nats_port.to_string(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to call get hosts")?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of get hosts")
+    }
+
     /// Trigger a equivalent of `wash call` on a [`TestWashInstance`]
-    #[allow(unused)]
     pub(crate) async fn call_actor(
         &self,
         actor_id: impl AsRef<str>,
