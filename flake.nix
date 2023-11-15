@@ -88,7 +88,6 @@
         targets.armv7-unknown-linux-gnueabihf = false;
         targets.armv7-unknown-linux-musleabihf = false;
         targets.powerpc64le-unknown-linux-gnu = false;
-        targets.riscv64gc-unknown-linux-gnu = false; # TODO: Enable once Ring updated https://github.com/wasmCloud/wasmCloud/issues/724
         targets.s390x-unknown-linux-gnu = false;
         targets.wasm32-unknown-unknown = false;
         targets.wasm32-wasi = false;
@@ -155,10 +154,8 @@
 
             depsBuildBuild' =
               depsBuildBuild
-              ++ optionals darwin2darwin [
-                pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-                pkgs.xcbuild.xcrun
-              ];
+              ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+              ++ optional darwin2darwin pkgs.xcbuild.xcrun;
           in
             {
               inherit
@@ -203,6 +200,64 @@
           pkgs,
           ...
         }: let
+          interpreters.aarch64-unknown-linux-gnu = "/lib/ld-linux-aarch64.so.1";
+          interpreters.riscv64gc-unknown-linux-gnu = "/lib/ld-linux-riscv64-lp64d.so.1";
+          interpreters.x86_64-unknown-linux-gnu = "/lib64/ld-linux-x86-64.so.2";
+
+          mkFHS = {
+            name,
+            src,
+            interpreter,
+          }:
+            pkgs.stdenv.mkDerivation {
+              inherit
+                name
+                src
+                ;
+
+              buildInputs = [
+                pkgs.patchelf
+              ];
+
+              dontBuild = true;
+              dontFixup = true;
+
+              installPhase = ''
+                runHook preInstall
+
+                for p in $(find . -type f); do
+                  # https://en.wikipedia.org/wiki/Executable_and_Linkable_Format#File_header
+                  if head -c 4 $p | grep $'\x7FELF' > /dev/null; then
+                    patchelf --set-rpath /lib $p || true
+                    patchelf --set-interpreter ${interpreter} $p || true
+                  fi
+                done
+
+                mkdir -p $out
+                cp -R * $out
+
+                runHook postInstall
+              '';
+            };
+
+          wasmcloud-aarch64-unknown-linux-gnu-fhs = mkFHS {
+            name = "wasmcloud-aarch64-unknown-linux-gnu-fhs";
+            src = packages.wasmcloud-aarch64-unknown-linux-gnu;
+            interpreter = interpreters.aarch64-unknown-linux-gnu;
+          };
+
+          wasmcloud-riscv64gc-unknown-linux-gnu-fhs = mkFHS {
+            name = "wasmcloud-riscv64gc-unknown-linux-gnu-fhs";
+            src = packages.wasmcloud-riscv64gc-unknown-linux-gnu;
+            interpreter = interpreters.riscv64gc-unknown-linux-gnu;
+          };
+
+          wasmcloud-x86_64-unknown-linux-gnu-fhs = mkFHS {
+            name = "wasmcloud-x86_64-unknown-linux-gnu-fhs";
+            src = packages.wasmcloud-x86_64-unknown-linux-gnu;
+            interpreter = interpreters.x86_64-unknown-linux-gnu;
+          };
+
           pullDebian = {
             imageDigest,
             sha256,
@@ -363,7 +418,10 @@
               build-wasmcloud-oci-debian
               wash-aarch64-unknown-linux-musl-oci-debian
               wash-x86_64-unknown-linux-musl-oci-debian
+              wasmcloud-aarch64-unknown-linux-gnu-fhs
               wasmcloud-aarch64-unknown-linux-musl-oci-debian
+              wasmcloud-riscv64gc-unknown-linux-gnu-fhs
+              wasmcloud-x86_64-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-musl-oci-debian
               ;
 
