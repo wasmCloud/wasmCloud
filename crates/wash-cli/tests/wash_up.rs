@@ -1,16 +1,15 @@
-mod common;
-
-use common::{
-    find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
-    wait_for_single_host,
-};
-
 use std::fs::{read_to_string, remove_dir_all};
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use serial_test::serial;
 use tokio::{process::Command, time::Duration};
+
+mod common;
+use common::{
+    find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
+    wait_for_single_host, TestWashInstance,
+};
 
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -248,5 +247,26 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
 
     nats.kill().await.map_err(|e| anyhow!(e))?;
     remove_dir_all(dir).unwrap();
+    Ok(())
+}
+
+/// Ensure that wash up
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_labels() -> Result<()> {
+    let instance =
+        TestWashInstance::create_with_extra_args(vec!["--label", "is-label-test=yes"]).await?;
+
+    // Get host data, ensure we find the host with the right label
+    let cmd_output = instance.get_hosts().await.context("failed to call actor")?;
+    assert!(cmd_output.success, "call command succeeded");
+    assert!(
+        cmd_output.hosts.iter().any(|h| h
+            .labels
+            .as_ref()
+            .is_some_and(|h| h.get("is-label-test").is_some_and(|v| v == "yes"))),
+        "a host is present which has the created label",
+    );
+
     Ok(())
 }

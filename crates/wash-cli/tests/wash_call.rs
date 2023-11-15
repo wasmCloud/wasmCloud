@@ -8,6 +8,10 @@ use common::{TestWashInstance, ECHO_OCI_REF};
 /// Ensure that wash call works
 #[tokio::test]
 #[serial]
+#[cfg_attr(
+    not(can_reach_wasmcloud_azurecr_io),
+    ignore = "wasmcloud.azurecr.io is not reachable"
+)]
 async fn integration_call() -> Result<()> {
     let instance = TestWashInstance::create().await?;
 
