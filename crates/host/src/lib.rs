@@ -4,9 +4,6 @@
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 
-/// local host
-pub mod local;
-
 /// wasmbus host
 pub mod wasmbus;
 
@@ -22,7 +19,6 @@ pub mod registry;
 /// Provider archive functionality
 mod par;
 
-pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
 pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
 pub use policy::{
     Action as PolicyAction, HostInfo as PolicyHostInfo, Manager as PolicyManager,

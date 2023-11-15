@@ -15,7 +15,6 @@ status = "actively-developed"
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true }
-async-recursion = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
@@ -48,6 +47,3 @@ wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
-
-[dev-dependencies]
-toml = { workspace = true, features = ["parse"] }

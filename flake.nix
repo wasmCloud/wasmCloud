@@ -114,15 +114,21 @@
 
           cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
           cargoLock.providers-rust = readTOML ./crates/providers/Cargo.lock;
-          cargoLock.tcp-component-command = readTOML ./tests/actors/rust/tcp-component-command/Cargo.lock;
 
           lockPackages =
             cargoLock.root.package
             ++ cargoLock.actors-rust.package
-            ++ cargoLock.providers-rust.package
-            ++ cargoLock.tcp-component-command.package;
+            ++ cargoLock.providers-rust.package;
+
+          darwin2darwin = pkgs.stdenv.hostPlatform.isDarwin && pkgsCross.stdenv.hostPlatform.isDarwin;
+
+          depsBuildBuild' =
+            depsBuildBuild
+            ++ optionals darwin2darwin [
+              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+              pkgs.xcbuild.xcrun
+            ];
         in
-          with pkgsCross;
           with pkgs.lib;
             {
               WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
@@ -136,10 +142,9 @@
 
               buildInputs =
                 buildInputs
-                ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
-                  pkgs.darwin.apple_sdk.frameworks.Security
-                  pkgs.xcbuild.xcrun
-                ];
+                ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
+
+              depsBuildBuild = depsBuildBuild';
 
               nativeBuildInputs =
                 nativeBuildInputs
@@ -149,12 +154,10 @@
             }
             // optionalAttrs (args ? cargoArtifacts) {
               depsBuildBuild =
-                depsBuildBuild
-                ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
-                  darwin.apple_sdk.frameworks.CoreFoundation
-                  darwin.apple_sdk.frameworks.CoreServices
-                  darwin.apple_sdk.frameworks.SystemConfiguration
-                  libiconv
+                depsBuildBuild'
+                ++ optionals darwin2darwin [
+                  pkgs.darwin.apple_sdk.frameworks.CoreFoundation
+                  pkgs.darwin.apple_sdk.frameworks.CoreServices
                 ];
 
               nativeCheckInputs =
@@ -167,7 +170,7 @@
               preCheck =
                 preCheck
                 # See https://github.com/nextest-rs/nextest/issues/267
-                + optionalString (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) ''
+                + optionalString darwin2darwin ''
                   export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
                 '';
             };

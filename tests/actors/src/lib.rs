@@ -41,15 +41,3 @@ pub const RUST_LOGGING_MODULE_COMMAND: &str =
     concat!(env!("OUT_DIR"), "/rust-logging-module-command.wasm");
 pub const RUST_LOGGING_MODULE_COMMAND_SIGNED: &str =
     concat!(env!("OUT_DIR"), "/rust-logging-module-command.signed.wasm");
-
-pub const RUST_TCP_COMPONENT_COMMAND: &str =
-    concat!(env!("OUT_DIR"), "/rust-tcp-component-command.wasm");
-pub const RUST_TCP_COMPONENT_COMMAND_SIGNED: &str =
-    concat!(env!("OUT_DIR"), "/rust-tcp-component-command.signed.wasm");
-
-pub const RUST_TCP_COMPONENT_COMMAND_PREVIEW2: &str =
-    concat!(env!("OUT_DIR"), "/rust-tcp-component-command-preview2.wasm");
-pub const RUST_TCP_COMPONENT_COMMAND_PREVIEW2_SIGNED: &str = concat!(
-    env!("OUT_DIR"),
-    "/rust-tcp-component-command-preview2.signed.wasm"
-);

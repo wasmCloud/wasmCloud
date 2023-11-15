@@ -247,17 +247,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-recursion"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd55a5ba1179988837d24ab4c7cc8ed6efdeff578ede0416b4225a5fca35bd0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.39",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.74"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5455,7 +5444,6 @@ version = "0.80.0"
 dependencies = [
  "anyhow",
  "async-nats 0.33.0",
- "async-recursion",
  "async-trait",
  "base64 0.21.5",
  "bytes",
@@ -5478,7 +5466,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "toml 0.7.8",
  "tracing",
  "ulid",
  "url",
