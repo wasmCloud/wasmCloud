@@ -216,29 +216,6 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 _ => bail!("invalid `logging-module-command` build artifacts"),
             }
         },
-        async {
-            let mut artifacts = build_artifacts(
-                [
-                    "--manifest-path=./rust/tcp-component-command/Cargo.toml",
-                    "--target=wasm32-wasi",
-                ],
-                |name, kind| {
-                    ["tcp-component-command"].contains(&name) && kind.contains(&CrateType::Bin)
-                },
-            )
-            .await
-            .context("failed to build `tcp-component-command` crate")?;
-            match (artifacts.next().deref_artifact(), artifacts.next()) {
-                (Some(("tcp-component-command", [tcp_component_command])), None) => {
-                    copy(
-                        tcp_component_command,
-                        out_dir.join("rust-tcp-component-command.wasm"),
-                    )
-                    .await
-                }
-                _ => bail!("invalid `tcp-component-command` build artifacts"),
-            }
-        }
     )
     .context("failed to build `wasm32-wasi` actors")?;
     Ok(())
@@ -287,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
-    for name in ["foobar-component-command", "tcp-component-command"] {
+    for name in ["foobar-component-command"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
             .await
@@ -326,8 +303,6 @@ async fn main() -> anyhow::Result<()> {
         ("foobar-component-command", None),
         ("foobar-component-command-preview2", None),
         ("logging-module-command", Some(vec![caps::LOGGING.into()])),
-        ("tcp-component-command", None),
-        ("tcp-component-command-preview2", None),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await
