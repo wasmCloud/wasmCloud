@@ -1,4 +1,0 @@
-[advisories]
-ignore = [
-    "RUSTSEC-2022-0093", # `ed25519-dalek` Oracle attack, remove once https://github.com/deislabs/bindle/pull/368 is merged
-]
