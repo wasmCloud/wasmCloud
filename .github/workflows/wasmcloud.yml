@@ -138,29 +138,23 @@ jobs:
         name: wasmcloud-x86_64-apple-darwin
         path: x86_64
 
-    - run: chmod +x ./x86_64/bin/wash
-    - run: chmod +x ./x86_64/bin/wasmcloud
+    - run: chmod +x ./x86_64/bin/*
     - run: ./x86_64/bin/wash --version
     - run: ./x86_64/bin/wasmcloud --version
 
-    - run: mkdir -p ./wash/bin
-    - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./wash/bin/wash
-    - run: mkdir -p ./wasmcloud/bin
-    - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./wasmcloud/bin/wasmcloud
+    - run: mkdir -p ./artifact/bin
+    - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./artifact/bin/wash
+    - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./artifact/bin/wasmcloud
 
-    - run: chmod +x ./wash/bin/wash
-    - run: ./wash/bin/wash --version
-    - run: chmod +x ./wasmcloud/bin/wasmcloud
-    - run: ./wasmcloud/bin/wasmcloud --version
+    - run: chmod +x ./artifact/bin/wash
+    - run: ./artifact/bin/wash --version
+    - run: chmod +x ./artifact/bin/wasmcloud
+    - run: ./artifact/bin/wasmcloud --version
 
-    - uses: actions/upload-artifact@v3
-      with:
-        name: wash-universal-darwin
-        path: wash
     - uses: actions/upload-artifact@v3
       with:
         name: wasmcloud-universal-darwin
-        path: wasmcloud
+        path: artifact
 
   test-linux:
     runs-on: ubuntu-22.04
