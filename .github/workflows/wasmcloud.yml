@@ -70,6 +70,11 @@ jobs:
             file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
+        - target: riscv64gc-unknown-linux-gnu-fhs
+          test-bin: |
+            nix build -L '.#wasmcloud-riscv64gc-unknown-linux-gnu'
+            nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-riscv64 ./result/bin/wasmcloud --version
+
         - target: x86_64-apple-darwin
           test-bin: |
             file ./result/bin/wash
@@ -108,7 +113,9 @@ jobs:
     - uses: ./.github/actions/build-nix
       with:
         package: wasmcloud-${{ matrix.config.target }}-oci
+      if: ${{ !endsWith(matrix.config.target, 'fhs') }}
     - run: ${{ matrix.config.test-oci }}
+      if: ${{ !endsWith(matrix.config.target, 'fhs') }}
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
@@ -383,7 +390,7 @@ jobs:
               ;;
               *)
                 mkdir -p ./${bin}
-                mv ${bin_path} ./${bin}/${bin}-${target}
+                mv ${bin_path} ./${bin}/${bin}-${target%-fhs}
               ;;
             esac
           done
