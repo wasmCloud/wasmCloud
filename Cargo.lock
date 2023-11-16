@@ -5030,7 +5030,7 @@ dependencies = [
  "warp-embed",
  "wascap",
  "wash-lib",
- "wasmcloud-control-interface 0.31.1",
+ "wasmcloud-control-interface 0.32.0",
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5090,7 +5090,7 @@ dependencies = [
  "wascap",
  "wasm-encoder 0.36.2",
  "wasmcloud-component-adapters 0.2.4",
- "wasmcloud-control-interface 0.31.1",
+ "wasmcloud-control-interface 0.32.0",
  "wasmcloud-core",
  "wasmparser 0.116.1",
  "wat",
@@ -5297,7 +5297,7 @@ dependencies = [
  "url",
  "uuid 1.5.0",
  "wascap",
- "wasmcloud-control-interface 0.31.1",
+ "wasmcloud-control-interface 0.32.0",
  "wasmcloud-core",
  "wasmcloud-host",
  "wasmcloud-tracing",
@@ -5405,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.31.1"
+version = "0.32.0"
 dependencies = [
  "async-nats 0.33.0",
  "bytes",
@@ -5472,7 +5472,7 @@ dependencies = [
  "uuid 1.5.0",
  "wascap",
  "wasmcloud-compat",
- "wasmcloud-control-interface 0.31.1",
+ "wasmcloud-control-interface 0.32.0",
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
