@@ -181,6 +181,7 @@ mod test {
             "2001",
             "--count",
             "2",
+            "--host-id",
             HOST_ID,
             ACTOR_ID,
         ])?;
@@ -197,10 +198,21 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(host_id, HOST_ID.parse()?);
-                assert_eq!(actor_id, ACTOR_ID.parse()?);
+                assert_eq!(host_id, Some(HOST_ID.to_string()));
+                assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(count, 2);
                 assert!(!skip_wait);
+            }
+            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+        }
+        let stop_actor_minimal: Cmd = Parser::try_parse_from(["ctl", "stop", "actor", "foobar"])?;
+        match stop_actor_minimal.command {
+            #[allow(deprecated)]
+            CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
+                host_id, actor_id, ..
+            })) => {
+                assert_eq!(host_id, None);
+                assert_eq!(actor_id, "foobar");
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }
@@ -216,10 +228,11 @@ mod test {
             CTL_PORT,
             "--timeout-ms",
             "2001",
+            "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            "default",
             "wasmcloud:provider",
+            "blahblah",
         ])?;
         match stop_provider_all.command {
             CtlCliCommand::Stop(StopCommand::Provider(StopProviderCommand {
@@ -234,11 +247,28 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(host_id, HOST_ID.parse()?);
-                assert_eq!(provider_id, PROVIDER_ID.parse()?);
-                assert_eq!(link_name, "default".to_string());
+                assert_eq!(host_id, Some(HOST_ID.to_string()));
+                assert_eq!(provider_id, PROVIDER_ID);
+                assert_eq!(link_name, "blahblah");
                 assert_eq!(contract_id, "wasmcloud:provider".to_string());
                 assert!(!skip_wait);
+            }
+            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+        }
+        let stop_provider_minimal: Cmd =
+            Parser::try_parse_from(["ctl", "stop", "provider", "foobar", "wasmcloud:provider"])?;
+        match stop_provider_minimal.command {
+            CtlCliCommand::Stop(StopCommand::Provider(StopProviderCommand {
+                host_id,
+                provider_id,
+                link_name,
+                contract_id,
+                ..
+            })) => {
+                assert_eq!(host_id, None);
+                assert_eq!(provider_id, "foobar");
+                assert_eq!(link_name, "default");
+                assert_eq!(contract_id, "wasmcloud:provider");
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }
@@ -349,8 +379,8 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(actor_id, ACTOR_ID.parse()?);
-                assert_eq!(provider_id, PROVIDER_ID.parse()?);
+                assert_eq!(actor_id, ACTOR_ID);
+                assert_eq!(provider_id, PROVIDER_ID);
                 assert_eq!(contract_id, "wasmcloud:provider".to_string());
                 assert_eq!(link_name.unwrap(), "default".to_string());
                 assert_eq!(values, vec!["THING=foo".to_string()]);
@@ -369,6 +399,7 @@ mod test {
             CTL_PORT,
             "--timeout-ms",
             "2001",
+            "--host-id",
             HOST_ID,
             ACTOR_ID,
             "wasmcloud.azurecr.io/actor:v2",
@@ -384,8 +415,8 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(host_id, HOST_ID.parse()?);
-                assert_eq!(actor_id, ACTOR_ID.parse()?);
+                assert_eq!(host_id, Some(HOST_ID.to_string()));
+                assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(new_actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
             }
             cmd => panic!("ctl get claims constructed incorrect command {cmd:?}"),
@@ -423,7 +454,7 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(host_id, HOST_ID.parse()?);
+                assert_eq!(host_id, HOST_ID);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
                 assert_eq!(max_concurrent, Some(1));
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);

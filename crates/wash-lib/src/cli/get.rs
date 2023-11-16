@@ -2,7 +2,11 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use wasmcloud_control_interface::{Host, HostInventory};
 
-use crate::{common::boxed_err_to_anyhow, config::WashConnectionOptions, id::ServerId};
+use crate::{
+    common::{boxed_err_to_anyhow, get_all_inventories},
+    config::WashConnectionOptions,
+    id::ServerId,
+};
 
 use super::CliConnectionOpts;
 
@@ -53,34 +57,27 @@ pub enum GetCommand {
     HostInventories(GetHostInventoriesCommand),
 }
 
-/// Retreive host inventory
+/// Retrieve host inventory
 pub async fn get_host_inventories(cmd: GetHostInventoriesCommand) -> Result<Vec<HostInventory>> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
-    let host_ids = if let Some(host_id) = cmd.host_id {
-        vec![host_id.to_string()]
+    if let Some(host_id) = cmd.host_id {
+        Ok(vec![client
+            .get_host_inventory(&host_id)
+            .await
+            .map_err(boxed_err_to_anyhow)?])
     } else {
-        let hosts = client.get_hosts().await.map_err(boxed_err_to_anyhow)?;
+        let hosts = get_all_inventories(&client)
+            .await
+            .context("unable to fetch all inventory")?;
         match hosts.len() {
-            0 => anyhow::bail!("No hosts are available for inventory query."),
-            _ => hosts.iter().map(|h| h.id.clone()).collect(),
+            0 => Err(anyhow::anyhow!(
+                "No hosts are available for inventory query."
+            )),
+            _ => Ok(hosts),
         }
-    };
-
-    let futs = host_ids
-        .into_iter()
-        .map(|host_id| (client.clone(), host_id))
-        .map(|(client, host_id)| async move {
-            client
-                .get_host_inventory(&host_id.clone())
-                .await
-                .map_err(boxed_err_to_anyhow)
-        });
-    futures::future::join_all(futs)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<HostInventory>>>()
+    }
 }
 
 /// Retrieve hosts

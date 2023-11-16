@@ -90,6 +90,7 @@ async fn integration_update_actor_serial() -> Result<()> {
         .args([
             "update",
             "actor",
+            "--host-id",
             wash_instance.host_id.as_str(),
             ECHO_ACTOR_ID,
             ECHO_OCI_REF,

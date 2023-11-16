@@ -8,7 +8,6 @@ use term_table::{
     Table,
 };
 use wash_lib::cli::CommandOutput;
-use wash_lib::id::ModuleId;
 use wasmcloud_control_interface::{Host, HostInventory, LinkDefinition};
 
 use crate::util::format_optional;
@@ -32,7 +31,7 @@ pub fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput 
 }
 
 pub fn link_del_output(
-    actor_id: &ModuleId,
+    actor_id: &str,
     contract_id: &str,
     link_name: &str,
     failure: Option<String>,

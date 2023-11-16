@@ -52,6 +52,7 @@ async fn integration_stop_actor_serial() -> Result<()> {
         .args([
             "stop",
             "actor",
+            "--host-id",
             &host_id,
             &actor_id,
             "--output",
@@ -119,10 +120,11 @@ async fn integration_stop_provider_serial() -> Result<()> {
         .args([
             "stop",
             "provider",
+            "--host-id",
             &host_id,
             &provider_id,
-            &link_name,
             &contract_id,
+            &link_name,
             "--output",
             "json",
             "--ctl-port",

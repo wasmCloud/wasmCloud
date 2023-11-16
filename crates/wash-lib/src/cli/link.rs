@@ -4,9 +4,8 @@ use wasmcloud_control_interface::LinkDefinition;
 
 use crate::{
     cli::{labels_vec_to_hashmap, CliConnectionOpts},
-    common::boxed_err_to_anyhow,
+    common::{boxed_err_to_anyhow, find_actor_id, find_provider_id},
     config::WashConnectionOptions,
-    id::{ModuleId, ServiceId},
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -14,9 +13,10 @@ pub struct LinkDelCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Public key ID of actor
-    #[clap(name = "actor-id", value_parser)]
-    pub actor_id: ModuleId,
+    /// Public key ID or name of actor to match on. If an actor name is given and matches multiple
+    /// actors, an error will be returned with a list of matching actors and their IDs.
+    #[clap(name = "actor-id")]
+    pub actor_id: String,
 
     /// Capability contract ID between actor and provider
     #[clap(name = "contract-id")]
@@ -29,19 +29,21 @@ pub struct LinkDelCommand {
 
 #[derive(Parser, Debug, Clone)]
 #[clap(
-    override_usage = "wash ctl link put --link-name <LINK_NAME> [OPTIONS] <actor-id> <provider-id> <contract-id> [values]..."
+    override_usage = "wash ctl link put --link-name <LINK_NAME> [OPTIONS] <actor-id-or-name> <provider-id-or-name> <contract-id> [values]..."
 )]
 pub struct LinkPutCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Public key ID of actor
-    #[clap(name = "actor-id", value_parser)]
-    pub actor_id: ModuleId,
+    /// Public key ID or name of actor to match on. If an actor name is given and matches multiple
+    /// actors, an error will be returned with a list of matching actors and their IDs.
+    #[clap(name = "actor-id")]
+    pub actor_id: String,
 
-    /// Public key ID of provider
-    #[clap(name = "provider-id", value_parser)]
-    pub provider_id: ServiceId,
+    /// Public key ID or name of provider to match on. If an provider name is given and matches
+    /// multiple providers, an error will be returned with a list of matching actors and their IDs.
+    #[clap(name = "provider-id")]
+    pub provider_id: String,
 
     /// Capability contract ID between actor and provider
     #[clap(name = "contract-id")]
@@ -120,12 +122,16 @@ pub async fn query_links(wco: WashConnectionOptions) -> Result<Vec<LinkDefinitio
 pub async fn delete_link(
     wco: WashConnectionOptions,
     contract_id: &str,
-    actor_id: &ModuleId,
+    actor_id: &str,
     link_name: &str,
 ) -> Result<()> {
-    wco.into_ctl_client(None)
-        .await?
-        .remove_link(actor_id, contract_id, link_name)
+    let ctl_client = wco.into_ctl_client(None).await?;
+    ctl_client
+        .remove_link(
+            &find_actor_id(actor_id, &ctl_client).await?.0,
+            contract_id,
+            link_name,
+        )
         .await
         .map(|_| ())
         .map_err(boxed_err_to_anyhow)
@@ -163,16 +169,16 @@ pub async fn delete_link(
 pub async fn create_link(
     wco: WashConnectionOptions,
     contract_id: &str,
-    actor_id: &ModuleId,
-    provider_id: &ServiceId,
+    actor_id: &str,
+    provider_id: &str,
     link_name: &str,
     link_values: &Vec<String>,
 ) -> Result<()> {
-    wco.into_ctl_client(None)
-        .await?
+    let ctl_client = wco.into_ctl_client(None).await?;
+    ctl_client
         .advertise_link(
-            actor_id,
-            provider_id,
+            &find_actor_id(actor_id, &ctl_client).await?.0,
+            &find_provider_id(provider_id, &ctl_client).await?.0,
             contract_id,
             link_name,
             labels_vec_to_hashmap(link_values.clone())?,

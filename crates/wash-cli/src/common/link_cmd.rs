@@ -7,7 +7,7 @@ use wash_lib::cli::link::{
     LinkQueryCommand,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::id::{validate_contract_id, ModuleId, ServiceId};
+use wash_lib::id::validate_contract_id;
 use wasmcloud_control_interface::LinkDefinition;
 
 use crate::appearance::spinner::Spinner;
@@ -15,10 +15,12 @@ use crate::ctl::{link_del_output, links_table};
 
 /// Generate output for link put command
 pub fn link_put_output(
-    actor_id: &ModuleId,
-    provider_id: &ServiceId,
+    actor_id: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
     failure: Option<String>,
 ) -> Result<CommandOutput> {
+    let actor_id = actor_id.as_ref();
+    let provider_id = provider_id.as_ref();
     match failure {
         None => {
             let mut map = HashMap::new();

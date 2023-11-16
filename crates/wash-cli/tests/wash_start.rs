@@ -1,5 +1,7 @@
 mod common;
 
+use std::process::Stdio;
+
 use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 use anyhow::{Context, Result};
@@ -13,7 +15,7 @@ use wash_lib::cli::output::StartCommandOutput;
     not(can_reach_wasmcloud_azurecr_io),
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
-async fn integration_start_actor_serial() -> Result<()> {
+async fn integration_start_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -39,12 +41,35 @@ async fn integration_start_actor_serial() -> Result<()> {
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 
+    // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
+    // code
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "stop",
+            "actor",
+            "echo",
+            "--output",
+            "json",
+            "--timeout-ms",
+            "40000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("failed to start actor")?;
+
+    assert!(status.success(), "Sucessfully stopped actor");
+
     Ok(())
 }
 
 #[tokio::test]
 #[serial]
-async fn integration_start_provider_serial() -> Result<()> {
+async fn integration_start_stop_provider_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -69,6 +94,30 @@ async fn integration_start_provider_serial() -> Result<()> {
     let cmd_output: StartCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
+
+    // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
+    // code
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "stop",
+            "provider",
+            "server",
+            "wasmcloud:httpserver",
+            "--output",
+            "json",
+            "--timeout-ms",
+            "40000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("failed to start actor")?;
+
+    assert!(status.success(), "Sucessfully stopped provider");
 
     Ok(())
 }
