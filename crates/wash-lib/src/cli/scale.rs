@@ -4,8 +4,8 @@ use clap::Parser;
 use crate::{
     actor::scale_actor,
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
+    common::find_host_id,
     config::WashConnectionOptions,
-    id::ServerId,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -20,9 +20,10 @@ pub struct ScaleActorCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host
-    #[clap(name = "host-id", value_parser)]
-    pub host_id: ServerId,
+    /// ID of host to scale actor on. If a non-ID is provided, the host will be selected based on
+    /// matching the friendly name and will return an error if more than one host matches.
+    #[clap(name = "host-id")]
+    pub host_id: String,
 
     /// Actor reference, e.g. the OCI URL for the actor.
     #[clap(name = "actor-ref")]
@@ -46,7 +47,9 @@ pub async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput>
 
     scale_actor(
         &client,
-        &cmd.host_id,
+        // NOTE(thomastaylor312): In the future, we could check if this is interactive and then
+        // prompt the user to choose if more than one thing matches
+        &find_host_id(&cmd.host_id, &client).await?.0,
         &cmd.actor_ref,
         cmd.max_concurrent,
         Some(annotations),

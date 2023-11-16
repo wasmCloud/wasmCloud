@@ -88,7 +88,7 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(auction_timeout_ms, 2002);
-                assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
             }
@@ -136,7 +136,7 @@ mod test {
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
-                assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
                 assert!(skip_wait);
             }

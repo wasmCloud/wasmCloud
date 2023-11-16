@@ -71,6 +71,7 @@ mod test {
             "ctl",
             "stop",
             "actor",
+            "--host-id",
             HOST_ID,
             ACTOR_ID,
             "--lattice-prefix",
@@ -110,8 +111,8 @@ mod test {
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert!(skip_wait);
                 assert_eq!(count, 1);
-                assert_eq!(host_id.to_string(), HOST_ID);
-                assert_eq!(actor_id.to_string(), ACTOR_ID,);
+                assert_eq!(host_id.unwrap(), HOST_ID);
+                assert_eq!(actor_id.to_string(), ACTOR_ID);
             }
             cmd => panic!("stop actor constructed incorrect command {cmd:?}"),
         }
@@ -128,10 +129,11 @@ mod test {
             "ctl",
             "stop",
             "provider",
+            "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            LINK_NAME,
             CONTRACT_ID,
+            LINK_NAME,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -166,10 +168,10 @@ mod test {
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(link_name, "default".to_string());
-                assert_eq!(host_id.to_string(), HOST_ID);
+                assert_eq!(host_id.unwrap(), HOST_ID);
                 assert_eq!(contract_id, CONTRACT_ID);
                 assert_eq!(link_name, LINK_NAME);
-                assert_eq!(provider_id.to_string(), PROVIDER_ID,);
+                assert_eq!(provider_id.to_string(), PROVIDER_ID);
                 assert!(skip_wait);
             }
             cmd => panic!("stop provider constructed incorrect command {cmd:?}"),

@@ -8,13 +8,12 @@ use tokio::time::Duration;
 use crate::{
     actor::{start_actor, ActorStartedInfo, StartActorArgs},
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
-    common::boxed_err_to_anyhow,
+    common::{boxed_err_to_anyhow, find_host_id},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
         DEFAULT_START_PROVIDER_TIMEOUT_MS,
     },
     context::default_timeout_ms,
-    id::ServerId,
     wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
 };
 
@@ -34,9 +33,12 @@ pub struct StartActorCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host, if omitted the actor will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", value_parser)]
-    pub host_id: Option<ServerId>,
+    /// Id of host or a string to match on the friendly name of a host. if omitted the actor will be
+    /// auctioned in the lattice to find a suitable host. If a string is supplied to match against,
+    /// then the matching host ID will be used. If more than one host matches, then an error will be
+    /// returned
+    #[clap(long = "host-id")]
+    pub host_id: Option<String>,
 
     /// Actor reference, e.g. the OCI URL for the actor.
     #[clap(name = "actor-ref")]
@@ -78,7 +80,7 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         .await?;
 
     let host = match cmd.host_id {
-        Some(host) => host,
+        Some(host) => find_host_id(&host, &client).await?.0,
         None => {
             let suitable_hosts = client
                 .perform_actor_auction(
@@ -148,9 +150,12 @@ pub struct StartProviderCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host, if omitted the provider will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", value_parser)]
-    pub host_id: Option<ServerId>,
+    /// Id of host or a string to match on the friendly name of a host. if omitted the provider will
+    /// be auctioned in the lattice to find a suitable host. If a string is supplied to match
+    /// against, then the matching host ID will be used. If more than one host matches, then an
+    /// error will be returned
+    #[clap(long = "host-id")]
+    pub host_id: Option<String>,
 
     /// Provider reference, e.g. the OCI URL for the provider
     #[clap(name = "provider-ref")]
@@ -191,7 +196,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
         .await?;
 
     let host = match cmd.host_id {
-        Some(host) => host,
+        Some(host) => find_host_id(&host, &client).await?.0,
         None => {
             let suitable_hosts = client
                 .perform_provider_auction(
