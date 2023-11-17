@@ -581,14 +581,15 @@ async fn wasmbus() -> anyhow::Result<()> {
         .get_hosts()
         .await
         .map_err(|e| anyhow!(e).context("failed to get hosts"))?;
-    hosts.sort_unstable_by(|a, _b| {
-        // If 'a' is host one, b should come after
-        if a.id == host_key.public_key() {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
-    });
+
+    ensure!(hosts.len() == 2, "Should have found 2 hosts");
+
+    // Put the first host as the last host in the list (so we can pop it off) if it isn't there
+    // already
+    if hosts[0].id == host_key.public_key() {
+        hosts.swap(0, 1);
+    }
+
     match (hosts.pop(), hosts.pop(), hosts.as_slice()) {
         (
             Some(HostInfo {
@@ -621,7 +622,11 @@ async fn wasmbus() -> anyhow::Result<()> {
             );
             ensure!(cluster_issuers == cluster_issuers_two);
             ensure!(ctl_host == Some(ctl_nats_url.to_string()));
-            ensure!(id == host_key.public_key());
+            ensure!(
+                id == host_key.public_key(),
+                "invalid host id from get hosts:\nGot: {id}\nExpected: {}",
+                host_key.public_key()
+            );
             ensure!(js_domain == None);
             ensure!(
                 labels.as_ref() == Some(&expected_labels),
@@ -680,13 +685,14 @@ expected: {expected_labels:?}"#
         .perform_actor_auction(foobar_actor_url.as_str(), HashMap::default())
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
-    ack.sort_unstable_by(|a, _b| {
-        if a.host_id == host_key.public_key() {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
-    });
+    ensure!(ack.len() == 2, "Should have received 2 acks");
+
+    // Put the first host as the last host in the list (so we can pop it off) if it isn't there
+    // already
+    if ack[0].host_id == host_key.public_key() {
+        ack.swap(0, 1);
+    }
+
     match (ack.pop(), ack.pop(), ack.as_slice()) {
         (
             Some(ActorAuctionAck {
@@ -701,11 +707,19 @@ expected: {expected_labels:?}"#
             }),
             [],
         ) => {
-            ensure!(host_id == host_key.public_key());
+            ensure!(
+                host_id == host_key.public_key(),
+                "invalid host id from actor auction:\nGot: {host_id}\nExpected: {}",
+                host_key.public_key()
+            );
             ensure!(actor_ref == foobar_actor_url.as_str());
             ensure!(constraints.is_empty());
 
-            ensure!(host_id_two == host_key_two.public_key());
+            ensure!(
+                host_id_two == host_key_two.public_key(),
+                "invalid second host id from actor auction:\nGot: {host_id_two}\nExpected: {}",
+                host_key_two.public_key()
+            );
             ensure!(actor_ref_two == foobar_actor_url.as_str());
             ensure!(constraints_two.is_empty());
         }
@@ -774,13 +788,14 @@ expected: {expected_labels:?}"#
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to perform provider auction"))?;
-    ack.sort_unstable_by(|a, _b| {
-        if a.host_id == host_key.public_key() {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
-    });
+    ensure!(ack.len() == 2, "Should have received 2 acks");
+
+    // Put the first host as the last host in the list (so we can pop it off) if it isn't there
+    // already
+    if ack[0].host_id == host_key.public_key() {
+        ack.swap(0, 1);
+    }
+
     match (ack.pop(), ack.pop(), ack.as_slice()) {
         (
             Some(ProviderAuctionAck {
@@ -798,11 +813,19 @@ expected: {expected_labels:?}"#
             [],
         ) => {
             // TODO: Validate `constraints`
-            ensure!(host_id == host_key.public_key());
+            ensure!(
+                host_id == host_key.public_key(),
+                "invalid host id from provider auction:\nGot: {host_id}\nExpected: {}",
+                host_key.public_key()
+            );
             ensure!(provider_ref == httpserver_provider_url.as_str());
             ensure!(link_name == "httpserver");
 
-            ensure!(host_id_two == host_key_two.public_key());
+            ensure!(
+                host_id_two == host_key_two.public_key(),
+                "invalid second host id from provider auction:\nGot: {host_id_two}\nExpected: {}",
+                host_key_two.public_key()
+            );
             ensure!(provider_ref_two == httpserver_provider_url.as_str());
             ensure!(link_name_two == "httpserver");
         }
@@ -1053,7 +1076,11 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
     ensure!(friendly_name != ""); // TODO: Make sure it's actually friendly?
-    ensure!(host_id == host_key.public_key());
+    ensure!(
+        host_id == host_key.public_key(),
+        "invalid host id from inventory:\nGot: {host_id}\nExpected: {}",
+        host_key.public_key()
+    );
     ensure!(issuer == cluster_key.public_key());
     ensure!(
         labels == expected_labels,
@@ -1255,7 +1282,11 @@ expected: {expected_name:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
     ensure!(friendly_name != ""); // TODO: Make sure it's actually friendly?
-    ensure!(host_id == host_key_two.public_key());
+    ensure!(
+        host_id == host_key_two.public_key(),
+        "invalid second host id from inventory:\nGot: {host_id}\nExpected: {}",
+        host_key_two.public_key()
+    );
     ensure!(issuer == cluster_key_two.public_key());
     ensure!(
         labels == expected_labels,

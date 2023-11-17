@@ -82,6 +82,7 @@ struct Queue {
     queries: async_nats::Subscriber,
     registries: async_nats::Subscriber,
     config: async_nats::Subscriber,
+    config_get: async_nats::Subscriber,
 }
 
 impl Stream for Queue {
@@ -125,6 +126,11 @@ impl Stream for Queue {
             Poll::Pending => pending = true,
         }
         match Pin::new(&mut self.config).poll_next(cx) {
+            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
+            Poll::Ready(None) => {}
+            Poll::Pending => pending = true,
+        }
+        match Pin::new(&mut self.config_get).poll_next(cx) {
             Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
             Poll::Ready(None) => {}
             Poll::Pending => pending = true,
@@ -188,26 +194,31 @@ impl Queue {
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
-        let (registries, pings, links, queries, auction, commands, inventory, config) = try_join!(
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
-                format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
-            ),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.get.>"),
-                format!("{topic_prefix}.{lattice_prefix}.get")
-            ),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.config.>"),
-                format!("{topic_prefix}.{lattice_prefix}.config"),
-            ),
-        )
-        .context("failed to subscribe to queues")?;
+        let (registries, pings, links, queries, auction, commands, inventory, config, config_get) =
+            try_join!(
+                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
+                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
+                nats.queue_subscribe(
+                    format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
+                    format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
+                ),
+                nats.queue_subscribe(
+                    format!("{topic_prefix}.{lattice_prefix}.get.*"),
+                    format!("{topic_prefix}.{lattice_prefix}.get")
+                ),
+                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
+                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
+                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
+                nats.queue_subscribe(
+                    format!("{topic_prefix}.{lattice_prefix}.config.>"),
+                    format!("{topic_prefix}.{lattice_prefix}.config"),
+                ),
+                nats.queue_subscribe(
+                    format!("{topic_prefix}.{lattice_prefix}.get.config.>"),
+                    format!("{topic_prefix}.{lattice_prefix}.get.config")
+                ),
+            )
+            .context("failed to subscribe to queues")?;
         Ok(Self {
             auction,
             commands,
@@ -217,6 +228,7 @@ impl Queue {
             queries,
             registries,
             config,
+            config_get,
         })
     }
 }
