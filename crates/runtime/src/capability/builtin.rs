@@ -640,7 +640,7 @@ impl Bus for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
     async fn get(
         &self,
         key: &str,
@@ -648,7 +648,7 @@ impl Bus for Handler {
         self.proxy_bus("wasmcloud:bus/config.get")?.get(key).await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
     async fn get_all(
         &self,
     ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>> {
