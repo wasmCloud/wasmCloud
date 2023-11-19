@@ -1,13 +1,8 @@
-mod common;
-
-use std::process::Stdio;
-
-use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serial_test::serial;
-use tokio::process::Command;
-use wash_lib::cli::output::StartCommandOutput;
+
+mod common;
+use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 #[tokio::test]
 #[serial]
@@ -18,51 +13,12 @@ use wash_lib::cli::output::StartCommandOutput;
 async fn integration_start_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args([
-            "start",
-            "actor",
-            ECHO_OCI_REF,
-            "--output",
-            "json",
-            "--timeout-ms",
-            "40000",
-            "--ctl-port",
-            &wash_instance.nats_port.to_string(),
-        ])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .context("failed to start actor")?;
-
-    assert!(output.status.success(), "executed start");
-
-    let cmd_output: StartCommandOutput =
-        serde_json::from_slice(&output.stdout).context("failed to parse output")?;
-    assert!(cmd_output.success, "command returned success");
+    // Start the actor via OCI ref
+    wash_instance.start_actor(ECHO_OCI_REF).await?;
 
     // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
     // code
-    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args([
-            "stop",
-            "actor",
-            "echo",
-            "--output",
-            "json",
-            "--timeout-ms",
-            "40000",
-            "--ctl-port",
-            &wash_instance.nats_port.to_string(),
-        ])
-        .kill_on_drop(true)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .context("failed to start actor")?;
-
-    assert!(status.success(), "Sucessfully stopped actor");
+    wash_instance.stop_actor("echo", None).await?;
 
     Ok(())
 }
@@ -72,52 +28,15 @@ async fn integration_start_stop_actor_serial() -> Result<()> {
 async fn integration_start_stop_provider_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args([
-            "start",
-            "provider",
-            PROVIDER_HTTPSERVER_OCI_REF,
-            "--output",
-            "json",
-            "--timeout-ms",
-            "40000",
-            "--ctl-port",
-            &wash_instance.nats_port.to_string(),
-        ])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .context("failed to start provider")?;
-
-    assert!(output.status.success(), "executed start");
-
-    let cmd_output: StartCommandOutput =
-        serde_json::from_slice(&output.stdout).context("failed to parse output")?;
-    assert!(cmd_output.success, "command returned success");
+    wash_instance
+        .start_provider(PROVIDER_HTTPSERVER_OCI_REF)
+        .await?;
 
     // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
     // code
-    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args([
-            "stop",
-            "provider",
-            "server",
-            "wasmcloud:httpserver",
-            "--output",
-            "json",
-            "--timeout-ms",
-            "40000",
-            "--ctl-port",
-            &wash_instance.nats_port.to_string(),
-        ])
-        .kill_on_drop(true)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .context("failed to start actor")?;
-
-    assert!(status.success(), "Sucessfully stopped provider");
+    wash_instance
+        .stop_provider("server", "wasmcloud:httpserver", None, None)
+        .await?;
 
     Ok(())
 }
