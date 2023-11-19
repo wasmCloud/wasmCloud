@@ -28,7 +28,7 @@ fn gen_bytes(len: usize) -> (Vec<u8>, u32) {
 #[tokio::test]
 async fn run_all() {
     let opts = TestOptions::default();
-    env_logger::try_init().ok();
+    tracing::try_init().ok();
 
     // initialize provider
     let _prov = test_provider().await;

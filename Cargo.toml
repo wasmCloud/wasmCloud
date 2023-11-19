@@ -154,7 +154,7 @@ tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
-tracing = { version = "0.1", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.20", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }

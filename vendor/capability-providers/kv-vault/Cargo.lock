@@ -2827,7 +2827,7 @@ checksum = "c38c03de923f80027cb62281f520bd97245a38eeb85a53f435a110509d044551"
 dependencies = [
  "base64 0.13.1",
  "data-encoding",
- "env_logger 0.10.0",
+ "tracing 0.1.40",
  "humantime",
  "lazy_static",
  "log",
@@ -3022,7 +3022,7 @@ version = "0.5.0"
 dependencies = [
  "async-trait",
  "atty",
- "env_logger 0.9.3",
+ "tracing 0.1.40",
  "rand",
  "serde",
  "serde_json",

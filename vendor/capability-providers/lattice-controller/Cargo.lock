@@ -2942,7 +2942,7 @@ checksum = "78faacaf906be20194b0e9dc84c70ed5ed3cee5da0d66b15b6c5cc1c5d6bab8e"
 dependencies = [
  "base64 0.13.1",
  "data-encoding",
- "env_logger",
+ "tracing",
  "humantime",
  "lazy_static",
  "log",
@@ -2966,7 +2966,7 @@ checksum = "c38c03de923f80027cb62281f520bd97245a38eeb85a53f435a110509d044551"
 dependencies = [
  "base64 0.13.1",
  "data-encoding",
- "env_logger",
+ "tracing",
  "humantime",
  "lazy_static",
  "log",
