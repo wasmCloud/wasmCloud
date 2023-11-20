@@ -1,0 +1,20 @@
+name: nix-flake-update
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  nix-flake-update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rvolosatovs/nix-flake-update-action@v1
+        with:
+          app_id: ${{ secrets.BOT_APP_ID }}
+          private_key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          assignees: rvolosatovs
+          reviewers: rvolosatovs
+          delete-branch: true
+          signoff: true
+          labels: dependencies
