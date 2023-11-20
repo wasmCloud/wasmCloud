@@ -539,7 +539,6 @@ jobs:
 
     - name: dry-run publish ${{ matrix.crate }} to crates.io
       if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      continue-on-error: ${{ matrix.workspace-dependencies }} # publish may fail due to workspace crates not being published yet
       run: cargo publish --dry-run
       working-directory: ./crates/${{ matrix.crate }}
 
