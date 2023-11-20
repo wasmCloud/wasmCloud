@@ -9,10 +9,10 @@ jobs:
   nix-flake-update:
     runs-on: ubuntu-latest
     steps:
-      - uses: rvolosatovs/nix-flake-update-action@v1
+      - uses: rvolosatovs/nix-flake-update-action@v2
         with:
-          app_id: ${{ secrets.BOT_APP_ID }}
-          private_key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           assignees: rvolosatovs
           reviewers: rvolosatovs
           delete-branch: true
