@@ -72,13 +72,13 @@ sudo snap install wash --edge --devmode
 ### Linux (brew)
 
 ```
-brew install wash
+brew install wasmcloud/wasmcloud/wash
 ```
 
 ### MacOS (brew)
 
 ```
-brew install wash
+brew install wasmcloud/wasmcloud/wash
 ```
 
 ### Windows (choco)
