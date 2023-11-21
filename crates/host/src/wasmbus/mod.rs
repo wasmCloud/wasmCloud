@@ -1782,7 +1782,7 @@ async fn merge_registry_config(
 impl Host {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-    const NAME_ADJECTIVES: &str = "
+    const NAME_ADJECTIVES: &'static str = "
     autumn hidden bitter misty silent empty dry dark summer
     icy delicate quiet white cool spring winter patient
     twilight dawn crimson wispy weathered blue billowing
@@ -1794,7 +1794,7 @@ impl Host {
     gray orange mauve
     ";
 
-    const NAME_NOUNS: &str = "
+    const NAME_NOUNS: &'static str = "
     waterfall river breeze moon rain wind sea morning
     snow lake sunset pine shadow leaf dawn glitter forest
     hill cloud meadow sun glade bird brook butterfly
