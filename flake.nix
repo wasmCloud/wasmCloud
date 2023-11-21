@@ -23,7 +23,7 @@
   inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.3.0";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
-  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5-rc1";
+  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5";
 
   outputs = {
     nixify,
