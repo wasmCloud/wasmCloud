@@ -113,11 +113,11 @@ nuid = { version = "0.4", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
 opentelemetry = { version = "0.20", default-features = false }
-opentelemetry-nats = { version = "0", path = "./crates/opentelemetry-nats", default-features = false }
+opentelemetry-nats = { version = "0.1", path = "./crates/opentelemetry-nats", default-features = false }
 opentelemetry-otlp = { version = "0.13", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
-provider-archive = { version = "0", path = "./crates/provider-archive", default-features = false }
+provider-archive = { version = "0.8", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
 redis = { version = "0.23", default-features = false }
@@ -165,23 +165,23 @@ wadm = { version = "0.9", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 warp-embed = { version = "0.4", default-features = false }
-wascap = { version = "0", path = "./crates/wascap", default-features = false }
+wascap = { version = "0.12", path = "./crates/wascap", default-features = false }
 wash-cli = { version = "0", path = "./crates/wash-cli", default-features = false }
-wash-lib = { version = "0", path = "./crates/wash-lib", default-features = false }
+wash-lib = { version = "0.15", path = "./crates/wash-lib", default-features = false }
 wasi-common = { version = "14", git = "https://github.com/rvolosatovs/wasmtime", branch = "release-14.0.0", default-features = false }
 wasm-encoder = { version = "0.37", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
 wasmcloud-actor-macros = { version = "0", path = "./crates/actor/macros", default-features = false }
-wasmcloud-compat = { version = "0", path = "./crates/compat", default-features = false }
+wasmcloud-compat = { version = "0.1", path = "./crates/compat", default-features = false }
 wasmcloud-component-adapters = { version = "0.3", default-features = false }
 wasmcloud-control-interface = { version = "0.32", path = "./crates/control-interface", default-features = false }
-wasmcloud-core = { version = "0", path = "./crates/core", default-features = false }
+wasmcloud-core = { version = "0.1", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
-wasmcloud-provider-sdk = { version = "0", path = "./crates/provider-sdk", default-features = false }
-wasmcloud-provider-wit-bindgen = { version = "0", path = "./crates/provider-wit-bindgen", default-features = false }
+wasmcloud-provider-sdk = { version = "0.1", path = "./crates/provider-sdk", default-features = false }
+wasmcloud-provider-wit-bindgen = { version = "0.1", path = "./crates/provider-wit-bindgen", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
-wasmcloud-tracing = { version = "0", path = "./crates/tracing", default-features = false }
+wasmcloud-tracing = { version = "0.1", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.116", default-features = false }
 wasmtime = { version = "14", git = "https://github.com/rvolosatovs/wasmtime", branch = "release-14.0.0", default-features = false }
 wasmtime-wasi = { version = "14", git = "https://github.com/rvolosatovs/wasmtime", branch = "release-14.0.0", default-features = false }
