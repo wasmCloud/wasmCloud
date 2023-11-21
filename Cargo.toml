@@ -178,7 +178,7 @@ wasmcloud-component-adapters = { version = "0.3", default-features = false }
 wasmcloud-control-interface = { version = "0.32", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.1", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
-wasmcloud-provider-sdk = { version = "0.1", path = "./crates/provider-sdk", default-features = false }
+wasmcloud-provider-sdk = { version = "0.2", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { version = "0.1", path = "./crates/provider-wit-bindgen", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-tracing = { version = "0.1", path = "./crates/tracing", default-features = false }
