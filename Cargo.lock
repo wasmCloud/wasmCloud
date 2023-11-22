@@ -4906,7 +4906,7 @@ dependencies = [
  "wit-bindgen-core 0.13.1",
  "wit-bindgen-go",
  "wit-component 0.16.1",
- "wit-parser 0.12.2",
+ "wit-parser 0.13.0",
 ]
 
 [[package]]
@@ -5333,7 +5333,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasmtime-wit-bindgen 14.0.4",
- "wit-parser 0.12.2",
+ "wit-parser 0.13.0",
 ]
 
 [[package]]
@@ -5368,7 +5368,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wit-component 0.16.1",
- "wit-parser 0.12.2",
+ "wit-parser 0.13.0",
 ]
 
 [[package]]
