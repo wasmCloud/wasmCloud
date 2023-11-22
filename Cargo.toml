@@ -193,5 +193,5 @@ which = { version = "4", default-features = false }
 wit-bindgen = { version = "0.14", default-features = false }
 wit-bindgen-core = { version = "0.14", default-features = false }
 wit-bindgen-go = { version = "0.13", default-features = false }
-wit-component = { version = "0.16", default-features = false }
+wit-component = { version = "0.18", default-features = false }
 wit-parser = { version = "0.12", default-features = false }
