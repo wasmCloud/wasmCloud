@@ -129,20 +129,31 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             "--manifest-path=./rust/Cargo.toml",
             "--target=wasm32-unknown-unknown",
             "-p=builtins-module-reactor",
+            "-p=kv-http-smithy",
         ],
         |name, kind| {
-            ["builtins-module-reactor"].contains(&name) && kind.contains(&CrateType::Cdylib)
+            ["builtins-module-reactor", "kv-http-smithy"].contains(&name)
+                && kind.contains(&CrateType::Cdylib)
         },
     )
     .await
     .context("failed to build `builtins-module-reactor` crate")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("builtins-module-reactor", [builtins_module_reactor])), None) => {
+    match (
+        artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
+        artifacts.next(),
+    ) {
+        (
+            Some(("builtins-module-reactor", [builtins_module_reactor])),
+            Some(("kv-http-smithy", [kv_http_smithy])),
+            None,
+        ) => {
             copy(
                 builtins_module_reactor,
                 out_dir.join("rust-builtins-module-reactor.wasm"),
             )
             .await?;
+            copy(kv_http_smithy, out_dir.join("rust-kv-http-smithy.wasm")).await?;
             Ok(())
         }
         _ => bail!("invalid `builtins-module-reactor` build artifacts"),
@@ -153,6 +164,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
     let out_dir = out_dir.as_ref();
 
     try_join!(
+        // Build component actors
         async {
             let mut artifacts = build_artifacts(
                 [
@@ -192,6 +204,8 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 _ => bail!("invalid `builtins-component-reactor` and `foobar-component-command` build artifacts"),
             }
         },
+
+        // Build non-component (module) actors
         async {
             let mut artifacts = build_artifacts(
                 [
@@ -247,10 +261,14 @@ async fn main() -> anyhow::Result<()> {
     let out_dir = env::var("OUT_DIR")
         .map(PathBuf::from)
         .context("failed to lookup `OUT_DIR`")?;
+
+    // Build both traditional wasm32-unknown-unknown and wasm32-wasi actors
     try_join!(
         install_rust_wasm32_unknown_unknown_actors(&out_dir),
         install_rust_wasm32_wasi_actors(&out_dir),
     )?;
+
+    // Build WASI component wasm modules
     for name in ["builtins-component-reactor"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
@@ -278,12 +296,14 @@ async fn main() -> anyhow::Result<()> {
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
 
+    // Create a new keypair to use when signing wasm modules built for test
     let issuer = KeyPair::new_account();
     println!(
         "cargo:rustc-env=ISSUER={}",
         issuer.seed().expect("failed to extract issuer seed")
     );
 
+    // Sign the built wasm modules with relevant claims
     let builtin_caps: Vec<String> = vec![
         caps::BLOB.into(),
         caps::HTTP_CLIENT.into(),
@@ -303,6 +323,10 @@ async fn main() -> anyhow::Result<()> {
         ("foobar-component-command", None),
         ("foobar-component-command-preview2", None),
         ("logging-module-command", Some(vec![caps::LOGGING.into()])),
+        (
+            "kv-http-smithy",
+            Some(vec![caps::HTTP_SERVER.into(), caps::KEY_VALUE.into()]),
+        ),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await

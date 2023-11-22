@@ -2,8 +2,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::net::Ipv6Addr;
-use std::pin::pin;
-use std::process::ExitStatus;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,16 +12,9 @@ use hyper::service::service_fn;
 use nkeys::KeyPair;
 use redis::{Commands, ConnectionLike};
 use serde::Deserialize;
-use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::process::Command;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::time::interval;
-use tokio::{fs, select, spawn, try_join};
-use tokio_stream::wrappers::IntervalStream;
+use tokio::{fs, spawn, try_join};
 use tokio_stream::StreamExt;
-use tracing::warn;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
@@ -35,315 +26,14 @@ use wasmcloud_control_interface::{
 };
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
-fn tempdir() -> anyhow::Result<TempDir> {
-    tempfile::tempdir().context("failed to create temporary directory")
-}
-
-async fn free_port() -> anyhow::Result<u16> {
-    let lis = TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0))
-        .await
-        .context("failed to start TCP listener")?
-        .local_addr()
-        .context("failed to query listener local address")?;
-    Ok(lis.port())
-}
-
-async fn assert_start_actor(
-    ctl_client: &wasmcloud_control_interface::Client,
-    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    lattice_prefix: &str,
-    host_key: &KeyPair,
-    url: impl AsRef<str>,
-    count: u16,
-) -> anyhow::Result<()> {
-    let mut sub_started = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
-        .await?;
-
-    // TODO(#740): Remove deprecated once control clients no longer use this command
-    #[allow(deprecated)]
-    let CtlOperationAck { accepted, error } = ctl_client
-        .start_actor(&host_key.public_key(), url.as_ref(), count, None)
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start actor"))?;
-    ensure!(error == "");
-    ensure!(accepted);
-
-    // Naive wait for at least a stopped / started event before exiting this function. This prevents
-    // assuming we're done with scaling too early since scale is an early-ack ctl request.
-    tokio::select! {
-        _ = sub_started.next() => {
-        }
-        _ = tokio::time::sleep(Duration::from_secs(10)) => {
-            bail!("timed out waiting for actor started event");
-        },
-    }
-
-    Ok(())
-}
-
-async fn assert_scale_actor(
-    ctl_client: &wasmcloud_control_interface::Client,
-    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    lattice_prefix: &str,
-    host_key: &KeyPair,
-    url: impl AsRef<str>,
-    annotations: Option<HashMap<String, String>>,
-    count: Option<u16>,
-) -> anyhow::Result<()> {
-    let mut sub_started = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
-        .await?;
-    let mut sub_stopped = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_stopped"))
-        .await?;
-    let CtlOperationAck { accepted, error } = ctl_client
-        .scale_actor(&host_key.public_key(), url.as_ref(), count, annotations)
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start actor"))?;
-    ensure!(error == "");
-    ensure!(accepted);
-
-    // Naive wait for at least a stopped / started event before exiting this function. This prevents
-    // assuming we're done with scaling too early since scale is an early-ack ctl request.
-    tokio::select! {
-        _ = sub_started.next() => {
-        }
-        _ = sub_stopped.next() => {
-        }
-        _ = tokio::time::sleep(Duration::from_secs(10)) => {
-            bail!("timed out waiting for actor scale event");
-        },
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
-async fn assert_start_provider(
-    client: &wasmcloud_control_interface::Client,
-    rpc_client: &async_nats::Client,
-    lattice_prefix: &str,
-    host_key: &KeyPair,
-    provider_key: &KeyPair,
-    link_name: &str,
-    url: impl AsRef<str>,
-    configuration: Option<String>,
-) -> anyhow::Result<()> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct HealthCheckResponse {
-        #[serde(default)]
-        healthy: bool,
-        #[serde(default)]
-        message: Option<String>,
-    }
-
-    let CtlOperationAck { accepted, error } = client
-        .start_provider(
-            &host_key.public_key(),
-            url.as_ref(),
-            Some(link_name.to_string()),
-            None,
-            configuration,
-        )
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
-    ensure!(error == "");
-    ensure!(accepted);
-
-    let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
-        .take(30)
-        .then(|_| rpc_client.request(
-            format!(
-                "wasmbus.rpc.{}.{}.{}.health",
-                lattice_prefix,
-                provider_key.public_key(),
-                link_name,
-            ),
-            "".into(),
-        ))
-        .filter_map(|res| {
-            match res {
-                Err(error) => {
-                    warn!(?error, "failed to connect to provider");
-                    None
-                }
-                Ok(res) => Some(res),
-            }
-        }))
-    .next()
-    .await
-    .context("failed to perform health check request")?;
-
-    let HealthCheckResponse { healthy, message } =
-        rmp_serde::from_slice(&res.payload).context("failed to decode health check response")?;
-    ensure!(message == None);
-    ensure!(healthy);
-    Ok(())
-}
-
-async fn assert_advertise_link(
-    client: &wasmcloud_control_interface::Client,
-    actor_claims: &jwt::Claims<jwt::Actor>,
-    provider_key: &KeyPair,
-    contract_id: impl AsRef<str>,
-    link_name: &str,
-    values: HashMap<String, String>,
-) -> anyhow::Result<()> {
-    client
-        .advertise_link(
-            &actor_claims.subject,
-            &provider_key.public_key(),
-            contract_id.as_ref(),
-            link_name,
-            values,
-        )
-        .await
-        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    Ok(())
-}
-
-async fn assert_remove_link(
-    client: &wasmcloud_control_interface::Client,
-    actor_claims: &jwt::Claims<jwt::Actor>,
-    contract_id: impl AsRef<str>,
-    link_name: &str,
-) -> anyhow::Result<()> {
-    client
-        .remove_link(&actor_claims.subject, contract_id.as_ref(), link_name)
-        .await
-        .map_err(|e| anyhow!(e).context("failed to remove link"))?;
-    Ok(())
-}
-
-async fn assert_config_put(
-    client: &wasmcloud_control_interface::Client,
-    actor_claims: &jwt::Claims<jwt::Actor>,
-    key: &str,
-    value: impl Into<Vec<u8>>,
-) -> anyhow::Result<()> {
-    client
-        .put_config(&actor_claims.subject, key, value)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow!(e).context("failed to put config"))
-}
-
-async fn assert_put_label(
-    client: &wasmcloud_control_interface::Client,
-    host_id: &str,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<()> {
-    client
-        .put_label(host_id, key, value)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow!(e).context("failed to put label"))
-}
-
-async fn assert_delete_label(
-    client: &wasmcloud_control_interface::Client,
-    host_id: &str,
-    key: &str,
-) -> anyhow::Result<()> {
-    client
-        .delete_label(host_id, key)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow!(e).context("failed to put label"))
-}
-
-async fn spawn_server(
-    cmd: &mut Command,
-) -> anyhow::Result<(JoinHandle<anyhow::Result<ExitStatus>>, oneshot::Sender<()>)> {
-    let mut child = cmd
-        .kill_on_drop(true)
-        .spawn()
-        .context("failed to spawn child")?;
-    let (stop_tx, stop_rx) = oneshot::channel();
-    let child = spawn(async move {
-        select!(
-            res = stop_rx => {
-                res.context("failed to wait for shutdown")?;
-                child.kill().await.context("failed to kill child")?;
-                child.wait().await
-            }
-            status = child.wait() => {
-                status
-            }
-        )
-        .context("failed to wait for child")
-    });
-    Ok((child, stop_tx))
-}
-
-async fn stop_server(
-    server: JoinHandle<anyhow::Result<ExitStatus>>,
-    stop_tx: oneshot::Sender<()>,
-) -> anyhow::Result<()> {
-    stop_tx.send(()).expect("failed to stop");
-    let status = server
-        .await
-        .context("failed to wait for server to exit")??;
-    ensure!(status.code().is_none());
-    Ok(())
-}
-
-async fn start_redis() -> anyhow::Result<(
-    JoinHandle<anyhow::Result<ExitStatus>>,
-    oneshot::Sender<()>,
-    Url,
-)> {
-    let port = free_port().await?;
-    let url =
-        Url::parse(&format!("redis://localhost:{port}")).context("failed to parse Redis URL")?;
-    let (server, stop_tx) = spawn_server(
-        Command::new(
-            env::var("WASMCLOUD_REDIS")
-                .as_deref()
-                .unwrap_or("redis-server"),
-        )
-        .args([
-            "--port",
-            &port.to_string(),
-            // Ensure that no data is saved locally, since users with
-            // redis-server installed on their machines may have default
-            // configurations which normally specify a persistence directory
-            "--save",
-            "",
-            "--dbfilename",
-            format!("test-redis-{port}.rdb").as_str(),
-        ]),
-    )
-    .await
-    .context("failed to start Redis")?;
-    Ok((server, stop_tx, url))
-}
-
-async fn start_nats() -> anyhow::Result<(
-    JoinHandle<anyhow::Result<ExitStatus>>,
-    oneshot::Sender<()>,
-    Url,
-)> {
-    let port = free_port().await?;
-    let url =
-        Url::parse(&format!("nats://localhost:{port}")).context("failed to parse NATS URL")?;
-    let jetstream_dir = tempdir()?;
-    let (server, stop_tx) = spawn_server(
-        Command::new(
-            env::var("WASMCLOUD_NATS")
-                .as_deref()
-                .unwrap_or("nats-server"),
-        )
-        .args(["-js", "-D", "-T=false", "-p", &port.to_string(), "-sd"])
-        .arg(jetstream_dir.path()),
-    )
-    .await
-    .context("failed to start NATS")?;
-    Ok((server, stop_tx, url))
-}
+pub mod common;
+use common::nats::start_nats;
+use common::redis::start_redis;
+use common::{
+    assert_advertise_link, assert_config_put, assert_delete_label, assert_put_label,
+    assert_remove_link, assert_scale_actor, assert_start_actor, assert_start_provider, free_port,
+    stop_server, tempdir,
+};
 
 async fn http_handler(
     req: hyper::Request<hyper::Body>,
@@ -529,31 +219,11 @@ async fn wasmbus() -> anyhow::Result<()> {
         .init();
 
     let (
-        (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url),
-        (rpc_nats_server, rpc_stop_nats_tx, rpc_nats_url),
-        (component_nats_server, component_stop_nats_tx, component_nats_url),
-        (module_nats_server, module_stop_nats_tx, module_nats_url),
+        (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url, ctl_nats_client),
+        (rpc_nats_server, rpc_stop_nats_tx, rpc_nats_url, rpc_nats_client),
+        (component_nats_server, component_stop_nats_tx, component_nats_url, component_nats_client),
+        (module_nats_server, module_stop_nats_tx, module_nats_url, module_nats_client),
     ) = try_join!(start_nats(), start_nats(), start_nats(), start_nats())?;
-
-    fn default_nats_connect_options() -> async_nats::ConnectOptions {
-        async_nats::ConnectOptions::new().retry_on_initial_connect()
-    }
-
-    // Sometimes NATS completes the server process start but isn't actually ready for connections
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    let (ctl_nats_client, rpc_nats_client, component_nats_client, module_nats_client) = try_join!(
-        async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
-        async_nats::connect_with_options(rpc_nats_url.as_str(), default_nats_connect_options()),
-        async_nats::connect_with_options(
-            component_nats_url.as_str(),
-            default_nats_connect_options()
-        ),
-        async_nats::connect_with_options(module_nats_url.as_str(), default_nats_connect_options()),
-    )
-    .context("failed to connect to NATS")?;
-
-    // FIXME: we should be using separate NATS clients for CTL and RPC
 
     let (
         (component_redis_server, component_stop_redis_tx, component_redis_url),
