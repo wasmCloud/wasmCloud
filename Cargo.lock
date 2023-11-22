@@ -4903,7 +4903,7 @@ dependencies = [
  "wasmparser 0.118.0",
  "wat",
  "weld-codegen",
- "wit-bindgen-core 0.13.1",
+ "wit-bindgen-core 0.14.0",
  "wit-bindgen-go",
  "wit-component 0.16.1",
  "wit-parser 0.12.2",
