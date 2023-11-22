@@ -302,11 +302,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1700506675,
-        "narHash": "sha256-7ghTPK0cLxtfITFpQDN1wgNsoh/UosV1Pu9p++H7vK8=",
+        "lastModified": 1700686714,
+        "narHash": "sha256-uJh4ediAZJAFDqR7FA+XUM03XpdSQYXMz85xkQqRVS4=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "0939af4b732a896ee8a78da45ef261ec69f8e694",
+        "rev": "3e9dda0b377b0500b5e550f9b180ea3b8c1c2807",
         "type": "github"
       },
       "original": {
