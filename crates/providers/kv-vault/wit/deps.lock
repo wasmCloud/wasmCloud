@@ -1,0 +1,4 @@
+[keyvalue]
+path = "../../../../wit/wasmcloud/keyvalue"
+sha256 = "d2c5b6f6dad67b75417bf8c3061d397bfd7c619b5186a60a0774e2a5f2499d57"
+sha512 = "5116c728beccd5136b726bea115a693972f179fad901f3453d27ae35f0a0c684d4fbc18ede3b30fb3721cbec48e088f4068fce4cbba71b909f720e6fe2c70b8d"

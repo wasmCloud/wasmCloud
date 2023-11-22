@@ -157,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
             "-p=wasmcloud-provider-httpclient",
             "-p=wasmcloud-provider-httpserver",
             "-p=wasmcloud-provider-kvredis",
+            "-p=wasmcloud-provider-kv-vault",
             "-p=wasmcloud-provider-nats",
         ],
         |name, kind| {
@@ -165,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
                 "httpclient",
                 "httpserver",
                 "kvredis",
+                "kv-vault",
                 "nats_messaging",
             ]
             .contains(&name)
@@ -179,12 +181,14 @@ async fn main() -> anyhow::Result<()> {
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
             Some(("blobstore_fs", [rust_blobstore_fs])),
             Some(("httpclient", [rust_httpclient])),
             Some(("httpserver", [rust_httpserver])),
+            Some(("kv-vault", [rust_kv_vault])),
             Some(("kvredis", [rust_kvredis])),
             Some(("nats_messaging", [rust_nats])),
             None,
@@ -194,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
                 rust_httpclient_seed,
                 rust_httpserver_seed,
                 rust_kvredis_seed,
+                rust_kv_vault_seed,
                 rust_nats_seed,
             ) = try_join!(
                 build_par(
@@ -226,6 +231,13 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 build_par(
                     &issuer,
+                    out_dir.join("rust-kv-vault.par"),
+                    "wasmcloud:keyvalue",
+                    "wasmcloud-provider-kv-vault",
+                    rust_kv_vault,
+                ),
+                build_par(
+                    &issuer,
                     out_dir.join("rust-nats.par"),
                     "wasmcloud:messaging",
                     "wasmcloud-provider-nats",
@@ -236,6 +248,7 @@ async fn main() -> anyhow::Result<()> {
             println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
             println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");
+            println!("cargo:rustc-env=RUST_KV_VAULT_SUBJECT={rust_kv_vault_seed}");
             println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_nats_seed}");
             Ok(())
         }

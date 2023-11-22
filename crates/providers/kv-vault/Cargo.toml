@@ -1,0 +1,24 @@
+[package]
+name = "wasmcloud-provider-kv-vault"
+version = "0.6.0"
+description = """
+Hashicorp Vault capability provider for the 'wasmcloud:keyvalue' capability contract
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing = { workspace = true }
+url = { workspace = true }
+vaultrs = { workspace = true, features = [ "rustls" ] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wasmcloud-provider-wit-bindgen = { workspace = true }

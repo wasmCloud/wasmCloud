@@ -4,11 +4,14 @@ members = [
     "builtins-module-reactor",
     "foobar-component-command",
     "logging-module-command",
+    "kv-http-smithy",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
+async-trait = { version = "0.1", default-features = false }
+futures = { version = "0.3", default-features = true }
 axum = { version = "0.6", default-features = false }
 rmp-serde = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }

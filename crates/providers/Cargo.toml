@@ -16,6 +16,7 @@ members = [
     "http-client",
     "http-server",
     "kv-redis",
+    "kv-vault",
     "nats",
 ]
 resolver = "2"
@@ -45,6 +46,8 @@ tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.20", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
+url = { version = "2.4", default-features = false }
+vaultrs = { version = "0.7", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "*", path = "../wascap" }
 wasmbus-rpc = { version = "0.15", default-features = false } # TODO: Replace by `wasmcloud-provider-sdk`
