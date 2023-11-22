@@ -1,15 +1,15 @@
-package wasmcloud:actor
+package wasmcloud:actor;
 
 /// All interfaces provided by the host. This may change in backwards-incompatible way.
 world interfaces {
-    import wasmcloud:bus/host
-    import wasmcloud:bus/guest-config
+    import wasmcloud:bus/host;
+    import wasmcloud:bus/guest-config;
 
-    import wasi:blobstore/blobstore
-    import wasi:keyvalue/atomic
-    import wasi:keyvalue/readwrite
-    import wasi:logging/logging
-    import wasi:random/random@0.2.0-rc-2023-11-10
+    import wasi:blobstore/blobstore;
+    import wasi:keyvalue/atomic;
+    import wasi:keyvalue/readwrite;
+    import wasi:logging/logging;
+    import wasi:random/random@0.2.0-rc-2023-11-10;
 
-    import wasmcloud:messaging/consumer
+    import wasmcloud:messaging/consumer;
 }

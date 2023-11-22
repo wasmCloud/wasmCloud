@@ -848,9 +848,9 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d379af7f68bfc21714c6c7dea883544201741d2ce8274bb12fa54f89507f52a7"
+checksum = "23738e11972c7643e4ec947840fc463b6a571afcd3e735bdfce7d03c7a784aca"
 dependencies = [
  "async-trait",
  "lazy_static",
@@ -1162,9 +1162,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2e66c9d817f1720209181c316d28635c050fa304f9c79e47a520882661b7308"
+checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
 
 [[package]]
 name = "delegate-attr"
@@ -4903,7 +4903,7 @@ dependencies = [
  "wasmparser 0.116.1",
  "wat",
  "weld-codegen",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.13.1",
  "wit-bindgen-go",
  "wit-component 0.16.1",
  "wit-parser 0.12.2",
@@ -6136,9 +6136,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38726c54a5d7c03cac28a2a8de1006cfe40397ddf6def3f836189033a413bc08"
+checksum = "0205c6e67438f9d657318e0d7ee407a8017cd7bc5f1636cd4a280d4ccbc8d4a0"
 dependencies = [
  "bitflags 2.4.1",
  "wit-bindgen-rust-macro",
@@ -6154,7 +6154,7 @@ dependencies = [
  "heck 0.4.1",
  "wasm-encoder 0.36.2",
  "wasm-metadata",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.13.1",
  "wit-component 0.17.0",
 ]
 
@@ -6170,6 +6170,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-bindgen-core"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dfc34e539edf78da2efed167549962a4d26000db04694408285f52d90703fee"
+dependencies = [
+ "anyhow",
+ "wit-component 0.18.2",
+ "wit-parser 0.13.0",
+]
+
+[[package]]
 name = "wit-bindgen-go"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6178,36 +6189,36 @@ dependencies = [
  "anyhow",
  "heck 0.4.1",
  "wit-bindgen-c",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.13.1",
  "wit-component 0.17.0",
 ]
 
 [[package]]
 name = "wit-bindgen-rust"
-version = "0.13.2"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7200e565124801e01b7b5ddafc559e1da1b2e1bed5364d669cd1d96fb88722"
+checksum = "e898ad170a2796e9ecc495ce52cc2518dc35364ec042a4e108dd3c454e2a24c6"
 dependencies = [
  "anyhow",
  "heck 0.4.1",
  "wasm-metadata",
- "wit-bindgen-core",
- "wit-component 0.17.0",
+ "wit-bindgen-core 0.14.0",
+ "wit-component 0.18.2",
 ]
 
 [[package]]
 name = "wit-bindgen-rust-macro"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae33920ad8119fe72cf59eb00f127c0b256a236b9de029a1a10397b1f38bdbd"
+checksum = "cde5bc98cd9ebc817e7a0325120b5cf047643c2cc4583b917e66914215f94cff"
 dependencies = [
  "anyhow",
  "proc-macro2",
  "quote",
  "syn 2.0.39",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.14.0",
  "wit-bindgen-rust",
- "wit-component 0.17.0",
+ "wit-component 0.18.2",
 ]
 
 [[package]]
@@ -6246,6 +6257,25 @@ dependencies = [
  "wasm-metadata",
  "wasmparser 0.116.1",
  "wit-parser 0.12.2",
+]
+
+[[package]]
+name = "wit-component"
+version = "0.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b8a35a2a9992898c9d27f1664001860595a4bc99d32dd3599d547412e17d7e2"
+dependencies = [
+ "anyhow",
+ "bitflags 2.4.1",
+ "indexmap 2.1.0",
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "wasm-encoder 0.38.0",
+ "wasm-metadata",
+ "wasmparser 0.118.0",
+ "wit-parser 0.13.0",
 ]
 
 [[package]]

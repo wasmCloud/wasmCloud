@@ -190,7 +190,7 @@ wasmtime-wit-bindgen = { version = "14", default-features = false }
 wat = { version = "1", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
 which = { version = "4", default-features = false }
-wit-bindgen = { version = "0.13", default-features = false }
+wit-bindgen = { version = "0.14", default-features = false }
 wit-bindgen-core = { version = "0.13", default-features = false }
 wit-bindgen-go = { version = "0.13", default-features = false }
 wit-component = { version = "0.16", default-features = false }
