@@ -1,5 +1,5 @@
-package test-actors:foobar
+package test-actors:foobar;
 
 interface foobar {
-    foobar: func(arg: string) -> string
+    foobar: func(arg: string) -> string;
 }
