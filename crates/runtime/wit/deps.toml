@@ -1,4 +1,4 @@
-#blobstore = "https://github.com/WebAssembly/wasi-blob-store/archive/main.tar.gz"
+blobstore = "https://github.com/WebAssembly/wasi-blob-store/archive/117dbff996284a0963671e2c1bc81c9c7e9f255b.tar.gz" # TODO: Switch to upstream once https://github.com/WebAssembly/wasi-blob-store/pull/14 merged
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0-rc-2023-11-10.tar.gz"
 io = "../../../wit/deps/io"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
