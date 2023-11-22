@@ -5332,7 +5332,7 @@ dependencies = [
  "syn 2.0.39",
  "tracing",
  "tracing-subscriber",
- "wasmtime-wit-bindgen 14.0.4",
+ "wasmtime-wit-bindgen",
  "wit-parser 0.12.2",
 ]
 
@@ -5495,7 +5495,7 @@ dependencies = [
  "quote",
  "syn 2.0.39",
  "wasmtime-component-util",
- "wasmtime-wit-bindgen 15.0.0",
+ "wasmtime-wit-bindgen",
  "wit-parser 0.13.0",
 ]
 
@@ -5755,18 +5755,6 @@ dependencies = [
  "wasmtime-cranelift-shared",
  "wasmtime-environ",
  "winch-codegen",
-]
-
-[[package]]
-name = "wasmtime-wit-bindgen"
-version = "14.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d214ca7513d76af2872ad5bba4b0dcc0225821931745fdcb4fc30dd34bc3bf7"
-dependencies = [
- "anyhow",
- "heck 0.4.1",
- "indexmap 2.1.0",
- "wit-parser 0.12.2",
 ]
 
 [[package]]
