@@ -298,7 +298,7 @@ interface blobstore {
     }
 
     /// Check whether an object exists
-    object-exists: func(c: container-object-selector) -> bool
+    object-exists: func(c: container-object-selector) -> bool;
 
     /// Retrieve information about an object
     ///
