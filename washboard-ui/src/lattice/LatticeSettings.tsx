@@ -7,10 +7,7 @@ import {Form, FormControl, FormField, FormItem, FormLabel, FormMessage} from '@/
 import {Input} from '@/ui/input';
 import {useLatticeConfig} from './use-lattice-config';
 import {canConnect} from "../services/nats.ts";
-
-type Props = {
-  onSave: (event: z.infer<typeof formSchema>) => void;
-};
+import {SheetClose, SheetFooter} from "@/ui/sheet";
 
 const formSchema = z.object({
   latticeUrl: z
@@ -26,7 +23,7 @@ const formSchema = z.object({
     ),
 });
 
-function LatticeSettings({onSave}: Props): ReactElement {
+function LatticeSettings(): ReactElement {
   const {
     config: {latticeUrl},
     setConfig,
@@ -38,10 +35,9 @@ function LatticeSettings({onSave}: Props): ReactElement {
     },
   });
 
-  const handleSave = (data: z.infer<typeof formSchema>): void => {
-    onSave(data);
-    setConfig('latticeUrl', form.getValues('latticeUrl'));
-  };
+  function handleSave(data: z.infer<typeof formSchema>): void {
+    setConfig('latticeUrl', data.latticeUrl);
+  }
 
   useEffect(() => {
     form.setValue('latticeUrl', latticeUrl);
@@ -65,11 +61,13 @@ function LatticeSettings({onSave}: Props): ReactElement {
             </FormItem>
           )}
         />
-        <div className="mt-4 flex justify-end">
-          <Button variant="default" type="submit" disabled={hasErrors}>
-            Update
-          </Button>
-        </div>
+        <SheetFooter className="mt-4">
+          <SheetClose asChild>
+            <Button variant="default" type="submit" disabled={hasErrors}>
+              Update
+            </Button>
+          </SheetClose>
+        </SheetFooter>
       </form>
     </Form>
   );
