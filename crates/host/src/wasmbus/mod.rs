@@ -3695,7 +3695,7 @@ impl Host {
 
     #[instrument(level = "trace", skip_all)]
     async fn handle_config_get_one(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
-        trace!("getting config");
+        trace!(%entity_id, %key, "handling config");
         let json = match self
             .config_data_cache
             .read()
@@ -3721,7 +3721,7 @@ impl Host {
 
     #[instrument(level = "trace", skip(self))]
     async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Bytes> {
-        trace!(%entity_id, "getting all config");
+        trace!(%entity_id, "handling all config");
         self.config_data_cache
             .read()
             .await
