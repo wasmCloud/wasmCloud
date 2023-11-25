@@ -250,21 +250,25 @@ pub(crate) async fn publish(
     name: &str,
     data: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let name = format!("com.wasmcloud.lattice.{name}");
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .context("failed to format current time")?;
     let ev = event_builder
         .clone()
-        .ty(&name)
+        .ty(format!("com.wasmcloud.lattice.{name}"))
         .id(Uuid::from_u128(Ulid::new().into()).to_string())
         .time(now)
         .data("application/json", data)
         .build()
         .context("failed to build cloud event")?;
     let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
+    // TODO(pre-1.0): deprecate general subject and remove this
+    let _ = ctl_nats
+        .publish(format!("wasmbus.evt.{lattice_prefix}"), ev.clone().into())
+        .await
+        .with_context(|| format!("failed to publish `{name}` event on general subject"));
     ctl_nats
-        .publish(format!("wasmbus.evt.{lattice_prefix}"), ev.into())
+        .publish(format!("wasmbus.evt.{lattice_prefix}.{name}"), ev.into())
         .await
         .with_context(|| format!("failed to publish `{name}` event"))
 }

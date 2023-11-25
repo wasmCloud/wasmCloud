@@ -133,6 +133,7 @@ class LatticeService {
       const message = await connection.request('wasmbus.ctl.default.get.links');
       this.linkState$.next(message.json<{links: WadmLink[]}>());
 
+      // TODO(pre-1.0): subscribe to specific event subjects instead of all events
       const watch = await connection.subscribe('wasmbus.evt.default');
       for await (const event of watch) {
         const parsedEvent = event.json<CloudEvent>();

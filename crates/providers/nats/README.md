@@ -10,5 +10,3 @@ To configure this provider, use the following link settings in link definitions:
 | `URI` | NATS connection uri. If not specified, the default is `0.0.0.0:4222` |
 | `CLIENT_JWT` | Optional JWT auth token. For JWT authentication, both `CLIENT_JWT` and `CLIENT_SEED` must be provided. |
 | `CLIENT_SEED` | Private seed for JWT authentication. |
-
-⚠️ A word of caution, setting the subscription link definition value to `wasmbus.evt.*` or `wasmbus.evt.<your_lattice_prefix>` _will_ cause that actor to infinite loop when handling a message. We publish events for when actor invocations succeed or fail on the `wasmbus.evt.<prefix>` topic, and the act of handling that message results in another invocation event.
