@@ -207,7 +207,9 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Issuer", 1, Alignment::Left),
             TableCell::new_with_alignment(
-                c.get("iss").unwrap_or(&"".to_string()),
+                c.get("issuer")
+                    .or_else(|| c.get("iss"))
+                    .unwrap_or(&"".to_string()),
                 1,
                 Alignment::Left,
             ),
@@ -215,7 +217,9 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Subject", 1, Alignment::Left),
             TableCell::new_with_alignment(
-                c.get("sub").unwrap_or(&"".to_string()),
+                c.get("subject")
+                    .or_else(|| c.get("sub"))
+                    .unwrap_or(&"".to_string()),
                 1,
                 Alignment::Left,
             ),
@@ -223,7 +227,9 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Capabilities", 1, Alignment::Left),
             TableCell::new_with_alignment(
-                c.get("caps").unwrap_or(&"".to_string()),
+                c.get("capabilities")
+                    .or_else(|| c.get("caps"))
+                    .unwrap_or(&"".to_string()),
                 1,
                 Alignment::Left,
             ),
@@ -239,7 +245,9 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Revision", 1, Alignment::Left),
             TableCell::new_with_alignment(
-                c.get("rev").unwrap_or(&"".to_string()),
+                c.get("revision")
+                    .or_else(|| c.get("rev"))
+                    .unwrap_or(&"".to_string()),
                 1,
                 Alignment::Left,
             ),
