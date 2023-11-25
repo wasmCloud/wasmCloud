@@ -1,5 +1,4 @@
 const DEFAULT_TOPIC_PREFIX: &str = "wasmbus.ctl";
-const EVT_TOPIC_PREFIX: &str = "wasmbus.evt";
 
 fn prefix(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
     format!(
@@ -9,10 +8,6 @@ fn prefix(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
             .unwrap_or(&DEFAULT_TOPIC_PREFIX.to_string()),
         lattice_prefix
     )
-}
-
-pub fn control_event(lattice_prefix: &str) -> String {
-    format!("{EVT_TOPIC_PREFIX}.{lattice_prefix}")
 }
 
 pub fn provider_auction_subject(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {

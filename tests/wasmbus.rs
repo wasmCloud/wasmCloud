@@ -78,8 +78,11 @@ async fn assert_scale_actor(
     annotations: Option<HashMap<String, String>>,
     count: Option<u16>,
 ) -> anyhow::Result<()> {
-    let mut sub = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}"))
+    let mut sub_started = nats_client
+        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
+        .await?;
+    let mut sub_stopped = nats_client
+        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_stopped"))
         .await?;
     let CtlOperationAck { accepted, error } = ctl_client
         .scale_actor(&host_key.public_key(), url.as_ref(), count, annotations)
@@ -90,13 +93,17 @@ async fn assert_scale_actor(
 
     // Naive wait for at least a stopped / started event before exiting this function. This prevents
     // assuming we're done with scaling too early since scale is an early-ack ctl request.
-    while let Some(message) = sub.next().await {
-        if let Ok(evt) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
-            if let Some(serde_json::Value::String(event_type)) = evt.get("type") {
-                if event_type.contains("actors_stopped") || event_type.contains("actors_started") {
-                    break;
-                }
+    loop {
+        tokio::select! {
+            _ = sub_started.next() => {
+                break;
             }
+            _ = sub_stopped.next() => {
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                bail!("timed out waiting for actor scale event");
+            },
         }
     }
 

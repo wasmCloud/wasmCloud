@@ -785,7 +785,7 @@ impl Client {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
         let mut sub = self
             .nc
-            .subscribe(broker::control_event(&self.lattice_prefix))
+            .subscribe(format!("wasmbus.evt.{}", self.lattice_prefix))
             .await?;
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
