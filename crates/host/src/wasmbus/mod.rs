@@ -51,8 +51,8 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, HostLabel,
-    LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
+    ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
+    HostLabel, LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
     ProviderDescription, RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest,
     ScaleActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand,
@@ -1619,50 +1619,52 @@ impl Claims {
 
 impl From<StoredClaims> for Claims {
     fn from(claims: StoredClaims) -> Self {
-        let name = (!claims.name.is_empty()).then_some(claims.name);
-        let rev = claims.revision.parse().ok();
-        let ver = (!claims.version.is_empty()).then_some(claims.version);
-
-        // rely on the fact that serialized actor claims don't include a contract_id
-        if claims.contract_id.is_empty() {
-            let tags =
-                (!claims.tags.is_empty()).then(|| claims.tags.split(',').map(Into::into).collect());
-            let caps = (!claims.capabilities.is_empty())
-                .then(|| claims.capabilities.split(',').map(Into::into).collect());
-            let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
-            let metadata = jwt::Actor {
-                name,
-                tags,
-                caps,
-                rev,
-                ver,
-                call_alias,
-                ..Default::default()
-            };
-            let claims = ClaimsBuilder::new()
-                .subject(&claims.subject)
-                .issuer(&claims.issuer)
-                .with_metadata(metadata)
-                .build();
-            Claims::Actor(claims)
-        } else {
-            let config_schema: Option<serde_json::Value> = claims
-                .config_schema
-                .and_then(|schema| serde_json::from_str(&schema).ok());
-            let metadata = jwt::CapabilityProvider {
-                name,
-                capid: claims.contract_id,
-                rev,
-                ver,
-                config_schema,
-                ..Default::default()
-            };
-            let claims = ClaimsBuilder::new()
-                .subject(&claims.subject)
-                .issuer(&claims.issuer)
-                .with_metadata(metadata)
-                .build();
-            Claims::Provider(claims)
+        match claims {
+            StoredClaims::Actor(claims) => {
+                let name = (!claims.name.is_empty()).then_some(claims.name);
+                let rev = claims.revision.parse().ok();
+                let ver = (!claims.version.is_empty()).then_some(claims.version);
+                let tags = (!claims.tags.is_empty()).then_some(claims.tags);
+                let caps = (!claims.capabilities.is_empty()).then_some(claims.capabilities);
+                let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
+                let metadata = jwt::Actor {
+                    name,
+                    tags,
+                    caps,
+                    rev,
+                    ver,
+                    call_alias,
+                    ..Default::default()
+                };
+                let claims = ClaimsBuilder::new()
+                    .subject(&claims.subject)
+                    .issuer(&claims.issuer)
+                    .with_metadata(metadata)
+                    .build();
+                Claims::Actor(claims)
+            }
+            StoredClaims::Provider(claims) => {
+                let name = (!claims.name.is_empty()).then_some(claims.name);
+                let rev = claims.revision.parse().ok();
+                let ver = (!claims.version.is_empty()).then_some(claims.version);
+                let config_schema: Option<serde_json::Value> = claims
+                    .config_schema
+                    .and_then(|schema| serde_json::from_str(&schema).ok());
+                let metadata = jwt::CapabilityProvider {
+                    name,
+                    capid: claims.contract_id,
+                    rev,
+                    ver,
+                    config_schema,
+                    ..Default::default()
+                };
+                let claims = ClaimsBuilder::new()
+                    .subject(&claims.subject)
+                    .issuer(&claims.issuer)
+                    .with_metadata(metadata)
+                    .build();
+                Claims::Provider(claims)
+            }
         }
     }
 }
@@ -3660,25 +3662,21 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_claims(&self) -> anyhow::Result<Bytes> {
-        // TODO: update control interface client to have a more specific type definition for
-        // GetClaimsResponse, so we can re-use it here. Currently it's Vec<HashMap<String, String>>
-        #[derive(Serialize)]
-        struct ClaimsResponse {
-            claims: Vec<StoredClaims>,
-        }
-
         trace!("handling claims");
 
         let (actor_claims, provider_claims) =
             join!(self.actor_claims.read(), self.provider_claims.read());
         let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
         let provider_claims = provider_claims.values().cloned().map(Claims::Provider);
-        let claims = actor_claims
+        let claims: Vec<StoredClaims> = actor_claims
             .chain(provider_claims)
             .flat_map(TryFrom::try_from)
             .collect();
-        let res = serde_json::to_vec(&ClaimsResponse { claims })
-            .context("failed to serialize response")?;
+
+        let res = serde_json::to_vec(&GetClaimsResponse {
+            claims: claims.into_iter().map(std::convert::Into::into).collect(),
+        })
+        .context("failed to serialize response")?;
         Ok(res.into())
     }
 
@@ -4071,7 +4069,11 @@ impl Host {
             }
         };
         let claims: StoredClaims = claims.try_into()?;
-        let key = format!("CLAIMS_{}", claims.subject);
+        let subject = match &claims {
+            StoredClaims::Actor(claims) => &claims.subject,
+            StoredClaims::Provider(claims) => &claims.subject,
+        };
+        let key = format!("CLAIMS_{subject}");
         trace!(?claims, ?key, "storing claims");
 
         let bytes = serde_json::to_vec(&claims)
@@ -4408,21 +4410,41 @@ impl Host {
     }
 }
 
-// TODO: use a better format https://github.com/wasmCloud/wasmCloud/issues/508
+// TODO: remove StoredClaims in #1093
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredClaims {
+    Actor(StoredActorClaims),
+    Provider(StoredProviderClaims),
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct StoredClaims {
+struct StoredActorClaims {
     call_alias: String,
-    #[serde(rename = "caps")]
-    capabilities: String,
-    contract_id: String,
-    #[serde(rename = "iss")]
+    #[serde(alias = "caps", deserialize_with = "deserialize_messy_vec")]
+    capabilities: Vec<String>,
+    #[serde(alias = "iss")]
     issuer: String,
     name: String,
-    #[serde(rename = "rev")]
+    #[serde(alias = "rev")]
     revision: String,
-    #[serde(rename = "sub")]
+    #[serde(alias = "sub")]
     subject: String,
-    tags: String,
+    #[serde(deserialize_with = "deserialize_messy_vec")]
+    tags: Vec<String>,
+    version: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct StoredProviderClaims {
+    contract_id: String,
+    #[serde(alias = "iss")]
+    issuer: String,
+    name: String,
+    #[serde(alias = "rev")]
+    revision: String,
+    #[serde(alias = "sub")]
+    subject: String,
     version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     config_schema: Option<String>,
@@ -4448,17 +4470,16 @@ impl TryFrom<Claims> for StoredClaims {
                     call_alias,
                     ..
                 } = metadata.context("no metadata found on actor claims")?;
-                Ok(StoredClaims {
+                Ok(StoredClaims::Actor(StoredActorClaims {
                     call_alias: call_alias.unwrap_or_default(),
-                    capabilities: caps.unwrap_or_default().join(","),
+                    capabilities: caps.unwrap_or_default(),
                     issuer,
                     name: name.unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
                     subject,
-                    tags: tags.unwrap_or_default().join(","),
+                    tags: tags.unwrap_or_default(),
                     version: ver.unwrap_or_default(),
-                    ..Default::default()
-                })
+                }))
             }
             Claims::Provider(jwt::Claims {
                 issuer,
@@ -4474,7 +4495,7 @@ impl TryFrom<Claims> for StoredClaims {
                     config_schema,
                     ..
                 } = metadata.context("no metadata found on provider claims")?;
-                Ok(StoredClaims {
+                Ok(StoredClaims::Provider(StoredProviderClaims {
                     contract_id,
                     issuer,
                     name: name.unwrap_or_default(),
@@ -4482,8 +4503,7 @@ impl TryFrom<Claims> for StoredClaims {
                     subject,
                     version: ver.unwrap_or_default(),
                     config_schema: config_schema.map(|schema| schema.to_string()),
-                    ..Default::default()
-                })
+                }))
             }
         }
     }
@@ -4511,17 +4531,16 @@ impl TryFrom<&Claims> for StoredClaims {
                 } = metadata
                     .as_ref()
                     .context("no metadata found on actor claims")?;
-                Ok(StoredClaims {
+                Ok(StoredClaims::Actor(StoredActorClaims {
                     call_alias: call_alias.clone().unwrap_or_default(),
-                    capabilities: caps.clone().unwrap_or_default().join(","),
+                    capabilities: caps.clone().unwrap_or_default(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
                     subject: subject.clone(),
-                    tags: tags.clone().unwrap_or_default().join(","),
+                    tags: tags.clone().unwrap_or_default(),
                     version: ver.clone().unwrap_or_default(),
-                    ..Default::default()
-                })
+                }))
             }
             Claims::Provider(jwt::Claims {
                 issuer,
@@ -4539,7 +4558,7 @@ impl TryFrom<&Claims> for StoredClaims {
                 } = metadata
                     .as_ref()
                     .context("no metadata found on provider claims")?;
-                Ok(StoredClaims {
+                Ok(StoredClaims::Provider(StoredProviderClaims {
                     contract_id: contract_id.clone(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
@@ -4547,10 +4566,95 @@ impl TryFrom<&Claims> for StoredClaims {
                     subject: subject.clone(),
                     version: ver.clone().unwrap_or_default(),
                     config_schema: config_schema.as_ref().map(ToString::to_string),
-                    ..Default::default()
-                })
+                }))
             }
         }
+    }
+}
+
+#[allow(clippy::implicit_hasher)]
+impl From<StoredClaims> for HashMap<String, String> {
+    fn from(claims: StoredClaims) -> Self {
+        match claims {
+            StoredClaims::Actor(claims) => HashMap::from([
+                ("call_alias".to_string(), claims.call_alias),
+                ("caps".to_string(), claims.capabilities.clone().join(",")), // TODO: remove in #1093
+                ("capabilities".to_string(), claims.capabilities.join(",")),
+                ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
+                ("issuer".to_string(), claims.issuer),
+                ("name".to_string(), claims.name),
+                ("rev".to_string(), claims.revision.clone()), // TODO: remove in #1093
+                ("revision".to_string(), claims.revision),
+                ("sub".to_string(), claims.subject.clone()), // TODO: remove in #1093
+                ("subject".to_string(), claims.subject),
+                ("tags".to_string(), claims.tags.join(",")),
+                ("version".to_string(), claims.version),
+            ]),
+            StoredClaims::Provider(claims) => HashMap::from([
+                ("contract_id".to_string(), claims.contract_id),
+                ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
+                ("issuer".to_string(), claims.issuer),
+                ("name".to_string(), claims.name),
+                ("rev".to_string(), claims.revision.clone()), // TODO: remove in #1093
+                ("revision".to_string(), claims.revision),
+                ("sub".to_string(), claims.subject.clone()), // TODO: remove in #1093
+                ("subject".to_string(), claims.subject),
+                ("version".to_string(), claims.version),
+                (
+                    "config_schema".to_string(),
+                    claims.config_schema.unwrap_or_default(),
+                ),
+            ]),
+        }
+    }
+}
+
+fn deserialize_messy_vec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    MessyVec::deserialize(deserializer).map(|messy_vec| messy_vec.0)
+}
+// Helper struct to deserialize either a comma-delimited string or an actual array of strings
+struct MessyVec(pub Vec<String>);
+
+struct MessyVecVisitor;
+
+// Since this is "temporary" code to preserve backwards compatibility with already-serialized claims,
+// we use fully-qualified names instead of importing
+impl<'de> serde::de::Visitor<'de> for MessyVecVisitor {
+    type Value = MessyVec;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("string or array of strings")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+
+        while let Some(value) = seq.next_element()? {
+            values.push(value);
+        }
+
+        Ok(MessyVec(values))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(MessyVec(value.split(',').map(String::from).collect()))
+    }
+}
+
+impl<'de> Deserialize<'de> for MessyVec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(MessyVecVisitor)
     }
 }
 
