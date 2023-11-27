@@ -93,18 +93,14 @@ async fn assert_scale_actor(
 
     // Naive wait for at least a stopped / started event before exiting this function. This prevents
     // assuming we're done with scaling too early since scale is an early-ack ctl request.
-    loop {
-        tokio::select! {
-            _ = sub_started.next() => {
-                break;
-            }
-            _ = sub_stopped.next() => {
-                break;
-            }
-            _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                bail!("timed out waiting for actor scale event");
-            },
+    tokio::select! {
+        _ = sub_started.next() => {
         }
+        _ = sub_stopped.next() => {
+        }
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            bail!("timed out waiting for actor scale event");
+        },
     }
 
     Ok(())
