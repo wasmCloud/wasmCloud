@@ -217,11 +217,11 @@ async fn assert_config_put(
 async fn assert_put_label(
     client: &wasmcloud_control_interface::Client,
     host_id: &str,
-    label: &str,
+    key: &str,
     value: &str,
 ) -> anyhow::Result<()> {
     client
-        .put_label(host_id, label, value)
+        .put_label(host_id, key, value)
         .await
         .map(|_| ())
         .map_err(|e| anyhow!(e).context("failed to put label"))
@@ -230,10 +230,10 @@ async fn assert_put_label(
 async fn assert_delete_label(
     client: &wasmcloud_control_interface::Client,
     host_id: &str,
-    label: &str,
+    key: &str,
 ) -> anyhow::Result<()> {
     client
-        .delete_label(host_id, label)
+        .delete_label(host_id, key)
         .await
         .map(|_| ())
         .map_err(|e| anyhow!(e).context("failed to put label"))

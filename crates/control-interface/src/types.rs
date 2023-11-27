@@ -421,6 +421,6 @@ pub struct LinkDefinition {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostLabel {
-    pub label: String,
+    pub key: String,
     pub value: String,
 }

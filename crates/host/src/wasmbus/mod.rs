@@ -51,11 +51,11 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
-    LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription,
-    RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest, ScaleActorCommand,
-    StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand,
+    ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, HostLabel,
+    LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
+    ProviderDescription, RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest,
+    ScaleActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
+    StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
@@ -3738,22 +3738,16 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_label_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct PutLabel {
-            label: String,
-            value: String,
-        }
-
-        let PutLabel { label, value } = serde_json::from_slice(payload.as_ref())
+        let HostLabel { key, value } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize put label request")?;
         let mut labels = self.labels.write().await;
-        match labels.entry(label) {
+        match labels.entry(key) {
             Entry::Occupied(mut entry) => {
-                info!(label = entry.key(), value, "updated label");
+                info!(key = entry.key(), value, "updated label");
                 entry.insert(value);
             }
             Entry::Vacant(entry) => {
-                info!(label = entry.key(), value, "set label");
+                info!(key = entry.key(), value, "set label");
                 entry.insert(value);
             }
         }
@@ -3762,18 +3756,13 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_label_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct DeleteLabel {
-            label: String,
-        }
-
-        let DeleteLabel { label } = serde_json::from_slice(payload.as_ref())
+        let HostLabel { key, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize delete label request")?;
         let mut labels = self.labels.write().await;
-        if labels.remove(&label).is_some() {
-            info!(label, "removed label");
+        if labels.remove(&key).is_some() {
+            info!(key, "removed label");
         } else {
-            warn!(label, "could not remove unset label");
+            warn!(key, "could not remove unset label");
         }
         Ok(ACCEPTED.into())
     }
