@@ -511,13 +511,13 @@ impl Client {
     pub async fn put_label(
         &self,
         host_id: &str,
-        label: &str,
+        key: &str,
         value: &str,
     ) -> Result<CtlOperationAck> {
         let subject = broker::put_label(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!(%subject, "putting label");
         let bytes = json_serialize(HostLabel {
-            label: label.to_string(),
+            key: key.to_string(),
             value: value.to_string(),
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -531,11 +531,11 @@ impl Client {
     /// # Errors
     ///
     /// Will return an error if there is a communication problem with the host
-    pub async fn delete_label(&self, host_id: &str, label: &str) -> Result<CtlOperationAck> {
+    pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlOperationAck> {
         let subject = broker::delete_label(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!(%subject, "removing label");
         let bytes = json_serialize(HostLabel {
-            label: label.to_string(),
+            key: key.to_string(),
             value: String::new(), // value isn't parsed by the host
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
