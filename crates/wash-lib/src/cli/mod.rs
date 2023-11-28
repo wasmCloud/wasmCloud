@@ -155,7 +155,7 @@ pub struct CliConnectionOpts {
     pub ctl_seed: Option<String>,
 
     /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
-    /// See https://docs.nats.io/developing-with-nats/security/creds for details.
+    /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
     #[clap(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
     pub ctl_credsfile: Option<PathBuf>,
 
