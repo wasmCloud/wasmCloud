@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
+
+pub use output::*;
 use wash_lib::cli::{
     get::{GetClaimsCommand, GetCommand, GetHostInventoriesCommand, GetHostsCommand},
     link::LinkCommand,
@@ -18,7 +20,6 @@ use crate::{
         start_cmd::handle_command as handle_start_command,
     },
 };
-pub use output::*;
 
 mod output;
 
@@ -118,13 +119,9 @@ pub async fn handle_command(
         }
         Scale(ScaleCommand::Actor(cmd)) => {
             eprintln!("[warn] `wash ctl scale actor` has been deprecated in favor of `wash scale actor` and will be removed in a future version.");
-            let max = cmd
-                .max_concurrent
-                .map(|max| max.to_string())
-                .unwrap_or_else(|| "unbounded".to_string());
             sp.update_spinner_message(format!(
                 " Scaling Actor {} to {} max concurrent instances ... ",
-                cmd.actor_ref, max
+                cmd.actor_ref, cmd.max_instances
             ));
             handle_scale_actor(cmd.clone()).await?
         }
@@ -137,15 +134,16 @@ pub async fn handle_command(
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
     use clap::Parser;
+
     use wash_lib::cli::{
         get::GetHostsCommand,
         scale::ScaleActorCommand,
         stop::{StopActorCommand, StopProviderCommand},
         update::UpdateActorCommand,
     };
+
+    use super::*;
 
     #[derive(Parser)]
     struct Cmd {
@@ -443,7 +441,7 @@ mod test {
                 opts,
                 host_id,
                 actor_ref,
-                max_concurrent,
+                max_instances,
                 annotations,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -452,7 +450,7 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
-                assert_eq!(max_concurrent, Some(1));
+                assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
             }
             cmd => panic!("ctl scale actor constructed incorrect command {cmd:?}"),

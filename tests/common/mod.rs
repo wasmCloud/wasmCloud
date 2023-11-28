@@ -84,7 +84,7 @@ pub async fn assert_scale_actor(
     host_key: &KeyPair,
     url: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
-    count: Option<u16>,
+    count: u16,
 ) -> anyhow::Result<()> {
     let mut sub_started = nats_client
         .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))

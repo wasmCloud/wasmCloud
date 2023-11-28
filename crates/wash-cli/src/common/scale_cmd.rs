@@ -14,13 +14,9 @@ pub async fn handle_command(
     let sp: Spinner = Spinner::new(&output_kind)?;
     let out = match command {
         ScaleCommand::Actor(cmd) => {
-            let max = cmd
-                .max_concurrent
-                .map(|max| max.to_string())
-                .unwrap_or_else(|| "unbounded".to_string());
             sp.update_spinner_message(format!(
                 " Scaling Actor {} to {} max concurrent instances ... ",
-                cmd.actor_ref, max
+                cmd.actor_ref, cmd.max_instances
             ));
             handle_scale_actor(cmd.clone()).await?
         }

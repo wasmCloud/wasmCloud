@@ -83,10 +83,10 @@ async fn integration_scale_actor_serial() -> Result<()> {
                 .instances
                 .iter()
                 .map(|i| {
-                    if i.max_concurrent == 0 {
+                    if i.max_instances == 0 {
                         1
                     } else {
-                        i.max_concurrent
+                        i.max_instances
                     }
                 })
                 .sum::<u16>();
@@ -165,10 +165,10 @@ async fn integration_scale_actor_serial() -> Result<()> {
                 .instances
                 .iter()
                 .map(|i| {
-                    if i.max_concurrent == 0 {
+                    if i.max_instances == 0 {
                         1
                     } else {
-                        i.max_concurrent
+                        i.max_instances
                     }
                 })
                 .sum::<u16>();

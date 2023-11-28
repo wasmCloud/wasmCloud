@@ -284,7 +284,7 @@ pub async fn handle_command(
         .find(|a| a.image_ref == Some(actor_ref.clone()))
     {
         actor_id = existing_actor.id;
-        scale_actor(&ctl_client, &host.id, &actor_ref, Some(1), None).await?;
+        scale_actor(&ctl_client, &host.id, &actor_ref, 1, None).await?;
     } else {
         // Start the actor for the first time
         actor_id = start_actor(StartActorArgs {

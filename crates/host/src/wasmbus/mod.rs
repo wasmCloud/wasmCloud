@@ -1,23 +1,9 @@
-/// wasmCloud host configuration
-pub mod config;
-
-pub use config::Host as HostConfig;
-
-mod event;
-
-use crate::{
-    fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
-    PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
-    RegistryType,
-};
-
 use core::future::Future;
 use core::num::NonZeroUsize;
 use core::ops::{Deref, RangeInclusive};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
-
 use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
@@ -49,6 +35,8 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
+
+pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
@@ -69,6 +57,17 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
+
+use crate::{
+    fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
+    PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
+    RegistryType,
+};
+
+/// wasmCloud host configuration
+pub mod config;
+
+mod event;
 
 const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
 
@@ -262,12 +261,13 @@ struct ActorInstance {
     handler: Handler,
     chunk_endpoint: ChunkEndpoint,
     annotations: Annotations,
-    max: Option<NonZeroUsize>,
+    max: NonZeroUsize,
     /// Cluster issuers that this actor should accept invocations from
     valid_issuers: Vec<String>,
     policy_manager: Arc<PolicyManager>,
     image_reference: String,
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
+    // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
 }
 
@@ -1597,7 +1597,8 @@ pub struct Host {
     queue: AbortHandle,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     links: RwLock<HashMap<String, LinkDefinition>>,
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
+    // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
 }
@@ -2313,7 +2314,7 @@ impl Host {
                 let instances = actor.instances.read().await;
                 let max = instances
                     .iter()
-                    .map(|(_annotations, instance)| instance.max.map_or(0, NonZeroUsize::get))
+                    .map(|(_annotations, instance)| instance.max.get())
                     .sum();
                 if max == 0 {
                     None
@@ -2380,7 +2381,7 @@ impl Host {
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &Annotations,
         actor_ref: impl AsRef<str>,
-        max: Option<NonZeroUsize>,
+        max: NonZeroUsize,
         actor: wasmcloud_runtime::Actor,
         handler: Handler,
     ) -> anyhow::Result<Arc<ActorInstance>> {
@@ -2421,8 +2422,7 @@ impl Host {
 
             let _calls = spawn({
                 let instance = Arc::clone(&instance);
-                let limit = max.map(NonZeroUsize::get);
-                Abortable::new(calls, calls_abort_reg).for_each_concurrent(limit, move |msg| {
+                Abortable::new(calls, calls_abort_reg).for_each_concurrent(max.get(), move |msg| {
                     let instance = Arc::clone(&instance);
                     async move { instance.handle_rpc_message(msg).await }
                 })
@@ -2453,7 +2453,7 @@ impl Host {
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
         actor: wasmcloud_runtime::Actor,
         actor_ref: String,
-        max: Option<NonZeroUsize>,
+        max: NonZeroUsize,
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
@@ -2521,7 +2521,7 @@ impl Host {
 
         info!(actor_ref, "actor started");
         self.publish_actor_started_events(
-            max.map_or(0, NonZeroUsize::get),
+            max.get(),
             claims,
             &annotations,
             instance.id,
@@ -2724,18 +2724,18 @@ impl Host {
         let ScaleActorCommand {
             actor_ref,
             annotations,
-            max_concurrent,
+            max_instances,
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
 
-        debug!(actor_ref, max_concurrent, "handling scale actor");
+        debug!(actor_ref, max_instances, "handling scale actor");
 
         let host_id = host_id.to_string();
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         spawn(async move {
             if let Err(e) = self
-                .handle_scale_actor_task(&actor_ref, &host_id, max_concurrent, annotations)
+                .handle_scale_actor_task(&actor_ref, &host_id, max_instances, annotations)
                 .await
             {
                 error!(%actor_ref, err = ?e, "failed to scale actor");
@@ -2746,16 +2746,15 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     /// Handles scaling an actor to a supplied number of `max` concurrently executing instances.
-    /// Supplying `None` for max will result in an unbounded number of concurrent requests, and supplying
-    /// `Some(0)` will result in stopping that actor instance.
+    /// Supplying `0` will result in stopping that actor instance.
     async fn handle_scale_actor_task(
         &self,
         actor_ref: &str,
         host_id: &str,
-        max: Option<u16>,
+        max_instances: u16,
         annotations: Annotations,
     ) -> anyhow::Result<()> {
-        trace!(actor_ref, max, "scale actor task");
+        trace!(actor_ref, max_instances, "scale actor task");
 
         let actor = self.fetch_actor(actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
@@ -2777,21 +2776,19 @@ impl Host {
         };
 
         let actor_ref = actor_ref.to_string();
-        // External option is whether or not there is a bound, internal is the bound itself.
-        // None == No max concurrent instances
-        // Some(None) means we requested 0 concurrent instances, so we need to stop the actor.
-        let requested_max: Option<Option<NonZeroUsize>> = max.map(|m| NonZeroUsize::new(m.into()));
-        match (self.actors.write().await.entry(actor_id), requested_max) {
+        match (
+            self.actors.write().await.entry(actor_id),
+            NonZeroUsize::new(max_instances.into()),
+        ) {
             // No actor is running and we requested to scale to zero, noop
-            (hash_map::Entry::Vacant(_), Some(None)) => {}
-            // No actor is running and we requested to scale to some amount or unbounded, start with specified max
-            (hash_map::Entry::Vacant(entry), max) => {
-                // Starting 0 actors makes no logical sense and is interpreted as starting with unbounded concurrency
-                self.start_actor(entry, actor, actor_ref, max.flatten(), host_id, annotations)
+            (hash_map::Entry::Vacant(_), None) => {}
+            // No actor is running and we requested to scale to some amount, start with specified max
+            (hash_map::Entry::Vacant(entry), Some(max)) => {
+                self.start_actor(entry, actor, actor_ref, max, host_id, annotations)
                     .await?;
             }
             // Actor is running and we requested to scale to zero instances, stop actor
-            (hash_map::Entry::Occupied(entry), Some(None)) => {
+            (hash_map::Entry::Occupied(entry), None) => {
                 let actor = entry.get();
 
                 let mut actor_instances = actor.instances.write().await;
@@ -2817,9 +2814,8 @@ impl Host {
                 }
             }
             // Actor is running and we requested to scale to some amount or unbounded, scale actor
-            (hash_map::Entry::Occupied(entry), max) => {
+            (hash_map::Entry::Occupied(entry), Some(max)) => {
                 let actor = entry.get();
-                let max = max.flatten();
 
                 let mut actor_instances = actor.instances.write().await;
                 if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
@@ -2876,8 +2872,7 @@ impl Host {
                             std::cmp::Ordering::Less => {
                                 // We started the difference between the current max and the requested max
                                 // SAFETY: We know max > matching_instance.max because of the ordering check above
-                                let num_started = max.map_or(0, NonZeroUsize::get)
-                                    - matching_instance.max.map_or(0, NonZeroUsize::get);
+                                let num_started = max.get() - matching_instance.max.get();
                                 self.publish_actor_started_events(
                                     num_started,
                                     claims,
@@ -2891,19 +2886,18 @@ impl Host {
                             std::cmp::Ordering::Greater => {
                                 // We stopped the difference between the current max and the requested max
                                 let num_stopped =
-                                // SAFETY: We know matching_instance.max > max because of the ordering check above
-                                    matching_instance.max.map_or(0, NonZeroUsize::get)
-                                        - max.map_or(0, NonZeroUsize::get);
+                                    // SAFETY: We know matching_instance.max > max because of the ordering check above
+                                    matching_instance.max.get()
+                                        - max.get();
                                 self.publish_actor_stopped_events(
                                     claims,
                                     &annotations,
                                     matching_instance.id,
                                     host_id,
-                                    NonZeroUsize::new(num_stopped),
-                                    matching_instance
-                                        .max
-                                        .map_or(0, NonZeroUsize::get)
-                                        .saturating_sub(num_stopped),
+                                    NonZeroUsize::new(num_stopped)
+                                        // Should not be possible, but defaulting to 1 for safety
+                                        .unwrap_or(NonZeroUsize::MIN),
+                                    matching_instance.max.get().saturating_sub(num_stopped),
                                 )
                                 .await
                             }
@@ -2937,7 +2931,7 @@ impl Host {
 
                     info!(actor_ref, "actor started");
                     self.publish_actor_started_events(
-                        max.map_or(0, NonZeroUsize::get),
+                        max.get(),
                         claims,
                         &annotations,
                         new_instance.id,
@@ -3036,7 +3030,7 @@ impl Host {
 
         info!(%new_actor_ref, "actor updated");
         self.publish_actor_started_events(
-            max.map_or(0, NonZeroUsize::get),
+            max.get(),
             new_claims,
             &annotations,
             new_instance.id,
@@ -3056,7 +3050,7 @@ impl Host {
             matching_instance.id,
             host_id,
             matching_instance.max,
-            max.map_or(0, NonZeroUsize::get),
+            max.get(),
         )
         .await?;
 
@@ -3513,10 +3507,7 @@ impl Host {
                             revision,
                             image_ref: Some(instance.image_reference.clone()),
                             // We only accept u16 values on the control interface, so the try_from is a safety measure.
-                            max_concurrent: instance
-                                .max
-                                .and_then(|m| u16::try_from(m.get()).ok())
-                                .unwrap_or(u16::MAX),
+                            max_instances: u16::try_from(instance.max.get()).unwrap_or(u16::MAX),
                         }
                     })
                     .collect();
@@ -4303,11 +4294,11 @@ impl Host {
         annotations: &BTreeMap<String, String>,
         instance_id: Ulid,
         host_id: impl AsRef<str>,
-        max: Option<NonZeroUsize>,
+        max: NonZeroUsize,
         remaining: usize,
     ) -> anyhow::Result<()> {
         // If the instance had no maximum concurrent value, default to stopping one
-        let () = stream::iter(0..max.map_or(1, NonZeroUsize::get))
+        let () = stream::iter(0..max.get())
             .for_each(|_| async {
                 let _ = self
                     .publish_event(
@@ -4331,7 +4322,7 @@ impl Host {
                 annotations,
                 host_id,
                 // If the instance had no maximum concurrent value, default to stopping one
-                max.unwrap_or(NonZeroUsize::MIN),
+                max,
                 remaining,
             ),
         )
@@ -4649,6 +4640,7 @@ mod test {
     use nkeys::KeyPair;
     use ulid::Ulid;
     use uuid::Uuid;
+
     use wascap::jwt;
     use wasmcloud_core::{invocation_hash, WasmCloudEntity};
     use wasmcloud_tracing::context::TraceContextInjector;
