@@ -233,8 +233,12 @@ pub struct RegistryCredential {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// The type of the registry (only "oci" is supported at this time")
-    #[serde(rename = "registryType")]
+    #[serde(rename = "registryType", default = "default_registry_type")]
     pub registry_type: String,
+}
+
+fn default_registry_type() -> String {
+    "oci".to_string()
 }
 
 /// A set of credentials to be used for fetching from specific registries

@@ -10,14 +10,19 @@ use oci_distribution::{
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use wash_lib::cli::{
-    labels_vec_to_hashmap,
-    registry::{RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
-    CommandOutput, OutputKind,
-};
 use wash_lib::registry::{
     pull_oci_artifact, push_oci_artifact, validate_artifact, OciPullOptions, OciPushOptions,
     SupportedArtifacts,
+};
+use wash_lib::{
+    cli::{
+        labels_vec_to_hashmap,
+        registry::{
+            RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand,
+        },
+        CommandOutput, OutputKind,
+    },
+    parser::get_config,
 };
 
 use crate::appearance::spinner::Spinner;
@@ -36,13 +41,31 @@ pub async fn registry_pull(
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
+    let credentials = match (cmd.opts.user, cmd.opts.password) {
+        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
+        _ => match get_config(None, Some(true)) {
+            Ok(project_config) => {
+                project_config
+                    .resolve_registry_credentials(&artifact_url)
+                    .await
+            }
+            Err(_) => Ok(RegistryAuth::Anonymous),
+        },
+    }?;
+
     let artifact = pull_oci_artifact(
         artifact_url,
         OciPullOptions {
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
-            user: cmd.opts.user,
-            password: cmd.opts.password,
+            user: match &credentials {
+                RegistryAuth::Basic(user, _) => Some(user.to_owned()),
+                _ => None,
+            },
+            password: match &credentials {
+                RegistryAuth::Basic(_, password) => Some(password.to_owned()),
+                _ => None,
+            },
             insecure: cmd.opts.insecure,
         },
     )
@@ -70,11 +93,15 @@ pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
         },
         ..Default::default()
     });
-    let auth = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => RegistryAuth::Basic(user, password),
-        _ => RegistryAuth::Anonymous,
-    };
-    let (_, _) = client.pull_manifest(&image, &auth).await?;
+    let credentials = match (cmd.opts.user, cmd.opts.password) {
+        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
+        _ => match get_config(None, Some(true)) {
+            Ok(project_config) => project_config.resolve_registry_credentials(&cmd.url).await,
+            Err(_) => Ok(RegistryAuth::Anonymous),
+        },
+    }?;
+
+    let (_, _) = client.pull_manifest(&image, &credentials).await?;
     Ok(CommandOutput::from("Pong!"))
 }
 
@@ -119,6 +146,18 @@ pub async fn registry_push(
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
+    let credentials = match (cmd.opts.user, cmd.opts.password) {
+        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
+        _ => match get_config(None, Some(true)) {
+            Ok(project_config) => {
+                project_config
+                    .resolve_registry_credentials(&artifact_url)
+                    .await
+            }
+            Err(_) => Ok(RegistryAuth::Anonymous),
+        },
+    }?;
+
     let annotations = labels_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
 
     push_oci_artifact(
@@ -127,8 +166,14 @@ pub async fn registry_push(
         OciPushOptions {
             config: cmd.config.map(PathBuf::from),
             allow_latest: cmd.allow_latest,
-            user: cmd.opts.user,
-            password: cmd.opts.password,
+            user: match &credentials {
+                RegistryAuth::Basic(user, _) => Some(user.to_owned()),
+                _ => None,
+            },
+            password: match &credentials {
+                RegistryAuth::Basic(_, password) => Some(password.to_owned()),
+                _ => None,
+            },
             insecure: cmd.opts.insecure,
             annotations: Some(annotations),
         },
@@ -138,7 +183,7 @@ pub async fn registry_push(
     spinner.finish_and_clear();
 
     let mut map = HashMap::new();
-    map.insert("url".to_string(), json!(cmd.url));
+    map.insert("url".to_string(), json!(artifact_url));
     Ok(CommandOutput::new(
         format!("{SHOWER_EMOJI} Successfully validated and pushed to {artifact_url}"),
         map,

@@ -6,8 +6,10 @@ use std::{collections::HashSet, fmt::Display, fs, path::PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
+use oci_distribution::secrets::RegistryAuth;
 use semver::Version;
 use serde::Deserialize;
+use wasmcloud_control_interface::RegistryCredentialMap;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +44,6 @@ pub struct ProjectConfig {
 pub struct ActorConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Vec<String>,
-    /// The registry to push to. eg. "localhost:8080"
-    pub registry: Option<String>,
     /// Whether to push to the registry insecurely. Defaults to false.
     pub push_insecure: bool,
     /// The directory to store the private signing keys in.
@@ -83,8 +83,6 @@ impl RustConfig {
 struct RawActorConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Option<Vec<String>>,
-    /// The registry to push to. eg. "localhost:8080"
-    pub registry: Option<String>,
     /// Whether to push to the registry insecurely. Defaults to false.
     pub push_insecure: Option<bool>,
     /// The directory to store the private signing keys in. Defaults to "./keys".
@@ -115,7 +113,6 @@ impl TryFrom<RawActorConfig> for ActorConfig {
     fn try_from(raw_config: RawActorConfig) -> Result<Self> {
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
-            registry: raw_config.registry,
             push_insecure: raw_config.push_insecure.unwrap_or(false),
             key_directory: raw_config
                 .key_directory
@@ -219,6 +216,27 @@ impl TryFrom<RawRustConfig> for RustConfig {
     }
 }
 
+#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
+struct RawRegistryConfig {
+    url: Option<String>,
+    credentials: Option<PathBuf>,
+}
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+pub struct RegistryConfig {
+    pub url: Option<String>,
+    pub credentials: Option<PathBuf>,
+}
+
+impl TryFrom<RawRegistryConfig> for RegistryConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(raw_config: RawRegistryConfig) -> Result<Self> {
+        Ok(Self {
+            url: raw_config.url,
+            credentials: raw_config.credentials,
+        })
+    }
+}
 /// Configuration common amoung all project types & languages.
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
@@ -233,6 +251,8 @@ pub struct CommonConfig {
     /// Expected name of the wasm module binary that will be generated
     /// (if not present, name is expected to be used as a fallback)
     pub wasm_bin_name: Option<String>,
+    /// Optional artifact OCI registry configuration. Primarily used for `wash push` & `wash pull` commands
+    pub registry: RegistryConfig,
 }
 
 impl CommonConfig {
@@ -308,6 +328,7 @@ struct RawProjectConfig {
 
     pub rust: Option<RawRustConfig>,
     pub tinygo: Option<RawTinyGoConfig>,
+    pub registry: Option<RawRegistryConfig>,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
@@ -407,6 +428,7 @@ impl RawProjectConfig {
         name: Option<String>,
         version: Option<Version>,
         revision: i32,
+        registry: RegistryConfig,
     ) -> Result<CommonConfig> {
         let cargo_toml_path = project_path.join("Cargo.toml");
         if !cargo_toml_path.is_file() {
@@ -448,6 +470,7 @@ impl RawProjectConfig {
             revision,
             path: project_path,
             wasm_bin_name,
+            registry,
         })
     }
 
@@ -489,6 +512,12 @@ impl RawProjectConfig {
             }
         };
 
+        let registry_config = self
+            .registry
+            .map(RegistryConfig::try_from)
+            .transpose()?
+            .unwrap_or_default();
+
         let common_config_result: Result<CommonConfig> = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
@@ -496,6 +525,7 @@ impl RawProjectConfig {
                     self.name.clone(),
                     self.version.clone(),
                     self.revision,
+                    registry_config.clone(),
                 ) {
                     // Successfully built with cargo information
                     Ok(cfg) => Ok(cfg),
@@ -507,6 +537,7 @@ impl RawProjectConfig {
                         revision: self.revision,
                         path: project_path,
                         wasm_bin_name: None,
+                        registry: registry_config,
                     }),
 
                     Err(err) => {
@@ -525,6 +556,7 @@ impl RawProjectConfig {
                 revision: self.revision,
                 path: project_path,
                 wasm_bin_name: None,
+                registry: registry_config,
             }),
         };
 
@@ -533,5 +565,60 @@ impl RawProjectConfig {
             project_type: project_type_config,
             common: common_config_result?,
         })
+    }
+}
+
+impl ProjectConfig {
+    pub fn resolve_registry_url(&self) -> Result<String> {
+        let registry_url = match &self.common.registry.url {
+            Some(url) => url.clone(),
+            None => {
+                bail!("No registry URL specified in wasmcloud.toml");
+            }
+        };
+
+        Ok(registry_url)
+    }
+
+    pub async fn resolve_registry_credentials(
+        &self,
+        registry: impl AsRef<str>,
+    ) -> Result<RegistryAuth> {
+        let credentials_file = &self.common.registry.credentials.to_owned();
+
+        if credentials_file.is_none() {
+            return Ok(RegistryAuth::Anonymous);
+        }
+
+        let credentials_file = credentials_file.clone().unwrap();
+
+        if !credentials_file.exists() {
+            return Ok(RegistryAuth::Anonymous);
+        }
+
+        let credentials = tokio::fs::read_to_string(&credentials_file).await;
+        if credentials.is_err() {
+            return Ok(RegistryAuth::Anonymous);
+        }
+
+        let credentials =
+            serde_json::from_str::<RegistryCredentialMap>(&credentials.unwrap_or_default());
+        if credentials.is_err() {
+            return Ok(RegistryAuth::Anonymous);
+        }
+
+        let credentials = credentials.unwrap_or_default();
+        if let Some(credentials) = credentials.get(registry.as_ref()) {
+            match (credentials.username.clone(), credentials.password.clone()) {
+                (Some(user), Some(password)) => {
+                    return Ok(RegistryAuth::Basic(user, password));
+                }
+                _ => {
+                    return Ok(RegistryAuth::Anonymous);
+                }
+            }
+        }
+
+        Ok(RegistryAuth::Anonymous)
     }
 }

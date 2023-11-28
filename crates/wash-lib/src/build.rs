@@ -644,6 +644,7 @@ mod tests {
     use wascap::{jwt::Token, wasm::extract_claims};
     use wasmparser::{Parser, Payload};
 
+    use crate::parser::RegistryConfig;
     use crate::{
         build::{embed_wasm_component_metadata, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
         parser::{ActorConfig, CommonConfig, WasmTarget},
@@ -766,6 +767,7 @@ world downstream {
                     revision: 0,
                     path: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
+                    registry: RegistryConfig::default(),
                 },
                 &ActorConfig {
                     wasm_target: wasm_target.clone(),

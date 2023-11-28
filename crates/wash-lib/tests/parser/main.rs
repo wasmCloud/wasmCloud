@@ -3,8 +3,8 @@ use std::{collections::HashSet, fs, path::PathBuf};
 use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
-    get_config, ActorConfig, CommonConfig, LanguageConfig, RustConfig, TinyGoConfig, TypeConfig,
-    WasmTarget,
+    get_config, ActorConfig, CommonConfig, LanguageConfig, RegistryConfig, RustConfig,
+    TinyGoConfig, TypeConfig, WasmTarget,
 };
 
 #[test]
@@ -28,7 +28,7 @@ fn rust_actor() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: Some("localhost:8080".to_string()),
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
@@ -49,6 +49,7 @@ fn rust_actor() {
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
+            registry: RegistryConfig::default(),
         }
     );
 }
@@ -77,7 +78,7 @@ fn rust_actor_with_revision() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: Some("localhost:8080".to_string()),
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
@@ -99,6 +100,7 @@ fn rust_actor_with_revision() {
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
+            registry: RegistryConfig::default(),
         }
     );
 }
@@ -125,7 +127,7 @@ fn tinygo_actor_module() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: Some("localhost:8080".to_string()),
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
@@ -146,6 +148,7 @@ fn tinygo_actor_module() {
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
+            registry: RegistryConfig::default(),
         }
     );
 }
@@ -165,7 +168,7 @@ fn tinygo_actor_component() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: Some("localhost:8080".to_string()),
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
@@ -337,7 +340,7 @@ fn minimal_rust_actor() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: None,
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: None,
@@ -358,6 +361,7 @@ fn minimal_rust_actor() {
                 .unwrap(),
             revision: 0,
             wasm_bin_name: None,
+            registry: RegistryConfig::default(),
         }
     )
 }
@@ -385,7 +389,7 @@ fn cargo_toml_actor() {
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            registry: None,
+
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: None,
@@ -406,6 +410,7 @@ fn cargo_toml_actor() {
                 .unwrap(),
             revision: 0,
             wasm_bin_name: None,
+            registry: RegistryConfig::default(),
         }
     )
 }

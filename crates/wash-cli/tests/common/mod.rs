@@ -78,6 +78,21 @@ pub fn test_dir_file(subfolder: &str, file: &str) -> PathBuf {
 }
 
 #[allow(unused)]
+/// writes content to specified file path... creates file if it doesn't exist
+pub async fn set_test_file_content(path: &PathBuf, content: &str) -> Result<()> {
+    let mut file = File::create(path).await.context(format!(
+        "failed to open/create test file {}",
+        path.to_string_lossy()
+    ))?;
+
+    file.write_all(content.as_bytes()).await.context(format!(
+        "failed to write content to test file {}",
+        path.to_string_lossy()
+    ))?;
+    Ok(())
+}
+
+#[allow(unused)]
 pub async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
     let nats_binary = ensure_nats_server("v2.8.4", nats_install_dir).await?;
     let config = NatsConfig::new_standalone("127.0.0.1", port, None);
