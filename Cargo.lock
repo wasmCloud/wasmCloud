@@ -741,9 +741,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.4.9"
+version = "4.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46ca43acc1b21c6cc2d1d3129c19e323a613935b5bc28fb3b33b5b2e5fb00030"
+checksum = "41fffed7514f420abec6d183b1d3acfd9099c79c3a10a06ade4f8203f1411272"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -767,7 +767,7 @@ version = "4.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bffe91f06a11b4b9420f62103854e90867812cd5d01557f853c5ee8e791b12ae"
 dependencies = [
- "clap 4.4.9",
+ "clap 4.4.10",
 ]
 
 [[package]]
@@ -2136,7 +2136,7 @@ dependencies = [
  "anyhow",
  "base64 0.21.5",
  "bytecount",
- "clap 4.4.9",
+ "clap 4.4.10",
  "fancy-regex",
  "fraction",
  "getrandom",
@@ -4793,7 +4793,7 @@ dependencies = [
  "atelier_core 0.2.22",
  "bytes",
  "cargo_atelier",
- "clap 4.4.9",
+ "clap 4.4.10",
  "clap_complete",
  "cloudevents-sdk",
  "console",
@@ -4856,7 +4856,7 @@ dependencies = [
  "cargo_toml",
  "chrono",
  "claims",
- "clap 4.4.9",
+ "clap 4.4.10",
  "cloudevents-sdk",
  "command-group",
  "config",
@@ -5087,7 +5087,7 @@ dependencies = [
  "anyhow",
  "assert-json-diff",
  "async-nats",
- "clap 4.4.9",
+ "clap 4.4.10",
  "futures",
  "hyper 0.14.27",
  "nkeys",
@@ -5834,7 +5834,7 @@ dependencies = [
  "atelier_smithy",
  "bytes",
  "cfg-if",
- "clap 4.4.9",
+ "clap 4.4.10",
  "directories",
  "downloader",
  "handlebars",
