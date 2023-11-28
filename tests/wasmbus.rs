@@ -50,12 +50,16 @@ async fn free_port() -> anyhow::Result<u16> {
 
 async fn assert_start_actor(
     ctl_client: &wasmcloud_control_interface::Client,
-    _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    _lattice_prefix: &str,
+    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    lattice_prefix: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     count: u16,
 ) -> anyhow::Result<()> {
+    let mut sub_started = nats_client
+        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
+        .await?;
+
     // TODO(#740): Remove deprecated once control clients no longer use this command
     #[allow(deprecated)]
     let CtlOperationAck { accepted, error } = ctl_client
@@ -65,7 +69,16 @@ async fn assert_start_actor(
     ensure!(error == "");
     ensure!(accepted);
 
-    // TODO: wait for actor_started event on wasmbus.rpc.{lattice_prefix}
+    // Naive wait for at least a stopped / started event before exiting this function. This prevents
+    // assuming we're done with scaling too early since scale is an early-ack ctl request.
+    tokio::select! {
+        _ = sub_started.next() => {
+        }
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            bail!("timed out waiting for actor started event");
+        },
+    }
+
     Ok(())
 }
 
@@ -109,7 +122,7 @@ async fn assert_scale_actor(
 #[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
-    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    rpc_client: &async_nats::Client,
     lattice_prefix: &str,
     host_key: &KeyPair,
     provider_key: &KeyPair,
@@ -141,7 +154,7 @@ async fn assert_start_provider(
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
-        .then(|_| nats_client.request(
+        .then(|_| rpc_client.request(
             format!(
                 "wasmbus.rpc.{}.{}.{}.health",
                 lattice_prefix,
@@ -517,9 +530,10 @@ async fn wasmbus() -> anyhow::Result<()> {
 
     let (
         (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url),
+        (rpc_nats_server, rpc_stop_nats_tx, rpc_nats_url),
         (component_nats_server, component_stop_nats_tx, component_nats_url),
         (module_nats_server, module_stop_nats_tx, module_nats_url),
-    ) = try_join!(start_nats(), start_nats(), start_nats())?;
+    ) = try_join!(start_nats(), start_nats(), start_nats(), start_nats())?;
 
     fn default_nats_connect_options() -> async_nats::ConnectOptions {
         async_nats::ConnectOptions::new().retry_on_initial_connect()
@@ -528,8 +542,9 @@ async fn wasmbus() -> anyhow::Result<()> {
     // Sometimes NATS completes the server process start but isn't actually ready for connections
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let (ctl_nats_client, component_nats_client, module_nats_client) = try_join!(
+    let (ctl_nats_client, rpc_nats_client, component_nats_client, module_nats_client) = try_join!(
         async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
+        async_nats::connect_with_options(rpc_nats_url.as_str(), default_nats_connect_options()),
         async_nats::connect_with_options(
             component_nats_url.as_str(),
             default_nats_connect_options()
@@ -571,7 +586,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let host_key = Arc::new(host_key);
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
-        rpc_nats_url: ctl_nats_url.clone(),
+        rpc_nats_url: rpc_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
         labels: HashMap::from([("label1".into(), "value1".into())]),
@@ -589,7 +604,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let host_key_two = Arc::new(host_key_two);
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
-        rpc_nats_url: ctl_nats_url.clone(),
+        rpc_nats_url: rpc_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key_two)),
@@ -663,7 +678,7 @@ got: {labels:?}
 expected: {base_labels:?}"#
             );
             ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
-            ensure!(rpc_host == Some(ctl_nats_url.to_string()));
+            ensure!(rpc_host == Some(rpc_nats_url.to_string()));
             ensure!(uptime_human.unwrap().len() > 0);
             ensure!(uptime_seconds >= 0);
             ensure!(version == Some(env!("CARGO_PKG_VERSION").into()));
@@ -995,7 +1010,7 @@ expected: {base_labels:?}"#
     try_join!(
         assert_start_provider(
             &ctl_client,
-            &ctl_nats_client,
+            &rpc_nats_client,
             TEST_PREFIX,
             &host_key,
             &blobstore_fs_provider_key,
@@ -1005,7 +1020,7 @@ expected: {base_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &ctl_nats_client,
+            &rpc_nats_client,
             TEST_PREFIX,
             &host_key,
             &httpclient_provider_key,
@@ -1015,7 +1030,7 @@ expected: {base_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &ctl_nats_client,
+            &rpc_nats_client,
             TEST_PREFIX,
             &host_key,
             &httpserver_provider_key,
@@ -1025,7 +1040,7 @@ expected: {base_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &ctl_nats_client,
+            &rpc_nats_client,
             TEST_PREFIX,
             &host_key,
             &kvredis_provider_key,
@@ -1035,7 +1050,7 @@ expected: {base_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &ctl_nats_client,
+            &rpc_nats_client,
             TEST_PREFIX,
             &host_key_two,
             &nats_provider_key,
@@ -1087,7 +1102,7 @@ expected: {base_labels:?}"#
     ensure!(pinged_host.js_domain == None);
     ensure!(pinged_host.labels == Some(base_labels.clone()));
     ensure!(pinged_host.lattice_prefix == Some(TEST_PREFIX.into()));
-    ensure!(pinged_host.rpc_host == Some(ctl_nats_url.to_string()));
+    ensure!(pinged_host.rpc_host == Some(rpc_nats_url.to_string()));
     ensure!(pinged_host.uptime_human.clone().unwrap().len() > 0);
     ensure!(pinged_host.uptime_seconds > 0);
     ensure!(pinged_host.version == Some(env!("CARGO_PKG_VERSION").into()));
@@ -1566,6 +1581,7 @@ expected: {base_labels:?}"#
 
     try_join!(
         stop_server(ctl_nats_server, ctl_stop_nats_tx),
+        stop_server(rpc_nats_server, rpc_stop_nats_tx),
         stop_server(component_nats_server, component_stop_nats_tx),
         stop_server(module_nats_server, module_stop_nats_tx),
         stop_server(component_redis_server, component_stop_redis_tx),
