@@ -872,7 +872,7 @@ expected: {expected_name:?}"#
                 instance_id,
                 revision,
                 image_ref,
-                max_concurrent,
+                max_instances,
             } = component_instances
                 .pop()
                 .context("no component actor instances found")?;
@@ -884,7 +884,7 @@ expected: {expected_name:?}"#
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
             ensure!(image_ref == component_image_ref);
-            ensure!(max_concurrent == 1);
+            ensure!(max_instances == 1);
 
             // TODO: Validate `constraints`
             ensure!(module_id == module_actor_claims.subject);
@@ -908,7 +908,7 @@ expected: {expected_name:?}"#
                 instance_id,
                 revision,
                 image_ref,
-                max_concurrent,
+                max_instances,
             } = module_instances
                 .pop()
                 .context("no module actor instances found")?;
@@ -920,7 +920,7 @@ expected: {expected_name:?}"#
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
             ensure!(image_ref == module_image_ref);
-            ensure!(max_concurrent == 1);
+            ensure!(max_instances == 1);
 
             // TODO: Validate `constraints`
             ensure!(foobar_id == foobar_actor_claims.subject);
@@ -944,7 +944,7 @@ expected: {expected_name:?}"#
                 instance_id,
                 revision,
                 image_ref,
-                max_concurrent,
+                max_instances,
             } = foobar_instances
                 .pop()
                 .context("no foobar actor instances found")?;
@@ -956,7 +956,7 @@ expected: {expected_name:?}"#
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
             ensure!(image_ref == foobar_image_ref);
-            ensure!(max_concurrent == 1);
+            ensure!(max_instances == 1);
         }
         (None, None, None, []) => bail!("no actor found"),
         _ => bail!("more than 3 actors found"),
@@ -1142,7 +1142,7 @@ expected: {expected_labels_two:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        Some(5),
+        5,
     )
     .await
     .context("failed to scale foobar actor")?;
@@ -1164,7 +1164,7 @@ expected: {expected_labels_two:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        None,
+        u16::MAX,
     )
     .await
     .context("failed to scale foobar actor")?;
@@ -1186,7 +1186,7 @@ expected: {expected_labels_two:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        Some(0),
+        0,
     )
     .await
     .context("failed to scale foobar actor")?;

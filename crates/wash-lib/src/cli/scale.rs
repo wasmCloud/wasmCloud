@@ -29,9 +29,9 @@ pub struct ScaleActorCommand {
     #[clap(name = "actor-ref")]
     pub actor_ref: String,
 
-    /// Maximum number of instances this actor can run concurrently. Omitting this value means there is no maximum.
-    #[clap(short = 'c', long = "max-concurrent", alias = "max", alias = "count")]
-    pub max_concurrent: Option<u16>,
+    /// Maximum number of instances this actor can run concurrently.
+    #[clap(short = 'c', long = "max-instances", alias = "max-concurrent", alias = "max", alias = "count", default_value_t = u16::MAX)]
+    pub max_instances: u16,
 
     /// Optional set of annotations used to describe the nature of this actor scale command.
     /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
@@ -51,21 +51,16 @@ pub async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput>
         // prompt the user to choose if more than one thing matches
         &find_host_id(&cmd.host_id, &client).await?.0,
         &cmd.actor_ref,
-        cmd.max_concurrent,
+        cmd.max_instances,
         Some(annotations),
     )
     .await?;
-
-    let max = cmd
-        .max_concurrent
-        .map(|max| max.to_string())
-        .unwrap_or_else(|| "unbounded".to_string());
 
     Ok(CommandOutput::from_key_and_text(
         "result",
         format!(
             "Request to scale actor {} to {} max concurrent instances received",
-            cmd.actor_ref, max
+            cmd.actor_ref, cmd.max_instances
         ),
     ))
 }

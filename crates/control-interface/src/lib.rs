@@ -244,15 +244,14 @@ impl Client {
     /// # Arguments
     /// `host_id`: The ID of the host to scale the actor on
     /// `actor_ref`: The OCI reference of the actor to scale
-    /// `max_concurrent`: The maximum number of requests this actor handle run concurrently. `None` represents an unbounded
-    /// level of concurrency while `0` will stop the actor.
+    /// `max_instances`: The maximum number of requests this actor handle run concurrently. Specifying `0` will stop the actor.
     /// `annotations`: Optional annotations to apply to the actor
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
         host_id: &str,
         actor_ref: &str,
-        max_concurrent: Option<u16>,
+        max_instances: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
@@ -263,7 +262,7 @@ impl Client {
         );
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
-            max_concurrent,
+            max_instances,
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
             host_id,
             annotations,

@@ -106,11 +106,11 @@ pub async fn scale_actor(
     client: &CtlClient,
     host_id: &str,
     actor_ref: &str,
-    max_concurrent: Option<u16>,
+    max_instances: u16,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<()> {
     let ack = client
-        .scale_actor(host_id, actor_ref, max_concurrent, annotations)
+        .scale_actor(host_id, actor_ref, max_instances, annotations)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
