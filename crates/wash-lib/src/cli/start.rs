@@ -52,7 +52,7 @@ pub struct StartActorCommand {
         alias = "count",
         default_value_t = 1
     )]
-    pub max_instances: u16,
+    pub max_instances: u32,
 
     /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[clap(short = 'c', long = "constraint", name = "constraints")]

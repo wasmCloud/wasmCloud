@@ -244,14 +244,14 @@ impl Client {
     /// # Arguments
     /// `host_id`: The ID of the host to scale the actor on
     /// `actor_ref`: The OCI reference of the actor to scale
-    /// `max_instances`: The maximum number of requests this actor handle run concurrently. Specifying `0` will stop the actor.
+    /// `max_instances`: The maximum number of instances this actor can run concurrently. Specifying `0` will stop the actor.
     /// `annotations`: Optional annotations to apply to the actor
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
         host_id: &str,
         actor_ref: &str,
-        max_instances: u16,
+        max_instances: u32,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
