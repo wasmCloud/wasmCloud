@@ -237,6 +237,37 @@ pub struct RegistryCredential {
     pub registry_type: String,
 }
 
+impl RegistryCredential {
+    #[must_use]
+    pub fn as_oci_registry_auth(&self) -> Option<oci_distribution::secrets::RegistryAuth> {
+        if self.registry_type != "oci" {
+            return None;
+        }
+
+        match self {
+            RegistryCredential {
+                username: Some(username),
+                password: Some(password),
+                ..
+            } => Some(oci_distribution::secrets::RegistryAuth::Basic(
+                username.clone(),
+                password.clone(),
+            )),
+
+            RegistryCredential {
+                username: Some(username),
+                password: None,
+                token: Some(token),
+                ..
+            } => Some(oci_distribution::secrets::RegistryAuth::Basic(
+                username.clone(),
+                token.clone(),
+            )),
+            _ => None,
+        }
+    }
+}
+
 fn default_registry_type() -> String {
     "oci".to_string()
 }

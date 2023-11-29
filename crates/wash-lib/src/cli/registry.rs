@@ -48,6 +48,10 @@ pub struct RegistryPullCommand {
     #[clap(long = "destination")]
     pub destination: Option<String>,
 
+    /// Registry of artifact. This is only needed if the URL is not a full (OCI) artifact URL (ie, missing the registry fragment)
+    #[clap(short = 'r', long = "registry", env = "WASH_REG_URL")]
+    pub registry: Option<String>,
+
     /// Digest to verify artifact against
     #[clap(short = 'd', long = "digest")]
     pub digest: Option<String>,
@@ -70,6 +74,10 @@ pub struct RegistryPushCommand {
     #[clap(name = "artifact")]
     pub artifact: String,
 
+    /// Registry of artifact. This is only needed if the URL is not a full (OCI) artifact URL (ie, missing the registry fragment)
+    #[clap(short = 'r', long = "registry", env = "WASH_REG_URL")]
+    pub registry: Option<String>,
+
     /// Path to config file, if omitted will default to a blank configuration
     #[clap(short = 'c', long = "config")]
     pub config: Option<String>,
@@ -91,6 +99,10 @@ pub struct RegistryPingCommand {
     /// URL of artifact
     #[clap(name = "url")]
     pub url: String,
+
+    /// Registry of artifact. This is only needed if the URL is not a full (OCI) artifact URL (ie, missing the registry fragment)
+    #[clap(short = 'r', long = "registry", env = "WASH_REG_URL")]
+    pub registry: Option<String>,
 
     #[clap(flatten)]
     pub opts: AuthOpts,

@@ -1,13 +1,19 @@
 mod common;
 
 use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use tokio::process::Command;
 
 use std::{
+    env,
     fs::{remove_dir_all, File},
     io::prelude::*,
 };
 
+use anyhow::{Context, Result};
+
 use serde_json::json;
+
+use crate::common::{init, set_test_file_content};
 
 const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
 const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
@@ -231,4 +237,171 @@ fn integration_reg_push_comprehensive() {
     assert_eq!(output, expected_json);
 
     remove_dir_all(push_dir).unwrap();
+}
+
+// NOTE: This test will fail without a local docker registry running
+#[tokio::test]
+#[cfg_attr(
+    not(can_reach_wasmcloud_azurecr_io),
+    ignore = "wasmcloud.azurecr.io is not reachable"
+)]
+async fn intergration_reg_config() -> Result<()> {
+    //===== Inital project setup and build actor artifact
+    let test_setup = init(
+        /* actor_name= */ "hello", /* template_name= */ "hello",
+    )
+    .await?;
+    let project_dir = test_setup.project_dir;
+    env::set_current_dir(&project_dir)?;
+
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/hello.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/hello_s.wasm");
+    assert!(signed_file.exists(), "signed file not found!");
+
+    //===== Setup registry config
+    env::set_var("WASH_REG_URL", LOCAL_REGISTRY);
+    env::set_var("WASH_REG_USER", "iambatman");
+    env::set_var("WASH_REG_PASSWORD", "iamvengeance");
+    set_test_file_content(
+        &project_dir.join("wasmcloud.toml").to_path_buf(),
+        r#"
+        name = "Hello World"
+        language = "rust"
+        type = "actor"
+        
+        [actor]
+        claims = ["wasmcloud:httpserver"]
+
+        [registry]
+        url = "localhost:5001"
+        credentials = "./registry_creds.json"
+        "#,
+    )
+    .await?;
+
+    set_test_file_content(
+        &project_dir.join("registry_creds.json").to_path_buf(),
+        r#"
+        {
+            "localhost:5001": {
+                "username": "iambatman",
+                "password": "iamvengeance"
+            }
+        }
+        "#,
+    )
+    .await?;
+
+    //===== case: Push (with a full artifact url) to test cli args
+    let push_url = format!("{}/hello:0.1.0", LOCAL_REGISTRY);
+    let cmd = wash()
+        .args([
+            "push",
+            push_url.as_str(),
+            signed_file.to_str().unwrap(),
+            "--allow-latest",
+            "--insecure",
+            // Even though we're passing a registry url, it should be ignored since we're also specifying a full artifact url
+            "--registry",
+            "this-is-ignored",
+            "--output",
+            "json",
+            "--password",
+            "iamvengeance",
+            "--user",
+            "iambatman",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
+
+    assert!(cmd.status.success());
+    // let output = output_to_string(cmd)?;
+    // println!("{}", output);
+    let output = get_json_output(cmd).unwrap();
+    let expected_json = json!({"url": push_url, "success": true});
+    assert_eq!(output, expected_json);
+
+    //===== case: Push (with a repository url) to test cli args
+    let push_url = "hello:0.2.0";
+    let cmd = wash()
+        .args([
+            "push",
+            push_url,
+            signed_file.to_str().unwrap(),
+            "--allow-latest",
+            "--registry",
+            LOCAL_REGISTRY,
+            "--insecure",
+            "--output",
+            "json",
+            "--password",
+            "iamvengeance",
+            "--user",
+            "iambatman",
+        ])
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
+    assert!(cmd.status.success());
+    let output = get_json_output(cmd).unwrap();
+    let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
+    let expected_json = json!({"url": expected_url, "success": true});
+    assert_eq!(output, expected_json);
+
+    //===== case: Push (with a repository url) to test env vars
+    let push_url = "hello:0.3.0";
+    let cmd = wash()
+        .args([
+            "push",
+            push_url,
+            signed_file.to_str().unwrap(),
+            "--allow-latest",
+            "--insecure",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
+
+    assert!(cmd.status.success());
+    let output = get_json_output(cmd).unwrap();
+    let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
+    let expected_json = json!({"url": expected_url, "success": true});
+    assert_eq!(output, expected_json);
+
+    //===== case: Push (with a repository url) to test file configuration
+    env::remove_var("WASH_REG_URL");
+    env::remove_var("WASH_REG_USER");
+    env::remove_var("WASH_REG_PASSWORD");
+    let push_url = "hello:0.4.0";
+    let cmd = wash()
+        .args([
+            "push",
+            push_url,
+            signed_file.to_str().unwrap(),
+            "--allow-latest",
+            "--insecure",
+            "--output",
+            "json",
+        ])
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
+
+    assert!(cmd.status.success());
+    let output = get_json_output(cmd).unwrap();
+    let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
+    let expected_json = json!({"url": expected_url, "success": true});
+    assert_eq!(output, expected_json);
+
+    Ok(())
 }
