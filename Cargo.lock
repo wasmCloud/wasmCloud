@@ -5329,6 +5329,7 @@ dependencies = [
  "bytes",
  "cloudevents-sdk",
  "futures",
+ "oci-distribution",
  "opentelemetry",
  "serde",
  "serde_json",

@@ -6,10 +6,9 @@ use std::{collections::HashSet, fmt::Display, fs, path::PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
-use oci_distribution::secrets::RegistryAuth;
 use semver::Version;
 use serde::Deserialize;
-use wasmcloud_control_interface::RegistryCredentialMap;
+use wasmcloud_control_interface::{RegistryCredential, RegistryCredentialMap};
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -569,56 +568,37 @@ impl RawProjectConfig {
 }
 
 impl ProjectConfig {
-    pub fn resolve_registry_url(&self) -> Result<String> {
-        let registry_url = match &self.common.registry.url {
-            Some(url) => url.clone(),
-            None => {
-                bail!("No registry URL specified in wasmcloud.toml");
-            }
-        };
-
-        Ok(registry_url)
-    }
-
     pub async fn resolve_registry_credentials(
         &self,
         registry: impl AsRef<str>,
-    ) -> Result<RegistryAuth> {
+    ) -> Result<RegistryCredential> {
         let credentials_file = &self.common.registry.credentials.to_owned();
 
-        if credentials_file.is_none() {
-            return Ok(RegistryAuth::Anonymous);
-        }
-
-        let credentials_file = credentials_file.clone().unwrap();
+        let Some(credentials_file) = credentials_file else {
+            return Ok(RegistryCredential::default());
+        };
 
         if !credentials_file.exists() {
-            return Ok(RegistryAuth::Anonymous);
+            return Ok(RegistryCredential::default());
         }
 
-        let credentials = tokio::fs::read_to_string(&credentials_file).await;
-        if credentials.is_err() {
-            return Ok(RegistryAuth::Anonymous);
-        }
+        let credentials = tokio::fs::read_to_string(&credentials_file)
+            .await
+            .context(format!(
+                "Failed to read registry credentials file {}",
+                credentials_file.display()
+            ))?;
 
         let credentials =
-            serde_json::from_str::<RegistryCredentialMap>(&credentials.unwrap_or_default());
-        if credentials.is_err() {
-            return Ok(RegistryAuth::Anonymous);
-        }
+            serde_json::from_str::<RegistryCredentialMap>(&credentials).context(format!(
+                "Failed to parse registry credentials from file {}",
+                credentials_file.display()
+            ))?;
 
-        let credentials = credentials.unwrap_or_default();
-        if let Some(credentials) = credentials.get(registry.as_ref()) {
-            match (credentials.username.clone(), credentials.password.clone()) {
-                (Some(user), Some(password)) => {
-                    return Ok(RegistryAuth::Basic(user, password));
-                }
-                _ => {
-                    return Ok(RegistryAuth::Anonymous);
-                }
-            }
-        }
+        let Some(credentials) = credentials.get(registry.as_ref()) else {
+            return Ok(RegistryCredential::default());
+        };
 
-        Ok(RegistryAuth::Anonymous)
+        Ok(credentials.clone())
     }
 }

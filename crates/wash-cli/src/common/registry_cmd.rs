@@ -1,10 +1,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use log::warn;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol},
-    secrets::RegistryAuth,
     Reference,
 };
 use serde_json::json;
@@ -24,6 +23,7 @@ use wash_lib::{
     },
     parser::get_config,
 };
+use wasmcloud_control_interface::RegistryCredential;
 
 use crate::appearance::spinner::Spinner;
 
@@ -35,37 +35,26 @@ pub async fn registry_pull(
     cmd: RegistryPullCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let artifact_url = cmd.url.to_ascii_lowercase();
-    let image: Reference = artifact_url.parse()?;
-
+    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
-        _ => match get_config(None, Some(true)) {
-            Ok(project_config) => {
-                project_config
-                    .resolve_registry_credentials(&artifact_url)
-                    .await
-            }
-            Err(_) => Ok(RegistryAuth::Anonymous),
-        },
+        (Some(user), Some(password)) => Ok(RegistryCredential {
+            username: Some(user),
+            password: Some(password),
+            ..Default::default()
+        }),
+        _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
     let artifact = pull_oci_artifact(
-        artifact_url,
+        image.whole(),
         OciPullOptions {
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
-            user: match &credentials {
-                RegistryAuth::Basic(user, _) => Some(user.to_owned()),
-                _ => None,
-            },
-            password: match &credentials {
-                RegistryAuth::Basic(_, password) => Some(password.to_owned()),
-                _ => None,
-            },
+            user: credentials.username,
+            password: credentials.password,
             insecure: cmd.opts.insecure,
         },
     )
@@ -84,7 +73,7 @@ pub async fn registry_pull(
 }
 
 pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
-    let image: Reference = cmd.url.parse()?;
+    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
     let mut client = Client::new(ClientConfig {
         protocol: if cmd.opts.insecure {
             ClientProtocol::Http
@@ -93,13 +82,19 @@ pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
         },
         ..Default::default()
     });
+
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
-        _ => match get_config(None, Some(true)) {
-            Ok(project_config) => project_config.resolve_registry_credentials(&cmd.url).await,
-            Err(_) => Ok(RegistryAuth::Anonymous),
-        },
+        (Some(user), Some(password)) => Ok(RegistryCredential {
+            username: Some(user),
+            password: Some(password),
+            ..Default::default()
+        }),
+        _ => resolve_registry_credentials(image.registry()).await,
     }?;
+
+    let Some(credentials) = credentials.as_oci_registry_auth() else {
+        bail!("failed to resolve registry credentials")
+    };
 
     let (_, _) = client.pull_manifest(&image, &credentials).await?;
     Ok(CommandOutput::from("Pong!"))
@@ -138,7 +133,8 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let artifact_url = cmd.url.to_ascii_lowercase();
+    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
+    let artifact_url = image.whole();
     if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
         warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
     }
@@ -147,15 +143,12 @@ pub async fn registry_push(
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryAuth::Basic(user, password)),
-        _ => match get_config(None, Some(true)) {
-            Ok(project_config) => {
-                project_config
-                    .resolve_registry_credentials(&artifact_url)
-                    .await
-            }
-            Err(_) => Ok(RegistryAuth::Anonymous),
-        },
+        (Some(user), Some(password)) => Ok(RegistryCredential {
+            username: Some(user),
+            password: Some(password),
+            ..Default::default()
+        }),
+        _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
     let annotations = labels_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
@@ -166,14 +159,8 @@ pub async fn registry_push(
         OciPushOptions {
             config: cmd.config.map(PathBuf::from),
             allow_latest: cmd.allow_latest,
-            user: match &credentials {
-                RegistryAuth::Basic(user, _) => Some(user.to_owned()),
-                _ => None,
-            },
-            password: match &credentials {
-                RegistryAuth::Basic(_, password) => Some(password.to_owned()),
-                _ => None,
-            },
+            user: credentials.username,
+            password: credentials.password,
             insecure: cmd.opts.insecure,
             annotations: Some(annotations),
         },
@@ -205,6 +192,58 @@ pub async fn handle_command(
         }
         RegistryCommand::Ping(cmd) => registry_ping(cmd).await,
     }
+}
+
+fn resolve_artifact_ref(url: &str, registry: &str) -> Result<Reference> {
+    let image: Reference = url
+        .trim()
+        .to_ascii_lowercase()
+        .parse()
+        .context("failed to parse artifact url into oci image reference")?;
+
+    if url.trim() == image.whole() {
+        return Ok(image);
+    }
+
+    if !url.trim().is_empty() && !registry.trim().is_empty() {
+        let image: Reference = format!("{}/{}", registry.trim(), url.trim())
+            .to_ascii_lowercase()
+            .parse()
+            .context("failed to parse artifact url from specified registry and repository")?;
+
+        return Ok(image);
+    }
+
+    if !url.trim().is_empty() && registry.trim().is_empty() {
+        let project_config = get_config(None, Some(true))?;
+        let registry = project_config
+            .common
+            .registry
+            .url
+            .clone()
+            .unwrap_or_default();
+
+        if registry.trim().is_empty() {
+            bail!("Missing or invalid registry url configuration")
+        }
+
+        let image: Reference = format!("{}/{}", registry.trim(), url.trim())
+        .to_ascii_lowercase()
+        .parse()
+        .context("failed to parse artifact url from specified repository and registry url configuration")?;
+
+        return Ok(image);
+    }
+
+    bail!("Unable to resolve artifact url from specified registry and repository")
+}
+
+async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
+    let Ok(project_config) = get_config(None, Some(true)) else {
+        return Ok(RegistryCredential::default());
+    };
+
+    project_config.resolve_registry_credentials(registry).await
 }
 
 #[cfg(test)]
