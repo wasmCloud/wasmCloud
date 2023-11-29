@@ -46,7 +46,7 @@ pub async fn assert_start_actor(
     lattice_prefix: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
-    count: u16,
+    count: u32,
 ) -> anyhow::Result<()> {
     let mut sub_started = nats_client
         .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
@@ -84,7 +84,7 @@ pub async fn assert_scale_actor(
     host_key: &KeyPair,
     url: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
-    count: u16,
+    count: u32,
 ) -> anyhow::Result<()> {
     let mut sub_started = nats_client
         .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))

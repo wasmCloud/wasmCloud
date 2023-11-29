@@ -29,9 +29,9 @@ pub struct ScaleActorCommand {
     #[clap(name = "actor-ref")]
     pub actor_ref: String,
 
-    /// Maximum number of instances this actor can run concurrently.
-    #[clap(short = 'c', long = "max-instances", alias = "max-concurrent", alias = "max", alias = "count", default_value_t = u16::MAX)]
-    pub max_instances: u16,
+    /// Maximum number of actor instances allowed to run concurrently. Setting this value to `0` will stop the actor.
+    #[clap(short = 'c', long = "max-instances", alias = "max-concurrent", alias = "max", alias = "count", default_value_t = u32::MAX)]
+    pub max_instances: u32,
 
     /// Optional set of annotations used to describe the nature of this actor scale command.
     /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment

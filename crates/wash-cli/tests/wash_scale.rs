@@ -89,7 +89,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
                         i.max_instances
                     }
                 })
-                .sum::<u16>();
+                .sum::<u32>();
             assert_eq!(max, 10);
             break;
         }
@@ -171,7 +171,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
                         i.max_instances
                     }
                 })
-                .sum::<u16>();
+                .sum::<u32>();
             assert_eq!(max, 5);
             break;
         }

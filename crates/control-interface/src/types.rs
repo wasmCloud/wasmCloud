@@ -63,7 +63,7 @@ pub struct ActorInstance {
     pub revision: i32,
     /// The maximum number of concurrent requests this instance can handle
     #[serde(default)]
-    pub max_instances: u16,
+    pub max_instances: u32,
 }
 
 pub type AnnotationMap = std::collections::HashMap<String, String>;
@@ -304,12 +304,39 @@ pub struct ScaleActorCommand {
     /// stop the actor.
     // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
     #[serde(default, alias = "count", rename = "count")]
-    pub max_instances: u16,
+    pub max_instances: u32,
     /// Host ID on which to scale this actor
     #[serde(default)]
     pub host_id: String,
 }
 
+<<<<<<< HEAD
+=======
+#[deprecated(
+    since = "0.30.0",
+    note = "Use `ScaleActorCommand` instead. This will be removed in a future release."
+)]
+/// A command sent to a specific host instructing it to start the actor
+/// indicated by the reference.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StartActorCommand {
+    /// Reference for the actor. Can be any of the acceptable forms of unique identification
+    #[serde(default)]
+    pub actor_ref: String,
+    /// Optional set of annotations used to describe the nature of this actor start command. For
+    /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<AnnotationMap>,
+    /// The number of actors to start
+    /// A zero value will be interpreted as 1.
+    #[serde(default)]
+    pub count: u32,
+    /// Host ID on which this actor should start
+    #[serde(default)]
+    pub host_id: String,
+}
+
+>>>>>>> 2c37d705 (feat(control-interface)!: upgrade max_instances to u32)
 /// A command sent to a host requesting a capability provider be started with the
 /// given link name and optional configuration.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

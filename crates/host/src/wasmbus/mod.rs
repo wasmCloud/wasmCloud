@@ -2751,7 +2751,7 @@ impl Host {
         &self,
         actor_ref: &str,
         host_id: &str,
-        max_instances: u16,
+        max_instances: u32,
         annotations: Annotations,
     ) -> anyhow::Result<()> {
         trace!(actor_ref, max_instances, "scale actor task");
@@ -2778,7 +2778,7 @@ impl Host {
         let actor_ref = actor_ref.to_string();
         match (
             self.actors.write().await.entry(actor_id),
-            NonZeroUsize::new(max_instances.into()),
+            NonZeroUsize::new(max_instances as usize),
         ) {
             // No actor is running and we requested to scale to zero, noop
             (hash_map::Entry::Vacant(_), None) => {}
@@ -3506,8 +3506,8 @@ impl Host {
                             instance_id,
                             revision,
                             image_ref: Some(instance.image_reference.clone()),
-                            // We only accept u16 values on the control interface, so the try_from is a safety measure.
-                            max_instances: u16::try_from(instance.max.get()).unwrap_or(u16::MAX),
+                            // We only accept u32 values on the control interface, so the try_from is a safety measure.
+                            max_instances: u32::try_from(instance.max.get()).unwrap_or(u32::MAX),
                         }
                     })
                     .collect();

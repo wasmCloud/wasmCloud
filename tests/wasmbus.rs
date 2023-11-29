@@ -1164,7 +1164,7 @@ expected: {expected_labels_two:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        u16::MAX,
+        u32::MAX,
     )
     .await
     .context("failed to scale foobar actor")?;

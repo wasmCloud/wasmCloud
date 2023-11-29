@@ -17,7 +17,7 @@ pub struct StartActorArgs<'a> {
     pub ctl_client: &'a CtlClient,
     pub host_id: &'a str,
     pub actor_ref: &'a str,
-    pub count: u16,
+    pub count: u32,
     pub skip_wait: bool,
     pub timeout_ms: Option<u64>,
 }
@@ -106,7 +106,7 @@ pub async fn scale_actor(
     client: &CtlClient,
     host_id: &str,
     actor_ref: &str,
-    max_instances: u16,
+    max_instances: u32,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<()> {
     let ack = client
