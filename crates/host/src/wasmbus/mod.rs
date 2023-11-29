@@ -2668,14 +2668,17 @@ impl Host {
         {
             let mut aliases = self.aliases.write().await;
             match aliases.entry(call_alias) {
-                Entry::Occupied(entry) => {
-                    ensure!(
-                        entry.get().public_key == claims.subject,
-                        "call alias `{}` clash between `{}` and `{}`",
-                        entry.key(),
-                        entry.get().public_key,
-                        claims.subject
+                Entry::Occupied(mut entry) => {
+                    warn!(
+                        alias = entry.key(),
+                        existing_public_key = entry.get().public_key,
+                        new_public_key = claims.subject,
+                        "call alias clash. Replacing existing entry"
                     );
+                    entry.insert(WasmCloudEntity {
+                        public_key: claims.subject.clone(),
+                        ..Default::default()
+                    });
                 }
                 Entry::Vacant(entry) => {
                     entry.insert(WasmCloudEntity {
