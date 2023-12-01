@@ -130,9 +130,15 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             "--target=wasm32-unknown-unknown",
             "-p=builtins-module-reactor",
             "-p=kv-http-smithy",
+            "-p=blobstore-http-smithy",
         ],
         |name, kind| {
-            ["builtins-module-reactor", "kv-http-smithy"].contains(&name)
+            [
+                "blobstore-http-smithy",
+                "builtins-module-reactor",
+                "kv-http-smithy",
+            ]
+            .contains(&name)
                 && kind.contains(&CrateType::Cdylib)
         },
     )
@@ -141,9 +147,12 @@ async fn install_rust_wasm32_unknown_unknown_actors(
     match (
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
+            // NOTE: this list of artifacts must stay sorted
+            Some(("blobstore-http-smithy", [blobstore_http_smithy])),
             Some(("builtins-module-reactor", [builtins_module_reactor])),
             Some(("kv-http-smithy", [kv_http_smithy])),
             None,
@@ -154,6 +163,11 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             )
             .await?;
             copy(kv_http_smithy, out_dir.join("rust-kv-http-smithy.wasm")).await?;
+            copy(
+                blobstore_http_smithy,
+                out_dir.join("rust-blobstore-http-smithy.wasm"),
+            )
+            .await?;
             Ok(())
         }
         _ => bail!("invalid `builtins-module-reactor` build artifacts"),
@@ -326,6 +340,10 @@ async fn main() -> anyhow::Result<()> {
         (
             "kv-http-smithy",
             Some(vec![caps::HTTP_SERVER.into(), caps::KEY_VALUE.into()]),
+        ),
+        (
+            "blobstore-http-smithy",
+            Some(vec![caps::HTTP_SERVER.into(), caps::BLOB.into()]),
         ),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))

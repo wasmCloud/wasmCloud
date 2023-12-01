@@ -192,6 +192,7 @@
                   pkgs.nats-server
                   pkgs.redis
                   pkgs.vault
+                  pkgs.minio
                 ];
             };
 
@@ -443,6 +444,7 @@
                 pkgs.protobuf # prost build dependency
                 pkgs.redis
                 pkgs.vault
+                pkgs.minio
                 pkgs.wit-deps
               ]
               ++ optional (!(pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64)) pkgs.tinygo; # TinyGo currently fails to buid due to GDB not being supported on aarch64-darwin

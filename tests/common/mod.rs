@@ -20,6 +20,7 @@ use tracing::warn;
 use wascap::jwt;
 use wasmcloud_control_interface::CtlOperationAck;
 
+pub mod minio;
 pub mod nats;
 pub mod redis;
 pub mod vault;

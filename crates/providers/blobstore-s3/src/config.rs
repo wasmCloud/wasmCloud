@@ -3,11 +3,14 @@
 //! See README.md for configuration options using environment variables, aws credentials files,
 //! and EC2 IAM authorizations.
 //!
-use aws_smithy_http::endpoint::Endpoint;
-use aws_types::{credentials::SharedCredentialsProvider, region::Region, SdkConfig as AwsConfig};
+use std::collections::HashMap;
+use std::env;
+
+use aws_config::SdkConfig;
+use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
+use base64::Engine;
 use serde::Deserialize;
-use std::{collections::HashMap, env};
-use wasmbus_rpc::error::{RpcError, RpcResult};
+use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
 
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
 
@@ -32,6 +35,10 @@ pub struct StorageConfig {
     /// optional map of bucket aliases to names
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// optional max chunk size
+    pub max_chunk_size_bytes: Option<usize>,
+    /// optional use WebPKI roots for TLS rather than native (the default for aws_sdk_s3)
+    pub tls_use_webpki_roots: Option<bool>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -49,23 +56,29 @@ pub struct StsAssumeRoleConfig {
 
 impl StorageConfig {
     /// initialize from linkdef values
-    pub fn from_values(values: &HashMap<String, String>) -> RpcResult<StorageConfig> {
+    pub fn from_values(
+        values: &HashMap<String, String>,
+    ) -> ProviderInvocationResult<StorageConfig> {
         let mut config = if let Some(config_b64) = values.get("config_b64") {
-            let bytes = base64::decode(config_b64.as_bytes()).map_err(|e| {
-                RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
-            })?;
-            serde_json::from_slice::<StorageConfig>(&bytes)
-                .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_b64: {}", e)))?
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(config_b64.as_bytes())
+                .map_err(|e| {
+                    ProviderInvocationError::Provider(format!("invalid base64 encoding: {e}",))
+                })?;
+            serde_json::from_slice::<StorageConfig>(&bytes).map_err(|e| {
+                ProviderInvocationError::Provider(format!("corrupt config_b64: {e}"))
+            })?
         } else if let Some(config) = values.get("config_json") {
-            serde_json::from_str::<StorageConfig>(config)
-                .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_json: {}", e)))?
+            serde_json::from_str::<StorageConfig>(config).map_err(|e| {
+                ProviderInvocationError::Provider(format!("corrupt config_json: {e}"))
+            })?
         } else {
             StorageConfig::default()
         };
         // load environment variables from file
         if let Some(env_file) = values.get("env") {
             let data = std::fs::read_to_string(env_file).map_err(|e| {
-                RpcError::ProviderInit(format!("reading env file '{}': {}", env_file, e))
+                ProviderInvocationError::Provider(format!("reading env file '{env_file}': {e}",))
             })?;
             simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
         }
@@ -88,11 +101,12 @@ impl StorageConfig {
         if let Ok(endpoint) = env::var("AWS_ENDPOINT") {
             config.endpoint = Some(endpoint)
         }
+
         // aliases are added from linkdefs in StorageClient::new()
         Ok(config)
     }
 
-    pub async fn configure_aws(self) -> AwsConfig {
+    pub async fn configure_aws(self) -> SdkConfig {
         use aws_config::{
             default_provider::{credentials::DefaultCredentialsChain, region::DefaultRegionChain},
             sts::AssumeRoleProvider,
@@ -106,10 +120,12 @@ impl StorageConfig {
         // use static credentials or defaults from environment
         let mut cred_provider = match (self.access_key_id, self.secret_access_key) {
             (Some(access_key_id), Some(secret_access_key)) => {
-                SharedCredentialsProvider::new(aws_types::credentials::Credentials::from_keys(
+                SharedCredentialsProvider::new(aws_sdk_s3::config::Credentials::new(
                     access_key_id,
                     secret_access_key,
                     self.session_token.clone(),
+                    None,
+                    "static",
                 ))
             }
             _ => SharedCredentialsProvider::new(
@@ -132,24 +148,20 @@ impl StorageConfig {
             if let Some(external_id) = sts_config.external_id {
                 role = role.external_id(external_id);
             }
-            cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
+            cred_provider = SharedCredentialsProvider::new(role.build().await);
         }
 
         let mut retry_config = aws_config::retry::RetryConfig::standard();
         if let Some(max_attempts) = self.max_attempts {
             retry_config = retry_config.with_max_attempts(max_attempts);
         }
-        let mut loader = aws_config::from_env()
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::v2023_11_09())
             .region(region)
             .credentials_provider(cred_provider)
             .retry_config(retry_config);
 
         if let Some(endpoint) = self.endpoint {
-            if let Ok(parsed_endpoint) = endpoint.parse() {
-                loader = loader.endpoint_resolver(Endpoint::immutable(parsed_endpoint));
-            } else {
-                tracing::warn!("Endpoint {} could not be parsed, ignoring", endpoint);
-            }
+            loader = loader.endpoint_url(endpoint);
         }
 
         loader.load().await

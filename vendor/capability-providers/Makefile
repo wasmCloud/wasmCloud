@@ -1,5 +1,5 @@
 # capability-providers/Makefile
 
-subdirs = blobstore-s3 blobstore-fs httpclient httpserver-rs kvredis kv-vault nats sqldb-postgres lattice-controller sqldb-dynamodb
+subdirs = nats sqldb-postgres lattice-controller sqldb-dynamodb
 
 include build/makefiles/recurse.mk

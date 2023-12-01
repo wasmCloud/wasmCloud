@@ -45,3 +45,8 @@ pub const RUST_LOGGING_MODULE_COMMAND_SIGNED: &str =
 pub const RUST_KV_HTTP_SMITHY: &str = concat!(env!("OUT_DIR"), "/rust-kv-http-smithy.wasm");
 pub const RUST_KV_HTTP_SMITHY_SIGNED: &str =
     concat!(env!("OUT_DIR"), "/rust-kv-http-smithy.signed.wasm");
+
+pub const RUST_BLOBSTORE_HTTP_SMITHY: &str =
+    concat!(env!("OUT_DIR"), "/rust-blobstore-http-smithy.wasm");
+pub const RUST_BLOBSTORE_HTTP_SMITHY_SIGNED: &str =
+    concat!(env!("OUT_DIR"), "/rust-blobstore-http-smithy.signed.wasm");
