@@ -1,17 +1,19 @@
-# Blobstore-Fs capability provider
+# `blobstore-fs` capability provider
 
-This capability provider implements the `wasmcloud:blobstore` capability for
-Unix and Windows file system. The provider will store files in the local host where the
-provider executes.
+This capability provider implements the `wasmcloud:blobstore` capability for Unix and Windows file systems. 
 
-## Building
-
-Build with 'make'. Test with 'make test'.
-Testing requires docker.
+The provider will store files and folders on the host where the provider executes, and expose those folders and files within as a blobstore (AKA object storage).
 
 ## Configuration
 
-The provider is configured with the link configuration value `ROOT=<path>` which specifies where files will be stored/read.
-The default root path is `/tmp`. The provider must have read and write access to the root location.
-Each actor will store its files under the directory `$ROOT/<actor_id>`.
+Similar to other wasmcloud providers, this provider is configured wiht link configuration values:
+
+| Link value | Default | Example            | Description                               |
+|------------|---------|--------------------|-------------------------------------------|
+| `ROOT`     | `/tmp`  | `/tmp/your-folder` | The root folder where data will be stored |
+
+> [!INFO]
+> The provider must have read and write access to the disk location specified by `ROOT`
+>
+> Each actor's files will be stored under the path `$ROOT/<actor id>`
 
