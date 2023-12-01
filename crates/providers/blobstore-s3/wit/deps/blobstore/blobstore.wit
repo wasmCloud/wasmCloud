@@ -15,7 +15,7 @@ interface blobstore {
     /// as non-leap seconds and nanoseconds since the UNIX EPOCH
     record timestamp {
       /// The number of non-leap seconds since UNIX EPOCH in UTC
-      /// NOTE: this is a break with the previous Timestamp type which used an i64
+      /// TODO(vadossi-cosmonic): this is a break with the previous Timestamp type which used an i64
       sec: u64,
       /// The number of nanoseconds since the beginning of the last whole non-leap second
       nsec: u32,

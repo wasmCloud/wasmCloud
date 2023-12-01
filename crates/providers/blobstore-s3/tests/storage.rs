@@ -1,6 +1,11 @@
+use std::collections::HashMap;
 use std::env;
 
-use blobstore_s3_lib::{wasmcloud_interface_blobstore::*, StorageClient, StorageConfig};
+use wasmcloud_provider_blobstore_s3::{
+    Chunk, ContainerObjectSelector, GetObjectRequest, ListObjectsRequest, PutObjectRequest,
+    RemoveObjectsRequest, StorageClient, StorageConfig,
+};
+use wasmcloud_provider_sdk::Context;
 
 /// Helper function to create a StorageClient with local testing overrides
 async fn test_client() -> StorageClient {
@@ -8,7 +13,13 @@ async fn test_client() -> StorageClient {
         endpoint: env::var("AWS_ENDPOINT").ok(),
         access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
         secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
-        ..Default::default()
+        aliases: HashMap::new(),
+        max_attempts: None,
+        region: None,
+        session_token: None,
+        sts_config: None,
+        max_chunk_size_bytes: None,
+        tls_use_webpki_roots: None,
     };
 
     StorageClient::new(conf, Default::default()).await
@@ -21,7 +32,7 @@ async fn test_client() -> StorageClient {
 #[tokio::test]
 async fn test_create_container() {
     let s3 = test_client().await;
-    let ctx = wasmbus_rpc::common::Context::default();
+    let ctx = Context::default();
 
     let num = rand::random::<u64>();
     let bucket = format!("test.bucket.{}", num);
@@ -49,7 +60,7 @@ async fn test_create_container() {
 #[tokio::test]
 async fn test_create_object() {
     let s3 = test_client().await;
-    let ctx = wasmbus_rpc::common::Context::default();
+    let ctx = Context::default();
 
     let num = rand::random::<u64>();
     let bucket = format!("test.object.{}", num);
@@ -79,7 +90,7 @@ async fn test_create_object() {
     assert!(
         s3.object_exists(
             &ctx,
-            &ContainerObject {
+            &ContainerObjectSelector {
                 container_id: bucket.clone(),
                 object_id: "object.1".to_string(),
             },
@@ -102,7 +113,7 @@ async fn test_create_object() {
     assert!(
         !s3.object_exists(
             &ctx,
-            &ContainerObject {
+            &ContainerObjectSelector {
                 container_id: bucket.clone(),
                 object_id: "object.1".to_string(),
             },
@@ -122,7 +133,7 @@ async fn test_create_object() {
 #[tokio::test]
 async fn test_list_objects() {
     let s3 = test_client().await;
-    let ctx = wasmbus_rpc::common::Context::default();
+    let ctx = Context::default();
 
     let num = rand::random::<u64>();
     let bucket = format!("test.list.{}", num);
@@ -186,7 +197,7 @@ async fn test_list_objects() {
 #[tokio::test]
 async fn test_get_object_range() {
     let s3 = test_client().await;
-    let ctx = wasmbus_rpc::common::Context::default();
+    let ctx = Context::default();
     let num = rand::random::<u64>();
     let bucket = format!("test.range.{}", num);
 
@@ -276,13 +287,13 @@ async fn test_get_object_range() {
 #[tokio::test]
 async fn test_get_object_chunks() {
     let s3 = test_client().await;
-    let ctx = wasmbus_rpc::common::Context::default();
+    let ctx = Context::default();
     let num = rand::random::<u64>();
     let bucket = format!("test.chunk.{}", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 
-    for count in vec![4, 40, 400, 4000].iter() {
+    for count in [4, 40, 400, 4000].iter() {
         let fname = format!("file_{}", (count * 25));
         let object_bytes = b"abcdefghijklmnopqrstuvwxy".repeat(*count);
         let _ = s3
@@ -310,7 +321,8 @@ async fn test_get_object_chunks() {
             &GetObjectRequest {
                 container_id: bucket.clone(),
                 object_id: "file_1000".to_string(),
-                ..Default::default()
+                range_end: None,
+                range_start: None,
             },
         )
         .await
@@ -324,7 +336,8 @@ async fn test_get_object_chunks() {
             &GetObjectRequest {
                 container_id: bucket.clone(),
                 object_id: "file_100000".to_string(),
-                ..Default::default()
+                range_end: None,
+                range_start: None,
             },
         )
         .await

@@ -170,7 +170,6 @@ async fn kv_vault_suite() -> Result<()> {
     assert!(resp_json.data.value.is_empty());
 
     // Perform set request
-    let http_client = reqwest::Client::default();
     let test_value = "example";
     let resp_json: ResponseEnvelope<SetResponseData> = http_client
         .post(format!("{httpserver_base_url}/set"))
@@ -242,7 +241,6 @@ async fn kv_vault_suite() -> Result<()> {
     assert!(!resp_json.data);
 
     // Set a value in a set
-    let http_client = reqwest::Client::default();
     let test_value = "example";
     let resp_json: ResponseEnvelope<SetResponseData> = http_client
         .post(format!("{httpserver_base_url}/set"))

@@ -1,0 +1,4 @@
+[blobstore]
+path = "../../../../wit/wasmcloud/blobstore"
+sha256 = "56376eb977a037311def01a520de58d0ce7e79ca4ea674fbecd9c7c20eed51f4"
+sha512 = "f790ed24e31cb0a9a1b78b7f1a1db06881eae8454208052fde6929723a90c2be8b27a1c26dbda258f602d5e5ccc8c58d4a319eb577f5cb4fed85fca43cb12392"

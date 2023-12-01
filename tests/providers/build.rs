@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let mut artifacts = build_artifacts(
         [
             "--manifest-path=../../crates/providers/Cargo.toml",
+            "-p=wasmcloud-provider-blobstore-s3",
             "-p=wasmcloud-provider-blobstore-fs",
             "-p=wasmcloud-provider-httpclient",
             "-p=wasmcloud-provider-httpserver",
@@ -163,10 +164,11 @@ async fn main() -> anyhow::Result<()> {
         |name, kind| {
             [
                 "blobstore_fs",
+                "blobstore_s3",
                 "httpclient",
                 "httpserver",
-                "kvredis",
                 "kv-vault",
+                "kvredis",
                 "nats_messaging",
             ]
             .contains(&name)
@@ -182,10 +184,12 @@ async fn main() -> anyhow::Result<()> {
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
             Some(("blobstore_fs", [rust_blobstore_fs])),
+            Some(("blobstore_s3", [rust_blobstore_s3])),
             Some(("httpclient", [rust_httpclient])),
             Some(("httpserver", [rust_httpserver])),
             Some(("kv-vault", [rust_kv_vault])),
@@ -195,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
         ) => {
             let (
                 rust_blobstore_fs_seed,
+                rust_blobstore_s3_seed,
                 rust_httpclient_seed,
                 rust_httpserver_seed,
                 rust_kvredis_seed,
@@ -207,6 +212,13 @@ async fn main() -> anyhow::Result<()> {
                     "wasmcloud:blobstore",
                     "wasmcloud-provider-blobstore-fs",
                     rust_blobstore_fs,
+                ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-blobstore-s3.par"),
+                    "wasmcloud:blobstore",
+                    "wasmcloud-provider-blobstore-s3",
+                    rust_blobstore_s3,
                 ),
                 build_par(
                     &issuer,
@@ -244,6 +256,7 @@ async fn main() -> anyhow::Result<()> {
                     rust_nats,
                 ),
             )?;
+            println!("cargo:rustc-env=RUST_BLOBSTORE_S3_SUBJECT={rust_blobstore_s3_seed}");
             println!("cargo:rustc-env=RUST_BLOBSTORE_FS_SUBJECT={rust_blobstore_fs_seed}");
             println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
             println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");

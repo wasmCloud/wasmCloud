@@ -279,6 +279,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "327762f6e5a765692301e5bb513e0d9fef63be86bbc14528052b1cd3e6f03e07"
 
 [[package]]
+name = "blobstore-http-smithy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "wasmbus-rpc",
+ "wasmcloud-interface-blobstore",
+ "wasmcloud-interface-httpserver",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2665,6 +2678,20 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tokio",
+]
+
+[[package]]
+name = "wasmcloud-interface-blobstore"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecc8e8b52c1042963f258b864d6e9d27ba0c3b145a1b0698159e91ff5334dedc"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "wasmbus-rpc",
 ]
 
 [[package]]

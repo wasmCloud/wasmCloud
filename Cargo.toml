@@ -43,8 +43,9 @@ async-nats = { workspace = true }
 assert-json-diff = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
+rand = { workspace = true }
 redis = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+reqwest = { workspace = true, features = ["rustls-tls", "json", "rustls-tls-manual-roots"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

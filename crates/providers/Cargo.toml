@@ -13,6 +13,7 @@ lto = true
 [workspace]
 members = [
     "blobstore-fs",
+    "blobstore-s3",
     "http-client",
     "http-server",
     "kv-redis",
@@ -25,12 +26,16 @@ resolver = "2"
 anyhow = { version = "1", default-features = false }
 async-nats = { version = "0.33", default-features = false }
 async-trait = { version = "0.1", default-features = false }
+aws-config = { version = "1.0", default-features = false }
+aws-sdk-s3 = { version = "1.4", default-features = false }
+aws-smithy-runtime = { version = "1.1", default-features = false }
 base64 = { version = "0.21", default-features = false }
 bytes = { version = "1", default-features = false }
 dashmap = { version = "5", default-features = false }
 flume = { version = "0.11", default-features = false }
 futures = { version = "0.3", default-features = false }
 http = { version = "0.2", default-features = false }
+hyper-rustls = { version = "0.24", default-features = false }
 opentelemetry = { version = "0.20", default-features = false }
 opentelemetry-nats = { path = "../opentelemetry-nats" }
 path-clean = { version = "1", default-features = false }
@@ -53,7 +58,6 @@ wascap = { version = "*", path = "../wascap" }
 wasmbus-rpc = { version = "0.15", default-features = false } # TODO: Replace by `wasmcloud-provider-sdk`
 wasmcloud-compat = { path = "../compat", default-features = false }
 wasmcloud-core = { path = "../core", default-features = false }
-wasmcloud-interface-blobstore = { version = "0.9" } # TODO: Replace by WIT
 wasmcloud-interface-httpclient = { version = "0.11" } # TODO: Replace by WIT
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
