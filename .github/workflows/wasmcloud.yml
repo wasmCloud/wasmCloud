@@ -239,7 +239,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     if: github.ref == 'refs/heads/main'
     steps:
-    - uses: actions/deploy-pages@v2.0.5
+    - uses: actions/deploy-pages@v3.0.0
       id: deployment
 
   oci:
