@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use log::warn;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol},
+    secrets::RegistryAuth,
     Reference,
 };
 use serde_json::json;
@@ -92,7 +93,7 @@ pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
-    let Some(credentials) = credentials.as_oci_registry_auth() else {
+    let Ok(credentials) = RegistryAuth::try_from(&credentials) else {
         bail!("failed to resolve registry credentials")
     };
 

@@ -245,7 +245,7 @@ fn integration_reg_push_comprehensive() {
     not(can_reach_wasmcloud_azurecr_io),
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
-async fn intergration_reg_config() -> Result<()> {
+async fn integration_reg_config() -> Result<()> {
     //===== Inital project setup and build actor artifact
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",

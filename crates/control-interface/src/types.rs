@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 use std::collections::HashMap;
 
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 /// One of a potential list of responses to an actor auction
@@ -237,19 +238,24 @@ pub struct RegistryCredential {
     pub registry_type: String,
 }
 
-impl RegistryCredential {
-    #[must_use]
-    pub fn as_oci_registry_auth(&self) -> Option<oci_distribution::secrets::RegistryAuth> {
-        if self.registry_type != "oci" {
-            return None;
+fn default_registry_type() -> String {
+    "oci".to_string()
+}
+
+impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
+    type Error = anyhow::Error;
+
+    fn try_from(cred: &RegistryCredential) -> Result<Self, Self::Error> {
+        if cred.registry_type != "oci" {
+            bail!("Only OCI registries are supported at this time");
         }
 
-        match self {
+        match cred {
             RegistryCredential {
                 username: Some(username),
                 password: Some(password),
                 ..
-            } => Some(oci_distribution::secrets::RegistryAuth::Basic(
+            } => Ok(oci_distribution::secrets::RegistryAuth::Basic(
                 username.clone(),
                 password.clone(),
             )),
@@ -259,17 +265,13 @@ impl RegistryCredential {
                 password: None,
                 token: Some(token),
                 ..
-            } => Some(oci_distribution::secrets::RegistryAuth::Basic(
+            } => Ok(oci_distribution::secrets::RegistryAuth::Basic(
                 username.clone(),
                 token.clone(),
             )),
-            _ => None,
+            _ => bail!("Invalid OCI registry credentials"),
         }
     }
-}
-
-fn default_registry_type() -> String {
-    "oci".to_string()
 }
 
 /// A set of credentials to be used for fetching from specific registries
