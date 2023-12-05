@@ -5193,6 +5193,7 @@ dependencies = [
 name = "wasmcloud-control-interface"
 version = "0.32.0"
 dependencies = [
+ "anyhow",
  "async-nats",
  "bytes",
  "cloudevents-sdk",
