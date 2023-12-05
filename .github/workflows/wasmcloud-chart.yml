@@ -27,7 +27,7 @@ jobs:
 
       # Used by helm chart-testing below
       - name: Set up Python
-        uses: actions/setup-python@v4.7.1
+        uses: actions/setup-python@v4.8.0
         with:
           python-version: '3.12.0'
 
