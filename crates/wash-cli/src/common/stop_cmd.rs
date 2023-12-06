@@ -98,19 +98,16 @@ mod test {
         ])?;
 
         match stop_actor_all.command {
-            #[allow(deprecated)]
             CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
                 opts,
                 host_id,
                 actor_id,
                 skip_wait,
-                count,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert!(skip_wait);
-                assert_eq!(count, 1);
                 assert_eq!(host_id.unwrap(), HOST_ID);
                 assert_eq!(actor_id.to_string(), ACTOR_ID);
             }
