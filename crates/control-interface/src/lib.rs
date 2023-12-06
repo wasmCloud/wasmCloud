@@ -92,14 +92,6 @@ impl ClientBuilder {
         }
     }
 
-    /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the
-    /// default will be 2 seconds
-    #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
-    #[must_use]
-    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
-        ClientBuilder { timeout, ..self }
-    }
-
     /// Sets the timeout for control interface requests issued by the client. If not set, the
     /// default will be 2 seconds
     #[must_use]
@@ -239,33 +231,6 @@ impl Client {
         })?;
         debug!("provider_auction:publish {}", &subject);
         self.publish_and_wait(subject, bytes).await
-    }
-
-    /// Sends a request to the given host to start a given actor by its OCI reference. This returns
-    /// an acknowledgement of _receipt_ of the command, not a confirmation that the actor started.
-    /// An acknowledgement will either indicate some form of validation failure, or, if no failure
-    /// occurs, the receipt of the command. To avoid blocking consumers, wasmCloud hosts will
-    /// acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client
-    /// needs deterministic results as to whether the actor completed its startup process, the
-    /// client will have to monitor the appropriate event in the control event stream
-    #[instrument(level = "debug", skip_all)]
-    #[deprecated(since = "0.30.0", note = "please use `scale_actor` instead")]
-    pub async fn start_actor(
-        &self,
-        host_id: &str,
-        actor_ref: &str,
-        count: u16,
-        annotations: Option<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
-        // It makes no logical sense to start 0 actors, so we represent that as an unbounded max instead.
-        let max = if count == 0 { None } else { Some(count) };
-        self.scale_actor(
-            parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
-            parse_identifier(&IdentifierKind::ActorRef, actor_ref)?.as_str(),
-            max,
-            annotations,
-        )
-        .await
     }
 
     /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of

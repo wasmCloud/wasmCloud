@@ -49,10 +49,13 @@ pub async fn assert_start_actor(
         .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
         .await?;
 
-    // TODO(#740): Remove deprecated once control clients no longer use this command
-    #[allow(deprecated)]
     let CtlOperationAck { accepted, error } = ctl_client
-        .start_actor(&host_key.public_key(), url.as_ref(), count, None)
+        .scale_actor(
+            &host_key.public_key(),
+            url.as_ref(),
+            if count == 0 { None } else { Some(count) },
+            None,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");

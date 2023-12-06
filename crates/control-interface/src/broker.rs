@@ -84,16 +84,6 @@ pub fn delete_label(topic_prefix: &Option<String>, lattice_prefix: &str, host_id
 pub mod commands {
     use super::prefix;
 
-    /// Actor commands require a host target
-    #[deprecated(
-        since = "0.30.0",
-        note = "Use `scale_actor` instead. This will be removed in a future release."
-    )]
-    #[allow(dead_code)]
-    pub fn start_actor(topic_prefix: &Option<String>, lattice_prefix: &str, host: &str) -> String {
-        format!("{}.cmd.{}.la", prefix(topic_prefix, lattice_prefix), host) // la - launch actor
-    }
-
     pub fn scale_actor(topic_prefix: &Option<String>, lattice_prefix: &str, host: &str) -> String {
         format!(
             "{}.cmd.{}.scale",

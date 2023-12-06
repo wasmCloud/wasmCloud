@@ -2953,76 +2953,6 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_launch_actor(
-        self: Arc<Self>,
-        payload: impl AsRef<[u8]>,
-        host_id: &str,
-    ) -> anyhow::Result<Bytes> {
-        // Explicitly allowing the deprecated command so we can offer backwards compatibility
-        // TODO(#740): Remove deprecated once control clients no longer use this command
-        #[allow(deprecated)]
-        let wasmcloud_control_interface::StartActorCommand {
-            actor_ref,
-            annotations,
-            count,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor launch command")?;
-
-        warn!("received deprecated start_actor command which will be removed in a future version");
-
-        let host_id = host_id.to_string();
-        spawn(async move {
-            let actor = self.fetch_actor(&actor_ref).await?;
-            let claims = actor.claims().context("claims missing")?;
-            let actor_id = claims.subject.clone();
-
-            let annotations = annotations.unwrap_or_default().into_iter().collect();
-
-            let max = match self.actors.write().await.entry(actor_id) {
-                hash_map::Entry::Vacant(_) => Some(count),
-                hash_map::Entry::Occupied(entry) => {
-                    let actor = entry.get();
-                    let instances = actor.instances.read().await;
-                    if let Some(instance) = matching_instance(&instances, &annotations) {
-                        if instance.image_reference != actor_ref {
-                            let err = anyhow!(
-                                "actor is already running with a different image reference `{}`",
-                                instance.image_reference
-                            );
-                            self.publish_event(
-                                "actors_start_failed",
-                                event::actors_start_failed(
-                                    claims,
-                                    &annotations,
-                                    host_id,
-                                    actor_ref,
-                                    &err,
-                                ),
-                            )
-                            .await?;
-                            bail!(err);
-                        }
-
-                        // Retrieve current max and add the requested count to it to simulate starting `count`
-                        instance
-                            .max
-                            .and_then(|m| u16::try_from(m.get()).ok())
-                            .unwrap_or(0)
-                            .checked_add(count)
-                    } else {
-                        Some(count)
-                    }
-                }
-            };
-            self.handle_scale_actor_task(&actor_ref, &host_id, max, annotations)
-                .await
-        });
-
-        Ok(ACCEPTED.into())
-    }
-
-    #[instrument(level = "debug", skip_all)]
     async fn handle_stop_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -3953,10 +3883,6 @@ impl Host {
             (Some("auction"), Some("provider"), None, None) => {
                 self.handle_auction_provider(message.payload).await
             }
-            (Some("cmd"), Some(host_id), Some("la"), None) => Arc::clone(&self)
-                .handle_launch_actor(message.payload, host_id)
-                .await
-                .map(Some),
             (Some("cmd"), Some(host_id), Some("lp"), None) => Arc::clone(&self)
                 .handle_launch_provider(message.payload, host_id)
                 .await

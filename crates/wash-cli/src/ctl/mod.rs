@@ -186,12 +186,10 @@ mod test {
             ACTOR_ID,
         ])?;
         match stop_actor_all.command {
-            #[allow(deprecated)]
             CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
                 opts,
                 host_id,
                 actor_id,
-                count,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -200,14 +198,12 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(actor_id, ACTOR_ID);
-                assert_eq!(count, 2);
                 assert!(!skip_wait);
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }
         let stop_actor_minimal: Cmd = Parser::try_parse_from(["ctl", "stop", "actor", "foobar"])?;
         match stop_actor_minimal.command {
-            #[allow(deprecated)]
             CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
                 host_id, actor_id, ..
             })) => {

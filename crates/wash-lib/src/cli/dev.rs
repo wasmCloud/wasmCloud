@@ -3,9 +3,8 @@ use console::style;
 use wasmcloud_control_interface::Client;
 
 use crate::{
-    actor::{start_actor, stop_actor, StartActorArgs},
+    actor::{start_actor, update_actor, StartActorArgs},
     build::{build_project, SignConfig},
-    context::default_timeout_ms,
     generate::emoji,
     id::{ModuleId, ServerId},
     parser::{ProjectConfig, TypeConfig},
@@ -42,16 +41,8 @@ pub async fn run_dev_loop(
                 ))
                 .bold(),
             );
-            // TODO: Just use update actor here
-            stop_actor(
-                ctl_client,
-                &host_id,
-                &actor_id,
-                None,
-                default_timeout_ms(),
-                false,
-            )
-            .await?;
+
+            update_actor(ctl_client, &host_id, &actor_id, actor_ref).await?;
             start_actor(StartActorArgs {
                 ctl_client,
                 host_id: &host_id,

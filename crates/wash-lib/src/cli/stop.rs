@@ -51,14 +51,6 @@ pub struct StopActorCommand {
     #[clap(name = "actor-id")]
     pub actor_id: String,
 
-    /// Number of actors to stop (DEPRECATED: count is ignored)
-    #[clap(long = "count", default_value = "1")]
-    #[deprecated(
-        since = "0.21.0",
-        note = "actor will be stopped regardless of scale, count is now ignored"
-    )]
-    pub count: u16,
-
     /// By default, the command will wait until the actor has been stopped.
     /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the actor to stp[].
     #[clap(long = "skip-wait")]

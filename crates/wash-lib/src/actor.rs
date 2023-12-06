@@ -51,9 +51,13 @@ pub async fn start_actor(
         .context("Failed to get lattice event channel")?;
 
     // Start the actor
-    #[allow(deprecated)]
     let ack = ctl_client
-        .start_actor(host_id, actor_ref, count, None)
+        .scale_actor(
+            host_id,
+            actor_ref,
+            if count == 0 { None } else { Some(count) },
+            None,
+        )
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| format!("Failed to start actor: {}", actor_ref))?;

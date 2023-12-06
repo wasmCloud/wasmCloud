@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::collections::HashMap;
 
 use anyhow::bail;
@@ -307,30 +306,6 @@ pub struct ScaleActorCommand {
     #[serde(default, alias = "count", rename = "count")]
     pub max_concurrent: Option<u16>,
     /// Host ID on which to scale this actor
-    #[serde(default)]
-    pub host_id: String,
-}
-
-#[deprecated(
-    since = "0.30.0",
-    note = "Use `ScaleActorCommand` instead. This will be removed in a future release."
-)]
-/// A command sent to a specific host instructing it to start the actor
-/// indicated by the reference.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StartActorCommand {
-    /// Reference for the actor. Can be any of the acceptable forms of unique identification
-    #[serde(default)]
-    pub actor_ref: String,
-    /// Optional set of annotations used to describe the nature of this actor start command. For
-    /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
-    /// The number of actors to start
-    /// A zero value will be interpreted as 1.
-    #[serde(default)]
-    pub count: u16,
-    /// Host ID on which this actor should start
     #[serde(default)]
     pub host_id: String,
 }
