@@ -9,5 +9,5 @@ world logging {
 }
 
 world incoming-http {
-    export wasi:http/incoming-handler@0.2.0-rc-2023-11-10;
+    export wasi:http/incoming-handler@0.2.0-rc-2023-12-05;
 }

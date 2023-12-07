@@ -15,7 +15,7 @@ repository.workspace = true
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["start", "parser", "nats", "build-adapters"]
+default = ["start", "parser", "nats"]
 start = ["semver"]
 parser = ["config", "semver", "serde", "serde_json"]
 cli = [
@@ -29,11 +29,10 @@ cli = [
     "path-absolutize",
 ]
 nats = ["async-nats", "wadm"]
-build-adapters = [ "wasmcloud-component-adapters/build-adapters" ]
+docs = [ "wasmcloud-component-adapters/docs" ]
 
 [package.metadata.docs.rs]
-no-default-features = true # skip building adapters (which requires internet access)
-features = ["start", "parser", "nats"]
+features = ["start", "parser", "nats", "docs"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -82,7 +81,7 @@ wadm = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
 wasm-encoder = { workspace = true }
-wasmcloud-component-adapters = { version = "0.2.4" } # override this version, since 0.3.0 uses an adapter based on wasmtime v0.14
+wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
 wat = { workspace = true }
