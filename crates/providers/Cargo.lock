@@ -47,7 +47,7 @@ dependencies = [
  "base64",
  "bytes",
  "futures",
- "http",
+ "http 0.2.11",
  "memchr",
  "nkeys",
  "nuid 0.5.0",
@@ -119,7 +119,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand 2.0.1",
- "http",
+ "http 0.2.11",
  "hyper",
  "time",
  "tokio",
@@ -148,7 +148,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes",
- "http",
+ "http 0.2.11",
  "http-body",
  "pin-project-lite",
  "tracing",
@@ -170,7 +170,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "fastrand 2.0.1",
- "http",
+ "http 0.2.11",
  "percent-encoding",
  "tracing",
  "uuid",
@@ -197,7 +197,7 @@ dependencies = [
  "aws-smithy-xml",
  "aws-types",
  "bytes",
- "http",
+ "http 0.2.11",
  "http-body",
  "once_cell",
  "percent-encoding",
@@ -224,7 +224,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
- "http",
+ "http 0.2.11",
  "regex",
  "tracing",
 ]
@@ -244,7 +244,7 @@ dependencies = [
  "form_urlencoded",
  "hex",
  "hmac",
- "http",
+ "http 0.2.11",
  "once_cell",
  "percent-encoding",
  "regex",
@@ -276,7 +276,7 @@ dependencies = [
  "crc32c",
  "crc32fast",
  "hex",
- "http",
+ "http 0.2.11",
  "http-body",
  "md-5",
  "pin-project-lite",
@@ -308,7 +308,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "futures-core",
- "http",
+ "http 0.2.11",
  "http-body",
  "once_cell",
  "percent-encoding",
@@ -328,7 +328,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "futures-core",
- "http",
+ "http 0.2.11",
  "http-body",
  "once_cell",
  "percent-encoding",
@@ -369,7 +369,7 @@ dependencies = [
  "bytes",
  "fastrand 2.0.1",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "hyper",
  "hyper-rustls",
@@ -390,7 +390,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
  "bytes",
- "http",
+ "http 0.2.11",
  "pin-project-lite",
  "tokio",
  "tracing",
@@ -406,7 +406,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "futures-core",
- "http",
+ "http 0.2.11",
  "http-body",
  "itoa",
  "num-integer",
@@ -438,7 +438,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "http",
+ "http 0.2.11",
  "rustc_version",
  "tracing",
 ]
@@ -454,7 +454,7 @@ dependencies = [
  "bitflags",
  "bytes",
  "futures-util",
- "http",
+ "http 0.2.11",
  "http-body",
  "hyper",
  "itoa",
@@ -480,7 +480,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
- "http",
+ "http 0.2.11",
  "http-body",
  "mime",
  "rustversion",
@@ -1058,7 +1058,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http",
+ "http 0.2.11",
  "indexmap 2.1.0",
  "slab",
  "tokio",
@@ -1087,7 +1087,7 @@ dependencies = [
  "base64",
  "bytes",
  "headers-core",
- "http",
+ "http 0.2.11",
  "httpdate",
  "mime",
  "sha1",
@@ -1099,7 +1099,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7f66481bfee273957b1f20485a4ff3362987f85b2c236580d81b4eb7a326429"
 dependencies = [
- "http",
+ "http 0.2.11",
 ]
 
 [[package]]
@@ -1150,13 +1150,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "http"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b32afd38673a8016f7c9ae69e5af41a58f81b1d31689040f2f1959594ce194ea"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
 name = "http-body"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5f38f16d184e36f2408a55281cd658ecbd3ca05cce6d6510a176eca393e26d1"
 dependencies = [
  "bytes",
- "http",
+ "http 0.2.11",
  "pin-project-lite",
 ]
 
@@ -1189,7 +1200,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "httparse",
  "httpdate",
@@ -1209,7 +1220,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
 dependencies = [
  "futures-util",
- "http",
+ "http 0.2.11",
  "hyper",
  "log",
  "rustls",
@@ -1527,7 +1538,7 @@ checksum = "c7594ec0e11d8e33faf03530a4c49af7064ebba81c1480e01be67d90b356508b"
 dependencies = [
  "async-trait",
  "bytes",
- "http",
+ "http 0.2.11",
  "opentelemetry_api",
  "reqwest",
 ]
@@ -1550,7 +1561,7 @@ checksum = "7e5e5a5c4135864099f3faafbe939eb4d7f9b80ebf68a8448da961b32a7c1275"
 dependencies = [
  "async-trait",
  "futures-core",
- "http",
+ "http 0.2.11",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry-semantic-conventions",
@@ -1913,7 +1924,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "hyper",
  "hyper-rustls",
@@ -2001,7 +2012,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "http",
+ "http 0.2.11",
  "reqwest",
  "rustify_derive",
  "serde",
@@ -2633,7 +2644,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "hyper",
  "hyper-timeout",
@@ -2870,7 +2881,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "derive_builder",
- "http",
+ "http 0.2.11",
  "reqwest",
  "rustify",
  "rustify_derive",
@@ -2912,7 +2923,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "headers",
- "http",
+ "http 0.2.11",
  "hyper",
  "log",
  "mime",
@@ -3045,7 +3056,7 @@ name = "wasmcloud-compat"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "http",
+ "http 1.0.0",
  "serde",
  "serde_bytes",
  "tokio",
@@ -3115,7 +3126,7 @@ name = "wasmcloud-provider-httpclient"
 version = "0.8.0"
 dependencies = [
  "async-trait",
- "http",
+ "http 0.2.11",
  "reqwest",
  "serde",
  "serde_bytes",
@@ -3135,7 +3146,7 @@ dependencies = [
  "dashmap",
  "flume",
  "futures",
- "http",
+ "http 0.2.11",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3265,9 +3276,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.118.0"
+version = "0.118.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebbb91574de0011ded32b14db12777e7dd5e9ea2f9d7317a1ab51a9495c75924"
+checksum = "95ee9723b928e735d53000dec9eae7b07a60e490c85ab54abb66659fc61bfcd9"
 dependencies = [
  "indexmap 2.1.0",
  "semver",
@@ -3275,9 +3286,8 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-wit-bindgen"
-version = "15.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41786c7bbbf250c0e685b291323b50c6bb65f0505a2c0b4f0b598c740f13f185"
+version = "16.0.0"
+source = "git+https://github.com/bytecodealliance/wasmtime?branch=release-16.0.0#64c2a247edd6bfc41bcfccb61848077c116bd9d6"
 dependencies = [
  "anyhow",
  "heck",

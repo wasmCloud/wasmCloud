@@ -20,7 +20,7 @@
   inputs.nixify.url = "github:rvolosatovs/nixify";
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
-  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.4.0";
+  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.5.0";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
   inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5";

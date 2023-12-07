@@ -29,7 +29,7 @@ pub mod incoming_http_bindings {
         world: "incoming-http",
         async: true,
         with: {
-           "wasi:http/types@0.2.0-rc-2023-11-10": wasmtime_wasi_http::bindings::http::types,
+           "wasi:http/types@0.2.0-rc-2023-12-05": wasmtime_wasi_http::bindings::http::types,
         },
     });
 }

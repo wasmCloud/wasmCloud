@@ -120,7 +120,7 @@ dependencies = [
  "base64 0.21.5",
  "bytes",
  "futures",
- "http",
+ "http 0.2.11",
  "itoa",
  "memchr",
  "nkeys",
@@ -801,7 +801,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http",
+ "http 0.2.11",
  "indexmap 2.1.0",
  "slab",
  "tokio",
@@ -880,13 +880,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "http"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b32afd38673a8016f7c9ae69e5af41a58f81b1d31689040f2f1959594ce194ea"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
 name = "http-body"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5f38f16d184e36f2408a55281cd658ecbd3ca05cce6d6510a176eca393e26d1"
 dependencies = [
  "bytes",
- "http",
+ "http 0.2.11",
  "pin-project-lite",
 ]
 
@@ -919,7 +930,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "httparse",
  "httpdate",
@@ -939,7 +950,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
 dependencies = [
  "futures-util",
- "http",
+ "http 0.2.11",
  "hyper",
  "rustls",
  "tokio",
@@ -1584,7 +1595,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http",
+ "http 0.2.11",
  "http-body",
  "hyper",
  "hyper-rustls",
@@ -2674,7 +2685,7 @@ name = "wasmcloud-compat"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "http",
+ "http 1.0.0",
  "serde",
  "serde_bytes",
  "tokio",
@@ -2973,9 +2984,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen"
-version = "0.14.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0205c6e67438f9d657318e0d7ee407a8017cd7bc5f1636cd4a280d4ccbc8d4a0"
+checksum = "b76f1d099678b4f69402a421e888bbe71bf20320c2f3f3565d0e7484dbe5bc20"
 dependencies = [
  "bitflags 2.4.1",
  "wit-bindgen-rust-macro",
@@ -2983,9 +2994,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-core"
-version = "0.14.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dfc34e539edf78da2efed167549962a4d26000db04694408285f52d90703fee"
+checksum = "75d55e1a488af2981fb0edac80d8d20a51ac36897a1bdef4abde33c29c1b6d0d"
 dependencies = [
  "anyhow",
  "wit-component",
@@ -2994,9 +3005,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rust"
-version = "0.14.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e898ad170a2796e9ecc495ce52cc2518dc35364ec042a4e108dd3c454e2a24c6"
+checksum = "a01ff9cae7bf5736750d94d91eb8a49f5e3a04aff1d1a3218287d9b2964510f8"
 dependencies = [
  "anyhow",
  "heck 0.4.1",
@@ -3007,9 +3018,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rust-macro"
-version = "0.14.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cde5bc98cd9ebc817e7a0325120b5cf047643c2cc4583b917e66914215f94cff"
+checksum = "804a98e2538393d47aa7da65a7348116d6ff403b426665152b70a168c0146d49"
 dependencies = [
  "anyhow",
  "proc-macro2",
