@@ -7,8 +7,8 @@ use async_nats::{Client, Message};
 use regex::Regex;
 use wadm::server::{
     DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
-    GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, UndeployModelRequest,
-    VersionResponse,
+    GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, StatusResponse,
+    UndeployModelRequest, VersionResponse,
 };
 
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -29,6 +29,7 @@ pub enum ModelOperation {
     Put,
     Deploy,
     Undeploy,
+    Status,
 }
 
 impl ToString for ModelOperation {
@@ -41,6 +42,7 @@ impl ToString for ModelOperation {
             ModelOperation::Put => "put",
             ModelOperation::Deploy => "deploy",
             ModelOperation::Undeploy => "undeploy",
+            ModelOperation::Status => "status",
         }
         .to_string()
     }
@@ -189,6 +191,29 @@ pub async fn get_model_history(
     let res = model_request(
         client,
         ModelOperation::History,
+        lattice_prefix,
+        Some(model_name),
+        vec![],
+    )
+    .await?;
+
+    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Query wadm for the status of a given model by name
+///
+/// # Arguments
+/// * `client` - The [Client](async_nats::Client) to use in order to send the request message
+/// * `lattice_prefix` - Optional lattice prefix that the application manifest is stored on, defaults to `default`
+/// * `model_name` - Name of the model to retrieve status for
+pub async fn get_model_status(
+    client: &Client,
+    lattice_prefix: Option<String>,
+    model_name: &str,
+) -> Result<StatusResponse> {
+    let res = model_request(
+        client,
+        ModelOperation::Status,
         lattice_prefix,
         Some(model_name),
         vec![],
