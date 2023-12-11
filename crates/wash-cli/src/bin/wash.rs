@@ -220,7 +220,7 @@ enum CliCommand {
 #[tokio::main]
 async fn main() {
     use clap::CommandFactory;
-    env_logger::init();
+    tracing_subscriber::fmt::init();
     let cli: Cli = Parser::parse();
 
     let output_kind = cli.output;

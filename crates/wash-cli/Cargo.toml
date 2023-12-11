@@ -26,7 +26,7 @@ clap_complete = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 dirs = { workspace = true }
-env_logger = { workspace = true }
+tracing = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
 log = { workspace = true }
