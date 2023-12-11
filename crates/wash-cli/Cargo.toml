@@ -27,6 +27,7 @@ cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 dirs = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }  
 futures = { workspace = true }
 indicatif = { workspace = true }
 log = { workspace = true }
