@@ -52,12 +52,7 @@ pub async fn start_actor(
 
     // Start the actor
     let ack = ctl_client
-        .scale_actor(
-            host_id,
-            actor_ref,
-            if count == 0 { None } else { Some(count) },
-            None,
-        )
+        .scale_actor(host_id, actor_ref, count, None)
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| format!("Failed to start actor: {}", actor_ref))?;

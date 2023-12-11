@@ -53,12 +53,7 @@ pub async fn assert_start_actor(
         .await?;
 
     let CtlOperationAck { accepted, error } = ctl_client
-        .scale_actor(
-            &host_key.public_key(),
-            url.as_ref(),
-            if count == 0 { None } else { Some(count) },
-            None,
-        )
+        .scale_actor(&host_key.public_key(), url.as_ref(), count, None)
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");

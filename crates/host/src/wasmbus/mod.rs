@@ -261,7 +261,8 @@ struct ActorInstance {
     handler: Handler,
     chunk_endpoint: ChunkEndpoint,
     annotations: Annotations,
-    max: NonZeroUsize,
+    /// Maximum number of instances of this actor that can be running at once
+    max_instances: NonZeroUsize,
     /// Cluster issuers that this actor should accept invocations from
     valid_issuers: Vec<String>,
     policy_manager: Arc<PolicyManager>,
@@ -1597,8 +1598,7 @@ pub struct Host {
     queue: AbortHandle,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     links: RwLock<HashMap<String, LinkDefinition>>,
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
-    // TODO: use a single map once Claims is an enum
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
 }
@@ -2314,7 +2314,7 @@ impl Host {
                 let instances = actor.instances.read().await;
                 let max = instances
                     .iter()
-                    .map(|(_annotations, instance)| instance.max.get())
+                    .map(|(_annotations, instance)| instance.max_instances.get())
                     .sum();
                 if max == 0 {
                     None
@@ -2381,11 +2381,15 @@ impl Host {
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &Annotations,
         actor_ref: impl AsRef<str>,
-        max: NonZeroUsize,
+        max_instances: NonZeroUsize,
         actor: wasmcloud_runtime::Actor,
         handler: Handler,
     ) -> anyhow::Result<Arc<ActorInstance>> {
-        trace!(actor_ref = actor_ref.as_ref(), max, "instantiating actor");
+        trace!(
+            actor_ref = actor_ref.as_ref(),
+            max_instances,
+            "instantiating actor"
+        );
 
         let actor_ref = actor_ref.as_ref();
         let topic = format!(
@@ -2412,7 +2416,7 @@ impl Host {
                 handler: handler.clone(),
                 chunk_endpoint: self.chunk_endpoint.clone(),
                 annotations: annotations.clone(),
-                max,
+                max_instances,
                 valid_issuers: self.cluster_issuers.clone(),
                 policy_manager: Arc::clone(&self.policy_manager),
                 image_reference: actor_ref.to_string(),
@@ -2422,10 +2426,13 @@ impl Host {
 
             let _calls = spawn({
                 let instance = Arc::clone(&instance);
-                Abortable::new(calls, calls_abort_reg).for_each_concurrent(max.get(), move |msg| {
-                    let instance = Arc::clone(&instance);
-                    async move { instance.handle_rpc_message(msg).await }
-                })
+                Abortable::new(calls, calls_abort_reg).for_each_concurrent(
+                    max_instances.get(),
+                    move |msg| {
+                        let instance = Arc::clone(&instance);
+                        async move { instance.handle_rpc_message(msg).await }
+                    },
+                )
             });
             anyhow::Result::<_>::Ok(instance)
         }
@@ -2453,11 +2460,11 @@ impl Host {
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
         actor: wasmcloud_runtime::Actor,
         actor_ref: String,
-        max: NonZeroUsize,
+        max_instances: NonZeroUsize,
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        debug!(actor_ref, ?max, "starting new actor");
+        debug!(actor_ref, ?max_instances, "starting new actor");
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
@@ -2512,7 +2519,7 @@ impl Host {
                 claims,
                 &annotations,
                 &actor_ref,
-                max,
+                max_instances,
                 actor.clone(),
                 handler.clone(),
             )
@@ -2521,10 +2528,10 @@ impl Host {
 
         info!(actor_ref, "actor started");
         self.publish_actor_started_events(
-            max.get(),
+            max_instances.get(),
+            max_instances,
             claims,
             &annotations,
-            instance.id,
             host_id,
             actor_ref,
         )
@@ -2574,10 +2581,10 @@ impl Host {
             self.publish_actor_stopped_events(
                 claims,
                 &instance.annotations,
-                instance.id,
                 host_id,
-                instance.max,
+                instance.max_instances,
                 0,
+                &instance.image_reference,
             )
             .await?;
         }
@@ -2800,10 +2807,10 @@ impl Host {
                     self.publish_actor_stopped_events(
                         claims,
                         &matching_instance.annotations,
-                        matching_instance.id,
                         host_id,
-                        matching_instance.max,
+                        matching_instance.max_instances,
                         0,
+                        &matching_instance.image_reference,
                     )
                     .await?;
                 }
@@ -2830,24 +2837,17 @@ impl Host {
                             "actor is already running with a different image reference `{}`",
                             matching_instance.image_reference
                         );
-                        match max.cmp(&matching_instance.max) {
+                        match max.cmp(&matching_instance.max_instances) {
                             // We don't have an `actor_stop_failed` event
                             std::cmp::Ordering::Less | std::cmp::Ordering::Equal => (),
                             std::cmp::Ordering::Greater => {
-                                self.publish_event(
-                                    "actor_start_failed",
-                                    event::actor_start_failed(actor_ref.clone(), &err),
-                                )
-                                .await?;
-                                self.publish_event(
-                                    "actors_start_failed",
-                                    event::actors_start_failed(
-                                        claims,
-                                        &annotations,
-                                        host_id,
-                                        actor_ref,
-                                        &err,
-                                    ),
+                                self.publish_actor_start_failed_events(
+                                    claims,
+                                    &annotations,
+                                    host_id,
+                                    actor_ref,
+                                    max,
+                                    &err,
                                 )
                                 .await?;
                             }
@@ -2856,7 +2856,7 @@ impl Host {
                         bail!(err);
                     }
                     // No need to scale if we already have the requested max
-                    if matching_instance.max != max {
+                    if matching_instance.max_instances != max {
                         let instance = self
                             .instantiate_actor(
                                 claims,
@@ -2868,16 +2868,16 @@ impl Host {
                             )
                             .await
                             .context("failed to instantiate actor")?;
-                        let publish_result = match matching_instance.max.cmp(&max) {
+                        let publish_result = match matching_instance.max_instances.cmp(&max) {
                             std::cmp::Ordering::Less => {
                                 // We started the difference between the current max and the requested max
                                 // SAFETY: We know max > matching_instance.max because of the ordering check above
-                                let num_started = max.get() - matching_instance.max.get();
+                                let num_started = max.get() - matching_instance.max_instances.get();
                                 self.publish_actor_started_events(
                                     num_started,
+                                    max,
                                     claims,
                                     &annotations,
-                                    instance.id,
                                     host_id,
                                     &actor_ref,
                                 )
@@ -2887,17 +2887,20 @@ impl Host {
                                 // We stopped the difference between the current max and the requested max
                                 let num_stopped =
                                     // SAFETY: We know matching_instance.max > max because of the ordering check above
-                                    matching_instance.max.get()
+                                    matching_instance.max_instances.get()
                                         - max.get();
                                 self.publish_actor_stopped_events(
                                     claims,
                                     &annotations,
-                                    matching_instance.id,
                                     host_id,
                                     NonZeroUsize::new(num_stopped)
                                         // Should not be possible, but defaulting to 1 for safety
                                         .unwrap_or(NonZeroUsize::MIN),
-                                    matching_instance.max.get().saturating_sub(num_stopped),
+                                    matching_instance
+                                        .max_instances
+                                        .get()
+                                        .saturating_sub(num_stopped),
+                                    &matching_instance.image_reference,
                                 )
                                 .await
                             }
@@ -2932,9 +2935,9 @@ impl Host {
                     info!(actor_ref, "actor started");
                     self.publish_actor_started_events(
                         max.get(),
+                        max,
                         claims,
                         &annotations,
-                        new_instance.id,
                         host_id,
                         actor_ref,
                     )
@@ -3012,7 +3015,7 @@ impl Host {
             .context("claims missing from running actor")?;
 
         let annotations = matching_instance.annotations.clone();
-        let max = matching_instance.max;
+        let max = matching_instance.max_instances;
 
         let Ok(new_instance) = self
             .instantiate_actor(
@@ -3031,9 +3034,9 @@ impl Host {
         info!(%new_actor_ref, "actor updated");
         self.publish_actor_started_events(
             max.get(),
+            max,
             new_claims,
             &annotations,
-            new_instance.id,
             host_id,
             new_actor_ref,
         )
@@ -3047,10 +3050,10 @@ impl Host {
         self.publish_actor_stopped_events(
             old_claims,
             &matching_instance.annotations,
-            matching_instance.id,
             host_id,
-            matching_instance.max,
+            matching_instance.max_instances,
             max.get(),
+            &matching_instance.image_reference,
         )
         .await?;
 
@@ -3507,7 +3510,8 @@ impl Host {
                             revision,
                             image_ref: Some(instance.image_reference.clone()),
                             // We only accept u32 values on the control interface, so the try_from is a safety measure.
-                            max_instances: u32::try_from(instance.max.get()).unwrap_or(u32::MAX),
+                            max_instances: u32::try_from(instance.max_instances.get())
+                                .unwrap_or(u32::MAX),
                         }
                     })
                     .collect();
@@ -4255,78 +4259,86 @@ impl Host {
         }
     }
 
-    /// Publishes `count` `actor_started` events and one `actors_started` event with the supplied count
-    async fn publish_actor_started_events(
+    // TODO(#1092): only publish actor_scale_failed event after wasmCloud releases 0.82
+    /// Publishes an `actors_start_failed` and `actor_scale_failed` event
+    async fn publish_actor_start_failed_events(
         &self,
-        count: usize,
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &BTreeMap<String, String>,
-        instance_id: Ulid,
         host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
+        max: NonZeroUsize,
+        err: &anyhow::Error,
     ) -> anyhow::Result<()> {
-        let () = stream::iter(0..count)
-            .for_each(|_| async {
-                let _ = self
-                    .publish_event(
-                        "actor_started",
-                        event::actor_started(
-                            claims,
-                            annotations,
-                            Uuid::from_u128(instance_id.into()),
-                            actor_ref.as_ref(),
-                        ),
-                    )
-                    .await;
-            })
-            .await;
-        self.publish_event(
-            "actors_started",
-            event::actors_started(claims, annotations, host_id, count, actor_ref),
-        )
-        .await
+        let (start, scale) = tokio::join!(
+            self.publish_event(
+                "actors_start_failed",
+                event::actors_start_failed(claims, annotations, &host_id, &actor_ref, err)
+            ),
+            self.publish_event(
+                "actor_scale_failed",
+                event::actor_scale_failed(claims, annotations, host_id, actor_ref, max, err)
+            )
+        );
+        start?;
+        scale
     }
 
-    /// Publishes `count` `actor_stopped` events and one `actors_stopped` event with the supplied count
+    // TODO(#1092): only publish actor_scaled event after wasmCloud releases 0.82
+    /// Publishes an `actor_started` and `actors_scaled` event with the supplied max
+    async fn publish_actor_started_events(
+        &self,
+        num_started: usize,
+        max: NonZeroUsize,
+        claims: &jwt::Claims<jwt::Actor>,
+        annotations: &BTreeMap<String, String>,
+        host_id: impl AsRef<str>,
+        image_ref: impl AsRef<str>,
+    ) -> anyhow::Result<()> {
+        let (started, scaled) = tokio::join!(
+            self.publish_event(
+                "actors_started",
+                event::actors_started(claims, annotations, &host_id, num_started, &image_ref),
+            ),
+            self.publish_event(
+                "actor_scaled",
+                event::actor_scaled(claims, annotations, host_id, max, image_ref),
+            )
+        );
+        started?;
+        scaled
+    }
+
+    // TODO(#1092): only publish actor_scaled event after wasmCloud releases 0.82
+    /// Publishes an `actors_stopped` and `actor_scaled` event with the supplied max and remaining
     async fn publish_actor_stopped_events(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &BTreeMap<String, String>,
-        instance_id: Ulid,
         host_id: impl AsRef<str>,
-        max: NonZeroUsize,
+        max_instances: NonZeroUsize,
         remaining: usize,
+        image_ref: impl AsRef<str>,
     ) -> anyhow::Result<()> {
-        // If the instance had no maximum concurrent value, default to stopping one
-        let () = stream::iter(0..max.get())
-            .for_each(|_| async {
-                let _ = self
-                    .publish_event(
-                        "actor_stopped",
-                        event::actor_stopped(
-                            claims,
-                            annotations,
-                            Uuid::from_u128(instance_id.into()),
-                        ),
-                    )
-                    .await;
-            })
-            .await;
-        // NOTE: We no longer track multiple instance replicas, we have one instance per
-        // set of annotations per actor. We publish the actors_stopped event using the instance's
-        // max concurrent to preserve backwards compatibility.
-        self.publish_event(
-            "actors_stopped",
-            event::actors_stopped(
-                claims,
-                annotations,
-                host_id,
-                // If the instance had no maximum concurrent value, default to stopping one
-                max,
-                remaining,
+        let (stopped, scaled) = tokio::join!(
+            self.publish_event(
+                "actors_stopped",
+                event::actors_stopped(
+                    claims,
+                    annotations,
+                    &host_id,
+                    max_instances,
+                    remaining,
+                    &image_ref
+                )
             ),
-        )
-        .await
+            self.publish_event(
+                "actor_scaled",
+                event::actor_scaled(claims, annotations, host_id, max_instances, image_ref),
+            ),
+        );
+        stopped?;
+        scaled
     }
 }
 
