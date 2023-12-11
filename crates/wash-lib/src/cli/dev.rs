@@ -43,15 +43,6 @@ pub async fn run_dev_loop(
             );
 
             update_actor(ctl_client, &host_id, &actor_id, actor_ref).await?;
-            start_actor(StartActorArgs {
-                ctl_client,
-                host_id: &host_id,
-                actor_ref,
-                count: 1,
-                skip_wait: false,
-                timeout_ms: None,
-            })
-            .await?;
         }
     }
 
