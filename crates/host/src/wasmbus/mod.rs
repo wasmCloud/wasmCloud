@@ -2316,8 +2316,6 @@ impl Host {
     async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
         let actors = self.actors.read().await;
-        // let actors: HashMap<&String, usize> = stream::iter(actors.iter())
-        // Previous format was pubkey => max
         let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
                 let instances = actor.instances.read().await;
@@ -2344,9 +2342,9 @@ impl Host {
                         }
                     })
                     .collect();
-                if instances.is_empty() {
+                let Some(image_ref) = instances.first().map(|i| i.image_ref.clone()) else {
                     return None;
-                }
+                };
                 let name = actor
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
@@ -2354,13 +2352,7 @@ impl Host {
                     .cloned();
                 Some(ActorDescription {
                     id: id.into(),
-                    // SAFETY: We just checked above and returned `None` if instances were empty
-                    // Preserve backwards compatible payload by returning the first image reference
-                    image_ref: instances
-                        .first()
-                        .expect("actor should have at least one instance")
-                        .image_ref
-                        .clone(),
+                    image_ref,
                     instances,
                     name,
                 })
@@ -2388,8 +2380,6 @@ impl Host {
                         rev: revision,
                         ..
                     } = claims.metadata.as_ref()?;
-                    // In previous heartbeat, was ID
-                    // "public_key": public_key,
                     Some(instances.iter().map(
                         move |(link_name, ProviderInstance { annotations, .. })| {
                             let annotations = Some(annotations.clone().into_iter().collect());

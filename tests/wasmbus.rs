@@ -810,6 +810,9 @@ expected: {base_labels:?}"#
         mut providers,
         issuer,
         friendly_name,
+        version,
+        uptime_human,
+        uptime_seconds,
     } = ctl_client
         .get_host_inventory(&host_key.public_key())
         .await
@@ -827,6 +830,9 @@ expected: {base_labels:?}"#
 got: {labels:?}
 expected: {expected_labels:?}"#
     );
+    ensure!(version == env!("CARGO_PKG_VERSION"), "invalid version");
+    ensure!(!uptime_human.is_empty());
+    ensure!(uptime_seconds > 0);
     actors.sort_by(|a, b| b.name.cmp(&a.name));
     match (actors.pop(), actors.pop(), actors.pop(), actors.as_slice()) {
         (
@@ -1016,6 +1022,9 @@ expected: {expected_name:?}"#
         mut providers,
         issuer,
         friendly_name,
+        version,
+        uptime_human,
+        uptime_seconds,
     } = ctl_client
         .get_host_inventory(&host_key_two.public_key())
         .await
@@ -1034,6 +1043,10 @@ got: {labels:?}
 expected: {expected_labels_two:?}"#
     );
     ensure!(actors.is_empty());
+    ensure!(version == env!("CARGO_PKG_VERSION"), "invalid version");
+    ensure!(!uptime_human.is_empty());
+    ensure!(uptime_seconds > 0);
+
     match (providers.pop(), providers.as_slice()) {
         (Some(nats), []) => {
             // TODO: Validate `constraints`
