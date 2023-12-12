@@ -34,7 +34,7 @@ pub type ConstraintMap = std::collections::HashMap<String, String>;
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActorDescription {
     /// Actor's 56-character unique ID
-    #[serde(default)]
+    #[serde(default, alias = "public_key")]
     pub id: String,
     /// Image reference for this actor, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +136,8 @@ pub struct Host {
 pub struct HostInventory {
     /// Actors running on this host.
     pub actors: Vec<ActorDescription>,
+    /// Providers running on this host
+    pub providers: ProviderDescriptions,
     /// The host's unique ID
     #[serde(default)]
     pub host_id: String,
@@ -146,9 +148,17 @@ pub struct HostInventory {
     #[serde(default)]
     pub friendly_name: String,
     /// The host's labels
+    #[serde(default)]
     pub labels: LabelsMap,
-    /// Providers running on this host
-    pub providers: ProviderDescriptions,
+    /// The host version
+    #[serde(default)]
+    pub version: String,
+    /// The host uptime in human-readable form
+    #[serde(default)]
+    pub uptime_human: String,
+    /// The host uptime in seconds
+    #[serde(default)]
+    pub uptime_seconds: u64,
 }
 
 pub type KeyValueMap = std::collections::HashMap<String, String>;
@@ -201,7 +211,7 @@ pub struct ProviderDescription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
     /// Provider's unique 56-character ID
-    #[serde(default)]
+    #[serde(default, alias = "public_key")]
     pub id: String,
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
