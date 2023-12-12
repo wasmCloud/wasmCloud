@@ -197,6 +197,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
         inspect::InspectCliCommand {
             target: cmd.archive,
             jwt_only: false,
+            wit: false,
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
             user: cmd.user,

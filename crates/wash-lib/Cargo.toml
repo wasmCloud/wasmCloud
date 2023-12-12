@@ -85,6 +85,7 @@ wasm-encoder = { workspace = true }
 wasmcloud-component-adapters = { version = "0.2.4" } # override this version, since 0.3.0 uses an adapter based on wasmtime v14
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
+wasmparser = { workspace = true }
 wat = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 wit-bindgen-core = { workspace = true }

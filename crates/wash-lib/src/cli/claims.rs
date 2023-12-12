@@ -42,6 +42,10 @@ pub struct InspectCommand {
     #[clap(name = "jwt_only", long = "jwt-only")]
     pub(crate) jwt_only: bool,
 
+    /// Extract the WIT world from a component and print to stdout instead of the claims
+    #[clap(name = "wit", long = "wit", alias = "world")]
+    pub wit: bool,
+
     /// Digest to verify artifact against (if OCI URL is provided for <module>)
     #[clap(short = 'd', long = "digest")]
     pub(crate) digest: Option<String>,
@@ -301,6 +305,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
         inspect::InspectCliCommand {
             target: cmd.module,
             jwt_only: cmd.jwt_only,
+            wit: cmd.wit,
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
             user: cmd.user,
@@ -786,6 +791,7 @@ mod test {
                 password,
                 insecure,
                 no_cache,
+                wit,
             }) => {
                 assert_eq!(module, SUBSCRIBER_OCI);
                 assert_eq!(
@@ -798,6 +804,7 @@ mod test {
                 assert!(insecure);
                 assert!(jwt_only);
                 assert!(no_cache);
+                assert!(!wit);
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -829,6 +836,7 @@ mod test {
                 password,
                 insecure,
                 no_cache,
+                wit,
             }) => {
                 assert_eq!(module, SUBSCRIBER_OCI);
                 assert_eq!(
@@ -841,6 +849,7 @@ mod test {
                 assert!(insecure);
                 assert!(jwt_only);
                 assert!(no_cache);
+                assert!(!wit);
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
