@@ -192,16 +192,25 @@ jobs:
         - audit
         - fmt
         - clippy
-        - nextest
 
     name: cargo ${{ matrix.check }}
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
+
+  cargo-nextest:
+    name: cargo nextest
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4.1.1
+    - uses: ./.github/actions/install-nix
+      with:
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - run: nix develop -c cargo nextest run --all-targets --workspace --exclude 'wash-lib' --exclude 'wash-cli'
 
   build-doc:
     runs-on: ubuntu-22.04
@@ -365,6 +374,7 @@ jobs:
     - build-doc
     - build-lipo
     - cargo
+    - cargo-nextest
     - oci
     - test-linux
     - test-windows
@@ -414,7 +424,9 @@ jobs:
 
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
-    needs: cargo
+    needs:
+    - cargo
+    - cargo-nextest
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
@@ -435,6 +447,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs:
     - cargo
+    - cargo-nextest
     - build-bin
     - test-linux
     runs-on: ubuntu-22.04
@@ -529,7 +542,9 @@ jobs:
           workspace-dependencies: true
 
     name: publish ${{ matrix.crate }} to crates.io
-    needs: cargo
+    needs:
+    - cargo
+    - cargo-nextest
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1

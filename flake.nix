@@ -439,6 +439,7 @@
               [
                 pkgs.buildah
                 pkgs.cargo-audit
+                pkgs.cargo-nextest
                 pkgs.nats-server
                 pkgs.protobuf # prost build dependency
                 pkgs.redis
