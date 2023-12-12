@@ -1,6 +1,6 @@
 use super::{cached_oci_file, CommandOutput, OutputKind};
 use crate::registry::{get_oci_artifact, OciPullOptions};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use provider_archive::*;
 use serde::de::DeserializeOwned;
@@ -12,17 +12,24 @@ use wascap::{
     jwt::{Actor, Claims, Token, TokenValidation, WascapEntity},
 };
 
-// The magic number 0061 736D is present at the beginning of all wasm files.
-const WASM_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
-
 #[derive(Debug, Parser, Clone)]
 pub struct InspectCliCommand {
     /// Path or OCI URL to signed actor module or provider archive
     pub target: String,
 
     /// Extract the raw JWT from the file and print to stdout
-    #[clap(name = "jwt_only", long = "jwt-only")]
+    #[clap(name = "jwt_only", long = "jwt-only", conflicts_with = "wit")]
     pub jwt_only: bool,
+
+    /// Extract the WIT world from a component and print to stdout instead of the claims.
+    /// When inspecting a provider archive, this flag will be ignored.
+    #[clap(
+        name = "wit",
+        long = "wit",
+        alias = "world",
+        conflicts_with = "jwt_only"
+    )]
+    pub wit: bool,
 
     /// Digest to verify artifact against (if OCI URL is provided for <module> or <archive>)
     #[clap(short = 'd', long = "digest")]
@@ -85,32 +92,51 @@ pub async fn handle_command(
         .await?;
     }
 
-    if is_wasm(&buf) {
-        // Inspect an actor module
-        let module_name = command.target.clone();
-        let jwt_only = command.jwt_only;
-        let caps = get_caps(command.clone(), &buf).await?;
-        let token =
-            caps.ok_or_else(|| anyhow!("No capabilities discovered in : {}", module_name))?;
-        if jwt_only {
-            let out = CommandOutput::from_key_and_text("token", token.jwt);
-            Ok(out)
-        } else {
-            let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-            let out = render_actor_claims(token.claims, validation);
-            Ok(out)
+    let output = match wasmparser::Parser::new(0).parse_all(&buf).next() {
+        // Inspect the WIT of a Wasm component
+        Some(Ok(wasmparser::Payload::Version {
+            encoding: wasmparser::Encoding::Component,
+            ..
+        })) if command.wit => {
+            let witty = wit_component::decode(&buf).expect("Failed to decode WIT");
+            let resolve = witty.resolve();
+            let main = witty.package();
+            let mut printer = wit_component::WitPrinter::default();
+            CommandOutput::from_key_and_text(
+                "wit",
+                printer
+                    .print(resolve, main)
+                    .context("should be able to print WIT world from a component")?,
+            )
         }
-    } else {
-        handle_provider_archive(command.clone(), &buf).await
-    }
-}
+        // Catch trying to inspect a WIT from a WASI Preview 1 module
+        Some(Ok(wasmparser::Payload::Version {
+            encoding: wasmparser::Encoding::Module,
+            ..
+        })) if command.wit => {
+            bail!("No WIT present in Wasm, this looks like a WASI Preview 1 module")
+        }
+        // Fail to inspect wit from a non-wasm file
+        _ if command.wit => bail!("Invalid Wasm, could not parse WIT"),
+        // Inspect claims inside of Wasm
+        Some(Ok(_)) => {
+            let module_name = command.target.clone();
+            let jwt_only = command.jwt_only;
+            let caps = get_caps(command.clone(), &buf).await?;
+            let token =
+                caps.with_context(|| format!("No capabilities discovered in : {}", module_name))?;
 
-/// Checks if the given file is a wasm file by searching a WASM magic number at the start of a binary
-fn is_wasm(input: &[u8]) -> bool {
-    if input.len() < 4 {
-        return false;
-    }
-    input[0..4] == WASM_MAGIC
+            if jwt_only {
+                CommandOutput::from_key_and_text("token", token.jwt)
+            } else {
+                let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
+                render_actor_claims(token.claims, validation)
+            }
+        }
+        //  Fallback to inspecting a provider archive
+        _ => handle_provider_archive(command.clone(), &buf).await?,
+    };
+    Ok(output)
 }
 
 /// Extracts claims for a given OCI artifact
@@ -163,6 +189,13 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
 
     let mut map = HashMap::new();
     map.insert(iss_label, json!(claims.issuer));
+    // NOTE(brooksmtownsend): This preserves backwards compatibility with any scripts piping JSON
+    // output from `wash inspect` into `jq` or similar for actors. We should consider removing this
+    // once we have a better way to handle this.
+    // The end result of this is that there is an `actor` and `module` key with the public key as a value.
+    if sub_label == "actor" {
+        map.insert("module".to_string(), json!(claims.subject));
+    }
     map.insert(sub_label, json!(claims.subject));
     map.insert("expires".to_string(), json!(validation.expires_human));
     map.insert(
@@ -221,7 +254,7 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
 fn token_label(pk: &str) -> String {
     match pk.chars().next().unwrap() {
         'A' => "Account".to_string(),
-        'M' => "Module".to_string(),
+        'M' => "Actor".to_string(),
         'O' => "Operator".to_string(),
         'S' => "Server".to_string(),
         'U' => "User".to_string(),
@@ -304,7 +337,7 @@ pub(crate) async fn handle_provider_archive(
         super::configure_table_style(&mut table);
 
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!("{} - Provider Archive", name),
+            format!("{} - Capability Provider", name),
             2,
             Alignment::Center,
         )]));
@@ -409,6 +442,7 @@ mod test {
             password,
             insecure,
             no_cache,
+            wit,
         } = inspect_long.command;
         assert_eq!(target, LOCAL);
         assert_eq!(digest.unwrap(), "sha256:blah");
@@ -418,6 +452,7 @@ mod test {
         assert_eq!(password.unwrap(), "secret");
         assert!(jwt_only);
         assert!(no_cache);
+        assert!(!wit);
 
         let inspect_short: Cmd = Parser::try_parse_from([
             "inspect",
@@ -443,6 +478,7 @@ mod test {
             password,
             insecure,
             no_cache,
+            wit,
         } = inspect_short.command;
         assert_eq!(target, REMOTE);
         assert_eq!(digest.unwrap(), "sha256:blah");
@@ -452,6 +488,7 @@ mod test {
         assert_eq!(password.unwrap(), "secret");
         assert!(jwt_only);
         assert!(no_cache);
+        assert!(!wit);
 
         let cmd: Cmd = Parser::try_parse_from([
             "inspect",
@@ -478,6 +515,7 @@ mod test {
             password,
             insecure,
             no_cache,
+            wit,
         } = cmd.command;
         assert_eq!(target, SUBSCRIBER_OCI);
         assert_eq!(
@@ -490,6 +528,7 @@ mod test {
         assert!(insecure);
         assert!(jwt_only);
         assert!(no_cache);
+        assert!(!wit);
 
         let short_cmd: Cmd = Parser::try_parse_from([
             "inspect",
@@ -502,7 +541,7 @@ mod test {
             "opensesame",
             "--allow-latest",
             "--insecure",
-            "--jwt-only",
+            "--wit",
             "--no-cache",
         ])
         .unwrap();
@@ -516,6 +555,7 @@ mod test {
             password,
             insecure,
             no_cache,
+            wit,
         } = short_cmd.command;
         assert_eq!(target, SUBSCRIBER_OCI);
         assert_eq!(
@@ -526,7 +566,8 @@ mod test {
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);
         assert!(insecure);
-        assert!(jwt_only);
+        assert!(!jwt_only);
         assert!(no_cache);
+        assert!(wit);
     }
 }
