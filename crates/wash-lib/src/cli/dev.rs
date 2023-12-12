@@ -3,7 +3,7 @@ use console::style;
 use wasmcloud_control_interface::Client;
 
 use crate::{
-    actor::{start_actor, update_actor, StartActorArgs},
+    actor::update_actor,
     build::{build_project, SignConfig},
     generate::emoji,
     id::{ModuleId, ServerId},
