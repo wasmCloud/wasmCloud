@@ -310,14 +310,14 @@ jobs:
 
     - name: Test `${{ matrix.bin }}` image
       run: |
-        buildah push --storage-driver=vfs ${{ matrix.bin }}:amd64 docker-daemon:${{ matrix.bin }}:test
+        buildah push ${{ matrix.bin }}:amd64 docker-daemon:${{ matrix.bin }}:test
         docker run --rm ${{ matrix.bin }}:test ${{ matrix.bin }} --version
 
     - name: Push `${{ matrix.bin }}` commit rev tag
       if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
 
         docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }} ${{ matrix.bin }} --version
         docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ matrix.bin }} --version
@@ -326,9 +326,9 @@ jobs:
       if: github.ref == 'refs/heads/main'
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
 
         docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
         docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
@@ -338,9 +338,9 @@ jobs:
       if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix))
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
 
         docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
         docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
@@ -350,9 +350,9 @@ jobs:
       if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !steps.ctx.outputs.prerelease
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+        buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
 
         docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
         docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
