@@ -2200,7 +2200,14 @@ impl Host {
                         move |_| {
                             let host = Arc::clone(&host);
                             async move {
-                                let heartbeat = host.heartbeat().await;
+                                let heartbeat = match host.heartbeat().await {
+                                    Ok(heartbeat) => heartbeat,
+                                    Err(e) => {
+                                        error!("failed to generate heartbeat: {e}");
+                                        return;
+                                    }
+                                };
+
                                 if let Err(e) =
                                     host.publish_event("host_heartbeat", heartbeat).await
                                 {
@@ -2306,21 +2313,57 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn heartbeat(&self) -> serde_json::Value {
-        trace!("generating heartbeat");
+    async fn inventory(&self) -> HostInventory {
+        trace!("generating host inventory");
         let actors = self.actors.read().await;
-        let actors: HashMap<&String, usize> = stream::iter(actors.iter())
+        // let actors: HashMap<&String, usize> = stream::iter(actors.iter())
+        // Previous format was pubkey => max
+        let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
                 let instances = actor.instances.read().await;
-                let max = instances
+                let instances: Vec<_> = instances
                     .iter()
-                    .map(|(_annotations, instance)| instance.max_instances.get())
-                    .sum();
-                if max == 0 {
-                    None
-                } else {
-                    Some((id, max))
+                    .map(|(annotations, instance)| {
+                        let instance_id = Uuid::from_u128(instance.id.into()).to_string();
+                        let revision = actor
+                            .claims()
+                            .and_then(|claims| claims.metadata.as_ref())
+                            .and_then(|jwt::Actor { rev, .. }| *rev)
+                            .unwrap_or_default();
+                        let annotations = Some(annotations.clone().into_iter().collect());
+                        wasmcloud_control_interface::ActorInstance {
+                            annotations,
+                            instance_id,
+                            revision,
+                            image_ref: Some(instance.image_reference.clone()),
+                            max_instances: instance
+                                .max_instances
+                                .get()
+                                .try_into()
+                                .unwrap_or(u32::MAX),
+                        }
+                    })
+                    .collect();
+                if instances.is_empty() {
+                    return None;
                 }
+                let name = actor
+                    .claims()
+                    .and_then(|claims| claims.metadata.as_ref())
+                    .and_then(|metadata| metadata.name.as_ref())
+                    .cloned();
+                Some(ActorDescription {
+                    id: id.into(),
+                    // SAFETY: We just checked above and returned `None` if instances were empty
+                    // Preserve backwards compatible payload by returning the first image reference
+                    image_ref: instances
+                        .first()
+                        .expect("actor should have at least one instance")
+                        .image_ref
+                        .clone(),
+                    instances,
+                    name,
+                })
             })
             .collect()
             .await;
@@ -2329,36 +2372,61 @@ impl Host {
             .read()
             .await
             .iter()
-            .flat_map(
+            .filter_map(
                 |(
                     public_key,
                     Provider {
-                        claims, instances, ..
+                        claims,
+                        instances,
+                        image_ref,
+                        ..
                     },
                 )| {
-                    instances.keys().map(move |link_name| {
-                        let metadata = claims.metadata.as_ref();
-                        let contract_id =
-                            metadata.map(|jwt::CapabilityProvider { capid, .. }| capid.as_str());
-                        json!({
-                            "public_key": public_key,
-                            "link_name": link_name,
-                            "contract_id": contract_id.unwrap_or("n/a"),
-                        })
-                    })
+                    let jwt::CapabilityProvider {
+                        capid: contract_id,
+                        name,
+                        rev: revision,
+                        ..
+                    } = claims.metadata.as_ref()?;
+                    // In previous heartbeat, was ID
+                    // "public_key": public_key,
+                    Some(instances.iter().map(
+                        move |(link_name, ProviderInstance { annotations, .. })| {
+                            let annotations = Some(annotations.clone().into_iter().collect());
+                            let revision = revision.unwrap_or_default();
+                            ProviderDescription {
+                                id: public_key.into(),
+                                image_ref: Some(image_ref.clone()),
+                                contract_id: contract_id.clone(),
+                                link_name: link_name.into(),
+                                name: name.clone(),
+                                annotations,
+                                revision,
+                            }
+                        },
+                    ))
                 },
             )
+            .flatten()
             .collect();
         let uptime = self.start_at.elapsed();
-        json!({
-            "actors": actors,
-            "friendly_name": self.friendly_name,
-            "labels": *self.labels.read().await,
-            "providers": providers,
-            "uptime_human": human_friendly_uptime(uptime),
-            "uptime_seconds": uptime.as_secs(),
-            "version": env!("CARGO_PKG_VERSION"),
-        })
+        HostInventory {
+            actors,
+            providers,
+            friendly_name: self.friendly_name.clone(),
+            labels: self.labels.read().await.clone(),
+            uptime_human: human_friendly_uptime(uptime),
+            uptime_seconds: uptime.as_secs(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            host_id: self.host_key.public_key(),
+            issuer: self.cluster_key.public_key(),
+        }
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn heartbeat(&self) -> anyhow::Result<serde_json::Value> {
+        trace!("generating heartbeat");
+        Ok(serde_json::to_value(self.inventory().await)?)
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -3490,101 +3558,8 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_inventory(&self) -> anyhow::Result<Bytes> {
         trace!("handling inventory");
-        let actors = self.actors.read().await;
-        let actors: Vec<_> = stream::iter(actors.iter())
-            .filter_map(|(id, actor)| async move {
-                let instances = actor.instances.read().await;
-                let instances: Vec<_> = instances
-                    .iter()
-                    .map(|(annotations, instance)| {
-                        let instance_id = Uuid::from_u128(instance.id.into()).to_string();
-                        let revision = actor
-                            .claims()
-                            .and_then(|claims| claims.metadata.as_ref())
-                            .and_then(|jwt::Actor { rev, .. }| *rev)
-                            .unwrap_or_default();
-                        let annotations = Some(annotations.clone().into_iter().collect());
-                        wasmcloud_control_interface::ActorInstance {
-                            annotations,
-                            instance_id,
-                            revision,
-                            image_ref: Some(instance.image_reference.clone()),
-                            // We only accept u32 values on the control interface, so the try_from is a safety measure.
-                            max_instances: u32::try_from(instance.max_instances.get())
-                                .unwrap_or(u32::MAX),
-                        }
-                    })
-                    .collect();
-                if instances.is_empty() {
-                    return None;
-                }
-                let name = actor
-                    .claims()
-                    .and_then(|claims| claims.metadata.as_ref())
-                    .and_then(|metadata| metadata.name.as_ref())
-                    .cloned();
-                Some(ActorDescription {
-                    id: id.into(),
-                    // SAFETY: We just checked above and returned `None` if instances were empty
-                    // Preserve backwards compatible payload by returning the first image reference
-                    image_ref: instances
-                        .first()
-                        .expect("actor should have at least one instance")
-                        .image_ref
-                        .clone(),
-                    instances,
-                    name,
-                })
-            })
-            .collect()
-            .await;
-        let providers = self.providers.read().await;
-        let providers: Vec<_> = providers
-            .iter()
-            .filter_map(
-                |(
-                    id,
-                    Provider {
-                        claims,
-                        instances,
-                        image_ref,
-                        ..
-                    },
-                )| {
-                    let jwt::CapabilityProvider {
-                        capid: contract_id,
-                        name,
-                        rev: revision,
-                        ..
-                    } = claims.metadata.as_ref()?;
-                    Some(instances.iter().map(
-                        move |(link_name, ProviderInstance { annotations, .. })| {
-                            let annotations = Some(annotations.clone().into_iter().collect());
-                            let revision = revision.unwrap_or_default();
-                            ProviderDescription {
-                                id: id.into(),
-                                image_ref: Some(image_ref.clone()),
-                                contract_id: contract_id.clone(),
-                                link_name: link_name.into(),
-                                name: name.clone(),
-                                annotations,
-                                revision,
-                            }
-                        },
-                    ))
-                },
-            )
-            .flatten()
-            .collect();
-        let buf = serde_json::to_vec(&HostInventory {
-            host_id: self.host_key.public_key(),
-            issuer: self.cluster_key.public_key(),
-            labels: self.labels.read().await.clone(),
-            friendly_name: self.friendly_name.clone(),
-            actors,
-            providers,
-        })
-        .context("failed to encode reply")?;
+        let inventory = self.inventory().await;
+        let buf = serde_json::to_vec(&inventory).context("failed to encode inventory")?;
         Ok(buf.into())
     }
 
