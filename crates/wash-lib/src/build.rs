@@ -664,12 +664,8 @@ world test-world {
    import foo;
 }
 "#;
-    const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 4] = [
-        "test_world_component_type.o",
-        "test_world.h",
-        "test_world.c",
-        "test-world.go",
-    ];
+    const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 3] =
+        ["test_world.h", "test_world.c", "test-world.go"];
 
     const COMPONENT_UPSTREAM_WIT: &str = r#"
 package washlib:multi;
@@ -695,12 +691,8 @@ world downstream {
    import bar;
 }
 "#;
-    const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 4] = [
-        "downstream_component_type.o",
-        "downstream.h",
-        "downstream.c",
-        "downstream.go",
-    ];
+    const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 3] =
+        ["downstream.h", "downstream.c", "downstream.go"];
 
     /// Set up a component that should be built
     ///
