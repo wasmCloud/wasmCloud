@@ -71,7 +71,7 @@
     "postcss": "^8.4.32",
     "prettier": "^3.1.1",
     "tailwindcss": "^3.3.6",
-    "ts-node": "^10.9.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.2",
     "vite": "^5.0.7",
     "vite-plugin-svgr": "^4.2.0"
