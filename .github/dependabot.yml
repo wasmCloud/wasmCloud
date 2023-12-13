@@ -4,6 +4,10 @@ updates:
   directory: "/"
   schedule:
     interval: "daily"
+  groups:
+    wasmtime: # wasmtime dependencies need to be updated together
+      patterns:
+      - "wasmtime*"
 - package-ecosystem: "cargo"
   directory: "/crates/providers"
   schedule:
