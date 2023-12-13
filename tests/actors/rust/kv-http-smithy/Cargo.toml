@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait = { workspace = true }
 futures = { workspace = true }
-serde = {version = "1.0", features = ["derive"]}
-serde_json = "1.0"
-wasmbus-rpc = "0.15"
-wasmcloud-interface-httpserver = "0.12"
-wasmcloud-interface-keyvalue = "0.12"
+serde = { workspace = true, features = ["derive"]}
+serde_json = { workspace = true }
+wasmbus-rpc = { workspace = true }
+wasmcloud-interface-httpserver = { workspace = true }
+wasmcloud-interface-keyvalue = { workspace = true }
