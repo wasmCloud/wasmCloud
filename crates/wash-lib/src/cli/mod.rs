@@ -274,12 +274,15 @@ pub fn extract_keypair(
         let key_dir = match (&keygen_type, directory) {
             (_, Some(d)) => KeyDir::new(d)?,
             (KeyPairType::Module, _) => {
-                let project_config = get_config(None, Some(true))?;
-                match project_config.project_type {
-                    TypeConfig::Actor(ref actor_config) => {
-                        KeyDir::new(&actor_config.key_directory)?
+                if let Ok(project_config) = get_config(None, Some(true)) {
+                    match project_config.project_type {
+                        TypeConfig::Actor(ref actor_config) => {
+                            KeyDir::new(&actor_config.key_directory)?
+                        }
+                        _ => default_key_dir,
                     }
-                    _ => default_key_dir,
+                } else {
+                    default_key_dir
                 }
             }
             _ => default_key_dir,
