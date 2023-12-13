@@ -5215,7 +5215,7 @@ dependencies = [
  "async-nats",
  "clap 4.4.11",
  "futures",
- "hyper 0.14.27",
+ "hyper 1.0.1",
  "nkeys",
  "rand",
  "redis",
