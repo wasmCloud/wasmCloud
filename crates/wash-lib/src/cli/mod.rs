@@ -30,6 +30,7 @@ use crate::{
         fs::{read_key, KeyDir},
         KeyManager,
     },
+    parser::{get_config, TypeConfig},
 };
 
 pub mod capture;
@@ -269,7 +270,31 @@ pub fn extract_keypair(
         }
     } else if let Some(module) = module_path {
         // No seed value provided, attempting to source from provided or default directory
-        let key_dir = KeyDir::new(determine_directory(directory)?)?;
+        let key_dir = {
+            match keygen_type {
+                KeyPairType::Module => {
+                    let default = || -> Result<KeyDir> { KeyDir::new(determine_directory(None)?) };
+
+                    match directory {
+                        Some(d) => KeyDir::new(d),
+                        None => {
+                            if let Ok(project_config) = get_config(None, Some(true)) {
+                                match project_config.project_type {
+                                    TypeConfig::Actor(ref actor_config) => {
+                                        KeyDir::new(&actor_config.key_directory)
+                                    }
+                                    _ => default(),
+                                }
+                            } else {
+                                default()
+                            }
+                        }
+                    }
+                }
+                _ => KeyDir::new(determine_directory(directory)?),
+            }
+        }?;
+
         // Account key should be re-used, and will attempt to generate based on the terminal USER
         let module_name = match keygen_type {
             KeyPairType::Account => std::env::var("USER").unwrap_or_else(|_| "user".to_string()),
