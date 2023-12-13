@@ -18,6 +18,9 @@ rmp-serde = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
+wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
 wasmcloud-compat = { path = "../../../crates/compat" }
+wasmcloud-interface-httpserver = { version = "0.12", default-features = false }
+wasmcloud-interface-keyvalue = { version = "0.12", default-features = false }
 wit-bindgen = { version = "0.16", default-features = false }
