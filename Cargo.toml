@@ -103,7 +103,7 @@ http = { version = "1", default-features = false, features = ["std"] }
 http-body = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 humantime = { version = "2", default-features = false }
-hyper = { version = "0.14", default-features = false }
+hyper = { version = "1.0", default-features = false }
 ignore = { version = "0.4", default-features = false }
 indicatif = { version = "0.17", default-features = false }
 log = { version = "0.4", default-features = false }
