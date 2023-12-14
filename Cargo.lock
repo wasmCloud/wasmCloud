@@ -2002,6 +2002,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-util"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ca339002caeb0d159cc6e023dff48e199f081e42fa039895c7c6f38b37f2e9d"
+dependencies = [
+ "bytes",
+ "futures-channel",
+ "futures-util",
+ "http 1.0.0",
+ "http-body 1.0.0",
+ "hyper 1.0.1",
+ "pin-project-lite",
+ "socket2 0.5.5",
+ "tokio",
+ "tower",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5215,7 +5235,9 @@ dependencies = [
  "async-nats",
  "clap 4.4.11",
  "futures",
+ "http-body-util",
  "hyper 1.0.1",
+ "hyper-util",
  "nkeys",
  "rand",
  "redis",
