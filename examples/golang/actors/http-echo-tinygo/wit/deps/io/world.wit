@@ -1,5 +1,6 @@
-package wasi:io
+package wasi:io@0.2.0-rc-2023-11-10;
 
 world imports {
-    import streams
+    import streams;
+    import poll;
 }
