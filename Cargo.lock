@@ -4201,7 +4201,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wascap",
- "wasmcloud-component-adapters 0.5.0",
+ "wasmcloud-component-adapters",
  "wit-component",
 ]
 
@@ -5053,7 +5053,7 @@ dependencies = [
  "walkdir",
  "wascap",
  "wasm-encoder",
- "wasmcloud-component-adapters 0.2.4",
+ "wasmcloud-component-adapters",
  "wasmcloud-control-interface 0.32.0",
  "wasmcloud-core",
  "wasmparser",
@@ -5296,26 +5296,6 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tokio",
-]
-
-[[package]]
-name = "wasmcloud-component-adapters"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff238e4074b4247b33694d1e07f6de463b6d364110af4c5e9dd21ad5356be81d"
-dependencies = [
- "anyhow",
- "base64 0.21.5",
- "futures",
- "nix-nar",
- "once_cell",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@ package main
 
 import (
 	echo "echo/gen"
+	echo_types "echo/gen"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,28 +18,28 @@ type EchoResponse struct {
 
 type Echo struct{}
 
-func (g *Echo) Handle(req echo.WasiHttpIncomingHandlerIncomingRequest, resp echo.WasiHttpTypesResponseOutparam) {
+func (g *Echo) Handle(req echo.ExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandlerIncomingRequest, resp echo.WasiHttp0_2_0_rc_2023_12_05_TypesResponseOutparam) {
 	er := new(EchoResponse)
 
-	method := echo.WasiHttpTypesIncomingRequestMethod(req)
+	method := req.Method()
 	switch method {
-	case echo.WasiHttpTypesMethodGet():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodGet():
 		er.Method = "GET"
-	case echo.WasiHttpTypesMethodPost():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPost():
 		er.Method = "POST"
-	case echo.WasiHttpTypesMethodPut():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPut():
 		er.Method = "PUT"
-	case echo.WasiHttpTypesMethodDelete():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodDelete():
 		er.Method = "DELETE"
-	case echo.WasiHttpTypesMethodPatch():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPatch():
 		er.Method = "PATCH"
-	case echo.WasiHttpTypesMethodConnect():
+	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodConnect():
 		er.Method = "CONNECT"
 	default:
 		er.Method = "OTHER"
 	}
 
-	pathWithQuery := echo.WasiHttpTypesIncomingRequestPathWithQuery(req)
+	pathWithQuery := req.PathWithQuery()
 	if pathWithQuery.IsNone() {
 		return
 	}
@@ -49,14 +50,37 @@ func (g *Echo) Handle(req echo.WasiHttpIncomingHandlerIncomingRequest, resp echo
 		er.QueryString = splitPathQuery[1]
 	}
 
-	bodyStream := echo.WasiHttpTypesIncomingRequestConsume(req)
-	if bodyStream.IsErr() {
-		writeHttpResponse(resp, http.StatusInternalServerError, []echo.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\"failed to read request body\"}"))
+	maybeBody := req.Consume()
+	fields := echo.StaticFieldsFromList([]echo.WasiHttp0_2_0_rc_2023_12_05_TypesTuple2FieldKeyFieldValueT{{F0: "Content-Type", F1: []byte("application/json")}}).Unwrap()
+	if maybeBody.IsErr() {
+		writeHttpResponse(resp, http.StatusInternalServerError, fields, []byte("{\"error\":\"failed to read request body\"}"))
 		return
 	}
+	body := maybeBody.Unwrap()
 
-	readStream := echo.WasiIoStreamsBlockingRead(bodyStream.Val, 18446744073709551614)
-	er.Body = string(readStream.Val.F0)
+	maybeBodyStream := body.Stream()
+	if maybeBodyStream.IsErr() {
+		writeHttpResponse(resp, http.StatusInternalServerError, fields, []byte("{\"error\":\"failed to convert body into stream\"}"))
+		return
+	}
+	bodyStream := maybeBodyStream.Unwrap()
+
+	maybeReadStream := bodyStream.Read(18446744073709551614)
+	if maybeReadStream.IsErr() {
+		// If the body is empty, we'll get a closed error, in which case we *do not* want to throw an error.
+		errKind := maybeReadStream.UnwrapErr().Kind()
+		if errKind == echo.WasiIo0_2_0_rc_2023_11_10_StreamsStreamErrorKindClosed {
+			// There was likely *no* data in the body (ex. a GET request)
+			er.Body = ""
+		} else {
+			// if we received some other error, report it
+			echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelError(), "failed to read incoming body stream", fmt.Sprintf("error kind [%v]", ))
+			writeHttpResponse(resp, http.StatusInternalServerError, fields, []byte("{\"error\":\"failed to read incoming body stream\"}"))
+			return
+		}
+	} else {
+		er.Body = string(maybeReadStream.Unwrap())
+	}
 
 	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "method", er.Method)
 	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "path", er.Path)
@@ -65,78 +89,42 @@ func (g *Echo) Handle(req echo.WasiHttpIncomingHandlerIncomingRequest, resp echo
 
 	bBody, err := json.Marshal(er)
 	if err != nil {
-		writeHttpResponse(resp, http.StatusInternalServerError, []echo.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, []byte("{\"error\":\"failed to marshal response\"}"))
+		writeHttpResponse(resp, http.StatusInternalServerError, fields, []byte("{\"error\":\"failed to marshal response\"}"))
 		return
 	}
 
-	writeHttpResponse(resp, http.StatusOK, []echo.WasiHttpTypesTuple2StringListU8TT{{F0: "Content-Type", F1: []byte("application/json")}}, bBody)
+	writeHttpResponse(resp, http.StatusOK, fields, bBody)
 }
 
-func writeHttpResponse(responseOutparam echo.WasiHttpTypesResponseOutparam, statusCode uint16, inHeaders []echo.WasiHttpTypesTuple2StringListU8TT, body []byte) {
+func writeHttpResponse(responseOutparam echo.WasiHttp0_2_0_rc_2023_12_05_TypesResponseOutparam, statusCode uint16, headers echo.WasiHttp0_2_0_rc_2023_12_05_TypesHeaders, body []byte) {
 	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", "writing response: "+string(body))
 
-	headers := echo.WasiHttpTypesNewFields(inHeaders)
+	outgoingResponse := echo.NewOutgoingResponse(headers)
+	outgoingResponse.SetStatusCode(statusCode)
 
-	outgoingResponse := echo.WasiHttpTypesNewOutgoingResponse(statusCode, headers)
-	if outgoingResponse.IsErr() {
+	maybeOutgoingBody := outgoingResponse.Body()
+	if maybeOutgoingBody.IsErr() {
+		return
+	}
+	outgoingBody := maybeOutgoingBody.Unwrap()
+
+	maybeOutgoingStream := outgoingBody.Write()
+	if maybeOutgoingStream.IsErr() {
+		return
+	}
+	outgoingStream := maybeOutgoingStream.Unwrap()
+
+  res := outgoingStream.BlockingWriteAndFlush(body)
+	if res.IsErr() {
 		return
 	}
 
-	outgoingStream := echo.WasiHttpTypesOutgoingResponseWrite(outgoingResponse.Unwrap())
-	if outgoingStream.IsErr() {
-		return
-	}
-
-	pollable := echo.WasiIoStreamsSubscribeToOutputStream(outgoingStream.Val)
-
-	bIndex := 0
-	for bIndex < len(body) {
-		if echo.WasiPollPollPollOneoff([]uint32{pollable})[0] {
-			echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - bIndex: %d", bIndex))
-
-			cw := echo.WasiIoStreamsCheckWrite(outgoingStream.Val)
-			if cw.IsErr() {
-				return
-			}
-
-			echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - checkWrite: %d", cw.Val))
-
-			if int(cw.Val) > len(body) {
-				cw.Val = uint64(len(body))
-			}
-
-			echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", fmt.Sprintf("inside loop - writing: %d-%d", bIndex, cw.Val))
-			w := echo.WasiIoStreamsWrite(outgoingStream.Val, body[bIndex:int(cw.Val)])
-			if w.IsErr() {
-				echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelError(), "writeHttpResponse", fmt.Sprintf("failed to write to stream: %v", w.UnwrapErr()))
-				return
-			}
-
-			bIndex = int(cw.Val) + 1
-		}
-	}
-
-	f := echo.WasiIoStreamsFlush(outgoingStream.Val)
-	if f.IsErr() {
-		echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelError(), "writeHttpResponse", fmt.Sprintf("failed to flush to stream: %v", f.UnwrapErr()))
-		return
-	}
-
-	echo.WasiHttpTypesFinishOutgoingStream(outgoingStream.Val)
-
-	// NOTE: I dont know why we have to do these two steps
-	echo.WasiPollPollPollOneoff([]uint32{pollable})
-	echo.WasiIoStreamsCheckWrite(outgoingStream.Val)
-
-	outparm := echo.WasiHttpTypesSetResponseOutparam(responseOutparam, outgoingResponse)
-	if outparm.IsErr() {
-		return
-	}
+	echo.StaticResponseOutparamSet(responseOutparam, echo_types.Ok[echo_types.WasiHttp0_2_0_rc_2023_12_05_TypesOutgoingResponse, echo_types.WasiHttp0_2_0_rc_2023_12_05_TypesErrorCode](outgoingResponse))
 }
 
 func init() {
 	mg := new(Echo)
-	echo.SetExportsWasiHttpIncomingHandler(mg)
+	echo.SetExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandler(mg)
 }
 
 func main() {}
