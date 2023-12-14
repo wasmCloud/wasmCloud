@@ -42,7 +42,9 @@ wasmcloud-tracing = { workspace = true, features = ["otel"] }
 async-nats = { workspace = true }
 assert-json-diff = { workspace = true }
 futures = { workspace = true }
+http-body-util = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
 rand = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls", "json", "rustls-tls-manual-roots"] }
@@ -92,7 +94,7 @@ cloudevents-sdk = { version = "0.7", default-features = false }
 command-group = { version = "1", default-features = false }
 config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
-data-encoding = { version = "2.3", default-features = false }
+data-encoding = { version = "2", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 dirs = { version = "4", default-features = false }
 env_logger = { version = "0.10", default-features = false }
@@ -103,7 +105,8 @@ http = { version = "1", default-features = false, features = ["std"] }
 http-body = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 humantime = { version = "2", default-features = false }
-hyper = { version = "1.0", default-features = false }
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
 ignore = { version = "0.4", default-features = false }
 indicatif = { version = "0.17", default-features = false }
 log = { version = "0.4", default-features = false }

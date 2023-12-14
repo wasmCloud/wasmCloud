@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use hyper::server::conn::Http;
+use http_body_util::BodyExt;
+use hyper::body::Bytes;
 use hyper::service::service_fn;
 use nkeys::KeyPair;
 use redis::{Commands, ConnectionLike};
@@ -36,8 +37,8 @@ use common::{
 };
 
 async fn http_handler(
-    req: hyper::Request<hyper::Body>,
-) -> anyhow::Result<hyper::Response<hyper::Body>> {
+    req: hyper::Request<hyper::body::Incoming>,
+) -> anyhow::Result<hyper::Response<http_body_util::Full<Bytes>>> {
     let (
         hyper::http::request::Parts {
             method,
@@ -49,13 +50,15 @@ async fn http_handler(
     ) = req.into_parts();
     ensure!(method == &hyper::Method::PUT);
     ensure!(uri == "/test");
-    let body = hyper::body::to_bytes(body)
+    let body = body
+        .collect()
         .await
-        .context("failed to read body")?;
+        .context("failed to read body")?
+        .to_bytes();
     ensure!(body == b"test"[..]);
     let res = hyper::Response::builder()
         .status(hyper::StatusCode::OK)
-        .body(hyper::Body::from("test"))
+        .body(http_body_util::Full::new("test".into()))
         .context("failed to construct response")?;
     Ok(res)
 }
@@ -109,9 +112,12 @@ async fn assert_handle_http_request(
         .context("failed to query listener local address")?
         .port();
     let http_server = spawn(async move {
+        use hyper_util::rt::{TokioExecutor, TokioIo};
+        use hyper_util::server::conn::auto;
+
         let (stream, _addr) = lis.accept().await.expect("failed to accept connection");
-        Http::new()
-            .serve_connection(stream, service_fn(http_handler))
+        auto::Builder::new(TokioExecutor::new())
+            .serve_connection(TokioIo::new(stream), service_fn(http_handler))
             .await
             .expect("failed to handle HTTP request");
     });
