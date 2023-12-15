@@ -180,7 +180,7 @@ wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
 wasmcloud-actor-macros = { version = "0", path = "./crates/actor/macros", default-features = false }
 wasmcloud-compat = { version = "0.1", path = "./crates/compat", default-features = false }
-wasmcloud-component-adapters = { version = "0.5", default-features = false }
+wasmcloud-component-adapters = { version = "0.6", default-features = false }
 wasmcloud-control-interface = { version = "0.32", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.2", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
