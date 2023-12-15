@@ -45,14 +45,11 @@ build
 Start wasmCloud, in a separate terminal:
 
 ```console
-WASMCLOUD_VERSION=v0.80.0 wash up --nats-websocket-port 4001
+wash up --nats-websocket-port 4001
 ```
 
 > **Warning**
-> This demo works with [`wasmCloud` host version 0.80.0][host-v0.80.0].
->
-> Please ensure that you use either `WASMCLOUD_VERSION` (via ENV) or `--wasmcloud-version=v0.80.0`
-> when executing commands like `wash up`
+> This demo works with [`wasmCloud` host versions 0.81.0 *or newer*][host-v0.81.0].
 
 Optionally, you can also start the UI by running (in a separate terminal):
 
@@ -60,7 +57,7 @@ Optionally, you can also start the UI by running (in a separate terminal):
 wash ui --experimental
 ```
 
-[host-v0.80.0]: https://github.com/wasmCloud/wasmCloud/releases/tag/v0.80.0
+[host-v0.81.0]: https://github.com/wasmCloud/wasmCloud/releases/tag/v0.81.0
 
 ## Deploy this application
 
