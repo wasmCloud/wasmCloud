@@ -81,7 +81,7 @@ wadm = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
 wasm-encoder = { workspace = true }
-wasmcloud-component-adapters = { version = "0.5.0" }
+wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmparser = { workspace = true }
