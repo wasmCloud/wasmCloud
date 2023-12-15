@@ -136,11 +136,11 @@ jobs:
     needs: build-bin
     runs-on: macos-12
     steps:
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-aarch64-apple-darwin
         path: aarch64
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-x86_64-apple-darwin
         path: x86_64
@@ -167,7 +167,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build-bin
     steps:
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-x86_64-unknown-linux-musl
     - run: chmod +x ./bin/wash
@@ -179,7 +179,7 @@ jobs:
     runs-on: windows-2022
     needs: build-windows
     steps:
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-x86_64-pc-windows-msvc
     - run: .\bin\wash.exe --version
@@ -373,7 +373,7 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v4.1.1
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         path: artifacts
     - run: |
@@ -447,11 +447,11 @@ jobs:
     - name: Install NFPM
       run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
 
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-aarch64-unknown-linux-musl
         path: ./crates/wash-cli/aarch64
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: wasmcloud-x86_64-unknown-linux-musl
         path: ./crates/wash-cli/x86_64
