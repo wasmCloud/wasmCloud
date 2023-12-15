@@ -29,10 +29,10 @@ cli = [
     "path-absolutize",
 ]
 nats = ["async-nats", "wadm"]
+docs = ["wasmcloud-component-adapters/docs"]
 
 [package.metadata.docs.rs]
-no-default-features = true # skip building adapters (which requires internet access)
-features = ["start", "parser", "nats"]
+features = ["start", "parser", "nats", "docs"]
 
 [dependencies]
 anyhow = { workspace = true }
