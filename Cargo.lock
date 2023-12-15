@@ -5228,7 +5228,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "0.80.0"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -5375,7 +5375,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.80.0"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "async-nats",
