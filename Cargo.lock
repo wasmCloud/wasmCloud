@@ -5300,9 +5300,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-component-adapters"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21f937a9f379d3a4bf7fcb4798d40e4a6edd6b312f8d34c9ba01c4366846e476"
+checksum = "723e26862f961cd3a2ed48689d4644cffcfea3fe6930093446b6f827d0cf8d09"
 dependencies = [
  "anyhow",
  "base64 0.21.5",
