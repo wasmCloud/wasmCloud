@@ -2,8 +2,9 @@ name: washboard
 
 on:
   push:
-    paths: 
+    paths:
       - 'washboard-ui/**'
+      - '.tool-versions'
     branches:
       - main
     tags:
@@ -28,14 +29,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version-file: .tool-versions
           cache-dependency-path: ./washboard-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Test
         run: npm run test
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm run test:playwright:headless
 
       - name: Build
         run: npm run build
@@ -48,6 +55,16 @@ jobs:
         with:
           name: washboard
           path: ./washboard-ui/washboard.tar.gz
+
+      - name: Upload Playwright Report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: playwright-report
+          retention-days: 30
+          path: |
+            washboard-ui/playwright-report
+            washboard-ui/test-results
 
   release:
     runs-on: ubuntu-latest
