@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - 'washboard-ui/**'
-      - '.tool-versions'
     branches:
       - main
     tags:
@@ -29,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: .tool-versions
+          node-version-file: ./washboard-ui/.tool-versions
           cache-dependency-path: ./washboard-ui/package-lock.json
 
       - name: Install dependencies
