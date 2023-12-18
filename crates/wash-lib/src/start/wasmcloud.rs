@@ -303,7 +303,7 @@ mod test {
     use tokio::net::TcpListener;
     use tokio::time::Duration;
 
-    const WASMCLOUD_VERSION: &str = "v0.79.0-rc3";
+    const WASMCLOUD_VERSION: &str = "v0.81.0-rc1";
 
     /// Returns an open port on the interface, searching within the range endpoints, inclusive
     async fn find_open_port() -> Result<u16> {
