@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     start_provider(
         KvRedisProvider::new(&default_connect_url),
-        Some("KeyValue Redis Provider".to_string()),
+        Some("kv-redis-provider".to_string()),
     )?;
 
     eprintln!("KVRedis provider exiting");
