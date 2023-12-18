@@ -23,9 +23,8 @@ pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host";
 #[cfg(target_family = "windows")]
 pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host.exe";
 
-// Any version of wasmCloud under 0.63.0 uses Elixir releases and is incompatible
-// See https://github.com/wasmCloud/wasmcloud-otp/pull/616 for the move to burrito releases
-const MINIMUM_WASMCLOUD_VERSION: &str = "0.78.0-rc2";
+// Any version of wasmCloud under 0.81 does not support wasmtime 16 wit worlds and is incompatible.
+const MINIMUM_WASMCLOUD_VERSION: &str = "0.81.0";
 
 /// A wrapper around the [ensure_wasmcloud_for_os_arch_pair] function that uses the
 /// architecture and operating system of the current host machine.
@@ -256,7 +255,7 @@ fn wasmcloud_url(version: &str) -> String {
     let os = "unknown-linux-gnu";
 
     #[cfg(target_os = "windows")]
-    let os = "pc-windows-gnu";
+    let os = "pc-windows-msvc.exe";
     format!(
         "{WASMCLOUD_GITHUB_RELEASE_URL}/{version}/wasmcloud-{arch}-{os}",
         arch = std::env::consts::ARCH
@@ -513,15 +512,15 @@ mod test {
 
     #[tokio::test]
     async fn can_properly_deny_elixir_release_hosts() -> anyhow::Result<()> {
-        // Ensure we allow versions >= 0.63.0
-        assert!(check_version("v0.78.0").is_ok());
+        // Ensure we allow versions >= 0.81.0
+        assert!(check_version("v0.81.0").is_ok());
         assert!(check_version(MINIMUM_WASMCLOUD_VERSION).is_ok());
 
         // Ensure we allow prerelease tags for testing
-        assert!(check_version("v0.79.0-rc.1").is_ok());
+        assert!(check_version("v0.81.0-rc1").is_ok());
 
         // Ensure we deny versions < MINIMUM_WASMCLOUD_VERSION
-        assert!(check_version("v0.63.1").is_err());
+        assert!(check_version("v0.80.99").is_err());
 
         if let Err(e) = check_version("v0.56.0") {
             assert_eq!(e.to_string(), format!("wasmCloud version v0.56.0 is earlier than the minimum supported version of v{MINIMUM_WASMCLOUD_VERSION}"));

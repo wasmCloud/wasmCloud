@@ -412,14 +412,14 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             Ok(path) => {
                 let wadm_child = start_wadm(&path, wadm_log_file, Some(config)).await;
                 if let Err(e) = &wadm_child {
-                    println!("🟨 Couldn't start wadm: {e}");
+                    eprintln!("🟨 Couldn't start wadm: {e}");
                     None
                 } else {
                     Some(wadm_child.unwrap())
                 }
             }
             Err(e) => {
-                println!("🟨 Couldn't download wadm {WADM_VERSION}: {e}");
+                eprintln!("🟨 Couldn't download wadm {WADM_VERSION}: {e}");
                 None
             }
         }
