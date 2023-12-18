@@ -41,7 +41,16 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
     };
 
     let cmd_out = Command::new("git")
-        .args(["clone", &repo_url, "--depth", "1", "--no-checkout", "."])
+        .args([
+            "clone",
+            &repo_url,
+            "--depth",
+            "1",
+            "--no-checkout",
+            "--branch",
+            &opts.repo_branch,
+            ".",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
