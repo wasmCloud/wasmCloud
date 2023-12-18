@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and returns only when it receives a shutdown message
     wasmcloud_provider_sdk::start_provider(
         HttpClientProvider{},
-        Some("HttpClient Provider".to_string()),
+        Some("http-client-provider".to_string()),
     )?;
 
     eprintln!("HttpClient provider exiting");

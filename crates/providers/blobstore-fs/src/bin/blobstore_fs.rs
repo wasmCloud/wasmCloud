@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and returns only when it receives a shutdown message
     wasmcloud_provider_sdk::start_provider(
         FsProvider::default(),
-        Some("Blobstore FS Provider".to_string()),
+        Some("blobstore-fs-provider".to_string()),
     )?;
 
     eprintln!("Blobstore FS Provider exiting");
