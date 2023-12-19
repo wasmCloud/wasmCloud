@@ -104,24 +104,28 @@ pub fn build_actor(
         // Build actor based on language toolchain
         let actor_wasm_path = match language_config {
             LanguageConfig::Rust(rust_config) => {
-                build_rust_actor(common_config, rust_config, actor_config)
+                build_rust_actor(common_config, rust_config, actor_config)?
             }
             LanguageConfig::TinyGo(tinygo_config) => {
-                build_tinygo_actor(common_config, tinygo_config, actor_config)
-            }
-        }?;
+                let actor_wasm_path =
+                    build_tinygo_actor(common_config, tinygo_config, actor_config)?;
 
-        // Perform embedding, if necessary
-        if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
-            embed_wasm_component_metadata(
-            &common_config.path,
-            actor_config
-                .wit_world
-                .as_ref()
-                .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
-            &actor_wasm_path,
-            &actor_wasm_path,
-        )?;
+                // Perform embedding, if necessary
+                if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 =
+                    &actor_config.wasm_target
+                {
+                    embed_wasm_component_metadata(
+                    &common_config.path,
+                    actor_config
+                        .wit_world
+                        .as_ref()
+                        .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
+                    &actor_wasm_path,
+                    &actor_wasm_path,
+                )?;
+                };
+                actor_wasm_path
+            }
         };
 
         // If the actor has been configured as WASI Preview2, adapt it from preview1
