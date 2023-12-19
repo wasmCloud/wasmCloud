@@ -627,10 +627,10 @@ impl WitFunctionLatticeTranslationStrategy {
                             ts if bindgen_cfg.replace_witified_maps
                                 && ts.len() > 2 // in order to skip the name & colon tokens
                                 && matches!(ts[0], TokenTree::Ident(ref n) if n.to_string().ends_with("_map"))
-                                && extract_witified_map_types(&ts[2..]).is_some() => {
-                                    let arg_name = &ts[0];
-                                    let (k,v) = extract_witified_map_types(&ts[2..]).expect("failed to parse WIT-ified map type");
-                                    tokens.append_all(quote::quote!(#arg_name: ::std::collections::HashMap<#k,#v>));
+                                && extract_witified_map(&ts[2..]).is_some() => {
+                                    let arg_name = Ident::new(ts[0].to_string().trim_end_matches("_map"), ts[0].span());
+                                    let map_type = extract_witified_map(&ts[2..]).expect("failed to parse WIT-ified map type");
+                                    tokens.append_all(quote::quote!(#arg_name: #map_type));
                             },
 
                             // pattern: unknown (any T)
@@ -1948,13 +1948,13 @@ impl VisitMut for WitBindgenOutputVisitor {
                                     .as_ref()
                                     .is_some_and(|i| i.to_string().ends_with("_map"))
                             {
-                                if let Some((k, v)) = extract_witified_map_types(
+                                if let Some(map_type) = extract_witified_map(
                                     &f.ty
                                         .to_token_stream()
                                         .into_iter()
                                         .collect::<Vec<TokenTree>>(),
                                 ) {
-                                    f.ty = parse_quote!(::std::collections::HashMap<#k,#v>);
+                                    f.ty = parse_quote!(#map_type);
                                     f.ident = f.ident.as_mut().map(|i| {
                                         Ident::new(i.to_string().trim_end_matches("_map"), i.span())
                                     });
@@ -2026,13 +2026,13 @@ impl VisitMut for WitBindgenOutputVisitor {
                                 .as_ref()
                                 .is_some_and(|i| i.to_string().ends_with("_map"))
                         {
-                            if let Some((k, v)) = extract_witified_map_types(
+                            if let Some(map_type) = extract_witified_map(
                                 &f.ty
                                     .to_token_stream()
                                     .into_iter()
                                     .collect::<Vec<TokenTree>>(),
                             ) {
-                                f.ty = parse_quote!(::std::collections::HashMap<#k,#v>);
+                                f.ty = parse_quote!(#map_type);
                                 f.ident = f.ident.as_mut().map(|i| {
                                     Ident::new(i.to_string().trim_end_matches("_map"), i.span())
                                 });
@@ -2310,13 +2310,35 @@ fn convert_wit_typedef(
 
 /// Attempt to extract key and value types from a tree of tokens that is a witified map
 ///
-/// For example, the following Rust type, submitted as a list of tokens would be parsed successfully:
+/// For example, the following Rust type submitted as a list of tokens would be parsed successfully:
 ///
 /// ```rust,ignore
 /// Vec<(String, String)>
 /// ```
-fn extract_witified_map_types(input: &[TokenTree]) -> Option<(TokenStream, TokenStream)> {
+fn extract_witified_map(input: &[TokenTree]) -> Option<TokenStream> {
     match input {
+        // Handle WIT-ified maps that are wrapped in Option or Vec
+        // i.e. Option<Vec<(K, V)>> or Vec<Vec<(K, V)>>
+        [
+            container @ TokenTree::Ident(container_ident), // Option
+            TokenTree::Punct(p1), // <
+            inner @ .. ,
+            TokenTree::Punct(p2), // >
+        ] if p1.as_char() == '<'
+            && p2.as_char() == '>'
+            && (*container_ident == "Option" || *container_ident == "Vec") 
+            // We need to know that the inner type is *not* a group
+            // since this branch is only meant to a list of tuples (Vec<Vec<(....)>>)
+            //
+            // If the inner tokens are a group then we should head to the final case branch instead
+            && inner.get(0).is_some_and(|tokens| !matches!(tokens, TokenTree::Group { .. })) => {
+            let container_ts = container.to_token_stream();
+            // Recursive call to extract the witified map from the inner type, re-wrapping in the container
+            extract_witified_map(inner)
+                .map(|t| parse_quote!(#container_ts<#t>))
+        },
+
+        // Handle WIT-ified maps that are unwrapped (i.e. a Vec<(K, V)>)
         [
             TokenTree::Ident(vec_ty),
             TokenTree::Punct(p1), // <
@@ -2335,12 +2357,14 @@ fn extract_witified_map_types(input: &[TokenTree]) -> Option<(TokenStream, Token
             // Find the index of the comma which splits the types
             let comma_idx = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.to_string() == ","))?;
 
-            Some((
-                TokenStream::from_iter(tokens[0..comma_idx].to_owned()),
-                TokenStream::from_iter(tokens[comma_idx + 1..].to_owned())
-            ))
+            let key_type = TokenStream::from_iter(tokens[0..comma_idx].to_owned());
+            let value_type = TokenStream::from_iter(tokens[comma_idx + 1..].to_owned());
+            let map_type = parse_quote!(::std::collections::HashMap<#key_type,#value_type>);
+            Some(map_type)
         },
-        _ => None
+
+        // All other matches cannot be WIT-ified maps
+        _ => None,
     }
 }
 
@@ -2364,7 +2388,7 @@ fn process_fn_arg(arg: &FnArg) -> anyhow::Result<(Ident, TokenStream)> {
     // then convert the type into a map *before* using it
     let type_name = match (
         arg_name.to_string().ends_with("_map"),
-        extract_witified_map_types(
+        extract_witified_map(
             &pat_type
                 .ty
                 .as_ref()
@@ -2373,12 +2397,12 @@ fn process_fn_arg(arg: &FnArg) -> anyhow::Result<(Ident, TokenStream)> {
                 .collect::<Vec<TokenTree>>(),
         ),
     ) {
-        (true, Some((k, v))) => {
+        (true, Some(map_type)) => {
             arg_name = Ident::new(
                 arg_name.to_string().trim_end_matches("_map"),
                 arg_name.span(),
             );
-            quote::quote!(::std::collections::HashMap<#k, #v>)
+            quote::quote!(#map_type)
         }
         _ => pat_type.ty.as_ref().to_token_stream(),
     };
@@ -2449,13 +2473,13 @@ mod tests {
     use syn::{parse_quote, LitStr, TraitItemFn};
 
     use crate::{
-        extract_witified_map_types, ProviderBindgenConfig, WitFunctionLatticeTranslationStrategy,
+        extract_witified_map, ProviderBindgenConfig, WitFunctionLatticeTranslationStrategy,
     };
 
     /// Token trees that we expect to parse into WIT-ified maps should parse
     #[test]
     fn parse_witified_map_type() -> Result<()> {
-        extract_witified_map_types(
+        extract_witified_map(
             &quote::quote!(Vec<(String, String)>)
                 .into_iter()
                 .collect::<Vec<TokenTree>>(),

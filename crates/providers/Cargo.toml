@@ -18,6 +18,7 @@ members = [
     "http-server",
     "kv-redis",
     "kv-vault",
+    "lattice-controller",
     "nats",
 ]
 resolver = "2"
@@ -58,5 +59,6 @@ wascap = { version = "*", path = "../wascap" }
 wasmcloud-compat = { path = "../compat", default-features = false }
 wasmcloud-core = { path = "../core", default-features = false }
 wasmcloud-interface-httpclient = { version = "0.11" } # TODO: Replace by WIT
+wasmcloud-control-interface = { path = "../control-interface" }
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }

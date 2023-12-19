@@ -23,3 +23,6 @@ pub const RUST_NATS_SUBJECT: &str = env!("RUST_NATS_SUBJECT");
 
 pub const RUST_BLOBSTORE_S3_VAULT: &str = concat!(env!("OUT_DIR"), "/rust-blobstore-s3.par");
 pub const RUST_BLOBSTORE_S3_VAULT_SUBJECT: &str = env!("RUST_BLOBSTORE_S3_SUBJECT");
+
+pub const RUST_LATTICE_CONTROLLER: &str = concat!(env!("OUT_DIR"), "/rust-lattice-controller.par");
+pub const RUST_LATTICE_CONTROLLER_SUBJECT: &str = env!("RUST_LATTICE_CONTROLLER_SUBJECT");

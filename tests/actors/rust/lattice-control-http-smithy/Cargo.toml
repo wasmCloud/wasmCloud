@@ -1,8 +1,8 @@
 [package]
-name = "blobstore-http-smithy"
+name = "lattice-control-http-smithy"
 version = "0.1.0"
 description = """
-A smithy-based actor that performs blobstore operations after receiving HTTP requests
+A smithy-based actor that performs lattice-control operations after receiving HTTP requests
 """
 edition = "2021"
 
@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true, features = ["derive"]}
+serde = {workspace = true, features = ["derive"]}
 serde_json = { workspace = true }
 wasmbus-rpc = { workspace = true }
-wasmcloud-interface-blobstore = { workspace = true }
+wasmcloud-interface-lattice-control = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }

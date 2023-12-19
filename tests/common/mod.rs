@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
+use std::path::Path;
 use std::pin::pin;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -7,7 +8,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use nkeys::KeyPair;
 use serde::Deserialize;
-use tempfile::TempDir;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -17,6 +18,7 @@ use tokio::{select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
+use url::Url;
 use wascap::jwt;
 use wasmcloud_control_interface::CtlOperationAck;
 
@@ -282,4 +284,23 @@ pub async fn stop_server(
         .context("failed to wait for server to exit")??;
     ensure!(status.code().is_none());
     Ok(())
+}
+
+/// Copy a pre-built PAR file to a temporary location so that it can be used safely.
+///
+/// During CI, it is possible for a PAR to be written to during the process of a parallel test
+/// triggering an file busy (EXTBSY) OS error. To avoid this, we copy the provider par
+/// to a temporary directory and use that instead.
+pub async fn copy_par(path: impl AsRef<Path>) -> Result<(Url, NamedTempFile)> {
+    let provider_tmp = tempfile::Builder::new()
+        .prefix("provider-tmp")
+        .suffix(".par")
+        .tempfile()
+        .context("failed to make temp file for http provider")?;
+    tokio::fs::copy(path.as_ref(), &provider_tmp)
+        .await
+        .context("failed to copy test par to new file")?;
+    let provider_url =
+        Url::from_file_path(provider_tmp.path()).expect("failed to construct provider ref");
+    Ok((provider_url, provider_tmp))
 }

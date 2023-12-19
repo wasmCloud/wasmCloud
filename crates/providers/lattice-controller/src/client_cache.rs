@@ -1,23 +1,14 @@
-// TODO: evaluate using dashmap as a replacement for the RwLocks
-// TODO: evaluate using cached (https://crates.io/crates/cached) as a replacement for this entire module
-// TODO?: if we don't replace this module with another crate, add more unit tests for edge cases
-// TODO: add a means by which this provider restores its credential cache upon startup
-// TODO: make lattice control connection timeout/auction timeout configurable (it's hardcoded now)
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use std::{collections::HashMap, sync::Arc};
-
-use tokio::{
-    sync::RwLock,
-    time::{interval_at, Duration, Instant},
-};
+use tokio::sync::RwLock;
+use tokio::time::{interval_at, Duration, Instant};
 use tracing::{debug, trace};
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::error::{RpcError, RpcResult};
 use wasmcloud_control_interface::Client;
+use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
 
 use crate::ConnectionConfig;
-
-pub(crate) const CACHE_EXPIRE_MINUTES: u64 = 10;
 
 #[derive(Clone)]
 pub(crate) struct ClientCache {
@@ -91,7 +82,7 @@ impl ClientCache {
     /// one will be created from the stored connection configuration. If there is no active client
     /// and no suitable configuration, this function returns an error and will _not_ resort to
     /// fallback credentials
-    pub(crate) async fn get_client(&self, lattice_id: &str) -> RpcResult<Client> {
+    pub(crate) async fn get_client(&self, lattice_id: &str) -> ProviderInvocationResult<Client> {
         let c = {
             // Don't hold the read lock for the whole func
             let lock = self.clients.read().await;
@@ -111,9 +102,8 @@ impl ClientCache {
                 self.store_client(lattice_id, client.clone()).await;
                 Ok(client)
             } else {
-                Err(RpcError::NotInitialized(format!(
-                    "No client configuration for lattice {} stored",
-                    lattice_id
+                Err(ProviderInvocationError::Provider(format!(
+                    "No client configuration for lattice [{lattice_id}] stored",
                 )))
             }
         }
@@ -130,38 +120,30 @@ impl ClientCache {
     }
 }
 
+/// Create and connect a [`wasmcloud_control_interface::Client`] interface client, given a [`ConnectionConfig`]
 async fn create_client(
     config: &ConnectionConfig,
-) -> RpcResult<wasmcloud_control_interface::Client> {
+) -> ProviderInvocationResult<wasmcloud_control_interface::Client> {
     let timeout = Duration::from_millis(config.timeout_ms);
     let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
     let lattice_prefix = config.lattice_prefix.clone();
     let conn = connect(config).await?;
 
-    let mut builder = wasmcloud_control_interface::ClientBuilder::new(conn)
+    Ok(wasmcloud_control_interface::ClientBuilder::new(conn)
         .lattice_prefix(lattice_prefix)
-        .rpc_timeout(timeout)
-        .auction_timeout(auction_timeout);
-    if let Some(domain) = config.js_domain.as_ref() {
-        builder = builder.js_domain(domain.to_string());
-    }
-
-    let client = builder
-        .build()
-        .await
-        .map_err(|e| RpcError::Nats(format!("Unable to create NATS client: {:?}", e)))?;
-
-    Ok(client)
+        .timeout(timeout)
+        .auction_timeout(auction_timeout)
+        .build())
 }
 
 /// Create a new nats connection
-async fn connect(cfg: &ConnectionConfig) -> RpcResult<async_nats::Client> {
+async fn connect(cfg: &ConnectionConfig) -> ProviderInvocationResult<async_nats::Client> {
     let cfg = cfg.clone();
     let opts = match (cfg.auth_jwt, cfg.auth_seed) {
         (Some(jwt), Some(seed)) => {
             let key_pair = std::sync::Arc::new(
                 KeyPair::from_seed(&seed)
-                    .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
+                    .map_err(|e| ProviderInvocationError::Provider(format!("key init: {e}")))?,
             );
             async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                 let key_pair = key_pair.clone();
@@ -170,13 +152,13 @@ async fn connect(cfg: &ConnectionConfig) -> RpcResult<async_nats::Client> {
         }
         (None, None) => async_nats::ConnectOptions::default(),
         _ => {
-            return Err(RpcError::InvalidParameter(
+            return Err(ProviderInvocationError::Provider(
                 "must provide both jwt and seed for jwt authentication".into(),
             ));
         }
     };
     if cfg.cluster_uris.is_empty() {
-        return Err(RpcError::NotInitialized(
+        return Err(ProviderInvocationError::Provider(
             "No NATS URIs supplied".to_string(),
         ));
     }
@@ -190,14 +172,14 @@ async fn connect(cfg: &ConnectionConfig) -> RpcResult<async_nats::Client> {
                 async_nats::Event::Disconnected => debug!("NATS client disconnected"),
                 async_nats::Event::Connected => debug!("NATS client reconnected"),
                 async_nats::Event::ClientError(err) => {
-                    debug!("NATS client error occurred: {}", err)
+                    debug!("NATS client error occurred: {err}")
                 }
-                other => debug!("NATS client other event occurred: {}", other),
+                other => debug!("NATS client other event occurred: {other}"),
             }
         })
         .connect(url)
         .await
-        .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
+        .map_err(|e| ProviderInvocationError::Provider(format!("Nats connection to {url}: {e}")))?;
 
     Ok(conn)
 }
@@ -249,7 +231,7 @@ mod test {
         // client should no longer be in the cache because it hasn't been utilized.
         // this will reconstitute the client
         let res = cache.get_client("test").await;
-        assert!(!res.is_err());
+        assert!(res.is_ok());
 
         tokio::time::sleep(Duration::from_secs(5)).await;
         cache.remove_config("test").await;

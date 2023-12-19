@@ -25,7 +25,7 @@ use crate::common::{
     assert_advertise_link, assert_start_actor, assert_start_provider, stop_server,
 };
 
-const LATTICE_PREFIX: &str = "test-blobstorage-s3";
+const LATTICE_PREFIX: &str = "test-blobstore-s3";
 
 /// Test all functionality for the blobstore-s3 provider
 ///
@@ -224,7 +224,6 @@ async fn test_ops_containers(
 
     // Perform POST request to trigger a blobstore container-exists
     let resp_json: ResponseEnvelope<bool> = http_client
-        // let resp_json: String = http_client
         .post(format!("{base_url}/container-exists"))
         .body(serde_json::to_string(&json!({"name": container }))?)
         .send()

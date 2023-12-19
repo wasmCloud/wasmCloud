@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
             "-p=wasmcloud-provider-kv-vault",
             "-p=wasmcloud-provider-kvredis",
             "-p=wasmcloud-provider-nats",
+            "-p=wasmcloud-provider-lattice-controller",
         ],
         |name, kind| {
             [
@@ -169,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 "httpserver",
                 "kv-vault",
                 "kvredis",
+                "lattice-controller",
                 "nats_messaging",
             ]
             .contains(&name)
@@ -185,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
@@ -194,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
             Some(("httpserver", [rust_httpserver])),
             Some(("kv-vault", [rust_kv_vault])),
             Some(("kvredis", [rust_kvredis])),
+            Some(("lattice-controller", [rust_lattice_controller])),
             Some(("nats_messaging", [rust_nats])),
             None,
         ) => {
@@ -204,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
                 rust_httpserver_seed,
                 rust_kvredis_seed,
                 rust_kv_vault_seed,
+                rust_lattice_controller_seed,
                 rust_nats_seed,
             ) = try_join!(
                 build_par(
@@ -250,6 +255,13 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 build_par(
                     &issuer,
+                    out_dir.join("rust-lattice-controller.par"),
+                    "wasmcloud:latticecontrol",
+                    "wasmcloud-provider-lattice-controller",
+                    rust_lattice_controller,
+                ),
+                build_par(
+                    &issuer,
                     out_dir.join("rust-nats.par"),
                     "wasmcloud:messaging",
                     "wasmcloud-provider-nats",
@@ -262,6 +274,9 @@ async fn main() -> anyhow::Result<()> {
             println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");
             println!("cargo:rustc-env=RUST_KV_VAULT_SUBJECT={rust_kv_vault_seed}");
+            println!(
+                "cargo:rustc-env=RUST_LATTICE_CONTROLLER_SUBJECT={rust_lattice_controller_seed}"
+            );
             println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_nats_seed}");
             Ok(())
         }

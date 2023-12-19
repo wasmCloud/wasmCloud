@@ -28,8 +28,15 @@ pub async fn start_nats() -> Result<(
                 .as_deref()
                 .unwrap_or("nats-server"),
         )
-        .args(["-js", "-D", "-T=false", "-p", &port.to_string(), "-sd"])
-        .arg(jetstream_dir.path()),
+        .args([
+            "-js",
+            "-D",
+            "-T=false",
+            "-p",
+            &port.to_string(),
+            "-sd",
+            jetstream_dir.path().display().to_string().as_str(),
+        ]),
     )
     .await
     .context("failed to start NATS")?;
