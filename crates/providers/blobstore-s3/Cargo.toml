@@ -18,7 +18,7 @@ status = "actively-developed"
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true, features = [ "rustls", "rt-tokio" ] }
-aws-smithy-runtime = { workspace = true, features = [ "client" ] }
+aws-smithy-runtime = { workspace = true, features = [ "client", "tls-rustls" ] }
 hyper-rustls = { workspace = true, features = [ "webpki-tokio" ]}
 base64 = { workspace = true}
 bytes = { workspace = true }

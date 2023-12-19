@@ -131,12 +131,14 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             "-p=builtins-module-reactor",
             "-p=kv-http-smithy",
             "-p=blobstore-http-smithy",
+            "-p=lattice-control-http-smithy",
         ],
         |name, kind| {
             [
                 "blobstore-http-smithy",
                 "builtins-module-reactor",
                 "kv-http-smithy",
+                "lattice-control-http-smithy",
             ]
             .contains(&name)
                 && kind.contains(&CrateType::Cdylib)
@@ -148,6 +150,7 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
@@ -155,6 +158,7 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             Some(("blobstore-http-smithy", [blobstore_http_smithy])),
             Some(("builtins-module-reactor", [builtins_module_reactor])),
             Some(("kv-http-smithy", [kv_http_smithy])),
+            Some(("lattice-control-http-smithy", [lattice_controller_http_smithy])),
             None,
         ) => {
             copy(
@@ -166,6 +170,11 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             copy(
                 blobstore_http_smithy,
                 out_dir.join("rust-blobstore-http-smithy.wasm"),
+            )
+            .await?;
+            copy(
+                lattice_controller_http_smithy,
+                out_dir.join("rust-lattice-control-http-smithy.wasm"),
             )
             .await?;
             Ok(())
@@ -344,6 +353,10 @@ async fn main() -> anyhow::Result<()> {
         (
             "blobstore-http-smithy",
             Some(vec![caps::HTTP_SERVER.into(), caps::BLOB.into()]),
+        ),
+        (
+            "lattice-control-http-smithy",
+            Some(vec![caps::HTTP_SERVER.into(), caps::LATTICE_CONTROL.into()]),
         ),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))

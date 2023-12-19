@@ -11,6 +11,7 @@ pub const MESSAGING: &str = "wasmcloud:messaging";
 pub const EVENTSTREAMS: &str = "wasmcloud:eventstreams";
 pub const NUMBERGEN: &str = "wasmcloud:builtin:numbergen";
 pub const LOGGING: &str = "wasmcloud:builtin:logging";
+pub const LATTICE_CONTROL: &str = "wasmcloud:latticecontrol";
 
 static CAPABILITY_NAMES: OnceLock<HashMap<&str, &str>> = OnceLock::new();
 
@@ -24,6 +25,7 @@ fn get_capability_names() -> &'static HashMap<&'static str, &'static str> {
             (BLOB, "Blob Store"),
             (EVENTSTREAMS, "Event Streams"),
             (NUMBERGEN, "Number Generation"),
+            (LATTICE_CONTROL, "Lattice control"),
             (LOGGING, "Logging"),
         ])
     })

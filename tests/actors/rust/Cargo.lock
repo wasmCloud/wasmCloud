@@ -1040,6 +1040,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lattice-control-http-smithy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "wasmbus-rpc",
+ "wasmcloud-interface-httpserver",
+ "wasmcloud-interface-lattice-control",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2720,6 +2733,22 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "wasmbus-rpc",
+ "weld-codegen",
+]
+
+[[package]]
+name = "wasmcloud-interface-lattice-control"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a364ac2568dbf374b4b8d3f6e7e2d2736c3afeeda217fa47da8002d5923153ef"
+dependencies = [
+ "async-trait",
+ "data-encoding",
+ "futures",
+ "log",
+ "rmp-serde",
+ "serde",
  "wasmbus-rpc",
  "weld-codegen",
 ]
