@@ -224,7 +224,7 @@ jobs:
           <meta http-equiv="refresh" content="0; URL=wasmcloud_host/index.html">
           <link rel="canonical" href="https://${{ github.repository_owner }}.github.io/wasmCloud/wasmcloud_host/index.html">
         EOF
-    - uses: actions/upload-pages-artifact@v2.0.0
+    - uses: actions/upload-pages-artifact@v3.0.0
       with:
         path: doc
 
