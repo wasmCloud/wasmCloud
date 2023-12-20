@@ -13,13 +13,12 @@ struct HttpServer;
 impl Guest for HttpServer {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
         let response = OutgoingResponse::new(Fields::new());
-        response.set_status_code(200).unwrap();
         let response_body = response.body().unwrap();
         response_body
             .write()
-            .unwrap()
+            .expect("failed to write to response body")
             .blocking_write_and_flush(b"Hello from Rust!\n")
-            .unwrap();
+            .expect("failed to block write and flush response body");
         OutgoingBody::finish(response_body, None).expect("failed to finish response body");
         ResponseOutparam::set(response_out, Ok(response));
     }

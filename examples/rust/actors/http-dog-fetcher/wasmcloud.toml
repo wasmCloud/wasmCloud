@@ -1,0 +1,14 @@
+name = "http-dog-fetcher"
+language = "rust"
+type = "actor"
+
+[actor]
+claims = [
+  "wasmcloud:httpserver",
+  "wasmcloud:builtin:logging",
+  "wasmcloud:blobstore",
+  "wasmcloud:builtin:numbergen",
+  "wasmcloud:httpclient"
+]
+wit_world = "hello"
+wasm_target = "wasm32-wasi-preview2"

@@ -181,9 +181,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-hello-world"
+name = "http-dog-fetcher"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "wasmcloud-actor",
  "wit-bindgen",
 ]
