@@ -13,7 +13,7 @@ spec:
       properties:
         # TODO: you must replace the path below to match your genreated code in build
         # Try using `wash build -o json` and use the `actor_path` field, prepended with `file://`
-        image: file:///Users/brooks/github.com/wasmcloud/wasmCloud/examples/rust/actors/http-dog-fetcher/build/http_dog_fetcher_s.wasm
+        image: file:///the/absolute/path/to/build/http-hello-world-component_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler
