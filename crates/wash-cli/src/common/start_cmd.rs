@@ -1,7 +1,7 @@
 use crate::appearance::spinner::Spinner;
 
 use anyhow::Result;
-use wash_lib::cli::start::{handle_start_actor, start_provider, StartCommand};
+use wash_lib::cli::start::{handle_start_actor, handle_start_provider, StartCommand};
 use wash_lib::cli::{CommandOutput, OutputKind};
 
 pub async fn handle_command(
@@ -22,7 +22,7 @@ pub async fn handle_command(
 
             sp.update_spinner_message(format!(" Starting provider {provider_ref} ... "));
 
-            start_provider(cmd).await?
+            handle_start_provider(cmd).await?
         }
     };
 
