@@ -156,29 +156,6 @@ spec:
             - name: WASMCLOUD_RPC_TLS
               value: {{ .Values.wasmcloud.config.rpc.tls | quote }}
             {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpc.natsHost }}
-            - name: WASMCLOUD_PROV_RPC_HOST
-              value: {{ .Values.wasmcloud.config.providerRpc.natsHost | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpc.natsPort }}
-            - name: WASMCLOUD_PROV_RPC_PORT
-              value: {{ .Values.wasmcloud.config.providerRpc.natsPort | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpc.natsJwt }}
-            - name: WASMCLOUD_PROV_RPC_JWT
-              value: {{ .Values.wasmcloud.config.providerRpc.natsJwt | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpc.natsSeed }}
-            - name: WASMCLOUD_PROV_RPC_SEED
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: providerRpcNatsSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpc.tls }}
-            - name: WASMCLOUD_PROV_RPC_TLS
-              value: {{ .Values.wasmcloud.config.providerRpc.tls | quote }}
-            {{- end }}
             {{- if .Values.wasmcloud.config.otel.exporter }}
             - name: OTEL_TRACES_EXPORTER
               value: {{ .Values.wasmcloud.config.otel.exporter | quote }}
