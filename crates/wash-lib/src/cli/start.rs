@@ -79,24 +79,27 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
+    let actor_ref = if cmd.actor_ref.starts_with('/') {
+        format!("file://{}", &cmd.actor_ref) // prefix with file:// if it's an absolute path
+    } else {
+        cmd.actor_ref.to_string()
+    };
+
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,
         None => {
             let suitable_hosts = client
                 .perform_actor_auction(
-                    &cmd.actor_ref,
+                    &actor_ref,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
                 .with_context(|| {
-                    format!(
-                        "Failed to auction actor {} to hosts in lattice",
-                        &cmd.actor_ref
-                    )
+                    format!("Failed to auction actor {} to hosts in lattice", &actor_ref)
                 })?;
             if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for actor {}", cmd.actor_ref);
+                bail!("No suitable hosts found for actor {}", actor_ref);
             } else {
                 suitable_hosts[0].host_id.parse().with_context(|| {
                     format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
@@ -113,7 +116,7 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
     } = start_actor(StartActorArgs {
         ctl_client: &client,
         host_id: &host,
-        actor_ref: &cmd.actor_ref,
+        actor_ref: &actor_ref,
         count: cmd.max_concurrent,
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
@@ -184,7 +187,7 @@ pub struct StartProviderCommand {
     pub skip_wait: bool,
 }
 
-pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> {
+pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting provider
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_PROVIDER_TIMEOUT_MS
@@ -195,12 +198,18 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
+    let provider_ref = if cmd.provider_ref.starts_with('/') {
+        format!("file://{}", &cmd.provider_ref) // prefix with file:// if it's an absolute path
+    } else {
+        cmd.provider_ref.to_string()
+    };
+
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,
         None => {
             let suitable_hosts = client
                 .perform_provider_auction(
-                    &cmd.provider_ref,
+                    &provider_ref,
                     &cmd.link_name,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
@@ -209,11 +218,11 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
                 .with_context(|| {
                     format!(
                         "Failed to auction provider {} with link name {} to hosts in lattice",
-                        &cmd.provider_ref, &cmd.link_name
+                        &provider_ref, &cmd.link_name
                     )
                 })?;
             if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for provider {}", cmd.provider_ref);
+                bail!("No suitable hosts found for provider {}", provider_ref);
             } else {
                 suitable_hosts[0].host_id.parse().with_context(|| {
                     format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
@@ -247,7 +256,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
     let ack = client
         .start_provider(
             &host,
-            &cmd.provider_ref,
+            &provider_ref,
             Some(cmd.link_name.clone()),
             None,
             config_json.clone(),
@@ -257,7 +266,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
         .with_context(|| {
             format!(
                 "Failed to start provider {} on host {:?} with link name {} and configuration {:?}",
-                &cmd.provider_ref, &host, &cmd.link_name, &config_json
+                &provider_ref, &host, &cmd.link_name, &config_json
             )
         })?;
 
@@ -266,12 +275,12 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
     }
 
     if cmd.skip_wait {
-        let text = format!("Start provider request received: {}", &cmd.provider_ref);
+        let text = format!("Start provider request received: {}", &provider_ref);
         return Ok(CommandOutput::new(
             text.clone(),
             HashMap::from([
                 ("result".into(), text.into()),
-                ("provider_ref".into(), cmd.provider_ref.into()),
+                ("provider_ref".into(), provider_ref.into()),
                 ("link_name".into(), cmd.link_name.into()),
                 ("host_id".into(), host.to_string().into()),
             ]),
@@ -282,13 +291,13 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host.to_string(),
-        cmd.provider_ref.clone(),
+        provider_ref.clone(),
     )
     .await
     .with_context(|| {
         format!(
             "Timed out waiting for start event for provider {} on host {}",
-            &cmd.provider_ref, &host
+            &provider_ref, &host
         )
     })?;
 
@@ -319,7 +328,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
         FindEventOutcome::Failure(err) => Err(err).with_context(|| {
             format!(
                 "Failed starting provider {} on host {}",
-                &cmd.provider_ref, &host
+                &provider_ref, &host
             )
         }),
     }
