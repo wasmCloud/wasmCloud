@@ -1418,7 +1418,7 @@ mod test {
                 ],
                 key_directory: PathBuf::from("./keys"),
                 destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-                call_alias: Some("testactor".to_string()),
+                call_alias: Some("test-actor".to_string()),
                 tags: Some(HashSet::from([
                     "wasmcloud.com/experimental".into(),
                     "test".into(),
