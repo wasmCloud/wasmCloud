@@ -1,23 +1,27 @@
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::{Read, Write},
-    path::PathBuf,
-};
-
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use log::warn;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs::{self, File},
+    io::{Read, Write},
+    path::PathBuf,
+};
 use wascap::{
     jwt::{Account, Actor, CapabilityProvider, Claims, Operator},
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
 
 use super::{extract_keypair, get::GetClaimsCommand, CommandOutput, OutputKind};
-use crate::{cli::inspect, common::boxed_err_to_anyhow, config::WashConnectionOptions};
+use crate::{
+    cli::inspect,
+    common::boxed_err_to_anyhow,
+    config::WashConnectionOptions,
+    parser::{get_config, ActorConfig, ProjectConfig, ProviderConfig, TypeConfig},
+};
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ClaimsCliCommand {
@@ -110,7 +114,7 @@ pub enum TokenCommand {
     Provider(ProviderMetadata),
 }
 
-#[derive(Debug, Clone, Parser, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Parser, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct GenerateCommon {
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[clap(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
@@ -186,19 +190,19 @@ pub struct AccountMetadata {
     common: GenerateCommon,
 }
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, Parser, Default, PartialEq, Eq)]
 pub struct ProviderMetadata {
     /// A descriptive name for the provider
     #[clap(short = 'n', long = "name")]
-    name: String,
+    name: Option<String>,
 
     /// Capability contract ID that this provider supports
     #[clap(short = 'c', long = "capid")]
-    capid: String,
+    capid: Option<String>,
 
     /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
     #[clap(short = 'v', long = "vendor")]
-    vendor: String,
+    vendor: Option<String>,
 
     /// Monotonically increasing revision number
     #[clap(short = 'r', long = "revision")]
@@ -230,7 +234,27 @@ pub struct ProviderMetadata {
     common: GenerateCommon,
 }
 
-#[derive(Parser, Debug, Clone, Serialize, Deserialize, Default)]
+impl ProviderMetadata {
+    pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
+        let provider_config = match project_config.project_type {
+            TypeConfig::Provider(ref provider_config) => provider_config.clone(),
+            _ => ProviderConfig::default(),
+        };
+
+        ProviderMetadata {
+            name: self.name.or(Some(project_config.common.name.clone())),
+            revision: self.revision.or(Some(project_config.common.revision)),
+            version: self
+                .version
+                .or(Some(project_config.common.version.to_string())),
+            capid: self.capid.or(Some(provider_config.capability_id)),
+            vendor: self.vendor.or(Some(provider_config.vendor)),
+            ..self
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
     #[clap(short = 'k', long = "keyvalue")]
@@ -258,22 +282,19 @@ pub struct ActorMetadata {
     pub eventstream: bool,
     /// A human-readable, descriptive name for the token
     #[clap(short = 'n', long = "name")]
-    pub name: String,
+    pub name: Option<String>,
     /// Add custom capabilities
     #[clap(short = 'c', long = "cap", name = "capabilities")]
     pub custom_caps: Vec<String>,
     /// A list of arbitrary tags to be embedded in the token
     #[clap(short = 't', long = "tag")]
     pub tags: Vec<String>,
-    /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
-    #[clap(short = 'p', long = "prov")]
-    pub provider: bool,
     /// Revision number
     #[clap(short = 'r', long = "rev")]
-    pub rev: i32,
+    pub rev: Option<i32>,
     /// Human-readable version string
     #[clap(short = 'v', long = "ver")]
-    pub ver: String,
+    pub ver: Option<String>,
     /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
     #[clap(short = 'a', long = "call-alias")]
     pub call_alias: Option<String>,
@@ -300,6 +321,83 @@ pub struct ActorMetadata {
     pub common: GenerateCommon,
 }
 
+impl ActorMetadata {
+    pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
+        let actor_config = match project_config.project_type {
+            TypeConfig::Actor(ref actor_config) => actor_config.clone(),
+            _ => ActorConfig::default(),
+        };
+
+        let mut standard_caps = HashMap::from([
+            (wascap::caps::KEY_VALUE.to_string(), self.keyvalue),
+            (wascap::caps::MESSAGING.to_string(), self.msg_broker),
+            (wascap::caps::HTTP_CLIENT.to_string(), self.http_client),
+            (wascap::caps::HTTP_SERVER.to_string(), self.http_server),
+            (wascap::caps::BLOB.to_string(), self.blob_store),
+            (wascap::caps::LOGGING.to_string(), self.logging),
+            (wascap::caps::EVENTSTREAMS.to_string(), self.eventstream),
+        ]);
+
+        let mut custom_caps = self
+            .custom_caps
+            .clone()
+            .into_iter()
+            .collect::<BTreeSet<String>>();
+
+        for cap in actor_config.claims.iter() {
+            if let Some(flag) = standard_caps.get_mut(cap) {
+                *flag = true;
+            } else {
+                custom_caps.insert(cap.clone());
+            }
+        }
+
+        ActorMetadata {
+            name: self.name.or(Some(project_config.common.name.clone())),
+            rev: self.rev.or(Some(project_config.common.revision)),
+            ver: self.ver.or(Some(project_config.common.version.to_string())),
+            keyvalue: *(standard_caps
+                .get(wascap::caps::KEY_VALUE)
+                .unwrap_or(&self.keyvalue)),
+            msg_broker: *(standard_caps
+                .get(wascap::caps::MESSAGING)
+                .unwrap_or(&self.msg_broker)),
+            http_server: *(standard_caps
+                .get(wascap::caps::HTTP_SERVER)
+                .unwrap_or(&self.http_server)),
+            http_client: *(standard_caps
+                .get(wascap::caps::HTTP_CLIENT)
+                .unwrap_or(&self.http_client)),
+            blob_store: *(standard_caps
+                .get(wascap::caps::BLOB)
+                .unwrap_or(&self.blob_store)),
+            logging: *(standard_caps
+                .get(wascap::caps::LOGGING)
+                .unwrap_or(&self.logging)),
+            eventstream: *(standard_caps
+                .get(wascap::caps::EVENTSTREAMS)
+                .unwrap_or(&self.eventstream)),
+            custom_caps: custom_caps.into_iter().collect(),
+            tags: match actor_config.tags.clone() {
+                Some(tags) => tags
+                    .clone()
+                    .into_iter()
+                    .collect::<BTreeSet<String>>()
+                    .union(&self.tags.clone().into_iter().collect::<BTreeSet<String>>())
+                    .cloned()
+                    .collect::<Vec<String>>(),
+                None => self.tags,
+            },
+            call_alias: self.call_alias.or(actor_config.call_alias),
+            common: GenerateCommon {
+                directory: self.common.directory.or(Some(actor_config.key_directory)),
+                ..self.common
+            },
+            ..self
+        }
+    }
+}
+
 impl From<InspectCommand> for inspect::InspectCliCommand {
     fn from(cmd: InspectCommand) -> Self {
         inspect::InspectCliCommand {
@@ -320,22 +418,58 @@ pub async fn handle_command(
     command: ClaimsCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
+    let project_config = get_config(None, Some(true)).ok();
     match command {
         ClaimsCliCommand::Inspect(inspectcmd) => {
             warn!("claims inspect will be deprecated in future versions. Use inspect instead.");
             inspect::handle_command(inspectcmd, output_kind).await
         }
-        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd, output_kind),
-        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd, output_kind),
+        ClaimsCliCommand::Sign(signcmd) => sign_file(
+            SignCommand {
+                metadata: match project_config {
+                    Some(ref config) => signcmd.metadata.update_with_project_config(config),
+                    None => signcmd.metadata,
+                },
+                destination: match project_config {
+                    Some(ref config) => match config.project_type {
+                        TypeConfig::Actor(ref actor_config) => signcmd.destination.or(actor_config
+                            .destination
+                            .clone()
+                            .map(|d| {
+                                d.to_str()
+                                    .expect("unable to convert destination pathbuf to str")
+                                    .to_string()
+                            })),
+                        _ => signcmd.destination,
+                    },
+                    None => signcmd.destination,
+                },
+                ..signcmd
+            },
+            output_kind,
+        ),
+        ClaimsCliCommand::Token(gencmd) => {
+            generate_token(gencmd, output_kind, project_config.as_ref())
+        }
     }
 }
 
-fn generate_token(cmd: TokenCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    match cmd {
-        TokenCommand::Actor(actor) => generate_actor(actor, output_kind),
-        TokenCommand::Operator(operator) => generate_operator(operator, output_kind),
-        TokenCommand::Account(account) => generate_account(account, output_kind),
-        TokenCommand::Provider(provider) => generate_provider(provider, output_kind),
+fn generate_token(
+    cmd: TokenCommand,
+    output_kind: OutputKind,
+    project_config: Option<&ProjectConfig>,
+) -> Result<CommandOutput> {
+    match (cmd, project_config) {
+        (TokenCommand::Actor(actor), Some(config)) => {
+            generate_actor(actor.update_with_project_config(config), output_kind)
+        }
+        (TokenCommand::Provider(provider), Some(config)) => {
+            generate_provider(provider.update_with_project_config(config), output_kind)
+        }
+        (TokenCommand::Actor(actor), _) => generate_actor(actor, output_kind),
+        (TokenCommand::Provider(provider), _) => generate_provider(provider, output_kind),
+        (TokenCommand::Operator(operator), _) => generate_operator(operator, output_kind),
+        (TokenCommand::Account(account), _) => generate_account(account, output_kind),
     }
 }
 
@@ -364,7 +498,7 @@ fn get_keypair_vec(
 fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
         actor.issuer.clone(),
-        Some(actor.name.clone()),
+        actor.name.clone(),
         actor.common.directory.clone(),
         KeyPairType::Account,
         actor.common.disable_keygen,
@@ -372,7 +506,7 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
     )?;
     let subject = extract_keypair(
         actor.subject.clone(),
-        Some(actor.name.clone()),
+        actor.name.clone(),
         actor.common.directory.clone(),
         KeyPairType::Module,
         actor.common.disable_keygen,
@@ -403,20 +537,17 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
     }
     caps_list.extend(actor.custom_caps.iter().cloned());
 
-    if actor.provider && caps_list.len() > 1 {
-        bail!("Capability providers cannot provide multiple capabilities at once.");
-    }
     let claims: Claims<Actor> = Claims::<Actor>::with_dates(
-        actor.name.clone(),
+        actor.name.context("actor name is required")?,
         issuer.public_key(),
         subject.public_key(),
         Some(caps_list),
         Some(actor.tags.clone()),
         days_from_now_to_jwt_time(actor.common.expires_in_days),
         days_from_now_to_jwt_time(actor.common.not_before_days),
-        actor.provider,
-        Some(actor.rev),
-        Some(actor.ver.clone()),
+        false,
+        Some(actor.rev.context("actor revision number is required")?),
+        Some(actor.ver.context("actor version is required")?),
         sanitize_alias(actor.call_alias)?,
     );
 
@@ -511,7 +642,7 @@ fn generate_account(account: AccountMetadata, output_kind: OutputKind) -> Result
 fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
         provider.issuer.clone(),
-        Some(provider.name.clone()),
+        provider.name.clone(),
         provider.common.directory.clone(),
         KeyPairType::Account,
         provider.common.disable_keygen,
@@ -519,7 +650,7 @@ fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Res
     )?;
     let subject = extract_keypair(
         provider.subject.clone(),
-        Some(provider.name.clone()),
+        provider.name.clone(),
         provider.common.directory.clone(),
         KeyPairType::Service,
         provider.common.disable_keygen,
@@ -527,11 +658,11 @@ fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Res
     )?;
 
     let claims: Claims<CapabilityProvider> = Claims::<CapabilityProvider>::with_dates(
-        provider.name.clone(),
+        provider.name.context("provider name is required")?,
         issuer.public_key(),
         subject.public_key(),
-        provider.capid.clone(),
-        provider.vendor.clone(),
+        provider.capid.context("capability ID is required")?,
+        provider.vendor.context("vendor is required")?,
         provider.revision,
         provider.version.clone(),
         HashMap::new(),
@@ -589,12 +720,8 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     }
     caps_list.extend(cmd.metadata.custom_caps.iter().cloned());
 
-    if cmd.metadata.provider && caps_list.len() > 1 {
-        bail!("Capability providers cannot provide multiple capabilities at once.");
-    }
-
     let signed = sign_buffer_with_claims(
-        cmd.metadata.name.clone(),
+        cmd.metadata.name.context("actor name is required")?,
         &buf,
         &subject,
         &issuer,
@@ -602,9 +729,13 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         cmd.metadata.common.not_before_days,
         caps_list.clone(),
         cmd.metadata.tags.clone(),
-        cmd.metadata.provider,
-        Some(cmd.metadata.rev),
-        Some(cmd.metadata.ver.clone()),
+        false,
+        Some(
+            cmd.metadata
+                .rev
+                .context("actor revision number is required")?,
+        ),
+        Some(cmd.metadata.ver.context("actor version is required")?),
         sanitize_alias(cmd.metadata.call_alias)?,
     )?;
 
@@ -698,8 +829,15 @@ pub async fn get_claims(
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashSet;
+
     use super::*;
+    use crate::parser::{
+        ActorConfig, CommonConfig, LanguageConfig, RegistryConfig, RustConfig, TypeConfig,
+    };
+    use claims::assert_ok;
     use clap::Parser;
+    use semver::Version;
 
     #[derive(Parser)]
     struct Cmd {
@@ -896,7 +1034,6 @@ mod test {
             "--keyvalue",
             "--logging",
             "--msg",
-            "--prov",
             "--disable-keygen",
         ])
         .unwrap();
@@ -921,14 +1058,13 @@ mod test {
                 assert!(metadata.extras);
                 assert!(metadata.logging);
                 assert!(metadata.eventstream);
-                assert_eq!(metadata.name, "MyActor");
+                assert_eq!(metadata.name.unwrap(), "MyActor");
                 assert!(!metadata.custom_caps.is_empty());
                 assert_eq!(metadata.custom_caps[0], "test:custom");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
-                assert!(metadata.provider);
-                assert_eq!(metadata.rev, 2);
-                assert_eq!(metadata.ver, "0.0.1");
+                assert_eq!(metadata.rev.unwrap(), 2);
+                assert_eq!(metadata.ver.unwrap(), "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -965,7 +1101,6 @@ mod test {
             "-k",
             "-l",
             "-g",
-            "-p",
             "--disable-keygen",
         ])
         .unwrap();
@@ -989,14 +1124,13 @@ mod test {
                 assert!(metadata.extras);
                 assert!(metadata.logging);
                 assert!(metadata.eventstream);
-                assert_eq!(metadata.name, "MyActor");
+                assert_eq!(metadata.name.unwrap(), "MyActor");
                 assert!(!metadata.custom_caps.is_empty());
                 assert_eq!(metadata.custom_caps[0], "test:custom");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
-                assert!(metadata.provider);
-                assert_eq!(metadata.rev, 2);
-                assert_eq!(metadata.ver, "0.0.1");
+                assert_eq!(metadata.rev.unwrap(), 2);
+                assert_eq!(metadata.ver.unwrap(), "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -1119,7 +1253,7 @@ mod test {
                 ver,
                 ..
             })) => {
-                assert_eq!(name, "TokenName");
+                assert_eq!(name.unwrap(), "TokenName");
                 assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
@@ -1144,8 +1278,8 @@ mod test {
                 assert_eq!(custom_caps[0], "test:custom");
                 assert!(!tags.is_empty());
                 assert_eq!(tags[0], "testtag");
-                assert_eq!(rev, 2);
-                assert_eq!(ver, "0.0.1");
+                assert_eq!(rev.unwrap(), 2);
+                assert_eq!(ver.unwrap(), "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -1233,7 +1367,7 @@ mod test {
                 version,
                 ..
             })) => {
-                assert_eq!(name, "TokenName");
+                assert_eq!(name.unwrap(), "TokenName");
                 assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
@@ -1246,12 +1380,256 @@ mod test {
                 assert!(common.disable_keygen);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
                 assert_eq!(subject.unwrap(), PROVIDER_KEY);
-                assert_eq!(capid, "wasmcloud:test");
-                assert_eq!(vendor, "test");
+                assert_eq!(capid.unwrap(), "wasmcloud:test");
+                assert_eq!(vendor.unwrap(), "test");
                 assert_eq!(revision.unwrap(), 0);
                 assert_eq!(version.unwrap(), "1.2.3");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
+    }
+
+    #[test]
+    fn rust_actor_metadata_with_project_config_overrides() -> anyhow::Result<()> {
+        let result = get_config(
+            Some(PathBuf::from(
+                "./tests/parser/files/rust_actor_claims_metadata.toml",
+            )),
+            None,
+        );
+
+        let project_config = assert_ok!(result);
+
+        assert_eq!(
+            project_config.language,
+            LanguageConfig::Rust(RustConfig {
+                cargo_path: Some("./cargo".into()),
+                target_path: Some("./target".into())
+            })
+        );
+
+        assert_eq!(
+            project_config.project_type,
+            TypeConfig::Actor(ActorConfig {
+                claims: vec![
+                    "wasmcloud:httpserver".to_string(),
+                    "wasmcloud:httpclient".to_string(),
+                    "lexcorp:quantum-simulator".to_string()
+                ],
+                key_directory: PathBuf::from("./keys"),
+                destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
+                call_alias: Some("testactor".to_string()),
+                tags: Some(HashSet::from([
+                    "wasmcloud.com/experimental".into(),
+                    "test".into(),
+                ])),
+                ..ActorConfig::default()
+            })
+        );
+
+        assert_eq!(
+            project_config.common,
+            CommonConfig {
+                name: "testactor".to_string(),
+                version: Version::parse("0.1.0").unwrap(),
+                revision: 666,
+                path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap(),
+                wasm_bin_name: None,
+                registry: RegistryConfig::default(),
+            }
+        );
+
+        //=== check project config overrides when cli args are NOT specified...
+        let actor_metadata = ActorMetadata::default().update_with_project_config(&project_config);
+        assert_eq!(
+            actor_metadata,
+            ActorMetadata {
+                name: Some("testactor".to_string()),
+                ver: Some(Version::parse("0.1.0")?.to_string()),
+                rev: Some(666),
+                http_server: true,
+                http_client: true,
+                custom_caps: vec!["lexcorp:quantum-simulator".to_string()],
+                call_alias: Some("test-actor".to_string()),
+                tags: vec!["test".to_string(), "wasmcloud.com/experimental".to_string()],
+                common: GenerateCommon {
+                    directory: Some(PathBuf::from("./keys")),
+                    ..GenerateCommon::default()
+                },
+                ..ActorMetadata::default()
+            }
+        );
+
+        //=== check project config overrides when some cli args are specified...
+        const LOCAL_WASM: &str = "./myactor.wasm";
+        let cmd: Cmd = Parser::try_parse_from([
+            "claims",
+            "sign",
+            LOCAL_WASM,
+            "--name",
+            "MyActor",
+            "--cap",
+            "test:custom",
+            "--destination",
+            "./myactor_s.wasm",
+            "--directory",
+            "./dir",
+            "--rev",
+            "777",
+            "--tag",
+            "test-tag",
+            "--ver",
+            "0.2.0",
+            "--blob_store",
+            "--keyvalue",
+            "--logging",
+        ])
+        .unwrap();
+
+        match cmd.claims {
+            ClaimsCliCommand::Sign(signcmd) => {
+                let cmd = SignCommand {
+                    metadata: signcmd.metadata.update_with_project_config(&project_config),
+                    destination: match &project_config.project_type {
+                        TypeConfig::Actor(ref actor_config) => signcmd.destination.or(actor_config
+                            .destination
+                            .clone()
+                            .map(|d| {
+                                d.to_str()
+                                    .expect("unable to convert destination pathbuf to str")
+                                    .to_string()
+                            })),
+                        _ => signcmd.destination,
+                    },
+                    ..signcmd
+                };
+
+                assert_eq!(cmd.source, LOCAL_WASM);
+                assert_eq!(cmd.destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(
+                    cmd.metadata.common.directory.unwrap(),
+                    PathBuf::from("./dir")
+                );
+                assert!(cmd.metadata.keyvalue);
+                assert!(cmd.metadata.http_server); // from project_config
+                assert!(cmd.metadata.http_client); // from project_config
+                assert!(cmd.metadata.blob_store);
+                assert!(cmd.metadata.logging);
+                assert_eq!(cmd.metadata.name.unwrap(), "MyActor");
+                assert_eq!(!cmd.metadata.custom_caps.len(), 2);
+                assert!(cmd
+                    .metadata
+                    .custom_caps
+                    .contains(&"test:custom".to_string()));
+                assert!(cmd
+                    .metadata
+                    .custom_caps
+                    .contains(&"lexcorp:quantum-simulator".to_string())); // from project_config
+                assert_eq!(!cmd.metadata.tags.len(), 3);
+                assert!(cmd.metadata.tags.contains(&"test-tag".to_string()));
+                assert!(cmd.metadata.tags.contains(&"test".to_string())); // from project_config
+                assert!(cmd
+                    .metadata
+                    .tags
+                    .contains(&"wasmcloud.com/experimental".to_string())); // from project_config
+                assert_eq!(cmd.metadata.rev.unwrap(), 777);
+                assert_eq!(cmd.metadata.ver.unwrap(), "0.2.0");
+                assert_eq!(cmd.metadata.call_alias.unwrap(), "test-actor"); // from project_config
+            }
+
+            _ => unreachable!("claims constructed incorrect command"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn rust_provider_metadata_with_project_config_overrides() -> anyhow::Result<()> {
+        let result = get_config(
+            Some(PathBuf::from(
+                "./tests/parser/files/rust_provider_claims_metadata.toml",
+            )),
+            None,
+        );
+
+        let project_config = assert_ok!(result);
+
+        assert_eq!(
+            project_config.language,
+            LanguageConfig::Rust(RustConfig {
+                cargo_path: Some("./cargo".into()),
+                target_path: Some("./target".into())
+            })
+        );
+
+        assert_eq!(
+            project_config.project_type,
+            TypeConfig::Provider(ProviderConfig {
+                capability_id: "wasmcloud:httpserver".into(),
+                vendor: "wayne-industries".into()
+            })
+        );
+
+        assert_eq!(
+            project_config.common,
+            CommonConfig {
+                name: "testprovider".to_string(),
+                version: Version::parse("0.1.0").unwrap(),
+                revision: 666,
+                path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap(),
+                wasm_bin_name: None,
+                registry: RegistryConfig::default(),
+            }
+        );
+
+        //=== check project config overrides when cli args are NOT specified...
+        let provider_metadata =
+            ProviderMetadata::default().update_with_project_config(&project_config);
+        assert_eq!(
+            provider_metadata,
+            ProviderMetadata {
+                name: Some("testprovider".to_string()),
+                version: Some(Version::parse("0.1.0")?.to_string()),
+                revision: Some(666),
+                capid: Some("wasmcloud:httpserver".into()),
+                vendor: Some("wayne-industries".into()),
+                ..ProviderMetadata::default()
+            }
+        );
+
+        //=== check project config overrides when cli args are specified...
+        let cmd: Cmd = Parser::try_parse_from([
+            "claims",
+            "token",
+            "provider",
+            "--name",
+            "TokenName",
+            "--capid",
+            "wasmcloud:test",
+            "--vendor",
+            "test",
+            "--revision",
+            "777",
+            "--version",
+            "0.2.0",
+        ])
+        .unwrap();
+        match cmd.claims {
+            ClaimsCliCommand::Token(TokenCommand::Provider(provider_metadata)) => {
+                let metadata = provider_metadata.update_with_project_config(&project_config);
+                assert_eq!(metadata.name.unwrap(), "TokenName");
+                assert_eq!(metadata.capid.unwrap(), "wasmcloud:test");
+                assert_eq!(metadata.vendor.unwrap(), "test");
+                assert_eq!(metadata.revision.unwrap(), 777);
+                assert_eq!(metadata.version.unwrap(), "0.2.0");
+            }
+            _ => unreachable!("claims constructed incorrect command"),
+        }
+
+        Ok(())
     }
 }
