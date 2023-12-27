@@ -315,7 +315,14 @@ fn build_tinygo_actor(
     }
 
     // Generate wit-bindgen code for Golang actors which are components-first
-    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+    //
+    // Running wit-bindgen via go generate is only for WIT-enabled projects, so we must limit
+    // to only projects that have their WIT defined in the expected top level wit directory
+    //
+    // While wasmcloud and it's tooling is WIT-first, it is possible to build preview1/preview2
+    // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
+    // we check for the `wit` directory which would be passed through to bindgen.
+    if actor_config.wit_world.is_some() {
         generate_tinygo_bindgen(
             &output_dir,
             common_config.path.join("wit"),
@@ -323,7 +330,7 @@ fn build_tinygo_actor(
                 "missing `wit_world` in wasmcloud.toml ([actor] section) to run go bindgen generate",
             )?,
         )
-            .context("generating golang bindgen code failed")?;
+                .context("generating golang bindgen code failed")?;
     }
 
     let result = command
@@ -421,6 +428,13 @@ fn generate_tinygo_bindgen(
         bail!(
             "bindgen directory @ [{}] does not exist",
             bindgen_dir.as_ref().display(),
+        );
+    }
+
+    if !wit_dir.as_ref().exists() {
+        bail!(
+            "top level WIT directory @ [{}] does not exist",
+            wit_dir.as_ref().display(),
         );
     }
 
