@@ -5,7 +5,7 @@ version = "0.1.0"
 revision = 666
 
 [actor]
-claims = ["wasmcloud:httpserver", "wasmcloud:httclient", "lexcorp:quantum-simulator"]
+claims = ["wasmcloud:httpserver", "wasmcloud:httpclient", "lexcorp:quantum-simulator"]
 registry = "localhost:8080"
 push_insecure = false
 key_directory = "./keys"
