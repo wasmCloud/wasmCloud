@@ -1518,7 +1518,7 @@ mod test {
                 assert!(cmd.metadata.blob_store);
                 assert!(cmd.metadata.logging);
                 assert_eq!(cmd.metadata.name.unwrap(), "MyActor");
-                assert_eq!(!cmd.metadata.custom_caps.len(), 2);
+                assert_eq!(cmd.metadata.custom_caps.len(), 2);
                 assert!(cmd
                     .metadata
                     .custom_caps
@@ -1527,7 +1527,7 @@ mod test {
                     .metadata
                     .custom_caps
                     .contains(&"lexcorp:quantum-simulator".to_string())); // from project_config
-                assert_eq!(!cmd.metadata.tags.len(), 3);
+                assert_eq!(cmd.metadata.tags.len(), 3);
                 assert!(cmd.metadata.tags.contains(&"test-tag".to_string()));
                 assert!(cmd.metadata.tags.contains(&"test".to_string())); // from project_config
                 assert!(cmd
