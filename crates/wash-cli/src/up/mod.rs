@@ -86,11 +86,11 @@ pub struct NatsOpts {
     pub nats_version: String,
 
     /// NATS server host to connect to
-    #[clap(long = "nats-host", env = "NATS_HOST")]
+    #[clap(long = "nats-host", env = "WASMCLOUD_NATS_HOST", alias = "NATS_HOST")]
     pub nats_host: Option<String>,
 
     /// NATS server port to connect to. This will be used as the NATS listen port if `--nats-connect-only` isn't set
-    #[clap(long = "nats-port", env = "NATS_PORT")]
+    #[clap(long = "nats-port", env = "WASMCLOUD_NATS_PORT", alias = "NATS_PORT")]
     pub nats_port: Option<u16>,
 
     /// NATS websocket port to use. Websocket support will not be enabled if this option isn't set. TLS is not supported. This is required for the wash ui to connect from localhost
