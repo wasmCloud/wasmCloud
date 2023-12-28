@@ -302,7 +302,7 @@ mod test {
     use tokio::net::TcpListener;
     use tokio::time::Duration;
 
-    const WASMCLOUD_VERSION: &str = "v0.81.0-rc1";
+    const WASMCLOUD_VERSION: &str = "v0.81.0";
 
     /// Returns an open port on the interface, searching within the range endpoints, inclusive
     async fn find_open_port() -> Result<u16> {
@@ -511,7 +511,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn can_properly_deny_elixir_release_hosts() -> anyhow::Result<()> {
+    async fn can_properly_deny_too_old_hosts() -> anyhow::Result<()> {
         // Ensure we allow versions >= 0.81.0
         assert!(check_version("v0.81.0").is_ok());
         assert!(check_version(MINIMUM_WASMCLOUD_VERSION).is_ok());
