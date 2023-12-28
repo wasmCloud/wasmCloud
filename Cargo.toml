@@ -54,6 +54,7 @@ reqwest = { workspace = true, features = [
 ] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-actors = { workspace = true }

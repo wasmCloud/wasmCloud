@@ -57,3 +57,17 @@ pub const RUST_LATTICE_CONTROL_HTTP_SMITHY_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-lattice-control-http-smithy.signed.wasm"
 );
+
+pub const RUST_MESSAGING_SENDER_HTTP_SMITHY: &str =
+    concat!(env!("OUT_DIR"), "/rust-messaging-sender-http-smithy.wasm");
+pub const RUST_MESSAGING_SENDER_HTTP_SMITHY_SIGNED: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-messaging-sender-http-smithy.signed.wasm"
+);
+
+pub const RUST_MESSAGING_RECEIVER_SMITHY: &str =
+    concat!(env!("OUT_DIR"), "/rust-messaging-receiver-smithy.wasm");
+pub const RUST_MESSAGING_RECEIVER_SMITHY_SIGNED: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-messaging-receiver-smithy.signed.wasm"
+);

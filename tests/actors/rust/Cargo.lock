@@ -1139,6 +1139,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f665ee40bc4a3c5590afb1e9677db74a508659dfd71e126420da8274909a0167"
 
 [[package]]
+name = "messaging-receiver-smithy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasmbus-rpc",
+ "wasmcloud-interface-messaging",
+]
+
+[[package]]
+name = "messaging-sender-http-smithy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasmbus-rpc",
+ "wasmcloud-interface-httpserver",
+ "wasmcloud-interface-messaging",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2749,6 +2776,21 @@ dependencies = [
  "log",
  "rmp-serde",
  "serde",
+ "wasmbus-rpc",
+ "weld-codegen",
+]
+
+[[package]]
+name = "wasmcloud-interface-messaging"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe861c87bc80f3670237aefa9530fb7b56ea7b98e37869886bdd5d35d3b6b3e"
+dependencies = [
+ "async-trait",
+ "log",
+ "serde",
+ "serde_bytes",
+ "serde_json",
  "wasmbus-rpc",
  "weld-codegen",
 ]

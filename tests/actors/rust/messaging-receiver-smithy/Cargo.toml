@@ -1,0 +1,19 @@
+[package]
+name = "messaging-receiver-smithy"
+version = "0.1.0"
+description = """
+A smithy-based actor that echoes back all received messages (via the wasmcloud:messaging contract) if a reply-to is set.
+"""
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = [ "sync" ] }
+serde = {workspace = true, features = ["derive"]}
+serde_json = { workspace = true }
+wasmbus-rpc = { workspace = true }
+wasmcloud-interface-messaging = { workspace = true }

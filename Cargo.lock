@@ -5234,6 +5234,7 @@ dependencies = [
  "reqwest",
  "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
  "tempfile",
  "test-actors",

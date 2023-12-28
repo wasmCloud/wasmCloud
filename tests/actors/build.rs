@@ -132,6 +132,8 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             "-p=kv-http-smithy",
             "-p=blobstore-http-smithy",
             "-p=lattice-control-http-smithy",
+            "-p=messaging-receiver-smithy",
+            "-p=messaging-sender-http-smithy",
         ],
         |name, kind| {
             [
@@ -139,6 +141,8 @@ async fn install_rust_wasm32_unknown_unknown_actors(
                 "builtins-module-reactor",
                 "kv-http-smithy",
                 "lattice-control-http-smithy",
+                "messaging-receiver-smithy",
+                "messaging-sender-http-smithy",
             ]
             .contains(&name)
                 && kind.contains(&CrateType::Cdylib)
@@ -151,6 +155,8 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
@@ -159,6 +165,8 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             Some(("builtins-module-reactor", [builtins_module_reactor])),
             Some(("kv-http-smithy", [kv_http_smithy])),
             Some(("lattice-control-http-smithy", [lattice_controller_http_smithy])),
+            Some(("messaging-receiver-smithy", [messaging_receiver_smithy])),
+            Some(("messaging-sender-http-smithy", [messaging_sender_http_smithy])),
             None,
         ) => {
             copy(
@@ -175,6 +183,16 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             copy(
                 lattice_controller_http_smithy,
                 out_dir.join("rust-lattice-control-http-smithy.wasm"),
+            )
+            .await?;
+            copy(
+                messaging_receiver_smithy,
+                out_dir.join("rust-messaging-receiver-smithy.wasm"),
+            )
+            .await?;
+            copy(
+                messaging_sender_http_smithy,
+                out_dir.join("rust-messaging-sender-http-smithy.wasm"),
             )
             .await?;
             Ok(())
@@ -357,6 +375,14 @@ async fn main() -> anyhow::Result<()> {
         (
             "lattice-control-http-smithy",
             Some(vec![caps::HTTP_SERVER.into(), caps::LATTICE_CONTROL.into()]),
+        ),
+        (
+            "messaging-sender-http-smithy",
+            Some(vec![caps::HTTP_SERVER.into(), caps::MESSAGING.into()]),
+        ),
+        (
+            "messaging-receiver-smithy",
+            Some(vec![caps::MESSAGING.into()]),
         ),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))

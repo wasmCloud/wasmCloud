@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
                 rust_kvredis_seed,
                 rust_kv_vault_seed,
                 rust_lattice_controller_seed,
-                rust_nats_seed,
+                rust_messaging_nats_seed,
             ) = try_join!(
                 build_par(
                     &issuer,
@@ -277,7 +277,7 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "cargo:rustc-env=RUST_LATTICE_CONTROLLER_SUBJECT={rust_lattice_controller_seed}"
             );
-            println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_nats_seed}");
+            println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_messaging_nats_seed}");
             Ok(())
         }
         _ => bail!("invalid provider build artifacts"),

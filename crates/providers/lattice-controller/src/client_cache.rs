@@ -163,7 +163,7 @@ async fn connect(cfg: &ConnectionConfig) -> ProviderInvocationResult<async_nats:
         ));
     }
 
-    let url = cfg.cluster_uris.get(0).unwrap();
+    let url = cfg.cluster_uris.first().unwrap();
 
     let conn = opts
         .event_callback(|event| async move {

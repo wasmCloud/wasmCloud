@@ -127,7 +127,10 @@ impl ServiceSettings {
             match ext.as_ref() {
                 "json" => ServiceSettings::from_json(&data),
                 "toml" => ServiceSettings::from_toml(&data),
-                _ => Err(HttpServerError::Settings(format!("unrecognized extension {}", ext))),
+                _ => Err(HttpServerError::Settings(format!(
+                    "unrecognized extension {}",
+                    ext
+                ))),
             }
         } else {
             Err(HttpServerError::Settings(format!(
@@ -139,7 +142,8 @@ impl ServiceSettings {
 
     /// load settings from json
     fn from_json(data: &str) -> Result<Self, HttpServerError> {
-        serde_json::from_str(data).map_err(|e| HttpServerError::Settings(format!("invalid json: {}", e)))
+        serde_json::from_str(data)
+            .map_err(|e| HttpServerError::Settings(format!("invalid json: {}", e)))
     }
 
     /// load settings from toml file
@@ -251,10 +255,9 @@ pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Htt
 
     // accept address as value parameter
     if let Some(addr) = values.get("address") {
-        settings.address = Some(
-            SocketAddr::from_str(addr)
-                .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {}", addr)))?,
-        );
+        settings.address = Some(SocketAddr::from_str(addr).map_err(|_| {
+            HttpServerError::InvalidParameter(format!("invalid address: {}", addr))
+        })?);
     }
 
     // accept port, for compatibility with previous implementations
@@ -660,7 +663,7 @@ mod test {
         let s = ServiceSettings::from_toml(toml).expect("parse_toml");
         assert_eq!(s.cors.allowed_methods.as_ref().unwrap().0.len(), 1);
         assert_eq!(
-            s.cors.allowed_methods.as_ref().unwrap().0.get(0).unwrap(),
+            s.cors.allowed_methods.as_ref().unwrap().0.first().unwrap(),
             "GET"
         );
     }
@@ -676,7 +679,7 @@ mod test {
         let s = ServiceSettings::from_json(json).expect("parse_json");
         assert_eq!(s.cors.allowed_headers.as_ref().unwrap().0.len(), 1);
         assert_eq!(
-            s.cors.allowed_headers.as_ref().unwrap().0.get(0).unwrap(),
+            s.cors.allowed_headers.as_ref().unwrap().0.first().unwrap(),
             "X-Cookies"
         );
     }

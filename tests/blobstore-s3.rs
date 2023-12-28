@@ -344,7 +344,7 @@ async fn test_ops_objects(base_url: impl AsRef<str>, http_client: &reqwest::Clie
     let meta = resp_json
         .data
         .objects
-        .get(0)
+        .first()
         .context("failed to get first element listed objects")?;
     assert_eq!(&meta.container_id, &container);
     assert_eq!(meta.content_length as usize, object_bytes_len);

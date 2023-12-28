@@ -1,0 +1,20 @@
+[package]
+name = "messaging-sender-http-smithy"
+version = "0.1.0"
+description = """
+A smithy-based actor that performs messaging send-related operations after receiving HTTP requests
+"""
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = [ "sync" ] }
+serde = {workspace = true, features = ["derive"]}
+serde_json = { workspace = true }
+wasmbus-rpc = { workspace = true }
+wasmcloud-interface-messaging = { workspace = true }
+wasmcloud-interface-httpserver = { workspace = true }
