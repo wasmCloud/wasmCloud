@@ -19,7 +19,7 @@ members = [
     "kv-redis",
     "kv-vault",
     "lattice-controller",
-    "nats",
+    "messaging-nats",
 ]
 resolver = "2"
 

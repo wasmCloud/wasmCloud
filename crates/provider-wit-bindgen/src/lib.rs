@@ -685,7 +685,16 @@ impl WitFunctionLatticeTranslationStrategy {
                     // Handle the no-parameter case
                     [] => {
                         let lattice_method = LitStr::new(
-                            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+                            format!(
+                                "{}.{}",
+                                iface
+                                    .name
+                                    .as_ref()
+                                    .context("failed to find interface name")?
+                                    .to_upper_camel_case(),
+                                iface_fn_name.to_upper_camel_case()
+                            )
+                            .as_str(),
                             Span::call_site(),
                         );
                         let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
@@ -715,7 +724,7 @@ impl WitFunctionLatticeTranslationStrategy {
                                 if let Some(err) = response.error {
                                     Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
                                 } else {
-                                    Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
+                                    Ok(())
                                 }
                             }
                         );
@@ -776,7 +785,16 @@ impl WitFunctionLatticeTranslationStrategy {
         let rust_type = convert_wit_type(arg_type, cfg)?;
         let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
         let lattice_method = LitStr::new(
-            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+            format!(
+                "{}.{}",
+                iface
+                    .name
+                    .as_ref()
+                    .context("failed to find interface name")?
+                    .to_upper_camel_case(),
+                iface_fn_name.to_upper_camel_case()
+            )
+            .as_str(),
             Span::call_site(),
         );
 
@@ -791,6 +809,18 @@ impl WitFunctionLatticeTranslationStrategy {
                 iface.name.clone().unwrap_or("<unknown>".into()),
             )
         })?;
+
+        // If the rust_type we're expecting to deal with is unit (`()`), we must return the unit
+        // instead of trying to deserialize what will eventually be an empty response (response.msg = [])
+        // into bytes.
+        //
+        // Attempting to convert an empty byte slice with wasmcloud_provider_sdk::deserialize will fail
+        // with an InvalidMarkerRead error, complaining about failing to fill the whole buffer.
+        let deser_phrase = if is_rust_unit_type(&result_rust_type) {
+            quote::quote!(Ok(()))
+        } else {
+            quote::quote!(Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?))
+        };
 
         // Return the generated function with appropriate args & return
         let func_tokens = quote::quote!(
@@ -819,7 +849,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 if let Some(err) = response.error {
                     Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
                 } else {
-                    Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
+                    #deser_phrase
                 }
             }
         );
@@ -839,7 +869,16 @@ impl WitFunctionLatticeTranslationStrategy {
         let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
         let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
         let lattice_method = LitStr::new(
-            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+            format!(
+                "{}.{}",
+                iface
+                    .name
+                    .as_ref()
+                    .context("failed to find interface name")?
+                    .to_upper_camel_case(),
+                iface_fn_name.to_upper_camel_case()
+            )
+            .as_str(),
             Span::call_site(),
         );
         // Build the invocation struct that will be used
@@ -885,7 +924,6 @@ impl WitFunctionLatticeTranslationStrategy {
                 &self,
                 args: #invocation_struct_name,
             ) -> Result<#result_rust_type, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
-
                 let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
                 let response = client
@@ -2326,7 +2364,7 @@ fn extract_witified_map(input: &[TokenTree]) -> Option<TokenStream> {
             TokenTree::Punct(p2), // >
         ] if p1.as_char() == '<'
             && p2.as_char() == '>'
-            && (*container_ident == "Option" || *container_ident == "Vec") 
+            && (*container_ident == "Option" || *container_ident == "Vec")
             // We need to know that the inner type is *not* a group
             // since this branch is only meant to a list of tuples (Vec<Vec<(....)>>)
             //
@@ -2462,6 +2500,11 @@ fn count_preceeding_supers(t: &Type) -> usize {
     } else {
         0
     }
+}
+
+/// Check if a given TokenStream is the Rust unit type
+fn is_rust_unit_type(t: &TokenStream) -> bool {
+    t.to_string() == "()"
 }
 
 #[cfg(test)]

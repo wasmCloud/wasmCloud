@@ -29,8 +29,6 @@ const TEST_LATTICE_PREFIX: &str = "test-lattice-controller";
 /// Test all functionality for the lattice-controller provider
 #[tokio::test(flavor = "multi_thread")]
 async fn lattice_controller_suite() -> Result<()> {
-    tracing_subscriber::fmt::init(); // TODO: remove once debugging is done
-
     let (nats_server, stop_nats_tx, nats_url, nats_client) = start_nats()
         .await
         .context("failed to start backing services")?;

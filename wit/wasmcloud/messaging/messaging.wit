@@ -1,0 +1,50 @@
+package wasmcloud:messaging;
+
+/// This interface represents the functions necessary
+/// to implement the [messaging wasmCloud interface](https://github.com/wasmCloud/interfaces/blob/main/messaging/messaging.smithy)
+///
+/// Derived from https://github.com/wasmCloud/interfaces/blob/f020c93d4cacd50318301f686e2f059a15862e1e/messaging/messaging.smithy
+interface messaging {
+    /// A message to be published
+    record message {
+        /// Subject (or topic) of the message
+        subject: string,
+
+        /// Topic on which the reply should be sent
+        reply-to: option<string>,
+
+        /// Message payload
+        body: list<u8>,
+    }
+
+    /// Message sent as part of a request, with timeout
+    record request-message {
+        /// Subject (or topic) of the message
+        subject: string,
+
+        /// Message payload
+        body: list<u8>,
+
+        /// Timeout in milliseconds
+        timeout-ms: u32,
+    }
+
+    /// Publish - send a message
+    ///
+    /// This function returns immediately after the message has been sent.
+    ///
+    /// If the sender expects to receive an asynchronous reply, the replyTo field should be
+    /// filled with the subject for teh response.
+    publish: func(msg: message);
+
+    /// Request - send a message in a request/reply pattern, waiting for a response
+    request: func(msg: request-message) -> message;
+}
+
+/// Actors that receive messages sent by a messaging provider adhere to this interface
+interface message-subscriber {
+    use messaging.{message};
+
+    /// Subscription handler
+    handle-message: func(msg: message);
+}

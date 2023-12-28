@@ -1,6 +1,9 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.17.3"
+version = "0.18.0"
+description = """
+A capability provider that satisfies the 'wasmcloud:messaging' contract using NATS as a backend.
+"""
 
 authors.workspace = true
 categories.workspace = true
@@ -25,5 +28,5 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-compat = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wasmcloud-provider-wit-bindgen = { workspace = true }

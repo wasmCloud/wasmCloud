@@ -182,7 +182,7 @@ async fn test_list_objects() {
         start_with: None,
     };
     let objs = s3.list_objects(&ctx, &req).await.expect("list objects");
-    let meta = objs.objects.get(0).unwrap();
+    let meta = objs.objects.first().unwrap();
     assert_eq!(&meta.container_id, &bucket);
     assert_eq!(meta.content_length as usize, object_bytes.len());
     assert_eq!(&meta.object_id, "object.1");

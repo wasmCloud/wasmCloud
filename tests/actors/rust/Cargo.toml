@@ -7,6 +7,8 @@ members = [
     "kv-http-smithy",
     "lattice-control-http-smithy",
     "logging-module-command",
+    "messaging-receiver-smithy",
+    "messaging-sender-http-smithy",
 ]
 resolver = "2"
 
@@ -24,6 +26,8 @@ wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
 wasmcloud-compat = { path = "../../../crates/compat" }
 wasmcloud-interface-httpserver = { version = "0.12", default-features = false }
 wasmcloud-interface-keyvalue = { version = "0.12", default-features = false }
+wasmcloud-interface-messaging = { version = "0.11", default-features = false }
 wasmcloud-interface-blobstore = { version = "0.9", default-features = false }
+wasmcloud-interface-logging = { version = "0.11", default-features = false }
 wasmcloud-interface-lattice-control = { version = "0.20", default-feature = false }
 wit-bindgen = { version = "0.16", default-features = false }
