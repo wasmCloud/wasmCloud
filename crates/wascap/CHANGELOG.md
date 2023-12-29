@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-f5459155f3b96aa67742a8c62eb286cc06885855/>
+
 ### Documentation
 
  - <csr-id-20ffecb027c225fb62d60b584d6b518aff4ceb51/> update wash URLs
@@ -25,13 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit converts the `lattice-control` provider to use WIT-ified
    interfaces (rather than Smithy-based interfaces) and `provider-wit-bindgen`.
 
+### Chore
+
+ - <csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/> add changelogs for host
+
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 43 calendar days.
- - 49 days passed between releases.
- - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 3 commits contributed to the release over the course of 44 calendar days.
+ - 50 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -41,11 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelogs for host (859b0ba)
     - Convert lattice-control provider to bindgen (f545915)
     - Update wash URLs (20ffecb)
 </details>
 
 ## v0.12.0 (2023-11-09)
+
+<csr-id-9c8abf3dd1a942f01a70432abb2fb9cfc4d48914/>
+<csr-id-ee9d552c7ea1c017d8aa646f64002a85ffebefb8/>
+<csr-id-9de9ae3de8799661525b2458303e72cd24cd666f/>
+<csr-id-0b59721367d138709b58fa241cdadd4f585203ac/>
+<csr-id-171214d4bcffddb9a2a37c2a13fcbed1ec43fd31/>
 
 ### Chore
 

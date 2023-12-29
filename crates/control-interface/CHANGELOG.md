@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-39d4de57e25af8cb4686d53410037c1cc93027ba/>
+<csr-id-5301084bde0db0c65811aa30c48de2a63e091fcf/>
+<csr-id-f43d88283ddc17ed81b1f95bf64b5985bda70fd3/>
+<csr-id-723ae50ea0eff41875f65622ba72cf2c4f53489f/>
+<csr-id-18791e7666b4de2526628e2a973c47b7f51d9481/>
+<csr-id-84fc7a928697c8fc9c6a03e94ed2053783577a4f/>
+<csr-id-a61723a12a298f10e28eb7464a2bb623b5cfe244/>
+<csr-id-17db669d79e242144eeffbd8d2ac2b1ae9edeb35/>
+<csr-id-7de31820034c4b70ab6edc772713e64aafe294a9/>
+<csr-id-65d2e28d54929b8f4d0b39077ee82ddad2387c8e/>
+<csr-id-57d014fb7fe11542d2e64068ba86e42a19f64f98/>
+<csr-id-4e9bae34fe95ecaffbc81fd452bf29746b4e5856/>
+<csr-id-bdb72eed8778a5d8c59d0b8939f147c374cb671f/>
+<csr-id-d3e6269dc1441b21d4c06d7620e9e7c6d839e211/>
+<csr-id-413410bad26d148aeda28b6403add7842570efac/>
+<csr-id-f8846e022a49d4c9158250af1ab9ae6661bceaf0/>
+<csr-id-79a8f1b03a63a4b5a5295cdf86ef69780bade052/>
+<csr-id-b604a8c7a5f1c9d3b417a178d68d90104d817b3a/>
+<csr-id-98a59529e451214d61acdffe4703552a5f4a231a/>
+<csr-id-f8c2d51f1b049e2035ea0d5df096a129482da7e4/>
+<csr-id-ae3c37c61b20c38abbf8e09b37c546dd1db4db42/>
+
 ### Chore
 
  - <csr-id-39d4de57e25af8cb4686d53410037c1cc93027ba/> bump to 0.32.1
@@ -17,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-723ae50ea0eff41875f65622ba72cf2c4f53489f/> address clippy warnings
  - <csr-id-18791e7666b4de2526628e2a973c47b7f51d9481/> integrate `control-interface` into the workspace
  - <csr-id-84fc7a928697c8fc9c6a03e94ed2053783577a4f/> add 'crates/control-interface/' from commit 'cea335729f3bf368178cc6b8745478bdd01c54b5'
+
+### Chore
+
+ - <csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/> add changelogs for host
 
 ### New Features
 
@@ -29,20 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This feature was motivated by 2 major reasons:
    
    1. We have been needing something like this for a while, at the very least for
-      being able to configure link names in an actor at runtime
-   2. There aren't currently any active (yes there were some in the past) efforts
+   being able to configure link names in an actor at runtime
+2. There aren't currently any active (yes there were some in the past) efforts
       to add a generic `wasi:cloud/guest-config` interface that can allow any host
       to provide config values to a component. I want to use this as a springboard
       for the conversation in wasi-cloud as we will start to use it and can give
       active feedback as to how the interface should be shaped
-   
-   With that said, note that this is only going to be added for actors built against
-   the component model. Since this is net new functionality, I didn't think it was
-   worth it to try to backport.
-   
-   As for testing, I have tested that an actor can import the functions and get the values
-   via the various e2e tests and also manually validated that all of the new topics
-   work.
 
 ### Other
 
@@ -72,9 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 25 commits contributed to the release over the course of 52 calendar days.
- - 973 days passed between releases.
- - 24 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 26 commits contributed to the release over the course of 53 calendar days.
+ - 974 days passed between releases.
+ - 25 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -84,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelogs for host (859b0ba)
     - Bump to 0.32.1 (39d4de5)
     - Remove deprecated code related to start actor cmd (7de3182)
     - Update parsing from RegistryCredential to RegistryAuth (65d2e28)
@@ -110,6 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Integrate `control-interface` into the workspace (18791e7)
     - Add 'crates/control-interface/' from commit 'cea335729f3bf368178cc6b8745478bdd01c54b5' (84fc7a9)
 </details>
+
+<csr-unknown>
+With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork.<csr-unknown/>
 
 ## v0.3.1 (2021-04-29)
 

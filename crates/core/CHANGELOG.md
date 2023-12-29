@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-eb0599fbdc6e1ac58616c7676b89bf7b19d4c662/>
+<csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
+<csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/>
+<csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/>
+<csr-id-123e53611e6d0b2bd4e92358783213784653fbf6/>
+<csr-id-7402a1f5cc4515e270fa66bbdd3d8bf2c03f35cb/>
+<csr-id-0319a9245589709d96b03786374d8026beb5d5d0/>
+<csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/>
+<csr-id-6abbcac954a9834d871ea69b8a40bd79d258c0f1/>
+<csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+
 ### Chore
 
  - <csr-id-eb0599fbdc6e1ac58616c7676b89bf7b19d4c662/> address clippy issues
  - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
  - <csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/> remove direct `wasmbus_rpc` dependency
  - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
+
+### Chore
+
+ - <csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/> add changelogs for host
 
 ### New Features
 
@@ -49,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 16 commits contributed to the release over the course of 122 calendar days.
- - 15 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 17 commits contributed to the release over the course of 123 calendar days.
+ - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -60,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelogs for host (859b0ba)
     - Bump to 0.2.0 for async-nats release (6abbcac)
     - Convert httpclient provider to bindgen (123e536)
     - Address clippy issues (eb0599f)
