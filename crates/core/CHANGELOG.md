@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.3.0 (2023-12-29)
 
 <csr-id-eb0599fbdc6e1ac58616c7676b89bf7b19d4c662/>
 <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-6abbcac954a9834d871ea69b8a40bd79d258c0f1/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
 <csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/>
+<csr-id-90d7c48a46e112ab884d9836bfc25c1de5570fee/>
 
 ### Chore
 
@@ -25,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
  - <csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/> remove direct `wasmbus_rpc` dependency
  - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
+
+### Chore
+
+ - <csr-id-31dbba97d47b8a5474679ce1ea01fb008c3e8bb2/> add changelog for wash-cli
 
 ### Chore
 
@@ -69,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 18 commits contributed to the release over the course of 123 calendar days.
- - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 19 commits contributed to the release over the course of 123 calendar days.
+ - 18 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -80,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelog for wash-cli ([`31dbba9`](https://github.com/connorsmith256/wasmcloud/commit/31dbba97d47b8a5474679ce1ea01fb008c3e8bb2))
     - Add changelogs for wash ([`90d7c48`](https://github.com/connorsmith256/wasmcloud/commit/90d7c48a46e112ab884d9836bfc25c1de5570fee))
     - Add changelogs for host ([`859b0ba`](https://github.com/connorsmith256/wasmcloud/commit/859b0baeff818a1af7e1824cbb80510669bdc976))
     - Bump to 0.2.0 for async-nats release ([`6abbcac`](https://github.com/connorsmith256/wasmcloud/commit/6abbcac954a9834d871ea69b8a40bd79d258c0f1))

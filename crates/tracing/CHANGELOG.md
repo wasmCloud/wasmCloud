@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.0 (2023-12-29)
 
 <csr-id-fffc9bb8cf42e0f5f7f03971b46dd5cdbb6d2c31/>
 <csr-id-45eea2ae0f65a0f4f403bed14feefdd67f82d0f3/>
@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/>
 <csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/>
 <csr-id-a8538fb7926b190a180bdd2b46ad00757d98759a/>
+<csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/>
 
 ### Chore
 
@@ -21,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-45eea2ae0f65a0f4f403bed14feefdd67f82d0f3/> clean-up imports
  - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
  - <csr-id-1a80eeaa1f1ba333891092f8a27e924511c0bd68/> satisfy clippy linting
+
+### Chore
+
+ - <csr-id-31dbba97d47b8a5474679ce1ea01fb008c3e8bb2/> add changelog for wash-cli
 
 ### Chore
 
@@ -53,8 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 15 commits contributed to the release over the course of 123 calendar days.
- - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 16 commits contributed to the release over the course of 123 calendar days.
+ - 15 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -64,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelog for wash-cli ([`31dbba9`](https://github.com/connorsmith256/wasmcloud/commit/31dbba97d47b8a5474679ce1ea01fb008c3e8bb2))
     - Add changelogs for host ([`859b0ba`](https://github.com/connorsmith256/wasmcloud/commit/859b0baeff818a1af7e1824cbb80510669bdc976))
     - Address clippy warnings ([`fffc9bb`](https://github.com/connorsmith256/wasmcloud/commit/fffc9bb8cf42e0f5f7f03971b46dd5cdbb6d2c31))
     - Clean-up imports ([`45eea2a`](https://github.com/connorsmith256/wasmcloud/commit/45eea2ae0f65a0f4f403bed14feefdd67f82d0f3))

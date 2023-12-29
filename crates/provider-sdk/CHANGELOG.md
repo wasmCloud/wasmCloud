@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.3.0 (2023-12-29)
 
 <csr-id-b9770de23b8d3b0fa1adffddb94236403d7e1d3f/>
 <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/>
 <csr-id-5fd0557c7ff454211e3f590333ff4dda208a1f7a/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+<csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/>
 
 ### Chore
 
@@ -32,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
  - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
  - <csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/> fix format
+
+### Chore
+
+ - <csr-id-31dbba97d47b8a5474679ce1ea01fb008c3e8bb2/> add changelog for wash-cli
 
 ### Chore
 
@@ -83,8 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 28 commits contributed to the release over the course of 156 calendar days.
- - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 29 commits contributed to the release over the course of 156 calendar days.
+ - 27 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -94,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelog for wash-cli ([`31dbba9`](https://github.com/connorsmith256/wasmcloud/commit/31dbba97d47b8a5474679ce1ea01fb008c3e8bb2))
     - Add changelogs for host ([`859b0ba`](https://github.com/connorsmith256/wasmcloud/commit/859b0baeff818a1af7e1824cbb80510669bdc976))
     - Bump `provider-sdk` to 0.2.0 ([`b9770de`](https://github.com/connorsmith256/wasmcloud/commit/b9770de23b8d3b0fa1adffddb94236403d7e1d3f))
     - Make publish method crate-public ([`5fd0557`](https://github.com/connorsmith256/wasmcloud/commit/5fd0557c7ff454211e3f590333ff4dda208a1f7a))

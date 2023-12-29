@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.12.1 (2023-12-29)
 
 <csr-id-f5459155f3b96aa67742a8c62eb286cc06885855/>
 <csr-id-859b0baeff818a1af7e1824cbb80510669bdc976/>
+<csr-id-90d7c48a46e112ab884d9836bfc25c1de5570fee/>
 
 ### Documentation
 
@@ -30,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chore
 
+ - <csr-id-31dbba97d47b8a5474679ce1ea01fb008c3e8bb2/> add changelog for wash-cli
+
+### Chore
+
  - <csr-id-90d7c48a46e112ab884d9836bfc25c1de5570fee/> add changelogs for wash
 
 ### Chore
@@ -40,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 44 calendar days.
+ - 5 commits contributed to the release over the course of 44 calendar days.
  - 50 days passed between releases.
- - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -52,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelog for wash-cli ([`31dbba9`](https://github.com/connorsmith256/wasmcloud/commit/31dbba97d47b8a5474679ce1ea01fb008c3e8bb2))
     - Add changelogs for wash ([`90d7c48`](https://github.com/connorsmith256/wasmcloud/commit/90d7c48a46e112ab884d9836bfc25c1de5570fee))
     - Add changelogs for host ([`859b0ba`](https://github.com/connorsmith256/wasmcloud/commit/859b0baeff818a1af7e1824cbb80510669bdc976))
     - Convert lattice-control provider to bindgen ([`f545915`](https://github.com/connorsmith256/wasmcloud/commit/f5459155f3b96aa67742a8c62eb286cc06885855))

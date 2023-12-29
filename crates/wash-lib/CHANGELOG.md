@@ -5,19 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.17.0 (2023-12-29)
+
+<csr-id-90d7c48a46e112ab884d9836bfc25c1de5570fee/>
 
 ### Chore
 
  - <csr-id-90d7c48a46e112ab884d9836bfc25c1de5570fee/> add changelogs for wash
 
+### Chore
+
+ - <csr-id-31dbba97d47b8a5474679ce1ea01fb008c3e8bb2/> add changelog for wash-cli
+
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release.
+ - 3 commits contributed to the release.
  - 1 day passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -27,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Add changelog for wash-cli ([`31dbba9`](https://github.com/connorsmith256/wasmcloud/commit/31dbba97d47b8a5474679ce1ea01fb008c3e8bb2))
     - Bump wasmcloud-control-interface v0.33.0, safety bump 2 crates ([`c585084`](https://github.com/connorsmith256/wasmcloud/commit/c585084d47e4b07c3bee295485a3302b0f071bf2))
     - Add changelogs for wash ([`90d7c48`](https://github.com/connorsmith256/wasmcloud/commit/90d7c48a46e112ab884d9836bfc25c1de5570fee))
 </details>
@@ -785,8 +792,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-78b99fde8606febf59e30f1d12ac558b29d425bf/> set default to Rust host
    - update paths to release binary
-- allow-file-upload default bug
-- mention dashboard ui cmd
 
 ### Bug Fixes
 
@@ -835,6 +840,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Bump cargo_metadata from 0.15.4 to 0.17.0 ([`a4f67e5`](https://github.com/connorsmith256/wasmcloud/commit/a4f67e5974c6bad70cd2d473fea7ab24371f922f))
     - Config loading for preview2 adapter path ([`7111b5d`](https://github.com/connorsmith256/wasmcloud/commit/7111b5d9a5ece7543ded436b7816974ad27910e2))
 </details>
+
+<csr-unknown>
+allow-file-upload default bugmention dashboard ui cmd<csr-unknown/>
 
 ## v0.9.3 (2023-07-27)
 
