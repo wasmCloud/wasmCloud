@@ -1,0 +1,10 @@
+interface wasi-cloud-error {
+	/// An error resource type for keyvalue operations.
+	/// Currently, this provides only one function to return a string representation
+	/// of the error. In the future, this will be extended to provide more information
+	/// about the error.
+	// Soon: switch to `resource error { ... }`
+	type error = u32;
+	drop-error: func(error: error);
+	trace: func(error: error) -> string;
+}

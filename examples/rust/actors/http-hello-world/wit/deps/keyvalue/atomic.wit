@@ -1,0 +1,20 @@
+/// A keyvalue interface that provides atomic operations.
+interface atomic {
+	/// A keyvalue interface that provides atomic operations.
+	use types.{bucket, error, key};
+
+	/// Atomically increment the value associated with the key in the bucket by the 
+	/// given delta. It returns the new value.
+	///
+	/// If the key does not exist in the bucket, it creates a new key-value pair
+	/// with the value set to the given delta. 
+	///
+	/// If any other error occurs, it returns an error.
+	increment: func(bucket: bucket, key: key, delta: u64) -> result<u64, error>;
+	
+	/// Atomically compare and swap the value associated with the key in the bucket.
+	/// It returns a boolean indicating if the swap was successful.
+	///
+	/// If the key does not exist in the bucket, it returns an error.
+	compare-and-swap: func(bucket: bucket, key: key, old: u64, new: u64) -> result<bool, error>;
+}
