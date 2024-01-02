@@ -1,0 +1,79 @@
+name: RFC Template
+description: Use this template when proposing an RFC for wasmCloud.
+title: "[RFC] <title>"
+labels: ["RFC", "rfc-proposed"]
+body:
+  - type: textarea
+    attributes:
+      label: RFC Title
+      description: A short title of your proposal.
+      placeholder: |
+        RFC: Implement RPC Protocol over Avian Carriers
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Introduction
+      description: A brief summary of the feature or idea that you're proposing. This should be a couple of sentences or a short paragraph.
+      placeholder: |
+        This RFC proposes implementing the wasmCloud RPC protocol using carrier pigeons.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Motivation
+      description: Explain the background behind this RFC. What problem are you trying to solve? Why is this solution needed? Why is it relevant for your project? This is your chance to provide a persuasive argument for your proposal.
+      placeholder: |
+        The wasmCloud RPC protocol is currently implemented over NATS. This is a problem because NATS requires a network connection. Carrier pigeons can be used in environments where no network is available.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Detailed Design
+      description: This is the heart of your RFC. Describe your proposed solution in detail. If you're suggesting a new feature, how will it work? If it's a new policy or process, what are the steps involved? Be as specific as possible. Include any code samples, diagrams, or other materials that would help others understand your proposal.
+      placeholder: |
+        The wasmCloud RPC protocol will be re-implemented using carrier pigeons. The following changes need to be made:
+        - The wasmCloud host will be modified to include a pigeon coop.
+        - The wasmCloud host will dispatch a pigeon for each invocation.
+        - Pigeons will have a maximum time-of-flight of 2 days by default. This will be configurable.
+        - To maintain security, the same pigeon must return with the invocation response.
+
+        See https://www.rfc-editor.org/rfc/rfc2549 for inspiration.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Backwards Compatibility
+      description: Discuss how your proposal will affect existing parts of your project. Will it introduce breaking changes? How will you mitigate these issues?
+      placeholder: |
+        This proposal will introduce breaking changes. The wasmCloud host will no longer be able to communicate with other hosts over NATS. If backwards compatibiltiy is required, a NATS-to-pigeon breeding program can be established.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions that you considered and why you chose your current proposal over them. This demonstrates that you've thought carefully about your proposal and helps others understand your decision-making process.
+      placeholder: |
+        The following alternatives were considered:
+        - Implementing the RPC protocol over penguins. The primary downside of this approach is that penguins are unable to fly.
+        - Maintaining the status quo and continuing to use NATS. This puts the project at risk of missing the anticipated wave of carrier pigeon adoption.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Unresolved Questions
+      description: List any questions or issues that you weren't able to address in your proposal. This helps others understand what feedback you're looking for.
+      placeholder: |
+        - Can pigeons be trusted?
+        - How will the wasmCloud host handle collisions?
+        - How often will the host's pigeon coop need to be cleaned?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Conclusion
+      description: End with a summary of your proposal and the next steps. What kind of feedback are you looking for? When do you hope to make a decision? Be clear about the process moving forward.
+      placeholder: |
+        This RFC proposes implementing the wasmCloud RPC protocol using carrier pigeons. As demonstrated, this approach is a clear improvement over the current implementation. Feedback is welcome, if you are a pigeon.
+    validations:
+      required: true

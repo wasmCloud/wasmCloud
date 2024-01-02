@@ -1,0 +1,56 @@
+name: Feature Request
+description: Suggest an idea for this project
+title: "[FEATURE] <title>"
+labels: ["enhancement", "triage"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Affected project(s)
+      description: Select all that apply
+      options:
+        - label: documentation
+          required: false
+        - label: examples
+          required: false
+        - label: wasmCloud host
+          required: false
+        - label: wasmCloud CLI (wash)
+          required: false
+        - label: wasmCloud dashboard UI (washboard)
+          required: false
+        - label: capability providers
+          required: false
+        - label: provider bindgen
+          required: false
+        - label: control interface client
+          required: false
+        - label: other / not sure
+          required: false
+  - type: textarea
+    attributes:
+      label: Is your feature request related to a problem? Please describe.
+      description: A clear and concise description of what the problem is.
+      placeholder: I'm frustrated when...
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+      placeholder: I would like to see...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
+      placeholder: I considered...
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Any other context or screenshots about the feature request.
+      placeholder: I have some screenshots...
+    validations:
+      required: false
