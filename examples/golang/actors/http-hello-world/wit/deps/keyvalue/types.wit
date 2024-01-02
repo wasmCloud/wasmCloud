@@ -1,0 +1,60 @@
+// A generic keyvalue interface for WASI.
+interface types {
+	/// A bucket is a collection of key-value pairs. Each key-value pair is stored
+	/// as a entry in the bucket, and the bucket itself acts as a collection of all
+	/// these entries. 
+	///
+	/// It is worth noting that the exact terminology for bucket in key-value stores
+	/// can very depending on the specific implementation. For example,
+	/// 1. Amazon DynamoDB calls a collection of key-value pairs a table
+	/// 2. Redis has hashes, sets, and sorted sets as different types of collections
+	/// 3. Cassandra calls a collection of key-value pairs a column family
+	/// 4. MongoDB calls a collection of key-value pairs a collection
+	/// 5. Riak calls a collection of key-value pairs a bucket
+	/// 6. Memcached calls a collection of key-value pairs a slab
+	/// 7. Azure Cosmos DB calls a collection of key-value pairs a container
+	///
+	/// In this interface, we use the term `bucket` to refer to a collection of key-value
+	// Soon: switch to `resource bucket { ... }`
+	type bucket = u32;
+	drop-bucket: func(bucket: bucket);
+	open-bucket: func(name: string) -> result<bucket, error>;
+
+	/// A key is a unique identifier for a value in a bucket. The key is used to
+	/// retrieve the value from the bucket.
+	type key = string;
+
+	/// A list of keys
+	type keys = list<key>;
+
+	use wasi:io/streams@0.2.0-rc-2023-11-10.{input-stream, output-stream};
+	use wasi-cloud-error.{ error };
+	/// A value is the data stored in a key-value pair. The value can be of any type
+	/// that can be represented in a byte array. It provides a way to write the value
+	/// to the output-stream defined in the `wasi-io` interface.
+	// Soon: switch to `resource value { ... }`
+	type outgoing-value = u32;
+	type outgoing-value-body-async = output-stream;
+	type outgoing-value-body-sync = list<u8>;
+	drop-outgoing-value: func(outgoing-value: outgoing-value);
+	new-outgoing-value: func() -> outgoing-value;
+	outgoing-value-write-body-async: func(outgoing-value: outgoing-value) -> result<outgoing-value-body-async, error>;
+	outgoing-value-write-body-sync: func(outgoing-value: outgoing-value, value: outgoing-value-body-sync) -> result<_, error>;
+
+	/// A incoming-value is a wrapper around a value. It provides a way to read the value
+	/// from the input-stream defined in the `wasi-io` interface.
+	///
+	/// The incoming-value provides two ways to consume the value:
+	/// 1. `incoming-value-consume-sync` consumes the value synchronously and returns the
+	///    value as a list of bytes.
+	/// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
+	///    value as an input-stream.
+	// Soon: switch to `resource incoming-value { ... }`
+	type incoming-value = u32;
+	type incoming-value-async-body = input-stream;
+	type incoming-value-sync-body = list<u8>;
+	drop-incoming-value: func(incoming-value: incoming-value);
+	incoming-value-consume-sync: func(incoming-value: incoming-value) -> result<incoming-value-sync-body, error>;
+	incoming-value-consume-async: func(incoming-value: incoming-value) -> result<incoming-value-async-body, error>;
+	size: func(incoming-value: incoming-value) -> u64;
+}

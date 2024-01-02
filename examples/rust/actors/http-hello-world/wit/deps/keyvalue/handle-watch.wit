@@ -1,0 +1,12 @@
+/// A keyvalue interface that provides handle-watch operations.
+interface handle-watch {
+	/// A keyvalue interface that provides handle-watch operations.
+	use types.{bucket, key, incoming-value};
+
+	/// Handle the set event for the given bucket and key. 
+	/// It returns a incoming-value that can be consumed to get the value.
+	on-set: func(bucket: bucket, key: key, incoming-value: incoming-value);
+
+	/// Handle the delete event for the given bucket and key.
+	on-delete: func(bucket: bucket, key: key);
+}
