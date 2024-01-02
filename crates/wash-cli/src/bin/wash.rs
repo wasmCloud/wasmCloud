@@ -125,7 +125,7 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Subcommand)]
 enum CliCommand {
-    /// Manage declarative applications and deployments (wadm) (experimental)
+    /// Manage declarative applications and deployments (wadm)
     #[clap(name = "app", subcommand)]
     App(AppCliCommand),
     /// Build (and sign) a wasmCloud actor, provider, or interface
@@ -149,7 +149,7 @@ enum CliCommand {
     /// Manage wasmCloud host configuration contexts
     #[clap(name = "ctx", alias = "context", alias = "contexts", subcommand)]
     Ctx(CtxCommand),
-    /// (experimental) Run a local development loop for an actor
+    /// Run a local development loop for an actor
     #[clap(name = "dev")]
     Dev(DevCommand),
     /// Tear down a wasmCloud environment launched with wash up
@@ -246,13 +246,7 @@ async fn main() {
         }
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
-        CliCommand::Dev(dev_cli) => {
-            if cli.experimental {
-                dev::handle_command(dev_cli, output_kind).await
-            } else {
-                experimental_error_message("dev")
-            }
-        }
+        CliCommand::Dev(dev_cli) => dev::handle_command(dev_cli, output_kind).await,
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Get(get_cli) => common::get_cmd::handle_command(get_cli, output_kind).await,
