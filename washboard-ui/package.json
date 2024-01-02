@@ -32,7 +32,7 @@
     "@radix-ui/react-tooltip": "^1.0.7",
     "@tanstack/react-table": "^8.10.7",
     "class-variance-authority": "^0.7.0",
-    "clsx": "^2.0.0",
+    "clsx": "^2.1.0",
     "date-fns": "^3.0.6",
     "immer": "^10.0.2",
     "lucide-react": "^0.303.0",
