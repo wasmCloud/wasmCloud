@@ -4,7 +4,7 @@ use common::{
     find_open_port, init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
 };
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 #[cfg(target_family = "unix")]
@@ -44,7 +44,6 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
                 "--disable-wadm",
             ])
             .kill_on_drop(true)
-            .envs(HashMap::from([("WASH_EXPERIMENTAL", "true")]))
             .spawn()
             .context("failed running cargo dev")?,
     ));
