@@ -29,7 +29,7 @@ pub const NATS_SERVER_BINARY: &str = "nats-server.exe";
 /// # #[tokio::main]
 /// # async fn main() {
 /// use wash_lib::start::ensure_nats_server;
-/// let res = ensure_nats_server("v2.8.4", "/tmp/").await;
+/// let res = ensure_nats_server("v2.10.7", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
@@ -59,7 +59,7 @@ where
 /// use wash_lib::start::ensure_nats_server_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = ensure_nats_server_for_os_arch_pair(os, arch, "v2.8.4", "/tmp/").await;
+/// let res = ensure_nats_server_for_os_arch_pair(os, arch, "v2.10.7", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
@@ -94,7 +94,7 @@ where
 /// # #[tokio::main]
 /// # async fn main() {
 /// use wash_lib::start::download_nats_server;
-/// let res = download_nats_server("v2.8.4", "/tmp/").await;
+/// let res = download_nats_server("v2.10.7", "/tmp/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
 /// # }
@@ -330,7 +330,7 @@ mod test {
         io::AsyncReadExt,
     };
 
-    const NATS_SERVER_VERSION: &str = "v2.8.4";
+    const NATS_SERVER_VERSION: &str = "v2.10.7";
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]

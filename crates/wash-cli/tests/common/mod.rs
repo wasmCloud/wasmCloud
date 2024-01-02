@@ -94,7 +94,7 @@ pub async fn set_test_file_content(path: &PathBuf, content: &str) -> Result<()> 
 
 #[allow(unused)]
 pub async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
-    let nats_binary = ensure_nats_server("v2.8.4", nats_install_dir).await?;
+    let nats_binary = ensure_nats_server("v2.10.7", nats_install_dir).await?;
     let config = NatsConfig::new_standalone("127.0.0.1", port, None);
     start_nats_server(nats_binary, std::process::Stdio::null(), config).await
 }
