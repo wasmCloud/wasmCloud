@@ -23,7 +23,7 @@ recommend deploying your main NATS server with another chart.
 You can install the chart via [the `wasmcloud-chart` package on ArtifactHub][artifacthub-wasmcloud]:
 
 ```console
-$ helm install wasmcloud oci://ghcr.io/wasmcloud/wasmcloud-chart --version 0.7.0
+$ helm install wasmcloud oci://ghcr.io/wasmcloud/wasmcloud-chart --version 0.7.2
 ```
 
 > [!NOTE]
@@ -31,7 +31,7 @@ $ helm install wasmcloud oci://ghcr.io/wasmcloud/wasmcloud-chart --version 0.7.0
 > You can replace `wasmcloud` with whatever you'd like to call your instantiation
 > of the helm chart.
 >
-> Version `0.7.0` of the helm chart (released Nov 9th, 2023) deploys version [`v0.80.0`][wasmcloud-v0.80.0] of the host by default.
+> Version `0.7.2` of the helm chart (released Jan 2nd, 2024) deploys version [`v0.81.0`][wasmcloud-v0.81.0] of the host by default.
 >
 > To change the version of the wasmcloud host that is deployed, set `wasmcloud.image.tag` in [`values.yaml`][values-yaml] to the
 > [docker image tag][wasmcloud-docker-tags] you'd like to deploy instead.
@@ -48,7 +48,7 @@ $ kubectl port-forward deployment/${RELEASE_NAME} 4222
 ```
 
 [artifacthub-wasmcloud]: https://artifacthub.io/packages/helm/wasmcloud-chart/wasmcloud-chart
-[wasmcloud-v0.80.0]: https://github.com/wasmCloud/wasmCloud/tree/v0.80.0
+[wasmcloud-v0.81.0]: https://github.com/wasmCloud/wasmCloud/tree/v0.81.0
 [wasmcloud-docker-tags]: https://hub.docker.com/r/wasmcloud/wasmcloud/tags
 [values-yaml]: ./values.yaml
 

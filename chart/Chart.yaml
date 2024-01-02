@@ -18,6 +18,6 @@ type: application
 # Note: Ensure you bump this `version` field in a separate PR than what you plan
 # to tag as the updated wasmCloud version. To be safe, bump and release wasmCloud
 # in one PR, then open a new PR updating this `version` and `appVersion`.
-version: 0.7.1
+version: 0.7.2
 
-appVersion: "0.80.0"
+appVersion: "0.81.0"
