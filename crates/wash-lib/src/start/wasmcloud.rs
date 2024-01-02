@@ -379,7 +379,7 @@ mod test {
         let _ = remove_dir_all(download_dir).await;
     }
 
-    const NATS_SERVER_VERSION: &str = "v2.8.4";
+    const NATS_SERVER_VERSION: &str = "v2.10.7";
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
