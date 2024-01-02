@@ -90,7 +90,7 @@ nats:
     pullPolicy: IfNotPresent
     # NOTE: The alpine image is required if you are doing leafnode configuration. Otherwise the base
     # nats image is missing the root certificates needed for validation
-    tag: "2.9-alpine"
+    tag: "2.10.7-alpine"
   resources: {}
 
 imagePullSecrets: []
