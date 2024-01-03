@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::warn;
+use tracing::{debug, info, warn};
 use wasm_encoder::{Encode, Section};
 use wit_bindgen_core::Files;
 use wit_bindgen_go::Opts as WitBindgenGoOpts;
@@ -449,7 +449,7 @@ fn generate_tinygo_bindgen(
     generator
         .generate(&resolver, world_id, &mut files)
         .context("failed to run golang wit-bindgen generator")?;
-    log::info!("successfully ran golang wit-bindgen generator");
+    info!("successfully ran golang wit-bindgen generator");
 
     // Write all generated files to disk
     for (file_name, content) in files.iter() {
@@ -472,7 +472,7 @@ fn generate_tinygo_bindgen(
             )
         })?;
     }
-    log::info!(
+    info!(
         "successfully wrote wit-bindgen generated golang files to [{}]",
         bindgen_dir.as_ref().display()
     );
@@ -541,7 +541,7 @@ fn convert_wit_dir_to_world(
     let (package_id, _paths) = resolve
         .push_dir(dir.as_ref())
         .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
-    log::info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
+    info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
 
     // Select the target world that was specified by the user
     let world_id = resolve
@@ -597,7 +597,7 @@ fn embed_wasm_component_metadata(
     for section in custom_sections {
         wasm_bytes.push(section.id());
         section.encode(&mut wasm_bytes);
-        log::debug!(
+        debug!(
             "successfully embedded component metadata section [{}] in WASM",
             section.name
         );
@@ -611,7 +611,7 @@ fn embed_wasm_component_metadata(
         )
     })?;
 
-    log::info!(
+    info!(
         "successfully wrote component w/ metadata to [{}]",
         output_wasm.as_ref().display()
     );

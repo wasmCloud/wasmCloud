@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs::metadata;
 use tokio::process::{Child, Command};
+use tracing::warn;
 
 use super::download_binary_from_github;
 
@@ -164,7 +165,7 @@ where
     let pid = child.as_ref().map(|c| c.id());
     if let (Ok(Some(wadm_pid)), Some(pid_path)) = (pid, pid_file) {
         if let Err(e) = tokio::fs::write(pid_path, wadm_pid.to_string()).await {
-            log::warn!("Couldn't write wadm pidfile: {e}");
+            warn!("Couldn't write wadm pidfile: {e}");
         }
     }
     child

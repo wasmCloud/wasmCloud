@@ -17,10 +17,10 @@ status = "actively-developed"
 [dependencies]
 async-trait = { workspace = true }
 aws-config = { workspace = true }
-aws-sdk-s3 = { workspace = true, features = [ "rustls", "rt-tokio" ] }
-aws-smithy-runtime = { workspace = true, features = [ "client", "tls-rustls" ] }
-hyper-rustls = { workspace = true, features = [ "webpki-tokio" ]}
-base64 = { workspace = true}
+aws-sdk-s3 = { workspace = true, features = ["rustls", "rt-tokio"] }
+aws-smithy-runtime = { workspace = true, features = ["client", "tls-rustls"] }
+hyper-rustls = { workspace = true, features = ["webpki-tokio"] }
+base64 = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
@@ -33,6 +33,5 @@ wasmcloud-provider-wit-bindgen = { workspace = true }
 
 [dev-dependencies]
 crc32fast = "1.3.2"
-env_logger = "0.9"
 fastrand = "1.7"
 rand = "0.8"

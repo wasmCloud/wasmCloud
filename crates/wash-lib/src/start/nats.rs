@@ -4,6 +4,7 @@ use std::process::Stdio;
 use anyhow::{bail, Result};
 use tokio::fs::{metadata, write};
 use tokio::process::{Child, Command};
+use tracing::warn;
 
 use crate::start::wait_for_server;
 
@@ -185,7 +186,7 @@ impl NatsConfig {
     /// * `js_domain`: Jetstream domain to use, defaults to `core`. See [Configuring Jetstream](https://wasmcloud.dev/reference/lattice/jetstream/) for more information
     pub fn new_standalone(host: &str, port: u16, js_domain: Option<String>) -> Self {
         if host == "0.0.0.0" {
-            log::warn!("Listening on 0.0.0.0 is unsupported on some platforms, use 127.0.0.1 for best results")
+            warn!("Listening on 0.0.0.0 is unsupported on some platforms, use 127.0.0.1 for best results")
         }
         NatsConfig {
             host: host.to_owned(),

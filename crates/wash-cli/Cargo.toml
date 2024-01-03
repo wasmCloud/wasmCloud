@@ -26,10 +26,8 @@ clap_complete = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 dirs = { workspace = true }
-env_logger = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
-log = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 nkeys = { workspace = true }
 notify = { workspace = true }
@@ -55,6 +53,14 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tar = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
+] }
 url = { workspace = true }
 wadm = { workspace = true }
 warp = { workspace = true }

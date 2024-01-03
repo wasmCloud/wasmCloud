@@ -1401,15 +1401,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95b3f3e67048839cb0d0781f445682a35113da7121f7c949db0e2be96a4fbece"
-dependencies = [
- "log",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4952,10 +4943,8 @@ dependencies = [
  "cloudevents-sdk",
  "console",
  "dirs",
- "env_logger",
  "futures",
  "indicatif",
- "log",
  "nix 0.27.1",
  "nkeys",
  "notify",
@@ -4985,6 +4974,8 @@ dependencies = [
  "tokio",
  "tokio-tar",
  "toml 0.7.8",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "wadm",
  "warp",
@@ -5021,7 +5012,6 @@ dependencies = [
  "heck 0.4.1",
  "ignore",
  "indicatif",
- "log",
  "nkeys",
  "oci-distribution",
  "path-absolutize",
@@ -5045,6 +5035,7 @@ dependencies = [
  "tokio-tar",
  "tokio-util",
  "toml 0.7.8",
+ "tracing",
  "url",
  "wadm",
  "walkdir",
