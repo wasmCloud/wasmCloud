@@ -24,6 +24,7 @@ use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
 use wash_lib::cli::get::GetCommand;
 use wash_lib::cli::inspect::InspectCliCommand;
+use wash_lib::cli::label::LabelHostCommand;
 use wash_lib::cli::link::LinkCommand;
 use wash_lib::cli::registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand};
 use wash_lib::cli::scale::ScaleCommand;
@@ -71,6 +72,7 @@ Iterate:
   link         Link an actor and a provider
   call         Invoke a wasmCloud actor
   ctl          Interact with a wasmCloud control interface (deprecated, use above commands)
+  label        Label (or un-label) a host with a key=value label pair
 
 Publish:
   pull         Pull an artifact from an OCI compliant registry
@@ -204,6 +206,9 @@ enum CliCommand {
     /// Stop an actor, provider, or host
     #[clap(name = "stop", subcommand)]
     Stop(StopCommand),
+    /// Label (or un-label) a host
+    #[clap(name = "label", alias = "tag")]
+    Label(LabelHostCommand),
     /// Update an actor running in a host to a newer version
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
@@ -286,6 +291,9 @@ async fn main() {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
         CliCommand::Stop(stop_cli) => common::stop_cmd::handle_command(stop_cli, output_kind).await,
+        CliCommand::Label(label_cli) => {
+            common::label_cmd::handle_command(label_cli, output_kind).await
+        }
         CliCommand::Update(update_cli) => {
             common::update_cmd::handle_command(update_cli, output_kind).await
         }
