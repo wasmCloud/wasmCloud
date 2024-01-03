@@ -54,6 +54,8 @@
 //! ```
 
 use anyhow::Result;
+use tracing::debug;
+
 pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
     let mut wait_count = 1;
     loop {
@@ -64,7 +66,7 @@ pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
         match tokio::net::TcpStream::connect(url).await {
             Ok(_) => break,
             Err(e) => {
-                log::debug!("Waiting for {service} at {url} to come up, attempt {wait_count}. Will retry in 1 second. Got error {:?}", e);
+                debug!("Waiting for {service} at {url} to come up, attempt {wait_count}. Will retry in 1 second. Got error {:?}", e);
                 wait_count += 1;
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }

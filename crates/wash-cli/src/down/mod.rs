@@ -5,9 +5,9 @@ use std::process::{Output, Stdio};
 use anyhow::{anyhow, bail, Result};
 use async_nats::Client;
 use clap::Parser;
-use log::{error, warn};
 use serde_json::json;
 use tokio::process::Command;
+use tracing::{error, warn};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::{
     cfg_dir, create_nats_client_from_opts, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,

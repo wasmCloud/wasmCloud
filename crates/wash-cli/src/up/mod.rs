@@ -19,6 +19,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
 };
+use tracing::warn;
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::create_nats_client_from_opts;
 use wash_lib::config::downloads_dir;
@@ -589,7 +590,7 @@ async fn run_wasmcloud_interactive(
             running.store(false, Ordering::SeqCst);
             let _ = running_sender.send(true);
         } else {
-            log::warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")
+            warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")
         }
         Result::<_, anyhow::Error>::Ok(())
     });

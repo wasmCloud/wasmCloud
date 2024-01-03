@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use log::warn;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -10,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
 };
+use tracing::warn;
 use wascap::{
     jwt::{Account, Actor, CapabilityProvider, Claims, Operator},
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},

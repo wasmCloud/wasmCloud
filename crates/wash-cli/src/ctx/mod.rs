@@ -7,8 +7,8 @@ use std::{
 
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
-use log::warn;
 use serde_json::json;
+use tracing::warn;
 use wash_lib::{
     cli::CommandOutput,
     config::{

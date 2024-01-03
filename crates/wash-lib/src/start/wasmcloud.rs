@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use anyhow::{bail, Result};
-use log::warn;
 use reqwest::StatusCode;
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio::process::{Child, Command};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
+use tracing::warn;
 
 #[cfg(target_family = "unix")]
 use std::os::unix::prelude::PermissionsExt;
@@ -278,9 +278,7 @@ fn check_version(version: &str) -> Result<()> {
         ),
         Ok(_ver) => Ok(()),
         Err(_parse_err) => {
-            log::warn!(
-                "Failed to parse wasmCloud version as a semantic version, download may fail"
-            );
+            warn!("Failed to parse wasmCloud version as a semantic version, download may fail");
             Ok(())
         }
     }

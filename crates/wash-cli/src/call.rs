@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use clap::Args;
-use log::{debug, error};
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+use tracing::{debug, error};
 use wash_lib::cli::CommandOutput;
 use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE_PREFIX};
 use wash_lib::context::{fs::ContextDir, ContextManager};

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::bail;
 use clap::{self, Parser, Subcommand};
 use serde_json::json;
+use tracing_subscriber::EnvFilter;
 use wash_cli::app::{self, AppCliCommand};
 use wash_cli::build::{self, BuildCommand};
 use wash_cli::call::{self, CallCli};
@@ -220,7 +221,10 @@ enum CliCommand {
 #[tokio::main]
 async fn main() {
     use clap::CommandFactory;
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let cli: Cli = Parser::parse();
 
     let output_kind = cli.output;

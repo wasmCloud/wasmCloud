@@ -15,10 +15,10 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use log::info;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::info;
 
 use crate::{
     config::{

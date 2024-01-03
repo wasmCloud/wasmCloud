@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use log::warn;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol},
     secrets::RegistryAuth,
@@ -10,6 +9,7 @@ use oci_distribution::{
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tracing::warn;
 use wash_lib::registry::{
     pull_oci_artifact, push_oci_artifact, validate_artifact, OciPullOptions, OciPushOptions,
     SupportedArtifacts,
