@@ -37,6 +37,7 @@ pub mod claims;
 pub mod dev;
 pub mod get;
 pub mod inspect;
+pub mod label;
 pub mod link;
 pub mod output;
 pub mod par;
