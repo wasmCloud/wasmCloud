@@ -300,9 +300,11 @@ pub struct WadmOpts {
     #[clap(long = "wadm-version", default_value = WADM_VERSION, env = "WADM_VERSION")]
     pub wadm_version: String,
 
+    /// If enabled, wadm will not be downloaded or run as a part of the up command
     #[clap(long = "disable-wadm")]
     pub disable_wadm: bool,
 
+    /// The JetStream domain to use for wadm
     #[clap(long = "wadm-js-domain", env = "WADM_JS_DOMAIN")]
     pub wadm_js_domain: Option<String>,
 }

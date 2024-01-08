@@ -17,10 +17,11 @@ const DEFAULT_WASHBOARD_VERSION: &str = "v0.1.0";
 
 #[derive(Parser, Debug, Clone)]
 pub struct UiCommand {
-    /// Whist port to run the UI on, defaults to 3030
+    /// Which port to run the UI on, defaults to 3030
     #[clap(short = 'p', long = "port", default_value = DEFAULT_WASH_UI_PORT)]
     pub port: u16,
 
+    /// Which version of the UI to run
     #[clap(short = 'v', long = "version", default_value = DEFAULT_WASHBOARD_VERSION)]
     pub version: String,
 }
