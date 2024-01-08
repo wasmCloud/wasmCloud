@@ -319,7 +319,7 @@ fn build_tinygo_actor(
     // Running wit-bindgen via go generate is only for WIT-enabled projects, so we must limit
     // to only projects that have their WIT defined in the expected top level wit directory
     //
-    // While wasmcloud and it's tooling is WIT-first, it is possible to build preview1/preview2
+    // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
     // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
     // we check for the `wit` directory which would be passed through to bindgen.
     if actor_config.wit_world.is_some() {
