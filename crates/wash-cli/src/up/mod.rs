@@ -94,11 +94,15 @@ pub struct NatsOpts {
     #[clap(long = "nats-port", env = "WASMCLOUD_NATS_PORT", alias = "NATS_PORT")]
     pub nats_port: Option<u16>,
 
-    /// NATS websocket port to use. Websocket support will not be enabled if this option isn't set. TLS is not supported. This is required for the wash ui to connect from localhost
-    #[clap(long = "nats-websocket-port", env = "NATS_WEBSOCKET_PORT")]
-    pub nats_websocket_port: Option<u16>,
+    /// NATS websocket port to use. TLS is not supported. This is required for the wash ui to connect from localhost
+    #[clap(
+        long = "nats-websocket-port",
+        env = "NATS_WEBSOCKET_PORT",
+        default_value_t = 4001
+    )]
+    pub nats_websocket_port: u16,
 
-    /// NATS Server Jetstream domain, defaults to `core`
+    /// NATS Server Jetstream domain for extending superclusters
     #[clap(long = "nats-js-domain", env = "NATS_JS_DOMAIN")]
     pub nats_js_domain: Option<String>,
 }
@@ -120,7 +124,7 @@ impl From<NatsOpts> for NatsConfig {
             js_domain: other.nats_js_domain,
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
-            websocket_port: other.nats_websocket_port,
+            websocket_port: Some(other.nats_websocket_port),
         }
     }
 }
@@ -368,7 +372,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             js_domain: cmd.nats_opts.nats_js_domain,
             remote_url: cmd.nats_opts.nats_remote_url,
             credentials: cmd.nats_opts.nats_credsfile.clone(),
-            websocket_port: cmd.nats_opts.nats_websocket_port,
+            websocket_port: Some(cmd.nats_opts.nats_websocket_port),
         };
         start_nats(&install_dir, &nats_binary, nats_config).await?;
         Some(nats_binary)
