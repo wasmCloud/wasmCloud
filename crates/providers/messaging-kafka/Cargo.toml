@@ -1,0 +1,27 @@
+[package]
+name = "wasmcloud-provider-kafka"
+version = "0.2.0"
+description = """
+A capability provider that satisfies the 'wasmcloud:messaging' contract using Kafka as a backend.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true,  features = ["derive"] }
+chrono = { workspace = true, features = ["clock"] }
+serde_bytes = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+rskafka = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wasmcloud-provider-wit-bindgen = { workspace = true }

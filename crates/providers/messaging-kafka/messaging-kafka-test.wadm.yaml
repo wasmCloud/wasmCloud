@@ -1,0 +1,55 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: messaging-kafka-test
+  annotations:
+    version: v0.0.1
+    description: "Test messaging-kafka provider with test actor messaging-sender-http-smithy"
+    experimental: true
+spec:
+  components:
+    # (Capability Provider) mediates HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: wasmcloud.azurecr.io/httpserver:0.19.1
+        contract: wasmcloud:httpserver
+
+    # (Capability Provider) provides messaging with Kafka
+    - name: messaging-kafka
+      type: capability
+      properties:
+        # TODO: you must replace the path below with the provider par.gz generated earlier
+        image: file:///the/absolute/path/to/provider.par.gz
+        contract: wasmcloud:messaging
+
+    # (Actor) A test actor that turns HTTP requests into Kafka messages
+    # in particular, sending a HTTP POST request to `/publish` will trigger a publish
+    - name: messaging-receiver-http-smithy
+      type: actor
+      properties:
+        # TODO: you must replace the path below to match your genreated code in build
+        image: file:///the/absolute/path/to/build/messaging-sender-http-smithy_s.wasm
+      traits:
+        # Govern the spread/scheduling of the actor
+        - type: spreadscaler
+          properties:
+            replicas: 1
+
+        # Link the HTTP server, and inform it to listen on port 8081
+        # on the local machine
+        - type: linkdef
+          properties:
+            target: httpserver
+            values:
+              ADDRESS: 127.0.0.1:8081
+
+        # Link to the messaging provider, directing it to the Kafka host
+        # and topics to listen on/interact with for this actor
+        - type: linkdef
+          properties:
+            target: messaging-kafka
+            values:
+              HOSTS: 127.0.0.1:9092
+              TOPIC: messaging-kafka.test

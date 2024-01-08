@@ -24,7 +24,7 @@ pub async fn start_nats() -> Result<(
     let jetstream_dir = tempdir()?;
     let (server, stop_tx) = spawn_server(
         Command::new(
-            env::var("WASMCLOUD_NATS")
+            env::var("TEST_NATS_BIN")
                 .as_deref()
                 .unwrap_or("nats-server"),
         )
