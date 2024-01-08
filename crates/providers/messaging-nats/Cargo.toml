@@ -11,6 +11,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[badges.maintenance]
+status = "actively-developed"
+
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
