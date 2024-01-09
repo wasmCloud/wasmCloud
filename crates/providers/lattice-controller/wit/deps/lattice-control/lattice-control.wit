@@ -282,7 +282,7 @@ interface lattice-controller {
       annotations-map: list<tuple<string,string>>,
 
       /// The target number of actors
-      count: u16,
+      count: u32,
     }
 
     /// A command sent to a specific host requesting instance of a given actor

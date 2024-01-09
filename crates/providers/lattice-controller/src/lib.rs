@@ -384,6 +384,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         _ctx: Context,
         cmd: StartActorCommand,
     ) -> ProviderInvocationResult<CtlOperationAck> {
+        let count = if cmd.count == 0 { 1_u32 } else { cmd.count.into() };
         Ok(self
             .get_connections()
             .await
@@ -392,7 +393,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             .scale_actor(
                 &cmd.host_id,
                 &cmd.actor_ref,
-                Some(cmd.count),
+                count,
                 Some(cmd.annotations.clone()),
             )
             .await
@@ -418,7 +419,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             .scale_actor(
                 &cmd.host_id,
                 &cmd.actor_ref,
-                Some(cmd.count),
+                cmd.count,
                 Some(cmd.annotations.clone()),
             )
             .await
