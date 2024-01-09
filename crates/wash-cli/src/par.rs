@@ -13,6 +13,11 @@ use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
+/// Helper function for detecting the arch used by the current machine
+fn detect_arch() -> String {
+    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum ParCliCommand {
     /// Build a provider archive file
@@ -85,7 +90,7 @@ pub struct CreateCommand {
     name: String,
 
     /// Architecture of provider binary in format ARCH-OS (e.g. x86_64-linux)
-    #[clap(short = 'a', long = "arch")]
+    #[clap(short = 'a', long = "arch", default_value_t = detect_arch())]
     arch: String,
 
     /// Path to provider binary for populating the archive
@@ -153,7 +158,7 @@ pub struct InsertCommand {
     archive: String,
 
     /// Architecture of binary in format ARCH-OS (e.g. x86_64-linux)
-    #[clap(short = 'a', long = "arch")]
+    #[clap(short = 'a', long = "arch", default_value_t = detect_arch())]
     arch: String,
 
     /// Path to provider binary to insert into archive
