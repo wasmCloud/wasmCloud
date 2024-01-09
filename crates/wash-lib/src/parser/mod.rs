@@ -15,6 +15,7 @@ use wasmcloud_control_interface::{RegistryCredential, RegistryCredentialMap};
 pub enum LanguageConfig {
     Rust(RustConfig),
     TinyGo(TinyGoConfig),
+    Other(String),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -506,9 +507,7 @@ impl RawProjectConfig {
                 Some(tinygo_config) => LanguageConfig::TinyGo(tinygo_config.try_into()?),
                 None => LanguageConfig::TinyGo(TinyGoConfig::default()),
             },
-            _ => {
-                bail!("unknown language in wasmcloud.toml: {}", self.language);
-            }
+            other => LanguageConfig::Other(other.to_string()),
         };
 
         let registry_config = self
@@ -545,7 +544,7 @@ impl RawProjectConfig {
                 }
             }
 
-            LanguageConfig::TinyGo(_) => Ok(CommonConfig {
+            LanguageConfig::TinyGo(_) | LanguageConfig::Other(_) => Ok(CommonConfig {
                 name: self
                     .name
                     .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
