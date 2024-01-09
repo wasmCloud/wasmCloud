@@ -109,7 +109,7 @@ There are three main sections of a `wasmcloud.toml` file: common config, languag
 | name          | string |                               | Name of the project                                                                    |
 | version       | string |                               | Semantic version of the project                                                        |
 | path          | string | `{pwd}`                       | Path to the project directory to determine where built and signed artifacts are output |
-| language      | enum   | [rust, tinygo]                | Language that actor or provider is written in                                          |
+| language      | enum   | [rust, tinygo, other]         | Language that actor or provider is written in                                          |
 | type          | enum   | [actor, provider, interface ] | Type of wasmcloud artifact that is being generated                                     |
 | wasm_bin_name | string | "name" setting                | Expected name of the wasm module binary that will be generated                         |
 
@@ -131,6 +131,12 @@ There are three main sections of a `wasmcloud.toml` file: common config, languag
 | ----------- | ------ | ------------- | --------------------------------------- |
 | cargo_path  | string | `which cargo` | The path to the cargo binary            |
 | target_path | string | ./target      | Path to cargo/rust's `target` directory |
+
+#### Language Config - [other]
+
+If you are using a language other than Rust or Go, you can designate your language as any string (ex. `javascript`).
+
+Since `wash` will be unable to infer the build toolchain from the language you provide, you must supply the `build_command` and the path to the `build_artifact` so that the artifact can be built and found before signing.
 
 #### Type Config - [actor]
 

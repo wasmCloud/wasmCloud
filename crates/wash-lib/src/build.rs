@@ -126,6 +126,17 @@ pub fn build_actor(
                 };
                 actor_wasm_path
             }
+            LanguageConfig::Other(_) if actor_config.build_command.is_some() => {
+                // SAFETY: We checked that the build command is not None above
+                build_custom_actor(
+                    common_config,
+                    actor_config,
+                    actor_config.build_command.as_ref().unwrap(),
+                )?
+            }
+            LanguageConfig::Other(other) => {
+                bail!("build command is required for unsupported language {other}");
+            }
         };
 
         // If the actor has been configured as WASI Preview2, adapt it from preview1
