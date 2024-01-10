@@ -433,6 +433,8 @@ jobs:
 
   nfpm:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+    env:
+      PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     needs:
     - cargo
     - build-bin
@@ -465,7 +467,6 @@ jobs:
         nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
         nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
     - name: Push `deb`
-      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       working-directory: ./crates/wash-cli
       run: |
         debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266)
@@ -474,7 +475,6 @@ jobs:
           curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
         done
     - name: Push `rpm`
-      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       working-directory: ./crates/wash-cli
       run: |
         rpms=(194 204 209 216 226 231 236 239 240 244 260 273)
