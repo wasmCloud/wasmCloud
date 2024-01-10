@@ -1,0 +1,8 @@
+# JS build output
+/dist/
+
+/node_modules/
+/keys/
+
+# wash build output
+/build/*
