@@ -1,0 +1,29 @@
+{
+  "name": "ts-example",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build:tsc": "tsc",
+    "build:component": "jco componentize -w wit -o dist/index.wasm dist/index.js",
+    "build:actor": "wash build --sign-only --config-path wasmcloud.toml",
+    "build": "npm run build:tsc && npm run build:component && npm run build:actor",
+    "actor:start": "wash start actor file://$(realpath dist/index_s.wasm) --auction-timeout-ms 10000 --timeout-ms 10000",
+    "actor:stop": "wash stop actor typescript-http-hello-world",
+    "wadm:start": "wash app deploy typescript-http-hello-world.wadm.yaml",
+    "wadm:stop": "wash app delete typescript-http-hello-world v0.0.1",
+    "start": "npm run build && npm run wadm:start",
+    "reload": "npm run build && npm run wadm:stop && npm run wadm:start",
+    "stop": "npm run wadm:stop",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.6.0",
+    "@bytecodealliance/jco": "^0.14.2",
+    "@types/node": "^20.10.8",
+    "typescript": "^5.3.3"
+  }
+}

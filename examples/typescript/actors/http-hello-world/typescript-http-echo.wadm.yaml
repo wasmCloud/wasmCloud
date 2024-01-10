@@ -1,0 +1,37 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: typescript-http-hello-world
+  annotations:
+    version: v0.0.1
+    description: "Demo of Typescript HTTP hello world server"
+    experimental: true
+spec:
+  components:
+    # (Capability Provider) mediates HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: wasmcloud.azurecr.io/httpserver:0.19.1
+        contract: wasmcloud:httpserver
+
+    # (Actor) A test actor that returns 'hello world' for any given HTTP request
+    - name: typescript-http-hello-world
+      type: actor
+      properties:
+        # TODO: you must replace the path below to match your genreated code in build
+        image: file:///the/absolute/path/to/build/index_s.wasm
+      traits:
+        # Govern the spread/scheduling of the actor
+        - type: spreadscaler
+          properties:
+            replicas: 1
+
+        # Link the HTTP server, and inform it to listen on port 8081
+        # on the local machine
+        - type: linkdef
+          properties:
+            target: httpserver
+            values:
+              ADDRESS: 127.0.0.1:8081
