@@ -32,10 +32,10 @@ crates/control-interface @wasmCloud/control-interface-maintainers
 crates/core @wasmCloud/org-maintainers
 crates/opentelemetry-nats @thomastaylor312 @connorsmith256
 crates/provider-archive @wasmCloud/capability-provider-maintainers
-crates/provider-sdk @thomastaylor312 @connorsmith256
-crates/provider-wit-bindgen @thomastaylor312 @vados-cosmonic @connorsmith256
+crates/provider-sdk @wasmCloud/capability-provider-sdk-maintainers
+crates/provider-wit-bindgen @wasmCloud/capability-provider-wit-bindgen-maintainers
 crates/tracing @thomastaylor312 @connorsmith256
-crates/wascap @thomastaylor312 @connorsmith256 @brooksmtownsend @autodidaddict
+crates/wascap @wasmCloud/wascap-maintainers
 
 # projects
 crates/providers @wasmCloud/capability-provider-maintainers
