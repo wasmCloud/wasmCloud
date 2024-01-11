@@ -1,10 +1,13 @@
 //! Interact with and manage wadm applications over NATS, requires the `nats` feature
 
-use std::{path::PathBuf, str::FromStr, time::Duration};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use async_nats::{Client, Message};
 use regex::Regex;
+use tracing::warn;
 use wadm::server::{
     DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
     GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, StatusResponse,
@@ -50,8 +53,62 @@ impl ToString for ModelOperation {
 
 #[derive(Debug)]
 pub enum AppManifest {
-    SerializedModel(String),
+    SerializedModel(serde_yaml::Value),
     ModelName(String),
+}
+
+impl AppManifest {
+    /// Resolve relative file paths in the given app manifest to some base path
+    pub fn resolve_image_relative_file_paths(&mut self, base: impl AsRef<Path>) -> Result<()> {
+        if let AppManifest::SerializedModel(ref mut content) = self {
+            resolve_relative_file_paths_in_yaml(content, base)?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolve the relative paths in a YAML value, given a base path (directory)
+/// from which to resolve the relative paths that are found
+fn resolve_relative_file_paths_in_yaml(
+    content: &mut serde_yaml::Value,
+    base_dir: impl AsRef<Path>,
+) -> Result<()> {
+    match content {
+        // If we encounter a string anywhere that is a relative path, resolve it
+        serde_yaml::Value::String(s)
+            if s.starts_with("file://") && s.chars().nth(7).is_some_and(|v| v != '/') =>
+        {
+            // Convert the base dir + relative path into a file based URL
+            let full_path = base_dir.as_ref().join(
+                s.strip_prefix("file://")
+                    .context("failed to strip prefix")?,
+            );
+            // Build a file based URL and replace the existing one
+            if let Ok(url) = Url::from_file_path(&full_path) {
+                *s = url.into();
+            } else {
+                warn!(
+                    "failed to build a file URL from path [{}], is the file missing?",
+                    full_path.display()
+                )
+            }
+        }
+        // If the YAML value is a mapping, recur into it to process more values
+        serde_yaml::Value::Mapping(m) => {
+            for (_key, value) in m.iter_mut() {
+                resolve_relative_file_paths_in_yaml(value, base_dir.as_ref())?;
+            }
+        }
+        // If the YAML value is a sequence, recur into it to process more values
+        serde_yaml::Value::Sequence(values) => {
+            for value in values {
+                resolve_relative_file_paths_in_yaml(value, base_dir.as_ref())?;
+            }
+        }
+        // All other cases we can ignore replacements
+        _ => {}
+    }
+    Ok(())
 }
 
 pub trait AsyncReadSource: AsyncRead + Unpin + Send + Sync {}
@@ -336,20 +393,45 @@ pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest>
                     bail!("unable to load app manifest from empty stdin input")
                 }
 
-                Ok(AppManifest::SerializedModel(buffer))
+                Ok(AppManifest::SerializedModel(
+                    serde_yaml::from_str(&buffer).context("failed to parse yaml from STDIN")?,
+                ))
             }
-            AppManifestSource::File(path) => Ok(AppManifest::SerializedModel(
-                tokio::fs::read_to_string(path)
-                    .await
-                    .context("failed to read model from file")?,
-            )),
+            AppManifestSource::File(path) => {
+                let mut manifest = AppManifest::SerializedModel(
+                    serde_yaml::from_str(
+                        tokio::fs::read_to_string(&path)
+                            .await
+                            .context("failed to read model from file")?
+                            .as_str(),
+                    )
+                    .with_context(|| {
+                        format!("failed to parse yaml from file @ [{}]", path.display())
+                    })?,
+                );
+
+                // For manifests loaded from a local file, canonicalize the path that held the YAML
+                // and use that directory (immediate parent) to resolve relative file paths inside
+                manifest.resolve_image_relative_file_paths(
+                    path.canonicalize()
+                        .context("failed to canonicalize path to app manifest")?
+                        .parent()
+                        .context("failed to get parent directory of app manifest")?,
+                )?;
+
+                Ok(manifest)
+            }
             AppManifestSource::Url(url) => Ok(AppManifest::SerializedModel(
-                reqwest::get(url)
-                    .await
-                    .context("request to remote model file failed")?
-                    .text()
-                    .await
-                    .context("failed to read model from remote file")?,
+                serde_yaml::from_str(
+                    reqwest::get(url.clone())
+                        .await
+                        .context("request to remote model file failed")?
+                        .text()
+                        .await
+                        .context("failed to read model from remote file")?
+                        .as_ref(),
+                )
+                .with_context(|| format!("failed to parse YAML from URL [{}]", url))?,
             )),
             AppManifestSource::Model(name) => Ok(AppManifest::ModelName(name)),
         }

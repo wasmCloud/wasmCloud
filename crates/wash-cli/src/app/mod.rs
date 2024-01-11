@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm::server::{
@@ -199,7 +199,14 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
-            let put_res = wash_lib::app::put_model(&client, lattice.clone(), &manifest).await?;
+            let put_res = wash_lib::app::put_model(
+                &client,
+                lattice.clone(),
+                serde_yaml::to_string(&manifest)
+                    .context("failed to convert manifest to string")?
+                    .as_ref(),
+            )
+            .await?;
 
             let model_name = match put_res.result {
                 PutResult::Created | PutResult::NewVersion => put_res.name,
@@ -227,7 +234,14 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
-            wash_lib::app::put_model(&client, lattice, &manifest).await
+            wash_lib::app::put_model(
+                &client,
+                lattice,
+                serde_yaml::to_string(&manifest)
+                    .context("failed to convert manifest to string")?
+                    .as_ref(),
+            )
+            .await
         }
         AppManifest::ModelName(_) => {
             bail!("failed to retrieve manifest at `{:?}`", cmd.source)
