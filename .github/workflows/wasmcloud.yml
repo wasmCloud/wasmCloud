@@ -434,6 +434,7 @@ jobs:
   nfpm:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     env:
+      REF: ${{ github.ref }}
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     needs:
     - cargo
