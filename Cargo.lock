@@ -5025,6 +5025,7 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "serde_with",
+ "serde_yaml",
  "tempfile",
  "term-table",
  "test-case",

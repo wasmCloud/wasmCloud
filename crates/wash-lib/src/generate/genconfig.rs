@@ -177,7 +177,7 @@ mod tests {
 
         assert_eq!(result.placeholders.len(), 2);
 
-        let pa = result.placeholders.get(0).unwrap();
+        let pa = result.placeholders.first().unwrap();
         let pb = result.placeholders.get(1).unwrap();
 
         assert_eq!(pa.len(), 4);
