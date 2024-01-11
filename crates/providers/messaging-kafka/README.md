@@ -161,7 +161,7 @@ To deploy the architecture above to your wasmcloud lattice:
 wash app deploy messaging-kafka-test.wadm.yaml
 ```
 
-> [!INFO]
+> [!NOTE]
 >
 > If you ever need to to remove (and possibly redeploy) your application:
 >

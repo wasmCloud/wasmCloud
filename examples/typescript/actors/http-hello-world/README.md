@@ -101,7 +101,7 @@ To send a request to the running actor (via the HTTP server provider):
 curl localhost:8081
 ```
 
-> [!INFO]
+> [!NOTE]
 > Confused as to why it is port 8081?
 >
 > See `typescript-http-hello-world.wadm.yaml` for more information on the pieces of the architecture;
