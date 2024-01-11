@@ -462,7 +462,7 @@ jobs:
     - name: Build `deb` and `rpm`
       working-directory: ./crates/wash-cli
       run: |
-        export VERSION=$(echo $REF | cut -d/ -f3)
+        export VERSION=$(echo $REF| cut -d- -f3 | tr -d "v")
         nfpm pkg --packager deb -f build/nfpm.amd64.yaml
         nfpm pkg --packager deb -f build/nfpm.arm64.yaml
         nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
