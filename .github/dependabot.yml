@@ -28,3 +28,8 @@ updates:
   directory: "/"
   schedule:
     interval: "daily"
+  groups:
+    upload-download-artifact:
+      patterns:
+      - "*upload-artifact*"
+      - "*download-artifact*"
