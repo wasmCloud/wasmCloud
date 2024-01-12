@@ -1,12 +1,11 @@
-import {useEffect, useState} from "react";
-import {clsx} from "clsx";
-import {useReactiveConfig} from "@/lattice/use-lattice-config.ts";
-import {canConnect} from "@/services/nats.ts";
+import {clsx} from 'clsx';
+import * as React from 'react';
+import {canConnect, useLatticeConfig} from '@/services/lattice';
 
-export function ConnectionStatus() {
-  const latticeConfig = useReactiveConfig();
-  const [status, setStatus] = useState<'PENDING' | 'ONLINE' | 'OFFLINE'>('PENDING');
-  useEffect(() => {
+export function ConnectionStatus(): React.ReactElement {
+  const [latticeConfig] = useLatticeConfig();
+  const [status, setStatus] = React.useState<'PENDING' | 'ONLINE' | 'OFFLINE'>('PENDING');
+  React.useEffect(() => {
     canConnect(latticeConfig.latticeUrl).then((online) => setStatus(online ? 'ONLINE' : 'OFFLINE'));
   }, [latticeConfig.latticeUrl]);
 
@@ -18,10 +17,10 @@ export function ConnectionStatus() {
           ONLINE: 'text-green-400 bg-green-400/10',
           OFFLINE: 'text-rose-400 bg-rose-400/10',
         }[status],
-        'flex-none rounded-full p-1'
+        'flex-none rounded-full p-1',
       )}
     >
-      <div className="h-2 w-2 rounded-full bg-current"/>
+      <div className="h-2 w-2 rounded-full bg-current" />
     </div>
-  )
+  );
 }

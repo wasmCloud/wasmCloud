@@ -6,7 +6,7 @@ interface AppProps<T = any> {
   children: ReactNode;
 }
 
-export default function AppProvider(props: AppProps): ReactElement {
+export function AppProvider(props: AppProps): ReactElement {
   return (
     <>
       {props.components.reduceRight((accumulator, Component) => {
