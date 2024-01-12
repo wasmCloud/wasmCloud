@@ -50,13 +50,13 @@ jobs:
         run: tar -C dist -zcvf washboard.tar.gz .
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: washboard
           path: ./washboard-ui/washboard.tar.gz
 
       - name: Upload Playwright Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: playwright-report
@@ -71,7 +71,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/washboard-ui-v')
     steps:
       - name: Download Asset
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: washboard
 
