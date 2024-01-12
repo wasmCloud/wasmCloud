@@ -1,12 +1,13 @@
 import {ReactElement} from 'react';
 import {RouterProvider, createBrowserRouter} from 'react-router-dom';
-import AppProvider from '@/lib/AppProvider';
+import {AppLatticeServiceProvider} from '@/context/AppLatticeServiceProvider';
+import {AppProvider} from '@/context/AppProvider';
 import {routes} from '@/routes';
 import {SettingsProvider} from '@/settings/SettingsContext';
 
 function App(): ReactElement {
   return (
-    <AppProvider components={[SettingsProvider]}>
+    <AppProvider components={[SettingsProvider, AppLatticeServiceProvider]}>
       <RouterProvider router={createBrowserRouter(routes)} />
     </AppProvider>
   );

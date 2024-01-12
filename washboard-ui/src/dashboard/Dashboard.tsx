@@ -1,9 +1,9 @@
 import {ReactElement} from 'react';
 import ActorsTable from '@/actors/ActorsTable';
 import {HostsSummary} from '@/hosts/HostsSummary';
-import useLatticeData from '@/lattice/use-lattice-data';
 import LinksTable from '@/links/LinksTable';
 import ProvidersTable from '@/providers/ProvidersTable';
+import {useLatticeData} from '@/services/lattice';
 import {Card, CardContent, CardHeader} from '@/ui/card';
 import StatsTile from './StatsTile';
 

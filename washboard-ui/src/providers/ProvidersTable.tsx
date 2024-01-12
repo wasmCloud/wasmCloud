@@ -10,8 +10,7 @@ import {
 } from '@tanstack/react-table';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useState} from 'react';
-import {WadmProvider} from '@/lattice/lattice-service';
-import useLatticeData from '@/lattice/use-lattice-data';
+import {useLatticeData, WadmProvider} from '@/services/lattice';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/ui/collapsible';
 import {ShortCopy} from '@/ui/short-copy';
 import {StatusIndicator} from '@/ui/status-indicator';

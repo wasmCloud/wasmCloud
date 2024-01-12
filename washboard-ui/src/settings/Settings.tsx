@@ -3,7 +3,6 @@ import {PropsWithChildren, ReactElement} from 'react';
 import LatticeSettings from '@/lattice/LatticeSettings';
 import {Button} from '@/ui/button';
 import {Label} from '@/ui/label';
-import {DarkModeToggle} from './DarkModeToggle';
 import {
   Sheet,
   SheetContent,
@@ -12,6 +11,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/ui/sheet';
+import {DarkModeToggle} from './DarkModeToggle';
 
 function Settings(): ReactElement {
   return (
@@ -26,7 +26,7 @@ function Settings(): ReactElement {
         <SheetHeader>
           <SheetTitle>Settings</SheetTitle>
           <SheetDescription>
-            Make changes to your settings here. Click update when you're done.
+            Make changes to your settings here. Click update when you&nbsp;re done.
           </SheetDescription>
         </SheetHeader>
         <div className="grid gap-4 py-4">

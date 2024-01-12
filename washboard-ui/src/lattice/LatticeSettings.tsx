@@ -2,12 +2,11 @@ import {zodResolver} from '@hookform/resolvers/zod';
 import {ReactElement, useEffect} from 'react';
 import {useForm} from 'react-hook-form';
 import * as z from 'zod';
+import {canConnect, useLatticeConfig} from '@/services/lattice';
 import {Button} from '@/ui/button';
 import {Form, FormControl, FormField, FormItem, FormLabel, FormMessage} from '@/ui/form';
 import {Input} from '@/ui/input';
-import {useLatticeConfig} from './use-lattice-config';
-import {canConnect} from "../services/nats.ts";
-import {SheetClose, SheetFooter} from "@/ui/sheet";
+import {SheetClose, SheetFooter} from '@/ui/sheet';
 
 const formSchema = z.object({
   latticeUrl: z
@@ -23,20 +22,23 @@ const formSchema = z.object({
     ),
 });
 
+type LatticeFormInput = z.input<typeof formSchema>;
+
+type LatticeFormOutput = z.output<typeof formSchema>;
+
 function LatticeSettings(): ReactElement {
-  const {
-    config: {latticeUrl},
-    setConfig,
-  } = useLatticeConfig();
-  const form = useForm<z.infer<typeof formSchema>>({
+  const [{latticeUrl}, setConfig] = useLatticeConfig();
+  const form = useForm<LatticeFormInput, object, LatticeFormOutput>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       latticeUrl: latticeUrl,
     },
   });
 
-  function handleSave(data: z.infer<typeof formSchema>): void {
-    setConfig('latticeUrl', data.latticeUrl);
+  function onSubmit(data: LatticeFormOutput): void {
+    setConfig({
+      latticeUrl: data.latticeUrl,
+    });
   }
 
   useEffect(() => {
@@ -47,7 +49,7 @@ function LatticeSettings(): ReactElement {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSave)}>
+      <form onSubmit={form.handleSubmit(onSubmit)}>
         <FormField
           control={form.control}
           name="latticeUrl"

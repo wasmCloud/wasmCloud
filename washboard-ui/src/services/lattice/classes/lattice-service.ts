@@ -1,16 +1,16 @@
 import {produce} from 'immer';
 import {NatsConnection, connect} from 'nats.ws';
 import {BehaviorSubject, Observable, Subject, map, merge, tap} from 'rxjs';
-import {CloudEvent} from './cloud-event.type';
+import {CloudEvent} from '../types/cloud-event.type';
 
-export interface LatticeCache {
+export type LatticeCache = {
   hosts: Record<string, WadmHost>;
   actors: Record<string, WadmActor>;
   providers: Record<string, WadmProvider>;
   links: WadmLink[];
-}
+};
 
-export interface WadmActor {
+export type WadmActor = {
   id: string;
   name: string;
   capabilities: string[];
@@ -23,9 +23,9 @@ export interface WadmActor {
       annotations: Record<string, string>;
     }[]
   >;
-}
+};
 
-export interface WadmProvider {
+export type WadmProvider = {
   id: string;
   name: string;
   issuer: string;
@@ -33,17 +33,17 @@ export interface WadmProvider {
   reference: string;
   link_name: string;
   hosts: Record<string, string>;
-}
+};
 
-export interface WadmLink {
+export type WadmLink = {
   actor_id: string;
   contract_id: string;
   link_name: string;
   public_key: string;
   provider_id: string;
-}
+};
 
-export interface WadmHost {
+export type WadmHost = {
   friendly_name: string;
   id: string;
   labels: Record<string, string>;
@@ -58,17 +58,16 @@ export interface WadmHost {
   }[];
   uptime_seconds: number;
   version: string;
-}
+};
 
-class LatticeService {
-  private static instance: LatticeService;
+export type LatticeServiceConfig = {
+  latticeUrl: string;
+};
+
+export class LatticeService {
   private static readonly RETRY_COUNT = 10;
 
   private connection?: NatsConnection;
-
-  private config = {
-    latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL || 'ws://localhost:4001',
-  };
 
   private linkState$: Subject<Pick<LatticeCache, 'links'>>;
   private wadmState$: Subject<Partial<LatticeCache>>;
@@ -76,32 +75,45 @@ class LatticeService {
     latticeUrl: string;
   }>;
 
-  private constructor() {
+  public constructor() {
     this.linkState$ = new Subject<Pick<LatticeCache, 'links'>>();
     this.wadmState$ = new Subject<Partial<LatticeCache>>();
     this.config$ = new BehaviorSubject({
       latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL || 'ws://localhost:4001',
     });
-    this.connect();
   }
 
-  public set latticeUrl(url: string) {
-    this.config.latticeUrl = url;
-    this.config$.next({...this.config$, latticeUrl: url})
-    this.connect();
-  }
-  public get latticeUrl(): string {
-    return this.config.latticeUrl;
-  }
+  public connect = async (): Promise<void> => {
+    this.connection = await connect({
+      servers: this.config$.value.latticeUrl,
+    });
+    this.connection.closed().then((error) => {
+      if (error) {
+        console.error(`closed with an error: ${error.message}`);
+      }
+    });
+    this.subscribeToWadmState();
+    this.subscribeToLinks();
+  };
 
-  public static getInstance(): LatticeService {
-    if (!LatticeService.instance) {
-      LatticeService.instance = new LatticeService();
-    }
-    return LatticeService.instance;
-  }
+  public disconnect = async (): Promise<void> => {
+    await this.connection?.drain().catch(() => null);
+  };
 
-  public getLatticeCache$(): Observable<LatticeCache> {
+  public reconnect = async (): Promise<void> => {
+    await this.disconnect();
+    await this.connect();
+  };
+
+  public setConfig = (newConfig: Partial<LatticeServiceConfig>): void => {
+    this.config$.next({
+      ...this.config$.value,
+      ...newConfig,
+    });
+    this.reconnect();
+  };
+
+  public getLatticeCache$ = (): Observable<LatticeCache> => {
     const subject = new BehaviorSubject<LatticeCache>({
       hosts: {},
       actors: {},
@@ -125,9 +137,9 @@ class LatticeService {
       .subscribe();
 
     return subject;
-  }
+  };
 
-  private subscribeToLinks() {
+  private subscribeToLinks(): void {
     (async (): Promise<void> => {
       const connection = await this.waitForConnection();
       const message = await connection.request('wasmbus.ctl.default.get.links');
@@ -150,7 +162,7 @@ class LatticeService {
     })();
   }
 
-  private subscribeToWadmState() {
+  private subscribeToWadmState(): void {
     (async (): Promise<void> => {
       const connection = await this.waitForConnection();
       const wadm = await connection.jetstream().views.kv('wadm_state');
@@ -173,20 +185,6 @@ class LatticeService {
       }
       this.wadmState$.complete();
     })();
-  }
-
-  private async connect(): Promise<void> {
-    await this.connection?.drain().catch(() => null);
-    this.connection = await connect({
-      servers: this.latticeUrl,
-    });
-    this.connection.closed().then((error) => {
-      if (error) {
-        console.error(`closed with an error: ${error.message}`);
-      }
-    });
-    this.subscribeToWadmState();
-    this.subscribeToLinks()
   }
 
   private waitForConnection(count = 0): Promise<NatsConnection> {

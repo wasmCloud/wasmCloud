@@ -1,8 +1,9 @@
-import {useDebugValue, useEffect, useMemo, useState} from 'react';
-import LatticeService, {LatticeCache} from './lattice-service';
+import {useDebugValue, useEffect, useState} from 'react';
+import {LatticeCache} from '../classes/lattice-service';
+import {useLatticeService} from '../context/LatticeServiceProvider';
 
 function useLatticeData(): LatticeCache {
-  const service = useMemo(() => LatticeService.getInstance(), []);
+  const service = useLatticeService();
   const [state, handleStateUpdate] = useState<LatticeCache>({
     hosts: {},
     actors: {},
@@ -16,9 +17,9 @@ function useLatticeData(): LatticeCache {
     return () => {
       sub.unsubscribe();
     };
-  }, [service, service.latticeUrl]);
+  }, [service]);
 
   return state;
 }
 
-export default useLatticeData;
+export {useLatticeData};
