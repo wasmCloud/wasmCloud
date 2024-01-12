@@ -4922,7 +4922,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "wasm-encoder 0.38.1",
+ "wasm-encoder 0.39.0",
  "wasm-gen",
  "wasmparser",
 ]
@@ -5040,7 +5040,7 @@ dependencies = [
  "wadm",
  "walkdir",
  "wascap",
- "wasm-encoder 0.38.1",
+ "wasm-encoder 0.39.0",
  "wasmcloud-component-adapters",
  "wasmcloud-control-interface 0.32.1",
  "wasmcloud-core",
