@@ -458,6 +458,11 @@ jobs:
       with:
         name: wasmcloud-x86_64-unknown-linux-musl
         path: ./crates/wash-cli/x86_64
+    - name: Make wash executable
+      working-directory: ./crates/wash-cli
+      run: |
+        chmod +x ./aarch64/bin/wash
+        chmod +x ./x86_64/bin/wash
 
     - name: Build `deb` and `rpm`
       working-directory: ./crates/wash-cli
