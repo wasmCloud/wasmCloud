@@ -241,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
     if let Err(e) = configure_tracing(
-        "wasmCloud Host".to_string(),
+        "wasmcloud-host".to_string(),
         &otel_config,
         args.enable_structured_logging,
         Some(&log_level),
