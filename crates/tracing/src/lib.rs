@@ -7,6 +7,7 @@ use std::env;
 use std::io::{IsTerminal, StderrLock, Write};
 
 use anyhow::Context;
+use heck::ToKebabCase;
 use once_cell::sync::OnceCell;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::LevelFilter;
@@ -114,6 +115,7 @@ pub fn configure_tracing(
 
 #[cfg(feature = "otel")]
 #[allow(clippy::missing_errors_doc)] // TODO: Document errors
+#[allow(clippy::needless_pass_by_value)]
 pub fn configure_tracing(
     service_name: String,
     otel_config: &OtelConfig,
@@ -126,6 +128,7 @@ pub fn configure_tracing(
 
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
+    let normalized_service_name = service_name.to_kebab_case();
 
     let exporter = otel_config
         .traces_exporter
@@ -141,7 +144,7 @@ pub fn configure_tracing(
                 );
                 DEFAULT_TRACING_ENDPOINT.to_string()
             };
-            Some(get_tracer(endpoint, service_name))
+            Some(get_tracer(endpoint, normalized_service_name))
         }
         Some(exporter) => {
             eprintln!("unsupported OTEL exporter: '{exporter}'");
