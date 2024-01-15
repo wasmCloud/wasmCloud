@@ -73,7 +73,7 @@
     "eslint-plugin-unicorn": "^50.0.1",
     "postcss": "^8.4.33",
     "prettier": "^3.1.1",
-    "tailwindcss": "^3.3.6",
+    "tailwindcss": "^3.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
     "vite": "^5.0.10",
