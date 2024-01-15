@@ -372,11 +372,11 @@
     },
     "nixlib_3": {
       "locked": {
-        "lastModified": 1704588527,
-        "narHash": "sha256-YECXW8P0bqFM5e65Mu2fL4wZlonNWCuNEk7UQPsuJZ0=",
+        "lastModified": 1705193289,
+        "narHash": "sha256-oL5EAaZHiA3ABLdyKag/DgT+457vmELv8A+eaox2xsI=",
         "owner": "nix-community",
         "repo": "nixpkgs.lib",
-        "rev": "be8e58791dcfa2b98b512c2a1bdf3bd94a38790b",
+        "rev": "da839f74dc77c9826fa333b1bc2c8258fd6ffcbe",
         "type": "github"
       },
       "original": {
