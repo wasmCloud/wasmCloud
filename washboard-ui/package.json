@@ -33,7 +33,7 @@
     "@tanstack/react-table": "^8.10.7",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
-    "date-fns": "^3.0.6",
+    "date-fns": "^3.2.0",
     "immer": "^10.0.2",
     "lucide-react": "^0.307.0",
     "nats.ws": "^1.19.1",
