@@ -96,7 +96,7 @@ impl Spier {
         let (actor_id, friendly_name) = find_actor_id(actor_id_or_name, ctl_client).await?;
         let linked_providers = get_linked_providers(&actor_id, ctl_client).await?;
 
-        let rpc_topic_prefix = format!("wasmbus.rpc.{}", ctl_client.lattice_prefix);
+        let rpc_topic_prefix = format!("wasmbus.rpc.{}", ctl_client.lattice);
         let actor_stream = nats_client
             .subscribe(format!("{}.{}", rpc_topic_prefix, actor_id.as_ref()))
             .await?;

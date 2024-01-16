@@ -135,9 +135,14 @@ pub struct WasmcloudOpts {
     #[clap(long = "wasmcloud-version", default_value = WASMCLOUD_HOST_VERSION, env = "WASMCLOUD_VERSION")]
     pub wasmcloud_version: String,
 
-    /// A lattice prefix is a unique identifier for a lattice, and is frequently used within NATS topics to isolate messages from different lattices
-    #[clap(short = 'x', long = "lattice-prefix", env = WASMCLOUD_LATTICE_PREFIX)]
-    pub lattice_prefix: Option<String>,
+    /// A unique identifier for a lattice, frequently used within NATS topics to isolate messages among different lattices
+    #[clap(
+        short = 'x',
+        long = "lattice",
+        alias = "lattice-prefix", // TODO(pre-1.0): remove me
+        env = WASMCLOUD_LATTICE
+    )]
+    pub lattice: Option<String>,
 
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate it's public key
     #[clap(long = "host-seed", env = WASMCLOUD_HOST_SEED)]
@@ -253,9 +258,7 @@ pub struct WasmcloudOpts {
 
 impl WasmcloudOpts {
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
-        let lattice_prefix = self
-            .lattice_prefix
-            .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string());
+        let lattice = self.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
         let ctl_host = self
             .ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
@@ -277,7 +280,7 @@ impl WasmcloudOpts {
         .context("Failed to create NATS client")?;
 
         let mut builder = CtlClientBuilder::new(nc)
-            .lattice_prefix(lattice_prefix)
+            .lattice(lattice)
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
 
         if let Some(rpc_timeout_ms) = self.rpc_timeout_ms {
@@ -327,11 +330,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let nats_port = cmd.nats_opts.nats_port.unwrap_or(ctx.ctl_port);
 
     let wasmcloud_opts = WasmcloudOpts {
-        lattice_prefix: Some(
-            cmd.wasmcloud_opts
-                .lattice_prefix
-                .unwrap_or(ctx.lattice_prefix),
-        ),
+        lattice: Some(cmd.wasmcloud_opts.lattice.unwrap_or(ctx.lattice)),
         ctl_host: Some(cmd.wasmcloud_opts.ctl_host.unwrap_or(nats_host.clone())),
         ctl_port: Some(cmd.wasmcloud_opts.ctl_port.unwrap_or(nats_port)),
         ctl_jwt: cmd.wasmcloud_opts.ctl_jwt.or(ctx.ctl_jwt),
@@ -387,15 +386,13 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
     nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
-    let lattice_prefix = wasmcloud_opts
-        .lattice_prefix
-        .context("missing lattice prefix")?;
+    let lattice = wasmcloud_opts.lattice.context("missing lattice prefix")?;
     let wadm_process = if !cmd.wadm_opts.disable_wadm
         && !is_wadm_running(
             &nats_host,
             nats_port,
             cmd.nats_opts.nats_credsfile.clone(),
-            &lattice_prefix,
+            &lattice,
         )
         .await
         .unwrap_or(false)
@@ -656,14 +653,14 @@ async fn is_wadm_running(
     nats_host: &str,
     nats_port: u16,
     credsfile: Option<PathBuf>,
-    lattice_prefix: &str,
+    lattice: &str,
 ) -> Result<bool> {
     let client =
         create_nats_client_from_opts(nats_host, &nats_port.to_string(), None, None, credsfile)
             .await?;
 
     Ok(
-        wash_lib::app::get_models(&client, Some(lattice_prefix.to_string()))
+        wash_lib::app::get_models(&client, Some(lattice.to_string()))
             .await
             .is_ok(),
     )
@@ -780,7 +777,7 @@ mod tests {
             "domain",
             "--wasmcloud-version",
             "v0.57.1",
-            "--lattice-prefix",
+            "--lattice",
             "anotherprefix",
         ])?;
         assert!(up_all_flags.wasmcloud_opts.allow_latest);
@@ -845,7 +842,7 @@ mod tests {
             "v0.57.1".to_string()
         );
         assert_eq!(
-            up_all_flags.wasmcloud_opts.lattice_prefix.unwrap(),
+            up_all_flags.wasmcloud_opts.lattice.unwrap(),
             "anotherprefix".to_string()
         );
         assert_eq!(

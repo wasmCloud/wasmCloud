@@ -194,7 +194,7 @@ impl Queue {
     async fn new(
         nats: &async_nats::Client,
         topic_prefix: &str,
-        lattice_prefix: &str,
+        lattice: &str,
         cluster_key: &KeyPair,
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
@@ -211,29 +211,27 @@ impl Queue {
             config,
             config_get,
         ) = try_join!(
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.registries.put",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.ping.hosts",)),
             nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
-                format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
+                format!("{topic_prefix}.{lattice}.linkdefs.*"),
+                format!("{topic_prefix}.{lattice}.linkdefs",)
             ),
             nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.get.*"),
-                format!("{topic_prefix}.{lattice_prefix}.get")
+                format!("{topic_prefix}.{lattice}.get.*"),
+                format!("{topic_prefix}.{lattice}.get")
             ),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
-            nats.subscribe(format!(
-                "{topic_prefix}.{lattice_prefix}.labels.{host_id}.*",
-            )),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.auction.>",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.cmd.{host_id}.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.get.{host_id}.inv",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.labels.{host_id}.*",)),
             nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.config.>"),
-                format!("{topic_prefix}.{lattice_prefix}.config"),
+                format!("{topic_prefix}.{lattice}.config.>"),
+                format!("{topic_prefix}.{lattice}.config"),
             ),
             nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice_prefix}.get.config.>"),
-                format!("{topic_prefix}.{lattice_prefix}.get.config")
+                format!("{topic_prefix}.{lattice}.get.config.>"),
+                format!("{topic_prefix}.{lattice}.get.config")
             ),
         )
         .context("failed to subscribe to queues")?;
@@ -284,7 +282,7 @@ impl Deref for ActorInstance {
 struct Handler {
     nats: async_nats::Client,
     config_data: Arc<RwLock<ConfigCache>>,
-    lattice_prefix: String,
+    lattice: String,
     cluster_key: Arc<KeyPair>,
     host_key: Arc<KeyPair>,
     claims: jwt::Claims<jwt::Actor>,
@@ -374,11 +372,11 @@ impl Handler {
         let topic = match target {
             None | Some(TargetEntity::Link(_)) => format!(
                 "wasmbus.rpc.{}.{}.{}",
-                self.lattice_prefix, invocation.target.public_key, invocation.target.link_name,
+                self.lattice, invocation.target.public_key, invocation.target.link_name,
             ),
             Some(TargetEntity::Actor(_)) => format!(
                 "wasmbus.rpc.{}.{}",
-                self.lattice_prefix, invocation.target.public_key
+                self.lattice, invocation.target.public_key
             ),
         };
 
@@ -821,7 +819,7 @@ impl Bus for Handler {
         let aliases = Arc::clone(&self.aliases);
         let nats = self.nats.clone();
         let chunk_endpoint = self.chunk_endpoint.clone();
-        let lattice_prefix = self.lattice_prefix.clone();
+        let lattice = self.lattice.clone();
         let origin = self.origin.clone();
         let cluster_key = self.cluster_key.clone();
         let host_key = self.host_key.clone();
@@ -876,13 +874,12 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 let topic = match target {
                     None | Some(TargetEntity::Link(_)) => format!(
-                        "wasmbus.rpc.{lattice_prefix}.{}.{}",
+                        "wasmbus.rpc.{lattice}.{}.{}",
                         invocation.target.public_key, invocation.target.link_name,
                     ),
-                    Some(TargetEntity::Actor(_)) => format!(
-                        "wasmbus.rpc.{lattice_prefix}.{}",
-                        invocation.target.public_key
-                    ),
+                    Some(TargetEntity::Actor(_)) => {
+                        format!("wasmbus.rpc.{lattice}.{}", invocation.target.public_key)
+                    }
                 };
 
                 let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
@@ -1755,7 +1752,7 @@ struct SupplementalConfig {
 #[instrument(level = "debug", skip_all)]
 async fn load_supplemental_config(
     ctl_nats: &async_nats::Client,
-    lattice_prefix: &str,
+    lattice: &str,
     labels: &HashMap<String, String>,
 ) -> anyhow::Result<SupplementalConfig> {
     #[derive(Deserialize, Default)]
@@ -1764,7 +1761,7 @@ async fn load_supplemental_config(
         registry_credentials: Option<HashMap<String, RegistryCredential>>,
     }
 
-    let cfg_topic = format!("wasmbus.cfg.{lattice_prefix}.req");
+    let cfg_topic = format!("wasmbus.cfg.{lattice}.req");
     let cfg_payload = serde_json::to_vec(&json!({
         "labels": labels,
     }))
@@ -1968,7 +1965,7 @@ impl Host {
                 let queue = Queue::new(
                     &ctl_nats,
                     &config.ctl_topic_prefix,
-                    &config.lattice_prefix,
+                    &config.lattice,
                     &cluster_key,
                     &host_key,
                 )
@@ -2018,14 +2015,14 @@ impl Host {
         } else {
             async_nats::jetstream::new(ctl_nats.clone())
         };
-        let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
+        let bucket = format!("LATTICEDATA_{}", config.lattice);
         let data = create_bucket(&ctl_jetstream, &bucket).await?;
 
-        let config_bucket = format!("CONFIGDATA_{}", config.lattice_prefix);
+        let config_bucket = format!("CONFIGDATA_{}", config.lattice);
         let config_data = create_bucket(&ctl_jetstream, &config_bucket).await?;
 
         let chunk_endpoint = ChunkEndpoint::with_client(
-            &config.lattice_prefix,
+            &config.lattice,
             rpc_nats.clone(),
             config.js_domain.as_ref(),
         );
@@ -2036,7 +2033,7 @@ impl Host {
         let (config_data_watch_abort, config_data_watch_abort_reg) = AbortHandle::new_pair();
 
         let supplemental_config = if config.config_service_enabled {
-            load_supplemental_config(&ctl_nats, &config.lattice_prefix, &labels).await?
+            load_supplemental_config(&ctl_nats, &config.lattice, &labels).await?
         } else {
             SupplementalConfig::default()
         };
@@ -2048,7 +2045,7 @@ impl Host {
             ctl_nats.clone(),
             PolicyHostInfo {
                 public_key: host_key.public_key(),
-                lattice_id: config.lattice_prefix.clone(),
+                lattice_id: config.lattice.clone(),
                 labels: labels.clone(),
                 cluster_issuers: cluster_issuers.clone(),
             },
@@ -2424,7 +2421,7 @@ impl Host {
         event::publish(
             &self.event_builder,
             &self.ctl_nats,
-            &self.host_config.lattice_prefix,
+            &self.host_config.lattice,
             name,
             data,
         )
@@ -2451,8 +2448,8 @@ impl Host {
 
         let actor_ref = actor_ref.as_ref();
         let topic = format!(
-            "wasmbus.rpc.{lattice_prefix}.{subject}",
-            lattice_prefix = self.host_config.lattice_prefix,
+            "wasmbus.rpc.{lattice}.{subject}",
+            lattice = self.host_config.lattice,
             subject = claims.subject
         );
         let actor = actor.clone();
@@ -2561,7 +2558,7 @@ impl Host {
         let handler = Handler {
             nats: self.rpc_nats.clone(),
             config_data: Arc::clone(&self.config_data_cache),
-            lattice_prefix: self.host_config.lattice_prefix.clone(),
+            lattice: self.host_config.lattice.clone(),
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
             claims: claims.clone(),
@@ -3209,7 +3206,7 @@ impl Host {
             let log_level: Option<wasmcloud_core::logging::Level> = None;
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
-                lattice_rpc_prefix: self.host_config.lattice_prefix.clone(),
+                lattice_rpc_prefix: self.host_config.lattice.clone(),
                 link_name: link_name.to_string(),
                 lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
                 lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
@@ -3290,7 +3287,7 @@ impl Host {
             let ctl_nats = self.ctl_nats.clone();
             let event_builder = self.event_builder.clone();
             // NOTE: health_ prefix here is to allow us to move the variables into the closure
-            let health_lattice_prefix = self.host_config.lattice_prefix.clone();
+            let health_lattice = self.host_config.lattice.clone();
             let health_provider_id = claims.subject.to_string();
             let health_link_name = link_name.to_string();
             let health_contract_id = claims.metadata.clone().map(|m| m.capid).unwrap_or_default();
@@ -3300,8 +3297,9 @@ impl Host {
                 let mut previous_healthy = false;
                 // Allow the provider 5 seconds to initialize
                 health_check.reset_after(Duration::from_secs(5));
-                let health_topic =
-                    format!("wasmbus.rpc.{health_lattice_prefix}.{health_provider_id}.{health_link_name}.health");
+                let health_topic = format!(
+                    "wasmbus.rpc.{health_lattice}.{health_provider_id}.{health_link_name}.health"
+                );
                 // TODO: Refactor this logic to simplify nesting
                 loop {
                     select! {
@@ -3321,7 +3319,7 @@ impl Host {
                                             if let Err(e) = event::publish(
                                                 &event_builder,
                                                 &ctl_nats,
-                                                &health_lattice_prefix,
+                                                &health_lattice,
                                                 "health_check_passed",
                                                 event::provider_health_check(
                                                     &health_provider_id,
@@ -3338,7 +3336,7 @@ impl Host {
                                             if let Err(e) = event::publish(
                                                 &event_builder,
                                                 &ctl_nats,
-                                                &health_lattice_prefix,
+                                                &health_lattice,
                                                 "health_check_failed",
                                                 event::provider_health_check(
                                                     &health_provider_id,
@@ -3354,7 +3352,7 @@ impl Host {
                                             if let Err(e) = event::publish(
                                                 &event_builder,
                                                 &ctl_nats,
-                                                &health_lattice_prefix,
+                                                &health_lattice,
                                                 "health_check_status",
                                                 event::provider_health_check(
                                                     &health_provider_id,
@@ -3503,7 +3501,7 @@ impl Host {
                     .send_request(
                         format!(
                             "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
-                            self.host_config.lattice_prefix
+                            self.host_config.lattice
                         ),
                         req,
                     )
@@ -3813,7 +3811,8 @@ impl Host {
           "js_domain": self.host_config.js_domain,
           "ctl_host": self.host_config.ctl_nats_url.to_string(),
           "rpc_host": self.host_config.rpc_nats_url.to_string(),
-          "lattice_prefix": self.host_config.lattice_prefix,
+          "lattice_prefix": self.host_config.lattice, // TODO(pre-1.0): remove me once all clients are updated to control interface v0.33
+          "lattice": self.host_config.lattice,
         }))
         .context("failed to encode reply")?;
         Ok(buf.into())
@@ -4024,10 +4023,10 @@ impl Host {
         }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
-        let lattice_prefix = &self.host_config.lattice_prefix;
+        let lattice = &self.host_config.lattice;
         self.rpc_nats
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.put",),
+                format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.put",),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 msgp.into(),
             )
@@ -4083,10 +4082,10 @@ impl Host {
         }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
-        let lattice_prefix = &self.host_config.lattice_prefix;
+        let lattice = &self.host_config.lattice;
         self.rpc_nats
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.del",),
+                format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.del",),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 msgp.into(),
             )

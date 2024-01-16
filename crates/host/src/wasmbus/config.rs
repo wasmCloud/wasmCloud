@@ -33,7 +33,7 @@ pub struct Host {
     /// Whether to require TLS for RPC connection
     pub rpc_tls: bool,
     /// The lattice the host belongs to
-    pub lattice_prefix: String,
+    pub lattice: String,
     /// The domain to use for host Jetstream operations
     pub js_domain: Option<String>,
     /// Labels (key-value pairs) to add to the host
@@ -88,7 +88,7 @@ impl Default for Host {
             rpc_jwt: None,
             rpc_key: None,
             rpc_tls: false,
-            lattice_prefix: "default".to_string(),
+            lattice: "default".to_string(),
             js_domain: None,
             labels: HashMap::default(),
             host_key: None,

@@ -25,7 +25,7 @@ use crate::common::{
     assert_advertise_link, assert_start_actor, assert_start_provider, stop_server,
 };
 
-const LATTICE_PREFIX: &str = "test-blobstore-s3";
+const LATTICE: &str = "test-blobstore-s3";
 
 /// Test all functionality for the blobstore-s3 provider
 ///
@@ -62,7 +62,7 @@ async fn blobstore_s3_suite() -> Result<()> {
 
     // Build client for interacting with the lattice
     let ctl_client = ClientBuilder::new(nats_client.clone())
-        .lattice_prefix(LATTICE_PREFIX.to_string())
+        .lattice(LATTICE.to_string())
         .build();
 
     // Start a wasmcloud host
@@ -71,7 +71,7 @@ async fn blobstore_s3_suite() -> Result<()> {
     let (_host, shutdown_host) = Host::new(HostConfig {
         ctl_nats_url: nats_url.clone(),
         rpc_nats_url: nats_url.clone(),
-        lattice_prefix: LATTICE_PREFIX.into(),
+        lattice: LATTICE.into(),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -133,7 +133,7 @@ async fn blobstore_s3_suite() -> Result<()> {
     assert_start_actor(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         blobstore_http_smithy_actor_url,
         1,
@@ -144,7 +144,7 @@ async fn blobstore_s3_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &httpserver_provider_key,
         "default",
@@ -157,7 +157,7 @@ async fn blobstore_s3_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &blobstore_s3_provider_key,
         "default",

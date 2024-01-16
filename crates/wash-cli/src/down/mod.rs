@@ -17,8 +17,8 @@ use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
 use crate::up::{
-    DEFAULT_LATTICE_PREFIX, DOWNLOADS_DIR, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
-    WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE_PREFIX,
+    DEFAULT_LATTICE, DOWNLOADS_DIR, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
+    WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE,
 };
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -26,11 +26,12 @@ pub struct DownCommand {
     /// A lattice prefix is a unique identifier for a lattice, and is frequently used within NATS topics to isolate messages from different lattices
     #[clap(
             short = 'x',
-            long = "lattice-prefix",
-            default_value = DEFAULT_LATTICE_PREFIX,
-            env = WASMCLOUD_LATTICE_PREFIX,
+            long = "lattice",
+            alias = "lattice-prefix", // TODO(pre-1.0): remove me
+            default_value = DEFAULT_LATTICE,
+            env = WASMCLOUD_LATTICE,
         )]
-    pub lattice_prefix: String,
+    pub lattice: String,
 
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = WASMCLOUD_CTL_HOST)]
@@ -86,8 +87,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     )
     .await
     {
-        let (hosts, hosts_remain) =
-            stop_hosts(client, &cmd.lattice_prefix, &cmd.host_id, cmd.all).await?;
+        let (hosts, hosts_remain) = stop_hosts(client, &cmd.lattice, &cmd.host_id, cmd.all).await?;
         out_json.insert("hosts_stopped".to_string(), json!(hosts));
         out_text.push_str("✅ wasmCloud hosts stopped successfully\n");
         if hosts_remain {
@@ -139,12 +139,12 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
 /// a boolean indicating whether any hosts remain running
 async fn stop_hosts(
     nats_client: Client,
-    lattice_prefix: &str,
+    lattice: &str,
     host_id: &Option<ServerId>,
     all: bool,
 ) -> Result<(Vec<String>, bool)> {
     let client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
-        .lattice_prefix(lattice_prefix)
+        .lattice(lattice)
         .auction_timeout(std::time::Duration::from_secs(2))
         .build();
 

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::{debug, error};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE_PREFIX};
+use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE};
 use wash_lib::context::{fs::ContextDir, ContextManager};
 use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
@@ -138,9 +138,14 @@ pub struct ConnectionOpts {
     #[clap(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
     rpc_credsfile: Option<PathBuf>,
 
-    /// Lattice prefix for wasmcloud command interface, defaults to "default"
-    #[clap(short = 'x', long = "lattice-prefix", env = "WASMCLOUD_LATTICE_PREFIX")]
-    lattice_prefix: Option<String>,
+    /// Lattice for wasmcloud command interface, defaults to "default"
+    #[clap(
+        short = 'x',
+        long = "lattice",
+        alias = "lattice-prefix", // TODO(pre-1.0): remove me
+        env = "WASMCLOUD_LATTICE"
+    )]
+    lattice: Option<String>,
 
     /// Timeout length for RPC, defaults to 2000 milliseconds
     #[clap(
@@ -347,10 +352,7 @@ async fn rpc_client_from_opts(
     let nc = create_nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile)
         .await?;
 
-    let lattice_prefix = opts
-        .lattice_prefix
-        .as_deref()
-        .unwrap_or(DEFAULT_LATTICE_PREFIX);
+    let lattice = opts.lattice.as_deref().unwrap_or(DEFAULT_LATTICE);
     Ok((
         RpcClient::new(
             nc,
@@ -359,7 +361,7 @@ async fn rpc_client_from_opts(
             Arc::new(nkeys::KeyPair::from_seed(&extract_arg_value(
                 cluster_seed.as_ref(),
             )?)?),
-            lattice_prefix,
+            lattice,
         ),
         opts.timeout_ms,
     ))
@@ -375,7 +377,7 @@ mod test {
 
     const RPC_HOST: &str = "127.0.0.1";
     const RPC_PORT: &str = "4222";
-    const LATTICE_PREFIX: &str = "default";
+    const DEFAULT_LATTICE: &str = "default";
     const SAVE_FNAME: &str = "/dev/null";
     const DATA_FNAME: &str = "/tmp/data.json";
 
@@ -402,8 +404,8 @@ mod test {
             "some-context",
             "--cluster-seed",
             "SCAMSVN4M2NZ65RWGYE42BZZ7VYEFEAAHGLIY7R4W7CRHORSMXTDJRKXLY",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--rpc-host",
             RPC_HOST,
             "--rpc-port",
@@ -428,7 +430,7 @@ mod test {
             } => {
                 assert_eq!(&opts.rpc_host.unwrap(), RPC_HOST);
                 assert_eq!(&opts.rpc_port.unwrap(), RPC_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 0);
                 assert_eq!(opts.context, Some("some-context".to_string()));
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));

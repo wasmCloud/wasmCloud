@@ -13,7 +13,7 @@ pub const WASH_DIR: &str = ".wash";
 const DOWNLOADS_DIR: &str = "downloads";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
-pub const DEFAULT_LATTICE_PREFIX: &str = "default";
+pub const DEFAULT_LATTICE: &str = "default";
 pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
 pub const DEFAULT_START_ACTOR_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
@@ -65,8 +65,8 @@ pub struct WashConnectionOptions {
     /// JS domain for wasmcloud control interface. Defaults to None
     pub js_domain: Option<String>,
 
-    /// Lattice prefix for wasmcloud control interface, defaults to "default"
-    pub lattice_prefix: Option<String>,
+    /// Lattice name for wasmcloud control interface, defaults to "default"
+    pub lattice: Option<String>,
 
     /// Timeout length to await a control interface response, defaults to 2000 milliseconds
     pub timeout_ms: u64,
@@ -78,9 +78,7 @@ pub struct WashConnectionOptions {
 impl WashConnectionOptions {
     /// Create a control client from connection options
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
-        let lattice_prefix = self
-            .lattice_prefix
-            .unwrap_or_else(|| self.ctx.lattice_prefix.clone());
+        let lattice = self.lattice.unwrap_or_else(|| self.ctx.lattice.clone());
 
         let ctl_host = self.ctl_host.unwrap_or_else(|| self.ctx.ctl_host.clone());
         let ctl_port = self
@@ -100,7 +98,7 @@ impl WashConnectionOptions {
                 .context("Failed to create NATS client")?;
 
         let mut builder = CtlClientBuilder::new(nc)
-            .lattice_prefix(lattice_prefix)
+            .lattice(lattice)
             .timeout(tokio::time::Duration::from_millis(self.timeout_ms))
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
 
@@ -132,11 +130,11 @@ impl WashConnectionOptions {
         Ok(nc)
     }
 
-    /// Either returns the opts.lattice prefix or opts.ctx.lattice_prefix... if both are absent/None,  returns the default lattice prefix (DEFAULT_LATTICE_PREFIX).
-    pub fn get_lattice_prefix(&self) -> String {
-        self.lattice_prefix
+    /// Either returns the opts.lattice or opts.ctx.lattice... if both are absent/None,  returns the default lattice prefix (DEFAULT_LATTICE).
+    pub fn get_lattice(&self) -> String {
+        self.lattice
             .clone()
-            .unwrap_or_else(|| self.ctx.lattice_prefix.clone())
+            .unwrap_or_else(|| self.ctx.lattice.clone())
     }
 }
 

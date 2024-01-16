@@ -15,8 +15,8 @@ pub const WADM_VERSION: &str = "v0.9.1";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
 pub const WASMCLOUD_HOST_VERSION: &str = "v0.81.0";
 // NATS isolation configuration variables
-pub const WASMCLOUD_LATTICE_PREFIX: &str = "WASMCLOUD_LATTICE_PREFIX";
-pub const DEFAULT_LATTICE_PREFIX: &str = "default";
+pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
+pub const DEFAULT_LATTICE: &str = "default";
 pub const WASMCLOUD_JS_DOMAIN: &str = "WASMCLOUD_JS_DOMAIN";
 // Host / Cluster configuration
 pub const WASMCLOUD_CLUSTER_ISSUERS: &str = "WASMCLOUD_CLUSTER_ISSUERS";
@@ -58,10 +58,10 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
     let mut host_config = HashMap::new();
     // NATS isolation configuration variables
     host_config.insert(
-        WASMCLOUD_LATTICE_PREFIX.to_string(),
+        WASMCLOUD_LATTICE.to_string(),
         wasmcloud_opts
-            .lattice_prefix
-            .unwrap_or(DEFAULT_LATTICE_PREFIX.to_string()),
+            .lattice
+            .unwrap_or(DEFAULT_LATTICE.to_string()),
     );
     if let Some(js_domain) = wasmcloud_opts.wasmcloud_js_domain {
         host_config.insert(WASMCLOUD_JS_DOMAIN.to_string(), js_domain);

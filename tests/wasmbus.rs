@@ -241,7 +241,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let mut module_redis_client =
         redis::Client::open(module_redis_url.as_str()).context("failed to connect to Redis")?;
 
-    const TEST_PREFIX: &str = "test-prefix";
+    const TEST_LATTICE: &str = "test-lattice";
 
     let cluster_key = KeyPair::new_cluster();
     let host_key = KeyPair::new_server();
@@ -263,7 +263,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: rpc_nats_url.clone(),
-        lattice_prefix: TEST_PREFIX.to_string(),
+        lattice: TEST_LATTICE.to_string(),
         js_domain: None,
         labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key)),
@@ -281,7 +281,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: rpc_nats_url.clone(),
-        lattice_prefix: TEST_PREFIX.to_string(),
+        lattice: TEST_LATTICE.to_string(),
         labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key_two)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
@@ -294,7 +294,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     .context("failed to initialize host two")?;
 
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
-        .lattice_prefix(TEST_PREFIX.to_string())
+        .lattice(TEST_LATTICE.to_string())
         .build();
     let mut hosts = ctl_client
         .get_hosts()
@@ -317,12 +317,13 @@ async fn wasmbus() -> anyhow::Result<()> {
                 id,
                 js_domain,
                 labels,
-                lattice_prefix,
+                lattice,
                 rpc_host,
                 uptime_human,
                 uptime_seconds,
                 version,
                 friendly_name,
+                ..
             }),
             Some(HostInfo {
                 cluster_issuers: cluster_issuers_two,
@@ -353,7 +354,7 @@ async fn wasmbus() -> anyhow::Result<()> {
 got: {labels:?}
 expected: {base_labels:?}"#
             );
-            ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
+            ensure!(lattice == Some(TEST_LATTICE.into()));
             ensure!(rpc_host == Some(rpc_nats_url.to_string()));
             ensure!(uptime_human.unwrap().len() > 0);
             ensure!(uptime_seconds >= 0);
@@ -450,7 +451,7 @@ expected: {base_labels:?}"#
         assert_start_actor(
             &ctl_client,
             &ctl_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &component_actor_url,
             1,
@@ -458,7 +459,7 @@ expected: {base_labels:?}"#
         assert_start_actor(
             &ctl_client,
             &ctl_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &module_actor_url,
             1,
@@ -466,7 +467,7 @@ expected: {base_labels:?}"#
         assert_start_actor(
             &ctl_client,
             &ctl_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &foobar_actor_url,
             1,
@@ -687,7 +688,7 @@ expected: {base_labels:?}"#
         assert_start_provider(
             &ctl_client,
             &rpc_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &blobstore_fs_provider_key,
             "blobstore",
@@ -697,7 +698,7 @@ expected: {base_labels:?}"#
         assert_start_provider(
             &ctl_client,
             &rpc_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &httpclient_provider_key,
             "httpclient",
@@ -707,7 +708,7 @@ expected: {base_labels:?}"#
         assert_start_provider(
             &ctl_client,
             &rpc_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &httpserver_provider_key,
             "httpserver",
@@ -717,7 +718,7 @@ expected: {base_labels:?}"#
         assert_start_provider(
             &ctl_client,
             &rpc_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key,
             &kvredis_provider_key,
             "keyvalue",
@@ -727,7 +728,7 @@ expected: {base_labels:?}"#
         assert_start_provider(
             &ctl_client,
             &rpc_nats_client,
-            TEST_PREFIX,
+            TEST_LATTICE,
             &host_key_two,
             &nats_provider_key,
             "messaging",
@@ -738,7 +739,7 @@ expected: {base_labels:?}"#
     .context("failed to start providers")?;
 
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
-        .lattice_prefix(TEST_PREFIX.to_string())
+        .lattice(TEST_LATTICE.to_string())
         .build();
 
     let mut claims_from_bucket = ctl_client
@@ -777,7 +778,7 @@ expected: {base_labels:?}"#
     ensure!(pinged_host.ctl_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.js_domain == None);
     ensure!(pinged_host.labels == Some(base_labels.clone()));
-    ensure!(pinged_host.lattice_prefix == Some(TEST_PREFIX.into()));
+    ensure!(pinged_host.lattice == Some(TEST_LATTICE.into()));
     ensure!(pinged_host.rpc_host == Some(rpc_nats_url.to_string()));
     ensure!(pinged_host.uptime_human.clone().unwrap().len() > 0);
     ensure!(pinged_host.uptime_seconds > 0);
@@ -1151,7 +1152,7 @@ expected: {expected_labels_two:?}"#
     assert_scale_actor(
         &ctl_client,
         &ctl_nats_client,
-        TEST_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
@@ -1173,7 +1174,7 @@ expected: {expected_labels_two:?}"#
     assert_scale_actor(
         &ctl_client,
         &ctl_nats_client,
-        TEST_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
@@ -1195,7 +1196,7 @@ expected: {expected_labels_two:?}"#
     assert_scale_actor(
         &ctl_client,
         &ctl_nats_client,
-        TEST_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),

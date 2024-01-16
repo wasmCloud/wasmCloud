@@ -43,13 +43,13 @@ pub async fn free_port() -> Result<u16> {
 pub async fn assert_start_actor(
     ctl_client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    lattice_prefix: &str,
+    lattice: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     count: u32,
 ) -> anyhow::Result<()> {
     let mut sub_started = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
+        .subscribe(format!("wasmbus.evt.{lattice}.actors_started"))
         .await?;
 
     let CtlOperationAck { accepted, error } = ctl_client
@@ -75,17 +75,17 @@ pub async fn assert_start_actor(
 pub async fn assert_scale_actor(
     ctl_client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    lattice_prefix: &str,
+    lattice: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
     count: u32,
 ) -> anyhow::Result<()> {
     let mut sub_started = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_started"))
+        .subscribe(format!("wasmbus.evt.{lattice}.actors_started"))
         .await?;
     let mut sub_stopped = nats_client
-        .subscribe(format!("wasmbus.evt.{lattice_prefix}.actors_stopped"))
+        .subscribe(format!("wasmbus.evt.{lattice}.actors_stopped"))
         .await?;
     let CtlOperationAck { accepted, error } = ctl_client
         .scale_actor(&host_key.public_key(), url.as_ref(), count, annotations)
@@ -113,7 +113,7 @@ pub async fn assert_scale_actor(
 pub async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
     rpc_client: &async_nats::Client,
-    lattice_prefix: &str,
+    lattice: &str,
     host_key: &KeyPair,
     provider_key: &KeyPair,
     link_name: &str,
@@ -147,7 +147,7 @@ pub async fn assert_start_provider(
         .then(|_| rpc_client.request(
             format!(
                 "wasmbus.rpc.{}.{}.{}.health",
-                lattice_prefix,
+                lattice,
                 provider_key.public_key(),
                 link_name,
             ),

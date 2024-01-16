@@ -25,7 +25,7 @@ use crate::common::{
     assert_advertise_link, assert_start_actor, assert_start_provider, stop_server,
 };
 
-const LATTICE_PREFIX: &str = "test-messaging-nats";
+const LATTICE: &str = "test-messaging-nats";
 
 /// Test all functionality for the messaging-nats provider
 ///
@@ -67,7 +67,7 @@ async fn messaging_nats_suite() -> Result<()> {
 
     // Build client for interacting with the lattice
     let ctl_client = ClientBuilder::new(nats_client.clone())
-        .lattice_prefix(LATTICE_PREFIX.to_string())
+        .lattice(LATTICE.to_string())
         .build();
 
     // Start a wasmcloud host
@@ -76,7 +76,7 @@ async fn messaging_nats_suite() -> Result<()> {
     let (_host, shutdown_host) = Host::new(HostConfig {
         ctl_nats_url: nats_url.clone(),
         rpc_nats_url: nats_url.clone(),
-        lattice_prefix: LATTICE_PREFIX.into(),
+        lattice: LATTICE.into(),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -138,7 +138,7 @@ async fn messaging_nats_suite() -> Result<()> {
     assert_start_actor(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         messaging_sender_http_smithy_actor_url,
         1,
@@ -173,7 +173,7 @@ async fn messaging_nats_suite() -> Result<()> {
     assert_start_actor(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         messaging_receiver_smithy_actor_url,
         1,
@@ -184,7 +184,7 @@ async fn messaging_nats_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &httpserver_provider_key,
         "default",
@@ -197,7 +197,7 @@ async fn messaging_nats_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &messaging_nats_provider_key,
         "default",

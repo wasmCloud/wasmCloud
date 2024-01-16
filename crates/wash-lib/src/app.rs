@@ -14,7 +14,7 @@ use wadm::server::{
 use tokio::io::{AsyncRead, AsyncReadExt};
 use url::Url;
 
-use crate::config::DEFAULT_LATTICE_PREFIX;
+use crate::config::DEFAULT_LATTICE;
 
 /// The NATS prefix wadm's API is listening on
 const WADM_API_PREFIX: &str = "wadm.api";
@@ -108,19 +108,19 @@ impl FromStr for AppManifestSource {
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application is managed on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application is managed on, defaults to `default`
 /// * `model_name` - Model name to undeploy
 /// * `non_destructive` - Undeploy deletes managed resources by default, this can be overridden by setting this to `true`
 pub async fn undeploy_model(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
     non_destructive: bool,
 ) -> Result<DeployModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Undeploy,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         serde_json::to_vec(&UndeployModelRequest { non_destructive })?,
     )
@@ -133,19 +133,19 @@ pub async fn undeploy_model(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application will be managed on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application will be managed on, defaults to `default`
 /// * `model_name` - Model name to deploy
 /// * `version` - Version to deploy, defaults to deploying the latest "put" version
 pub async fn deploy_model(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
 ) -> Result<DeployModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Deploy,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         serde_json::to_vec(&DeployModelRequest { version })?,
     )
@@ -158,17 +158,17 @@ pub async fn deploy_model(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifest will be stored on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application manifest will be stored on, defaults to `default`
 /// * `model` - The full YAML or JSON string containing the OAM wadm manifest
 pub async fn put_model(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model: &str,
 ) -> Result<PutModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Put,
-        lattice_prefix,
+        lattice,
         None,
         model.as_bytes().to_vec(),
     )
@@ -181,17 +181,17 @@ pub async fn put_model(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifest is stored on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve history for
 pub async fn get_model_history(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
 ) -> Result<VersionResponse> {
     let res = model_request(
         client,
         ModelOperation::History,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         vec![],
     )
@@ -204,17 +204,17 @@ pub async fn get_model_history(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifest is stored on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve status for
 pub async fn get_model_status(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
 ) -> Result<StatusResponse> {
     let res = model_request(
         client,
         ModelOperation::Status,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         vec![],
     )
@@ -227,19 +227,19 @@ pub async fn get_model_status(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifest is stored on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve history for
 /// * `version` - Version to retrieve, defaults to retrieving the latest "put" version
 pub async fn get_model_details(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
 ) -> Result<GetModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Get,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         serde_json::to_vec(&GetModelRequest { version })?,
     )
@@ -252,13 +252,13 @@ pub async fn get_model_details(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifest is stored on, defaults to `default`
+/// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model
 /// * `version` - Version to retrieve, defaults to deleting the latest "put" version (or all if `delete_all` is specified)
 /// * `delete_all` - Whether or not to delete all versions for a given model name
 pub async fn delete_model_version(
     client: &Client,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
     delete_all: bool,
@@ -266,7 +266,7 @@ pub async fn delete_model_version(
     let res = model_request(
         client,
         ModelOperation::Delete,
-        lattice_prefix,
+        lattice,
         Some(model_name),
         serde_json::to_vec(&DeleteModelRequest {
             version: version.unwrap_or_default(),
@@ -282,12 +282,9 @@ pub async fn delete_model_version(
 ///
 /// # Arguments
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
-/// * `lattice_prefix` - Optional lattice prefix that the application manifests are stored on, defaults to `default`
-pub async fn get_models(
-    client: &Client,
-    lattice_prefix: Option<String>,
-) -> Result<Vec<ModelSummary>> {
-    let res = model_request(client, ModelOperation::List, lattice_prefix, None, vec![]).await?;
+/// * `lattice` - Optional lattice name that the application manifests are stored on, defaults to `default`
+pub async fn get_models(client: &Client, lattice: Option<String>) -> Result<Vec<ModelSummary>> {
+    let res = model_request(client, ModelOperation::List, lattice, None, vec![]).await?;
 
     serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
 }
@@ -297,7 +294,7 @@ pub async fn get_models(
 async fn model_request(
     client: &Client,
     operation: ModelOperation,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
     object_name: Option<&str>,
     bytes: Vec<u8>,
 ) -> Result<Message> {
@@ -305,7 +302,7 @@ async fn model_request(
     // We let callers of this function dictate the topic after the prefix + lattice
     let topic = format!(
         "{WADM_API_PREFIX}.{}.model.{}{}",
-        lattice_prefix.unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string()),
+        lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
         operation.to_string(),
         object_name
             .map(|name| format!(".{name}"))

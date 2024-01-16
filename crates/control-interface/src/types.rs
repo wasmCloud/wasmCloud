@@ -115,7 +115,9 @@ pub struct Host {
     pub labels: Option<KeyValueMap>,
     /// Lattice prefix/ID used by the host
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lattice_prefix: Option<String>,
+    pub lattice: Option<String>,
+    #[serde(default, skip_serializing)]
+    lattice_prefix: Option<String>, // TODO(pre-1.0): remove me once all clients are updated to control interface v0.33
     /// NATS server host used for regular RPC
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc_host: Option<String>,
@@ -128,6 +130,14 @@ pub struct Host {
     /// Current wasmCloud Host software version
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+// TODO(pre-1.0): remove me once all clients are updated to control interface v0.33
+impl Host {
+    #[must_use]
+    pub fn lattice(&self) -> Option<&String> {
+        self.lattice.as_ref().or(self.lattice_prefix.as_ref())
+    }
 }
 
 /// Describes the known contents of a given host at the time of

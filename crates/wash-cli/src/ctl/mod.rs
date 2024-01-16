@@ -153,7 +153,7 @@ mod test {
 
     const CTL_HOST: &str = "127.0.0.1";
     const CTL_PORT: &str = "4222";
-    const LATTICE_PREFIX: &str = "default";
+    const DEFAULT_LATTICE: &str = "default";
     const JS_DOMAIN: &str = "custom-domain";
 
     const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
@@ -169,8 +169,8 @@ mod test {
             "ctl",
             "stop",
             "actor",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -192,7 +192,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(actor_id, ACTOR_ID);
@@ -214,8 +214,8 @@ mod test {
             "ctl",
             "stop",
             "provider",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -239,7 +239,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(provider_id, PROVIDER_ID);
@@ -270,8 +270,8 @@ mod test {
             "ctl",
             "get",
             "hosts",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -283,7 +283,7 @@ mod test {
             CtlCliCommand::Get(CtlGetCommand::Hosts(GetHostsCommand { opts })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
             }
             cmd => panic!("ctl get hosts constructed incorrect command {cmd:?}"),
@@ -292,8 +292,8 @@ mod test {
             "ctl",
             "get",
             "inventory",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -309,7 +309,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
             }
@@ -319,8 +319,8 @@ mod test {
             "ctl",
             "get",
             "claims",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -334,7 +334,7 @@ mod test {
             CtlCliCommand::Get(CtlGetCommand::Claims(GetClaimsCommand { opts })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(opts.js_domain.unwrap(), JS_DOMAIN);
             }
@@ -344,8 +344,8 @@ mod test {
             "ctl",
             "link",
             "put",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -371,7 +371,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(provider_id, PROVIDER_ID);
@@ -385,8 +385,8 @@ mod test {
             "ctl",
             "update",
             "actor",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -407,7 +407,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(actor_id, ACTOR_ID);
@@ -420,8 +420,8 @@ mod test {
             "ctl",
             "scale",
             "actor",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -446,7 +446,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
