@@ -9,16 +9,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 redis = { workspace = true, features = [
     "tokio-comp",
     "aio",
     "connection-manager",
     "rustls",
 ] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wasmcloud-provider-wit-bindgen = { workspace = true }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }

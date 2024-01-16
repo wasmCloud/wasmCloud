@@ -8,14 +8,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
 use tokio::sync::RwLock;
 use tracing::error;
 
-use wasmcloud_provider_sdk::core::LinkDefinition;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
+};
 
 mod config;
 pub use config::StorageConfig;

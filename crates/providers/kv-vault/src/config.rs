@@ -3,7 +3,10 @@
 
 use std::{collections::HashMap, env};
 use url::Url;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
+
+use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::{
+    ProviderInvocationError, ProviderInvocationResult,
+};
 
 /// Default address at which Vault is expected to be running,
 /// used if unspecified by configuration

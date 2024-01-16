@@ -36,19 +36,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use flume::{bounded, Receiver, Sender};
 use futures::Future;
 use http::HeaderMap;
-use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument};
 use warp::path::FullPath;
 use warp::Filter;
 
-use wasmcloud_provider_sdk::core::{LinkDefinition, WasmCloudEntity};
-use wasmcloud_provider_sdk::error::{InvocationError, ProviderInvocationError};
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde::{Deserialize, Serialize},
+    wasmcloud_provider_sdk,
+    wasmcloud_provider_sdk::core::{LinkDefinition, WasmCloudEntity},
+    wasmcloud_provider_sdk::error::{InvocationError, ProviderInvocationError},
+};
 
 mod hashmap_ci;
 pub(crate) use hashmap_ci::make_case_insensitive;
@@ -130,22 +133,24 @@ impl WasmcloudCapabilityProvider for HttpServerProvider {
 const HANDLE_REQUEST_METHOD: &str = "HttpServer.HandleRequest";
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 #[serde(rename_all = "camelCase")]
 pub struct HttpRequest {
     pub method: String,
     pub path: String,
     pub query_string: String,
     pub header: ::std::collections::HashMap<String, Vec<String>>,
-    #[serde(with = "::serde_bytes")]
+    #[serde(with = "::wasmcloud_provider_wit_bindgen::deps::serde_bytes")]
     pub body: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponse {
     pub status_code: u16,
     pub header: ::std::collections::HashMap<String, Vec<String>>,
-    #[serde(with = "::serde_bytes")]
+    #[serde(with = "::wasmcloud_provider_wit_bindgen::deps::serde_bytes")]
     pub body: Vec<u8>,
 }
 

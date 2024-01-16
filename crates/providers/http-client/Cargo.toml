@@ -15,11 +15,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
-async-trait = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
-serde = { workspace = true, features = ["derive"] }
-serde_bytes = { workspace = true }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wasmcloud-provider-wit-bindgen = { workspace = true }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }

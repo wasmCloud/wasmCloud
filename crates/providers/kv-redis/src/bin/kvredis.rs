@@ -7,21 +7,29 @@
 //! are simultaneously attempting to communicate with redis. See documentation
 //! on the [exec](#exec) function for more information.
 //!
+//! Note that this provider uses many *re-exported* dependencies of `wasmcloud_provider_wit_bindgen`
+//! in order to reduce required dependencies on this binary itself. Using `serde` as a re-exported dependency
+//! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
+//!
 //!
 use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use redis::FromRedisValue;
-use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
-use wasmcloud_provider_sdk::core::LinkDefinition;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::provider_main::start_provider;
-use wasmcloud_provider_sdk::{load_host_data, Context};
+
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde::Deserialize,
+    serde_json,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::provider_main::start_provider,
+    wasmcloud_provider_sdk::{load_host_data, Context},
+};
 
 wasmcloud_provider_wit_bindgen::generate!({
     impl_struct: KvRedisProvider,
@@ -33,6 +41,7 @@ const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 
 #[derive(Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 struct KvRedisConfig {
     /// Default URL to connect when actor doesn't provide one on a link
     #[serde(alias = "URL", alias = "Url")]
@@ -160,8 +169,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
         arg: IncrementRequest,
     ) -> ProviderInvocationResult<i32> {
         let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
-        self
-            .exec(&ctx, &mut cmd)
+        self.exec(&ctx, &mut cmd)
             .await
             .map_err(ProviderInvocationError::Provider)
     }
@@ -170,8 +178,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn contains(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
         let mut cmd = redis::Cmd::exists(arg.to_string());
-        self
-            .exec(&ctx, &mut cmd)
+        self.exec(&ctx, &mut cmd)
             .await
             .map_err(ProviderInvocationError::Provider)
     }
@@ -250,8 +257,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
         arg: ListRangeRequest,
     ) -> ProviderInvocationResult<Vec<String>> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
-        self
-            .exec(&ctx, &mut cmd)
+        self.exec(&ctx, &mut cmd)
             .await
             .map_err(ProviderInvocationError::Provider)
     }

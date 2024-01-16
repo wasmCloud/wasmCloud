@@ -9,14 +9,19 @@ use std::env;
 use aws_config::SdkConfig;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
 use base64::Engine;
-use serde::Deserialize;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
+
+use wasmcloud_provider_wit_bindgen::deps::{
+    serde::Deserialize,
+    serde_json,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+};
 
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
 
 /// Configuration for connecting to S3.
 ///
 #[derive(Clone, Default, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct StorageConfig {
     /// AWS_ACCESS_KEY_ID, can be specified from environment
     pub access_key_id: Option<String>,
@@ -42,6 +47,7 @@ pub struct StorageConfig {
 }
 
 #[derive(Clone, Default, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct StsAssumeRoleConfig {
     /// Role to assume (AWS_ASSUME_ROLE_ARN)
     /// Should be in the form "arn:aws:iam::123456789012:role/example"

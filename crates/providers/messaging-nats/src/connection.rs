@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+
+use wasmcloud_provider_wit_bindgen::deps::{
+    serde::{Deserialize, Serialize},
+    serde_json,
+};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 
@@ -14,6 +18,7 @@ const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct ConnectionConfig {
     /// List of topics to subscribe to
     #[serde(default)]

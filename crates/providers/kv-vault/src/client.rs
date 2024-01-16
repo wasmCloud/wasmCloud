@@ -2,9 +2,10 @@
 //!
 use std::{string::ToString, sync::Arc};
 
-use serde::{de::DeserializeOwned, Serialize};
 use vaultrs::api::kv2::responses::SecretVersionMetadata;
 use vaultrs::client::{VaultClient, VaultClientSettings};
+
+use wasmcloud_provider_wit_bindgen::deps::serde::{de::DeserializeOwned, Serialize};
 
 use crate::{config::Config, error::VaultError};
 

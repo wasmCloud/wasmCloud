@@ -4,8 +4,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, RwLockReadGuard};
 use tracing::{instrument, warn};
 use wasmcloud_control_interface as interface_client;
@@ -15,6 +13,7 @@ use client_cache::ClientCache;
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 const DEFAULT_TIMEOUT_MS: u64 = 2000;
+
 // NOTE: Exercise caution when adjusting this value, as it can cause tests and
 // other examples to fail, due to going against various timeouts set on the host and
 // cooperating providers/actors, since the *entire* auction duration will be awaited
@@ -22,8 +21,12 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 const DEFAULT_AUCTION_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_LATTICE_PREFIX: &str = "default";
 
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde::{Deserialize, Serialize},
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::{load_host_data, Context},
+};
 
 wasmcloud_provider_wit_bindgen::generate!({
     impl_struct: LatticeControllerProvider,
@@ -70,6 +73,7 @@ impl LatticeControllerProvider {
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 struct ConnectionConfig {
     /// URIs used to connect to the cluster
     #[serde(default)]
@@ -116,7 +120,10 @@ impl Default for ConnectionConfig {
 #[async_trait]
 impl WasmcloudCapabilityProvider for LatticeControllerProvider {
     #[instrument(level = "debug", skip(self, _ld), fields(actor_id = %_ld.actor_id))]
-    async fn put_link(&self, _ld: &wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
+    async fn put_link(
+        &self,
+        _ld: &wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition,
+    ) -> bool {
         // This provider is *externally* multiplexed -- link definitions
         // contain no useful data
         true
@@ -168,7 +175,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         //
         // Since auctions will *wait* until the auction_timeout to do operations like gathering hosts,
         // we must manually ensure this value is unlikely to cause timeouts.
-        let host_data = wasmcloud_provider_sdk::load_host_data().map_err(|e| {
+        let host_data = load_host_data().map_err(|e| {
             ProviderInvocationError::Provider(format!("failed to load host data: {e}"))
         })?;
         if host_data
@@ -384,7 +391,11 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         _ctx: Context,
         cmd: StartActorCommand,
     ) -> ProviderInvocationResult<CtlOperationAck> {
-        let count = if cmd.count == 0 { 1_u32 } else { cmd.count.into() };
+        let count = if cmd.count == 0 {
+            1_u32
+        } else {
+            cmd.count.into()
+        };
         Ok(self
             .get_connections()
             .await
@@ -535,13 +546,13 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
 
     /// Start a provider on the lattice
     #[instrument(
-        level = "debug", 
-        skip_all, 
+        level = "debug",
+        skip_all,
         fields(
-            actor_id = ?_ctx.actor, 
-            host_id = %cmd.host_id, 
-            provider_ref = %cmd.provider_ref, 
-            link_name = %cmd.link_name, 
+            actor_id = ?_ctx.actor,
+            host_id = %cmd.host_id,
+            provider_ref = %cmd.provider_ref,
+            link_name = %cmd.link_name,
             lattice_id = ?cmd.lattice_id
         )
     )]

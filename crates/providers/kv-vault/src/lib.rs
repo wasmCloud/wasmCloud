@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
-use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
 
-use wasmcloud_provider_sdk::core::LinkDefinition;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde_json,
+    serde_json::Value,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
+};
 
 pub(crate) mod client;
 pub(crate) mod config;

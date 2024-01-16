@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use rskafka::client::consumer::{StartOffset, StreamConsumerBuilder};
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
@@ -12,9 +11,12 @@ use rskafka::record::{Record, RecordAndOffset};
 use tokio::task::JoinHandle;
 use tracing::{debug, instrument, warn};
 
-use wasmcloud_provider_sdk::core::LinkDefinition;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
+};
 
 wasmcloud_provider_wit_bindgen::generate!({
     impl_struct: KafkaMessagingProvider,

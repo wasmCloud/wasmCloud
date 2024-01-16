@@ -15,11 +15,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
-async-trait = { workspace = true }
 path-clean = { workspace = true }
-serde = { workspace = true }
-serde_bytes = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wasmcloud-provider-wit-bindgen = { workspace = true }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
