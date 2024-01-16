@@ -50,11 +50,12 @@ struct Args {
     /// The lattice the host belongs to
     #[clap(
         short = 'x',
-        long = "lattice-prefix",
+        long = "lattice",
+        alias = "lattice-prefix", // TODO(pre-1.0): remove me
         default_value = "default",
-        env = "WASMCLOUD_LATTICE_PREFIX"
+        env = "WASMCLOUD_LATTICE"
     )]
-    lattice_prefix: String,
+    lattice: String,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key  
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
@@ -233,6 +234,14 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
+    // TODO(pre-1.0): remove me
+    if let Ok(lattice) = std::env::var("WASMCLOUD_LATTICE_PREFIX") {
+        eprintln!(
+            "The `WASMCLOUD_LATTICE_PREFIX` environment variable is deprecated and will be removed. Please use `WASMCLOUD_LATTICE` instead."
+        );
+        std::env::set_var("WASMCLOUD_LATTICE", lattice);
+    }
+
     let args: Args = Args::parse();
 
     let otel_config = OtelConfig {
@@ -318,7 +327,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to parse labels")?;
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
-        lattice_prefix: args.lattice_prefix,
+        lattice: args.lattice,
         host_key,
         cluster_key,
         cluster_issuers: args.cluster_issuers,

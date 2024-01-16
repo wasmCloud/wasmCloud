@@ -23,7 +23,7 @@ use crate::common::{
     assert_advertise_link, assert_start_actor, assert_start_provider, stop_server,
 };
 
-const LATTICE_PREFIX: &str = "test-kv-vault";
+const LATTICE: &str = "test-kv-vault";
 
 /// Test all functionality for the kv-vault provider
 #[tokio::test(flavor = "multi_thread")]
@@ -57,7 +57,7 @@ async fn kv_vault_suite() -> Result<()> {
 
     // Build client for interacting with the lattice
     let ctl_client = ClientBuilder::new(nats_client.clone())
-        .lattice_prefix(LATTICE_PREFIX.to_string())
+        .lattice(LATTICE.to_string())
         .build();
 
     // Start a wasmcloud host
@@ -66,7 +66,7 @@ async fn kv_vault_suite() -> Result<()> {
     let (_host, shutdown_host) = Host::new(HostConfig {
         ctl_nats_url: nats_url.clone(),
         rpc_nats_url: nats_url.clone(),
-        lattice_prefix: LATTICE_PREFIX.into(),
+        lattice: LATTICE.into(),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -121,7 +121,7 @@ async fn kv_vault_suite() -> Result<()> {
     assert_start_actor(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         kv_http_smithy_actor_url,
         1,
@@ -132,7 +132,7 @@ async fn kv_vault_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &httpserver_provider_key,
         "default",
@@ -145,7 +145,7 @@ async fn kv_vault_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        LATTICE_PREFIX,
+        LATTICE,
         &host_key,
         &kv_vault_provider_key,
         "default",

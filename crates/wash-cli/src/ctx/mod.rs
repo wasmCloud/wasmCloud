@@ -11,9 +11,7 @@ use serde_json::json;
 use tracing::warn;
 use wash_lib::{
     cli::CommandOutput,
-    config::{
-        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
-    },
+    config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
     context::{fs::ContextDir, ContextManager, WashContext, HOST_CONFIG_NAME},
     id::ClusterSeed,
 };
@@ -309,9 +307,9 @@ fn prompt_for_context() -> Result<WashContext> {
         &Some(DEFAULT_NATS_TIMEOUT_MS.to_string()),
     )?;
 
-    let lattice_prefix = user_question(
+    let lattice = user_question(
         "What is the lattice prefix that the host will communicate on?",
-        &Some(DEFAULT_LATTICE_PREFIX.to_string()),
+        &Some(DEFAULT_LATTICE.to_string()),
     )?;
 
     let js_domain = match user_question(
@@ -369,7 +367,7 @@ fn prompt_for_context() -> Result<WashContext> {
         ctl_seed,
         ctl_credsfile: ctl_credsfile.map(PathBuf::from),
         ctl_timeout: ctl_timeout.parse()?,
-        lattice_prefix,
+        lattice,
         js_domain,
         rpc_host,
         rpc_port: rpc_port.parse().unwrap_or_default(),

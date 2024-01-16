@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, NoneAsEmptyString};
 
 use crate::{
-    config::{
-        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
-    },
+    config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
     id::ClusterSeed,
 };
 
@@ -67,8 +65,9 @@ pub struct WashContext {
     #[serde(default = "default_timeout_ms")]
     pub ctl_timeout: u64,
 
-    #[serde(default = "default_lattice_prefix")]
-    pub lattice_prefix: String,
+    // NOTE: lattice_prefix was renamed to lattice in most places, but this alias will need to remain for backwards compatibility with existing context files
+    #[serde(alias = "lattice_prefix", default = "default_lattice")]
+    pub lattice: String,
 
     pub js_domain: Option<String>,
 
@@ -107,7 +106,7 @@ impl Default for WashContext {
             ctl_seed: None,
             ctl_credsfile: None,
             ctl_timeout: DEFAULT_NATS_TIMEOUT_MS,
-            lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
+            lattice: DEFAULT_LATTICE.to_string(),
             js_domain: None,
             rpc_host: DEFAULT_NATS_HOST.to_string(),
             rpc_port: DEFAULT_NATS_PORT.parse().unwrap(),
@@ -129,8 +128,8 @@ fn default_nats_port() -> u16 {
     DEFAULT_NATS_PORT.parse().unwrap()
 }
 
-fn default_lattice_prefix() -> String {
-    DEFAULT_LATTICE_PREFIX.to_string()
+fn default_lattice() -> String {
+    DEFAULT_LATTICE.to_string()
 }
 
 pub fn default_timeout_ms() -> u64 {

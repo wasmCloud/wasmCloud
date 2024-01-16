@@ -151,22 +151,18 @@ pub async fn handle_command(cmd: CaptureCommand) -> Result<CommandOutput> {
         let window_size = Duration::from_secs(cmd.window_size_minutes * 60);
         return enable(
             js_context,
-            wco.lattice_prefix.as_deref().unwrap_or("default"),
+            wco.lattice.as_deref().unwrap_or("default"),
             window_size,
         )
         .await;
     } else if cmd.disable {
-        return disable(
-            js_context,
-            wco.lattice_prefix.as_deref().unwrap_or("default"),
-        )
-        .await;
+        return disable(js_context, wco.lattice.as_deref().unwrap_or("default")).await;
     }
 
     capture(
         js_context,
         ctl_client,
-        wco.lattice_prefix.as_deref().unwrap_or("default"),
+        wco.lattice.as_deref().unwrap_or("default"),
     )
     .await
 }

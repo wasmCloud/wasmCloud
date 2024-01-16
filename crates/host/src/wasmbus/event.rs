@@ -251,7 +251,7 @@ pub fn config_deleted(entity_id: impl AsRef<str>, key: impl AsRef<str>) -> serde
 pub(crate) async fn publish(
     event_builder: &EventBuilderV10,
     ctl_nats: &async_nats::Client,
-    lattice_prefix: &str,
+    lattice: &str,
     name: &str,
     data: serde_json::Value,
 ) -> anyhow::Result<()> {
@@ -269,11 +269,11 @@ pub(crate) async fn publish(
     let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
     // TODO(pre-1.0): deprecate general subject and remove this
     let _ = ctl_nats
-        .publish(format!("wasmbus.evt.{lattice_prefix}"), ev.clone().into())
+        .publish(format!("wasmbus.evt.{lattice}"), ev.clone().into())
         .await
         .with_context(|| format!("failed to publish `{name}` event on general subject"));
     ctl_nats
-        .publish(format!("wasmbus.evt.{lattice_prefix}.{name}"), ev.into())
+        .publish(format!("wasmbus.evt.{lattice}.{name}"), ev.into())
         .await
         .with_context(|| format!("failed to publish `{name}` event"))
 }

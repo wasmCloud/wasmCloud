@@ -178,23 +178,17 @@ pub async fn handle_command(
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::undeploy_model(
-        &client,
-        lattice_prefix,
-        &cmd.model_name,
-        cmd.non_destructive,
-    )
-    .await
+    wash_lib::app::undeploy_model(&client, lattice, &cmd.model_name, cmd.non_destructive).await
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
@@ -205,17 +199,16 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
-            let put_res =
-                wash_lib::app::put_model(&client, lattice_prefix.clone(), &manifest).await?;
+            let put_res = wash_lib::app::put_model(&client, lattice.clone(), &manifest).await?;
 
             let model_name = match put_res.result {
                 PutResult::Created | PutResult::NewVersion => put_res.name,
                 _ => bail!("Could not put manifest to deploy {}", put_res.message),
             };
-            wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
+            wash_lib::app::deploy_model(&client, lattice, &model_name, cmd.version).await
         }
         AppManifest::ModelName(model_name) => {
-            wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
+            wash_lib::app::deploy_model(&client, lattice, &model_name, cmd.version).await
         }
     }
 }
@@ -223,7 +216,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
@@ -234,7 +227,7 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
-            wash_lib::app::put_model(&client, lattice_prefix, &manifest).await
+            wash_lib::app::put_model(&client, lattice, &manifest).await
         }
         AppManifest::ModelName(_) => {
             bail!("failed to retrieve manifest at `{:?}`", cmd.source)
@@ -245,33 +238,33 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::get_model_history(&client, lattice_prefix, &cmd.model_name).await
+    wash_lib::app::get_model_history(&client, lattice, &cmd.model_name).await
 }
 
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::get_model_details(&client, lattice_prefix, &cmd.model_name, cmd.version).await
+    wash_lib::app::get_model_details(&client, lattice, &cmd.model_name, cmd.version).await
 }
 
 async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
     wash_lib::app::delete_model_version(
         &client,
-        lattice_prefix,
+        lattice,
         &cmd.model_name,
         cmd.version,
         cmd.delete_all,
@@ -282,10 +275,10 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
-    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+    let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
-    wash_lib::app::get_models(&client, lattice_prefix).await
+    wash_lib::app::get_models(&client, lattice).await
 }
 
 fn list_models_output(results: Vec<ModelSummary>) -> CommandOutput {

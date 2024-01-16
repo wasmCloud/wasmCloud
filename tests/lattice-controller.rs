@@ -24,7 +24,7 @@ use crate::common::{
     assert_advertise_link, assert_start_actor, assert_start_provider, copy_par, stop_server,
 };
 
-const TEST_LATTICE_PREFIX: &str = "test-lattice-controller";
+const TEST_LATTICE: &str = "test-lattice-controller";
 
 /// Test all functionality for the lattice-controller provider
 #[tokio::test(flavor = "multi_thread")]
@@ -65,7 +65,7 @@ async fn lattice_controller_suite() -> Result<()> {
 
     // Build client for initial interaction with the lattice
     let ctl_client = ClientBuilder::new(nats_client.clone())
-        .lattice_prefix(TEST_LATTICE_PREFIX.to_string())
+        .lattice(TEST_LATTICE.to_string())
         .build();
 
     // Start a wasmcloud host
@@ -83,7 +83,7 @@ async fn lattice_controller_suite() -> Result<()> {
         //
         // By default the lattice-controller waits for auctions 3x as long as  as a regular timeout
         rpc_timeout: tokio::time::Duration::from_secs(6),
-        lattice_prefix: TEST_LATTICE_PREFIX.into(),
+        lattice: TEST_LATTICE.into(),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -139,7 +139,7 @@ async fn lattice_controller_suite() -> Result<()> {
     assert_start_actor(
         &ctl_client,
         &nats_client,
-        TEST_LATTICE_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &lattice_control_http_smithy_actor_url,
         1,
@@ -150,7 +150,7 @@ async fn lattice_controller_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        TEST_LATTICE_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &httpserver_provider_key,
         "default",
@@ -163,7 +163,7 @@ async fn lattice_controller_suite() -> Result<()> {
     assert_start_provider(
         &ctl_client,
         &nats_client,
-        TEST_LATTICE_PREFIX,
+        TEST_LATTICE,
         &host_key,
         &lattice_controller_provider_key,
         "default",
@@ -178,7 +178,7 @@ async fn lattice_controller_suite() -> Result<()> {
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
         .post(format!("{httpserver_base_url}/set-lattice-credentials"))
         .body(serde_json::to_string(&json!({
-            "latticeId": TEST_LATTICE_PREFIX,
+            "latticeId": TEST_LATTICE,
             "userJwt": null,
             "userSeed": null,
             "natsUrl": nats_url.to_string().replace("nats://localhost", "127.0.0.1"),
@@ -203,7 +203,7 @@ async fn lattice_controller_suite() -> Result<()> {
     let resp_json: ResponseEnvelope<Vec<LatticeHost>> = http_client
         .post(format!("{httpserver_base_url}/get-hosts"))
         .body(serde_json::to_string(&json!({
-            "latticeId": TEST_LATTICE_PREFIX,
+            "latticeId": TEST_LATTICE,
         }))?)
         .send()
         .await
@@ -218,7 +218,7 @@ async fn lattice_controller_suite() -> Result<()> {
     test_ops_actors(
         &httpserver_base_url,
         &http_client,
-        TEST_LATTICE_PREFIX,
+        TEST_LATTICE,
         &test_component_actor_url,
     )
     .await?;
@@ -244,7 +244,7 @@ async fn lattice_controller_suite() -> Result<()> {
 async fn test_ops_actors(
     base_url: impl AsRef<str>,
     http_client: &reqwest::Client,
-    lattice_prefix: impl AsRef<str>,
+    lattice: impl AsRef<str>,
     actor_ref: impl AsRef<str>,
 ) -> Result<()> {
     let base_url = base_url.as_ref();
@@ -254,7 +254,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<Vec<ActorAuctionAck>> = http_client
         .post(format!("{base_url}/auction-actor"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "actorRef": actor_ref,
             "constraints": HashMap::<String,String>::new(),
         }))?)
@@ -283,7 +283,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
         .post(format!("{base_url}/start-actor"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "actorRef": actor_ref,
             "hostId": host_id,
             "annotations": HashMap::<String, String>::new(),
@@ -305,7 +305,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<HostInventory> = http_client
         .post(format!("{base_url}/get-host-inventory"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "hostId": host_id,
         }))?)
         .send()
@@ -322,7 +322,7 @@ async fn test_ops_actors(
             if let Some(actor_id) = http_client
                 .post(format!("{base_url}/get-host-inventory"))
                 .body(serde_json::to_string(&json!({
-                    "latticeId": lattice_prefix.as_ref(),
+                    "latticeId": lattice.as_ref(),
                     "hostId": host_id,
                 }))?)
                 .send()
@@ -351,7 +351,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
         .post(format!("{base_url}/scale-actor"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "actorRef": actor_ref,
             "hostId": host_id,
             "actorId": actor_id,
@@ -374,7 +374,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
         .post(format!("{base_url}/stop-actor"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "hostId": host_id,
             "actorId": actor_id,
             "count": 0,
@@ -396,7 +396,7 @@ async fn test_ops_actors(
     let resp_json: ResponseEnvelope<HostInventory> = http_client
         .post(format!("{base_url}/get-host-inventory"))
         .body(serde_json::to_string(&json!({
-            "latticeId": lattice_prefix.as_ref(),
+            "latticeId": lattice.as_ref(),
             "hostId": host_id,
         }))?)
         .send()
@@ -495,5 +495,5 @@ pub struct LatticeHost {
     ctl_host: Option<String>,
     prov_rpc_host: Option<String>,
     rpc_host: Option<String>,
-    lattice_prefix: Option<String>,
+    lattice: Option<String>,
 }

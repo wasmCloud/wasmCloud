@@ -32,7 +32,7 @@ pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
     /// Lattice prefix
-    pub lattice_prefix: String,
+    pub lattice: String,
     timeout: Duration,
     auction_timeout: Duration,
 }
@@ -41,7 +41,7 @@ impl Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("topic_prefix", &self.topic_prefix)
-            .field("lattice_prefix", &self.lattice_prefix)
+            .field("lattice", &self.lattice)
             .field("timeout", &self.timeout)
             .field("auction_timeout", &self.auction_timeout)
             .finish_non_exhaustive()
@@ -53,7 +53,7 @@ impl Debug for Client {
 pub struct ClientBuilder {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
-    lattice_prefix: String,
+    lattice: String,
     timeout: Duration,
     auction_timeout: Duration,
 }
@@ -66,7 +66,7 @@ impl ClientBuilder {
         ClientBuilder {
             nc,
             topic_prefix: None,
-            lattice_prefix: "default".to_string(),
+            lattice: "default".to_string(),
             timeout: Duration::from_secs(2),
             auction_timeout: Duration::from_secs(5),
         }
@@ -85,9 +85,9 @@ impl ClientBuilder {
     /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will
     /// be set to `default`
     #[must_use]
-    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
+    pub fn lattice(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
-            lattice_prefix: prefix.into(),
+            lattice: prefix.into(),
             ..self
         }
     }
@@ -115,7 +115,7 @@ impl ClientBuilder {
         Client {
             nc: self.nc,
             topic_prefix: self.topic_prefix,
-            lattice_prefix: self.lattice_prefix,
+            lattice: self.lattice,
             timeout: self.timeout,
             auction_timeout: self.auction_timeout,
         }
@@ -157,7 +157,7 @@ impl Client {
     /// _timeout_.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
-        let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice);
         debug!("get_hosts:publish {}", &subject);
         self.publish_and_wait(subject, Vec::new()).await
     }
@@ -167,7 +167,7 @@ impl Client {
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
         let subject = broker::queries::host_inventory(
             &self.topic_prefix,
-            &self.lattice_prefix,
+            &self.lattice,
             parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
         );
         debug!("get_host_inventory:request {}", &subject);
@@ -180,7 +180,7 @@ impl Client {
     /// Retrieves the full set of all cached claims in the lattice.   
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<Vec<HashMap<String, String>>> {
-        let subject = broker::queries::claims(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::queries::claims(&self.topic_prefix, &self.lattice);
         debug!("get_claims:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
@@ -202,7 +202,7 @@ impl Client {
         actor_ref: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ActorAuctionAck>> {
-        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
             constraints,
@@ -223,7 +223,7 @@ impl Client {
         link_name: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ProviderAuctionAck>> {
-        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
             link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
@@ -255,11 +255,8 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject = broker::commands::scale_actor(
-            &self.topic_prefix,
-            &self.lattice_prefix,
-            host_id.as_str(),
-        );
+        let subject =
+            broker::commands::scale_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             max_instances,
@@ -279,7 +276,7 @@ impl Client {
     /// credentials when using this function in production as the data contains secrets
     #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
-        let subject = broker::publish_registries(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::publish_registries(&self.topic_prefix, &self.lattice);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
         let resp = self
@@ -315,7 +312,7 @@ impl Client {
             values,
         };
 
-        let subject = broker::advertise_link(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::advertise_link(&self.topic_prefix, &self.lattice);
         debug!("advertise_link:request {}", &subject);
 
         let bytes = crate::json_serialize(&ld)?;
@@ -334,7 +331,7 @@ impl Client {
         contract_id: &str,
         link_name: &str,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::remove_link(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::remove_link(&self.topic_prefix, &self.lattice);
         debug!("remove_link:request {}", &subject);
         let ld = LinkDefinition {
             actor_id: parse_identifier(&IdentifierKind::ActorId, actor_id)?,
@@ -354,7 +351,7 @@ impl Client {
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
     pub async fn query_links(&self) -> Result<Vec<LinkDefinition>> {
-        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice_prefix);
+        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("query_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
@@ -379,7 +376,7 @@ impl Client {
         key: &str,
         value: impl Into<Vec<u8>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::put_config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        let subject = broker::put_config(&self.topic_prefix, &self.lattice, entity_id, key);
         debug!(%subject, "Putting config");
         match self
             .request_timeout(subject, value.into(), self.timeout)
@@ -397,8 +394,7 @@ impl Client {
     /// NOTE: This operation is currently experimental and may change or be removed at any time
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_config_key(&self, entity_id: &str, key: &str) -> Result<CtlOperationAck> {
-        let subject =
-            broker::delete_config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        let subject = broker::delete_config(&self.topic_prefix, &self.lattice, entity_id, key);
         debug!(%subject, %key, "Delete config at key");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -416,7 +412,7 @@ impl Client {
     /// NOTE: This operation is currently experimental and may change or be removed at any time
     #[instrument(level = "debug", skip_all)]
     pub async fn clear_config(&self, entity_id: &str, key: &str) -> Result<CtlOperationAck> {
-        let subject = broker::clear_config(&self.topic_prefix, &self.lattice_prefix, entity_id);
+        let subject = broker::clear_config(&self.topic_prefix, &self.lattice, entity_id);
         debug!(%subject, %key, "Deleting all config at key");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -436,8 +432,7 @@ impl Client {
     /// NOTE: This operation is currently experimental and may change or be removed at any time
     #[instrument(level = "debug", skip_all)]
     pub async fn get_config(&self, entity_id: &str, key: &str) -> Result<GetConfigKeyResponse> {
-        let subject =
-            broker::queries::config(&self.topic_prefix, &self.lattice_prefix, entity_id, key);
+        let subject = broker::queries::config(&self.topic_prefix, &self.lattice, entity_id, key);
         debug!(%subject, %key, "Getting config at key");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -453,8 +448,7 @@ impl Client {
     /// NOTE: This operation is currently experimental and may change or be removed at any time
     #[instrument(level = "debug", skip_all)]
     pub async fn get_all_config(&self, entity_id: &str) -> Result<HashMap<String, Vec<u8>>> {
-        let subject =
-            broker::queries::all_config(&self.topic_prefix, &self.lattice_prefix, entity_id);
+        let subject = broker::queries::all_config(&self.topic_prefix, &self.lattice, entity_id);
         debug!(%subject, "Getting all config");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -478,7 +472,7 @@ impl Client {
         key: &str,
         value: &str,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::put_label(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let subject = broker::put_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "putting label");
         let bytes = json_serialize(HostLabel {
             key: key.to_string(),
@@ -496,7 +490,7 @@ impl Client {
     ///
     /// Will return an error if there is a communication problem with the host
     pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlOperationAck> {
-        let subject = broker::delete_label(&self.topic_prefix, &self.lattice_prefix, host_id);
+        let subject = broker::delete_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "removing label");
         let bytes = json_serialize(HostLabel {
             key: key.to_string(),
@@ -525,11 +519,8 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject = broker::commands::update_actor(
-            &self.topic_prefix,
-            &self.lattice_prefix,
-            host_id.as_str(),
-        );
+        let subject =
+            broker::commands::update_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id,
@@ -559,11 +550,8 @@ impl Client {
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject = broker::commands::start_provider(
-            &self.topic_prefix,
-            &self.lattice_prefix,
-            host_id.as_str(),
-        );
+        let subject =
+            broker::commands::start_provider(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
             host_id,
@@ -597,11 +585,8 @@ impl Client {
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
 
-        let subject = broker::commands::stop_provider(
-            &self.topic_prefix,
-            &self.lattice_prefix,
-            host_id.as_str(),
-        );
+        let subject =
+            broker::commands::stop_provider(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id,
@@ -629,11 +614,8 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject = broker::commands::stop_actor(
-            &self.topic_prefix,
-            &self.lattice_prefix,
-            host_id.as_str(),
-        );
+        let subject =
+            broker::commands::stop_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
             host_id,
@@ -658,7 +640,7 @@ impl Client {
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
-            broker::commands::stop_host(&self.topic_prefix, &self.lattice_prefix, host_id.as_str());
+            broker::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
             host_id,
@@ -749,7 +731,7 @@ impl Client {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
         let mut sub = self
             .nc
-            .subscribe(format!("wasmbus.evt.{}", self.lattice_prefix))
+            .subscribe(format!("wasmbus.evt.{}", self.lattice))
             .await?;
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {

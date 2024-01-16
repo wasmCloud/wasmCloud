@@ -22,8 +22,8 @@ use tracing::info;
 
 use crate::{
     config::{
-        cfg_dir, WashConnectionOptions, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
-        DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+        cfg_dir, WashConnectionOptions, DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS,
     },
     context::{default_timeout_ms, fs::ContextDir, ContextManager},
     keys::{
@@ -169,9 +169,14 @@ pub struct CliConnectionOpts {
     )]
     pub js_domain: Option<String>,
 
-    /// Lattice prefix for wasmcloud control interface, defaults to "default"
-    #[clap(short = 'x', long = "lattice-prefix", env = "WASMCLOUD_LATTICE_PREFIX")]
-    pub lattice_prefix: Option<String>,
+    /// Lattice name for wasmcloud control interface, defaults to "default"
+    #[clap(
+        short = 'x',
+        long = "lattice",
+        alias = "lattice-prefix", // TODO(pre-1.0): remove me
+        env = "WASMCLOUD_LATTICE"
+    )]
+    pub lattice: Option<String>,
 
     /// Timeout length to await a control interface response, defaults to 2000 milliseconds
     #[clap(
@@ -196,7 +201,7 @@ impl Default for CliConnectionOpts {
             ctl_seed: None,
             ctl_credsfile: None,
             js_domain: None,
-            lattice_prefix: Some(DEFAULT_LATTICE_PREFIX.to_string()),
+            lattice: Some(DEFAULT_LATTICE.to_string()),
             timeout_ms: DEFAULT_NATS_TIMEOUT_MS,
             context: None,
         }
@@ -214,7 +219,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             js_domain,
-            lattice_prefix,
+            lattice,
             timeout_ms,
             context,
         }: CliConnectionOpts,
@@ -238,7 +243,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             js_domain,
-            lattice_prefix,
+            lattice,
             timeout_ms,
             ctx,
         })
@@ -407,7 +412,7 @@ mod test {
     use std::env;
 
     use crate::{
-        config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE_PREFIX, WASH_DIR},
+        config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE, WASH_DIR},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
@@ -415,26 +420,23 @@ mod test {
 
     #[tokio::test]
     #[cfg(not(target_family = "windows"))]
-    async fn test_lattice_prefix() -> Result<()> {
+    async fn test_lattice_name() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         env::set_current_dir(&tempdir)?;
         env::set_var("HOME", tempdir.path());
 
-        // when opts.lattice_prefix.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice_prefix from the preset default context...
+        // when opts.lattice.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice from the preset default context...
         let cli_opts = CliConnectionOpts::default();
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
-        assert_eq!(
-            wash_opts.get_lattice_prefix(),
-            DEFAULT_LATTICE_PREFIX.to_string()
-        );
+        assert_eq!(wash_opts.get_lattice(), DEFAULT_LATTICE.to_string());
 
-        // when opts.lattice_prefix.is_some() && opts.context.is_none(), use the specified lattice_prefix...
+        // when opts.lattice.is_some() && opts.context.is_none(), use the specified lattice...
         let cli_opts = CliConnectionOpts {
-            lattice_prefix: Some("hal9000".to_string()),
+            lattice: Some("hal9000".to_string()),
             ..Default::default()
         };
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
-        assert_eq!(wash_opts.get_lattice_prefix(), "hal9000".to_string());
+        assert_eq!(wash_opts.get_lattice(), "hal9000".to_string());
 
         let context_dir = ContextDir::from_dir(Some(
             tempdir
@@ -442,33 +444,33 @@ mod test {
                 .join(format!("{WASH_DIR}/{DEFAULT_CTX_DIR_NAME}")),
         ))?;
 
-        // when opts.lattice_prefix.is_none() && opts.context.is_some(), use the lattice_prefix from the specified context...
+        // when opts.lattice.is_none() && opts.context.is_some(), use the lattice from the specified context...
         context_dir.save_context(&WashContext {
             name: "foo".to_string(),
-            lattice_prefix: "iambatman".to_string(),
+            lattice: "iambatman".to_string(),
             ..Default::default()
         })?;
         let cli_opts = CliConnectionOpts {
             context: Some("foo".to_string()),
-            lattice_prefix: None,
+            lattice: None,
             ..Default::default()
         };
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
-        assert_eq!(wash_opts.get_lattice_prefix(), "iambatman".to_string());
+        assert_eq!(wash_opts.get_lattice(), "iambatman".to_string());
 
-        // when opts.lattice_prefix.is_none() && opts.context.is_none(), use the lattice_prefix from the specified default context...
+        // when opts.lattice.is_none() && opts.context.is_none(), use the lattice from the specified default context...
         context_dir.save_context(&WashContext {
             name: "bar".to_string(),
-            lattice_prefix: "iamironman".to_string(),
+            lattice: "iamironman".to_string(),
             ..Default::default()
         })?;
         context_dir.set_default_context("bar")?;
         let cli_opts = CliConnectionOpts {
-            lattice_prefix: None,
+            lattice: None,
             ..Default::default()
         };
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
-        assert_eq!(wash_opts.get_lattice_prefix(), "iamironman".to_string());
+        assert_eq!(wash_opts.get_lattice(), "iamironman".to_string());
 
         Ok(())
     }

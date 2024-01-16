@@ -129,11 +129,11 @@ async fn create_client(
 ) -> ProviderInvocationResult<wasmcloud_control_interface::Client> {
     let timeout = Duration::from_millis(config.timeout_ms);
     let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
-    let lattice_prefix = config.lattice_prefix.clone();
+    let lattice = config.lattice.clone();
     let conn = connect(config).await?;
 
     Ok(wasmcloud_control_interface::ClientBuilder::new(conn)
-        .lattice_prefix(lattice_prefix)
+        .lattice(lattice)
         .timeout(timeout)
         .auction_timeout(auction_timeout)
         .build())

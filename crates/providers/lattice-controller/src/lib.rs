@@ -19,7 +19,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 // cooperating providers/actors, since the *entire* auction duration will be awaited
 // for operations like `get-hosts`
 const DEFAULT_AUCTION_TIMEOUT_MS: u64 = 3000;
-const DEFAULT_LATTICE_PREFIX: &str = "default";
+const DEFAULT_LATTICE: &str = "default";
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
@@ -87,9 +87,9 @@ struct ConnectionConfig {
     #[serde(default)]
     auth_seed: Option<String>,
 
-    /// Prefix for the lattice to use
+    /// Name of the lattice
     #[serde(default)]
-    lattice_prefix: String,
+    lattice: String,
 
     /// NATS JetStream domain
     #[serde(default)]
@@ -109,7 +109,7 @@ impl Default for ConnectionConfig {
             auth_jwt: None,
             js_domain: None,
             auth_seed: None,
-            lattice_prefix: String::from(DEFAULT_LATTICE_PREFIX),
+            lattice: String::from(DEFAULT_LATTICE),
             timeout_ms: DEFAULT_TIMEOUT_MS,
             auction_timeout_ms: DEFAULT_AUCTION_TIMEOUT_MS,
         }
@@ -162,7 +162,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 .unwrap_or_else(|| "0.0.0.0:4222".to_string())],
             auth_jwt: arg.user_jwt.clone(),
             auth_seed: arg.user_seed.clone(),
-            lattice_prefix: arg.lattice_id.to_string(),
+            lattice: arg.lattice_id.to_string(),
             js_domain: arg.js_domain.clone(),
             ..Default::default()
         };
@@ -297,19 +297,21 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             .await
             .map(|v| {
                 v.into_iter()
-                    .map(|h| Host {
+                    .map(|h| {
+                        let lattice_prefix = h.lattice().cloned();
+                        Host {
                         cluster_issuers: h.cluster_issuers,
                         ctl_host: h.ctl_host,
                         id: h.id,
                         js_domain: h.js_domain,
                         labels: h.labels,
-                        lattice_prefix: h.lattice_prefix,
+                        lattice_prefix, // NOTE: the control interface type has been updated to just `lattice`, but the wit type is still `lattice_prefix`
                         prov_rpc_host: h.rpc_host.clone(),
                         rpc_host: h.rpc_host,
                         uptime_human: h.uptime_human,
                         uptime_seconds: h.uptime_seconds,
                         version: h.version,
-                    })
+                    }})
                     .collect::<Vec<_>>()
             })
             .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)

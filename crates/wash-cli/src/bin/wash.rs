@@ -230,6 +230,15 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    // TODO(pre-1.0): remove me
+    if let Ok(lattice) = std::env::var("WASMCLOUD_LATTICE_PREFIX") {
+        eprintln!(
+            "The `WASMCLOUD_LATTICE_PREFIX` environment variable is deprecated and will be removed. Please use `WASMCLOUD_LATTICE` instead."
+        );
+        std::env::set_var("WASMCLOUD_LATTICE", lattice);
+    }
+
     let cli: Cli = Parser::parse();
 
     let output_kind = cli.output;

@@ -73,7 +73,7 @@ macro_rules! process_until_quit {
 pub struct ProviderConnection {
     links: Arc<RwLock<HashMap<String, LinkDefinition>>>,
     rpc_client: RpcClient,
-    lattice_prefix: String,
+    lattice: String,
     host_data: Arc<HostData>,
     // We keep these around so they can drop
     _listener_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
@@ -85,7 +85,7 @@ impl std::fmt::Debug for ProviderConnection {
             .field("provider_id", &self.host_data.provider_key)
             .field("host_id", &self.host_data.host_id)
             .field("link", &self.host_data.link_name)
-            .field("lattice_prefix", &self.lattice_prefix)
+            .field("lattice", &self.lattice)
             .finish()
     }
 }
@@ -111,7 +111,7 @@ impl ProviderConnection {
         Ok(ProviderConnection {
             links: Arc::new(RwLock::new(HashMap::new())),
             rpc_client,
-            lattice_prefix: host_data.lattice_rpc_prefix.to_owned(),
+            lattice: host_data.lattice_rpc_prefix.to_owned(),
             host_data: Arc::new(host_data.to_owned()),
             _listener_handles: Default::default(),
         })
@@ -186,7 +186,7 @@ impl ProviderConnection {
     pub fn provider_rpc_topic(&self) -> String {
         format!(
             "wasmbus.rpc.{}.{}.{}",
-            &self.lattice_prefix, &self.host_data.provider_key, self.host_data.link_name
+            &self.lattice, &self.host_data.provider_key, self.host_data.link_name
         )
     }
 
@@ -342,7 +342,7 @@ impl ProviderConnection {
     {
         let shutdown_topic = format!(
             "wasmbus.rpc.{}.{}.{}.shutdown",
-            &self.lattice_prefix, &self.host_data.provider_key, self.host_data.link_name
+            &self.lattice, &self.host_data.provider_key, self.host_data.link_name
         );
         debug!("subscribing for shutdown : {}", &shutdown_topic);
         let mut sub = self.rpc_client.client().subscribe(shutdown_topic).await?;
@@ -403,7 +403,7 @@ impl ProviderConnection {
     {
         let ldput_topic = format!(
             "wasmbus.rpc.{}.{}.{}.linkdefs.put",
-            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
         );
 
         let mut sub = self.rpc_client.client().subscribe(ldput_topic).await?;
@@ -456,7 +456,7 @@ impl ProviderConnection {
         // Link Delete
         let link_del_topic = format!(
             "wasmbus.rpc.{}.{}.{}.linkdefs.del",
-            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
         );
         debug!(topic = %link_del_topic, "subscribing for link del");
         let mut sub = self
@@ -491,7 +491,7 @@ impl ProviderConnection {
     {
         let topic = format!(
             "wasmbus.rpc.{}.{}.{}.health",
-            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
         );
 
         let mut sub = self.rpc_client.client().subscribe(topic).await?;

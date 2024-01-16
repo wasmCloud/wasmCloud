@@ -46,7 +46,7 @@ mod test {
 
     const CTL_HOST: &str = "127.0.0.1";
     const CTL_PORT: &str = "4222";
-    const LATTICE_PREFIX: &str = "default";
+    const DEFAULT_LATTICE: &str = "default";
 
     const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
 
@@ -59,8 +59,8 @@ mod test {
             "ctl",
             "start",
             "actor",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -86,7 +86,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
@@ -98,8 +98,8 @@ mod test {
             "ctl",
             "start",
             "provider",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
+            "--lattice",
+            DEFAULT_LATTICE,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -130,7 +130,7 @@ mod test {
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(config_json, None);
                 assert_eq!(auction_timeout_ms, 2002);

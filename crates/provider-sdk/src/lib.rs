@@ -40,16 +40,16 @@ pub fn serialize<T: Serialize>(data: &T) -> InvocationResult<Vec<u8>> {
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
 /// A provider entity must have the public_key and link_name fields filled in.
 /// An actor entity must have a public_key and an empty link_name.
-pub fn rpc_topic(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
+pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
     if !entity.link_name.is_empty() {
         // provider target
         format!(
             "wasmbus.rpc.{}.{}.{}",
-            lattice_prefix, entity.public_key, entity.link_name
+            lattice, entity.public_key, entity.link_name
         )
     } else {
         // actor target
-        format!("wasmbus.rpc.{}.{}", lattice_prefix, entity.public_key)
+        format!("wasmbus.rpc.{}.{}", lattice, entity.public_key)
     }
 }
 
