@@ -99,6 +99,7 @@ pub fn actor_scaled(
 ) -> serde_json::Value {
     json!({
         "public_key": claims.subject,
+        "claims": format_actor_claims(claims),
         "annotations": annotations,
         "host_id": host_id.as_ref(),
         "image_ref": image_ref.as_ref(),
