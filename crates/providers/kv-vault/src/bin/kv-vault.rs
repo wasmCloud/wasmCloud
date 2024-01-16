@@ -1,11 +1,12 @@
 //! Hashicorp Vault implementation of the wasmcloud KeyValue capability contract "wasmcloud:keyvalue"
 //!
 
+use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk;
+
 use wasmcloud_provider_kv_vault::KvVaultProvider;
-use wasmcloud_provider_sdk::provider_main::start_provider;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    start_provider(
+    wasmcloud_provider_sdk::start_provider(
         KvVaultProvider::default(),
         Some("kv-vault-provider".to_string()),
     )?;

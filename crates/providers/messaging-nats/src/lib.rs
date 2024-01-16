@@ -3,7 +3,6 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
@@ -12,9 +11,13 @@ use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 
-use wasmcloud_provider_sdk::core::{HostData, LinkDefinition};
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde_json,
+    wasmcloud_provider_sdk::core::{HostData, LinkDefinition},
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
+};
 
 mod connection;
 use connection::ConnectionConfig;

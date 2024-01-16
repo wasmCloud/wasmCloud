@@ -5460,6 +5460,8 @@ dependencies = [
  "async-trait",
  "serde",
  "serde_bytes",
+ "serde_json",
+ "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen-macro",
 ]
 

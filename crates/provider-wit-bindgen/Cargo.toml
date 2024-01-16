@@ -14,8 +14,13 @@ repository.workspace = true
 [badges.maintenance]
 status = "actively-developed"
 
+[features]
+otel = [ "wasmcloud-provider-sdk/otel" ]
+
 [dependencies]
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+serde_json = { workspace = true }
 wasmcloud-provider-wit-bindgen-macro = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true }

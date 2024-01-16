@@ -6,7 +6,10 @@ use tokio::time::{interval_at, Duration, Instant};
 use tracing::{debug, trace};
 use wascap::prelude::KeyPair;
 use wasmcloud_control_interface::Client;
-use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
+
+use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::{
+    ProviderInvocationError, ProviderInvocationResult,
+};
 
 use crate::ConnectionConfig;
 

@@ -13,20 +13,15 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
-async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 flume = { workspace = true, features = ["async"] }
 futures = { workspace = true }
 http = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_bytes = { workspace = true, features = ["std"] }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true }
 warp = { workspace = true, features = ["tls"] }
-wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wasmcloud-provider-wit-bindgen = { workspace = true }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }

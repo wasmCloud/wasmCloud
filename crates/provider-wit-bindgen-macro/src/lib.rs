@@ -702,27 +702,27 @@ impl WitFunctionLatticeTranslationStrategy {
                         let func_ts = quote::quote!(
                             async fn #iface_fn_name(
                                 &self,
-                            ) -> ::wasmcloud_provider_sdk::error::ProviderInvocationResult<()> {
-                                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+                            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationResult<()> {
+                                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                                 let client = connection.get_rpc_client();
                                 let response = client
                                     .send(
-                                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                                             public_key: self.ld.provider_id.clone(),
                                             link_name: self.ld.link_name.clone(),
                                             contract_id: #contract_ident.to_string(),
                                         },
-                                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                                             public_key: self.ld.actor_id.clone(),
                                             ..Default::default()
                                         },
                                         #lattice_method,
-                                        ::wasmcloud_provider_sdk::serialize(())?
+                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(())?
                                     )
                                     .await?;
 
                                 if let Some(err) = response.error {
-                                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
                                 } else {
                                     Ok(())
                                 }
@@ -819,7 +819,11 @@ impl WitFunctionLatticeTranslationStrategy {
         let deser_phrase = if is_rust_unit_type(&result_rust_type) {
             quote::quote!(Ok(()))
         } else {
-            quote::quote!(Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?))
+            quote::quote!(Ok(
+                ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(
+                    &response.msg
+                )?
+            ))
         };
 
         // Return the generated function with appropriate args & return
@@ -827,27 +831,27 @@ impl WitFunctionLatticeTranslationStrategy {
             async fn #fn_name(
                 &self,
                 #arg_name_ident: #rust_type
-            ) -> Result<#result_rust_type, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
-                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+            ) -> Result<#result_rust_type, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
                 let response = client
                     .send(
-                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                             public_key: self.ld.provider_id.clone(),
                             link_name: self.ld.link_name.clone(),
                             contract_id: #contract_ident.to_string(),
                         },
-                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                             public_key: self.ld.actor_id.clone(),
                             ..Default::default()
                         },
                         #lattice_method,
-                        ::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?
                     )
                     .await?;
 
                 if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
                 } else {
                     #deser_phrase
                 }
@@ -902,7 +906,8 @@ impl WitFunctionLatticeTranslationStrategy {
         //
         // This struct will eventually be written out, before the InvocationHandlers
         let invocation_struct_tokens = quote::quote!(
-            #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+            #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde")]
             pub struct #invocation_struct_name {
                 #struct_member_tokens
             }
@@ -923,29 +928,29 @@ impl WitFunctionLatticeTranslationStrategy {
             async fn #fn_name(
                 &self,
                 args: #invocation_struct_name,
-            ) -> Result<#result_rust_type, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
-                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+            ) -> Result<#result_rust_type, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
                 let response = client
                     .send(
-                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                             public_key: self.ld.provider_id.clone(),
                             link_name: self.ld.link_name.clone(),
                             contract_id: #contract_ident.to_string(),
                         },
-                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
                             public_key: self.ld.actor_id.clone(),
                             ..Default::default()
                         },
                         #lattice_method,
-                        ::wasmcloud_provider_sdk::serialize(&args)?
+                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&args)?
                     )
                     .await?;
 
                 if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
                 } else {
-                    Ok(::wasmcloud_provider_sdk::deserialize(&response.msg)?)
+                    Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&response.msg)?)
                 }
             }
         );
@@ -1202,7 +1207,8 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         iface_tokens.append_all(quote::quote!(
             // START: *Invocation structs & trait for #wit_iface
             #(
-                #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+                #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+                #[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
                 struct #struct_type_names {
                     #struct_members
                 }
@@ -1264,7 +1270,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         // Create and append the trait for the iface along with
         // the functions that should be implemented by the provider
         iface_tokens.append_all(quote::quote!(
-            #[::async_trait::async_trait]
+            #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
             pub trait #wit_iface {
                 fn contract_id() -> &'static str {
                     #contract_ident
@@ -1273,7 +1279,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 #(
                     async fn #func_names (
                         &self,
-                        ctx: ::wasmcloud_provider_sdk::Context,
+                        ctx: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context,
                         #invocation_args_with_types
                     ) #invocation_returns;
                 )*
@@ -1296,7 +1302,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         //  - a pre-existing type (ex. `String`)
                         //
                         // We can use this to generate lines for
-                        acc.0.push(quote::quote!(let input: #type_name = ::wasmcloud_provider_sdk::deserialize(&body)?;));
+                        acc.0.push(quote::quote!(let input: #type_name = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&body)?;));
 
                         let invocation_arg_names = lm.invocation_arg_names;
                         acc.1.push(if invocation_arg_names.len() == 1 {
@@ -1339,9 +1345,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                     )
                         .await
                         .map_err(|e| {
-                            ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(e.to_string())
+                            ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(e.to_string())
                         })?;
-                    Ok(::wasmcloud_provider_sdk::serialize(&result)?)
+                    Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&result)?)
                 }
             )*
         ));
@@ -1409,19 +1415,19 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// This implementation is a stub and must be filled out by implementers
         ///
         /// It would be preferable to use <T: SomeTrait> here, but the fact that  'd like to use
-        #[::async_trait::async_trait]
-        impl ::wasmcloud_provider_sdk::MessageDispatch for #impl_struct_name {
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
+        impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::MessageDispatch for #impl_struct_name {
             async fn dispatch<'a>(
                 &'a self,
-                ctx: ::wasmcloud_provider_sdk::Context,
+                ctx: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context,
                 method: String,
                 body: std::borrow::Cow<'a, [u8]>,
-            ) -> Result<Vec<u8>, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+            ) -> Result<Vec<u8>, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
                 match method.as_str() {
                     #(
                         #interface_dispatch_match_arms
                     )*
-                    _ => Err(::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
+                    _ => Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
                         "Invalid method name {method}"
                     )).into())
                 }
@@ -1434,9 +1440,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         ///
         /// It is a mirror of ProviderHandler for the purposes of ensuring that
         /// at least the following members are is supported.
-        #[::async_trait::async_trait]
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
         trait WasmcloudCapabilityProvider {
-            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool;
+            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> bool;
             async fn delete_link(&self, actor_id: &str);
             async fn shutdown(&self);
         }
@@ -1445,9 +1451,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// required functionality of all Providers on a wasmCloud lattice.
         ///
         /// This implementation is a stub and must be filled out by implementers
-        #[::async_trait::async_trait]
-        impl ::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
-            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
+        impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
+            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
                 WasmcloudCapabilityProvider::put_link(self, ld).await
             }
 
@@ -1462,7 +1468,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         /// Given the implementation of ProviderHandler and MessageDispatch,
         /// the implementation for your struct is a guaranteed
-        impl ::wasmcloud_provider_sdk::Provider for #impl_struct_name {}
+        impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Provider for #impl_struct_name {}
 
         // Structs that are used at Invocation Handling time
         #( #exported_iface_invocation_structs )*
@@ -1472,11 +1478,11 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         ///
         /// Interfaces exported by the provider can use this to send traffic across the lattice
         pub struct InvocationHandler<'a> {
-            ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition,
+            ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition,
         }
 
         impl<'a> InvocationHandler<'a> {
-            pub fn new(ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
+            pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
                 Self { ld }
             }
 
@@ -1820,7 +1826,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                                     });
 
                                     let result_tokens = quote::quote!(
-                                            -> ::wasmcloud_provider_sdk::error::ProviderInvocationResult<#inner_tokens>
+                                            -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationResult<#inner_tokens>
                                         );
 
                                     trimmed.sig.output = syn::parse2::<ReturnType>(result_tokens.clone())
@@ -1946,7 +1952,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                             // opt in to serde's specialized handling since this is what the
                             // implementation written in the host currently expects
                             if f.ty == syn::parse_str::<Type>("Vec<u8>").expect("failed to parse") {
-                                f.attrs.push(parse_quote!(#[serde(with = "::serde_bytes")]));
+                                f.attrs.push(parse_quote!(#[serde(with = "::wasmcloud_provider_wit_bindgen::deps::serde_bytes")]));
                             }
 
                             // If an enum contains a type that is a resource (i.e. a wasmtime::component::Resource),
@@ -2002,9 +2008,14 @@ impl VisitMut for WitBindgenOutputVisitor {
                     }
 
                     // Add the attributes we want to be present to the enum
-                    e.attrs.append(&mut vec![parse_quote!(
-                        #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
-                    )]);
+                    e.attrs.append(&mut vec![
+                        parse_quote!(
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+                        ),
+                        parse_quote!(
+                            #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde")]
+                        ),
+                    ]);
 
                     // Save the enum by name to the tally of structs that have been extended
                     // this is used later to generate interfaces, when generating interfaces, as a import path lookup
@@ -2054,7 +2065,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                         // opt in to serde's specialized handling since this is what the
                         // implementation written in the host currently expects
                         if f.ty == syn::parse_str::<Type>("Vec<u8>").expect("failed to parse") {
-                            f.attrs.push(parse_quote!(#[serde(with = "::serde_bytes")]));
+                            f.attrs.push(parse_quote!(#[serde(with = "::wasmcloud_provider_wit_bindgen::deps::serde_bytes")]));
                         }
 
                         // If the struct field is a WIT-ified map, then we should replace
@@ -2081,10 +2092,10 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // Add the attributes we want to be present
                     s.attrs.append(&mut vec![
                         parse_quote!(
-                            #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
                         ),
                         parse_quote!(
-                            #[serde(rename_all = "camelCase")]
+                            #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde", rename_all = "camelCase")]
                         ),
                     ]);
 

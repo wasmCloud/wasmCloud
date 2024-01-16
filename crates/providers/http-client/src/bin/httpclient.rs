@@ -1,3 +1,5 @@
+use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk;
+
 use wasmcloud_provider_httpclient::HttpClientProvider;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -5,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // listens to lattice rpcs, handles actor links,
     // and returns only when it receives a shutdown message
     wasmcloud_provider_sdk::start_provider(
-        HttpClientProvider{},
+        HttpClientProvider {},
         Some("http-client-provider".to_string()),
     )?;
 

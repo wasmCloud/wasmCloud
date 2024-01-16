@@ -3253,13 +3253,9 @@ dependencies = [
 name = "wasmcloud-provider-blobstore-fs"
 version = "0.3.3"
 dependencies = [
- "async-trait",
  "path-clean",
- "serde",
- "serde_bytes",
  "tokio",
  "tracing",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3267,7 +3263,6 @@ dependencies = [
 name = "wasmcloud-provider-blobstore-s3"
 version = "0.6.0"
 dependencies = [
- "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
@@ -3277,13 +3272,9 @@ dependencies = [
  "fastrand 1.9.0",
  "hyper-rustls",
  "rand",
- "serde",
- "serde_bytes",
- "serde_json",
  "simple_env_load",
  "tokio",
  "tracing",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3291,13 +3282,9 @@ dependencies = [
 name = "wasmcloud-provider-httpclient"
 version = "0.8.0"
 dependencies = [
- "async-trait",
  "http",
  "reqwest",
- "serde",
- "serde_bytes",
  "tracing",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3305,22 +3292,17 @@ dependencies = [
 name = "wasmcloud-provider-httpserver"
 version = "0.18.3"
 dependencies = [
- "async-trait",
  "base64 0.21.5",
  "bytes",
  "dashmap",
  "flume",
  "futures",
  "http",
- "serde",
- "serde_bytes",
- "serde_json",
  "thiserror",
  "tokio",
  "toml",
  "tracing",
  "warp",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3328,15 +3310,11 @@ dependencies = [
 name = "wasmcloud-provider-kafka"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "chrono",
  "futures",
  "rskafka",
- "serde",
- "serde_bytes",
  "tokio",
  "tracing",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3344,15 +3322,11 @@ dependencies = [
 name = "wasmcloud-provider-kv-vault"
 version = "0.6.0"
 dependencies = [
- "async-trait",
- "serde",
- "serde_json",
  "thiserror",
  "tokio",
  "tracing",
  "url",
  "vaultrs",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3360,13 +3334,9 @@ dependencies = [
 name = "wasmcloud-provider-kvredis"
 version = "0.21.2"
 dependencies = [
- "async-trait",
  "redis",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3375,13 +3345,10 @@ name = "wasmcloud-provider-lattice-controller"
 version = "0.13.0"
 dependencies = [
  "async-nats",
- "async-trait",
- "serde",
  "tokio",
  "tracing",
  "wascap",
  "wasmcloud-control-interface",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3391,21 +3358,16 @@ version = "0.18.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
  "base64 0.21.5",
  "bytes",
  "futures",
  "opentelemetry",
  "opentelemetry-nats",
- "serde",
- "serde_bytes",
- "serde_json",
  "tokio",
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry",
  "wascap",
- "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -3439,6 +3401,18 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-wit-bindgen"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "wasmcloud-provider-sdk",
+ "wasmcloud-provider-wit-bindgen-macro",
+]
+
+[[package]]
+name = "wasmcloud-provider-wit-bindgen-macro"
 version = "0.1.0"
 dependencies = [
  "anyhow",

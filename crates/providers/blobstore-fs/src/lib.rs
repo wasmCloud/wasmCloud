@@ -10,19 +10,20 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use path_clean::PathClean;
-use serde::Deserialize;
 use tokio::fs::{
     create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File, OpenOptions,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tracing::{error, info};
-use wasmcloud_provider_sdk::{
-    core::LinkDefinition,
-    error::{ProviderInvocationError, ProviderInvocationResult},
-    Context,
+
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    serde::Deserialize,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
 };
 
 mod fs_utils;
@@ -42,6 +43,7 @@ const FIRST_SEQ_NBR: u64 = 0;
 pub type ChunkOffsetKey = (String, usize);
 
 #[derive(Default, Debug, Clone, Deserialize)]
+#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 struct FsProviderConfig {
     ld: LinkDefinition,
     root: PathBuf,

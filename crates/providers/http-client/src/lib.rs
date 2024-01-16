@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use async_trait::async_trait;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{error, instrument, trace, warn};
-use wasmcloud_provider_sdk::{
-    core::LinkDefinition,
-    error::{ProviderInvocationError, ProviderInvocationResult},
-    Context,
+
+use wasmcloud_provider_wit_bindgen::deps::{
+    async_trait::async_trait,
+    wasmcloud_provider_sdk::core::LinkDefinition,
+    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    wasmcloud_provider_sdk::Context,
 };
 
 wasmcloud_provider_wit_bindgen::generate!({
