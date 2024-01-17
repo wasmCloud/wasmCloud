@@ -13,7 +13,7 @@ module.exports = {
     'plugin:react/recommended',
     'plugin:react-hooks/recommended',
     'plugin:unicorn/recommended',
-    'plugin:prettier/recommended',
+    'prettier',
   ],
   parser: '@typescript-eslint/parser',
   parserOptions: {
@@ -22,8 +22,9 @@ module.exports = {
     tsconfigRootDir: __dirname,
     project: ['./tsconfig.json', './tsconfig.eslint.json'],
   },
-  plugins: ['react-refresh', 'prettier'],
+  plugins: ['react-refresh'],
   rules: {
+    '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
     'object-curly-spacing': ['warn', 'never'],
     'no-console': ['warn', {allow: ['info', 'warn', 'error']}],
     'no-undef': 'warn',
@@ -110,7 +111,7 @@ module.exports = {
     {
       files: ['*.jsx', '*.tsx'],
       rules: {
-        'unicorn/filename-case': ['error', {case: 'pascalCase'}],
+        'unicorn/filename-case': ['error', {case: 'kebabCase'}],
       },
     },
     {

@@ -11,10 +11,10 @@ import {
 import * as React from 'react';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/ui/table';
 
-interface DataTableProps<TData, TValue> {
+type DataTableProps<TData, TValue> = {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
-}
+};
 export function DataTable<TData, TValue>({
   data,
   columns,

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {LatticeServiceConfig} from '../classes/lattice-service';
-import {useLatticeService} from '../context/LatticeServiceProvider';
+import {useLatticeService} from './use-lattice-service';
 
 type SetConfigFunction = (value: Partial<LatticeServiceConfig>) => void;
 

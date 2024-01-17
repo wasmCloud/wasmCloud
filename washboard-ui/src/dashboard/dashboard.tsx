@@ -1,13 +1,13 @@
 import {ReactElement} from 'react';
-import ActorsTable from '@/actors/ActorsTable';
-import {HostsSummary} from '@/hosts/HostsSummary';
-import LinksTable from '@/links/LinksTable';
-import ProvidersTable from '@/providers/ProvidersTable';
+import {ActorsTable} from '@/actors/actors-table';
+import {HostsSummary} from '@/hosts/hosts-summary';
+import {LinksTable} from '@/links/links-table';
+import {ProvidersTable} from '@/providers/providers-table';
 import {useLatticeData} from '@/services/lattice';
 import {Card, CardContent, CardHeader} from '@/ui/card';
-import StatsTile from './StatsTile';
+import {StatsTile} from './stats-tile';
 
-function Dashboard(): ReactElement {
+export function Dashboard(): ReactElement {
   const {hosts, actors, providers, links} = useLatticeData();
 
   const hostsCount = Object.keys(hosts).length.toString();
@@ -54,5 +54,3 @@ function Dashboard(): ReactElement {
     </div>
   );
 }
-
-export default Dashboard;

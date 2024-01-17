@@ -26,7 +26,7 @@ type LatticeFormInput = z.input<typeof formSchema>;
 
 type LatticeFormOutput = z.output<typeof formSchema>;
 
-function LatticeSettings(): ReactElement {
+export function LatticeSettings(): ReactElement {
   const [{latticeUrl}, setConfig] = useLatticeConfig();
   const form = useForm<LatticeFormInput, object, LatticeFormOutput>({
     resolver: zodResolver(formSchema),
@@ -74,5 +74,3 @@ function LatticeSettings(): ReactElement {
     </Form>
   );
 }
-
-export default LatticeSettings;

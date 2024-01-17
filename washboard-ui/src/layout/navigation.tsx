@@ -1,9 +1,9 @@
 import {ReactElement} from 'react';
 import SvgLogo from '@/assets/logo-wide.svg?react';
-import {ConnectionStatus} from '@/components/connection-status.tsx';
+import {ConnectionStatus} from '@/components/connection-status';
 import {Settings} from '@/settings';
 
-function Navigation(): ReactElement {
+export function Navigation(): ReactElement {
   return (
     <div className="rounded-xl bg-brand p-2 text-brand-foreground md:p-4">
       <div className="flex items-center justify-between">
@@ -16,5 +16,3 @@ function Navigation(): ReactElement {
     </div>
   );
 }
-
-export default Navigation;

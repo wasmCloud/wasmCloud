@@ -1,2 +1,2 @@
-export {default as Badge} from './Badge';
+export {Badge} from './badge';
 export {badgeVariants} from './variants';

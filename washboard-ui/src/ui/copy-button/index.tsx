@@ -3,12 +3,12 @@ import {Check, Copy} from 'lucide-react';
 import {MouseEvent, ReactNode, forwardRef, useEffect, useState} from 'react';
 import {cn} from '@/lib/utils';
 import {Button} from '@/ui/button';
-import {ButtonProps} from '@/ui/button/Button';
+import {ButtonProps} from '@/ui/button/button';
 
-interface CopyButtonProps extends Omit<ButtonProps, 'children'> {
+type CopyButtonProps = Omit<ButtonProps, 'children'> & {
   text: string;
   children?: ReactNode | ((copied: boolean) => ReactNode);
-}
+};
 
 const CopyButton = forwardRef<HTMLButtonElement, CopyButtonProps>(
   ({asChild, onClick, children, className, ...props}: CopyButtonProps, ref) => {
@@ -39,7 +39,7 @@ const CopyButton = forwardRef<HTMLButtonElement, CopyButtonProps>(
     const iconClass = cn('w-3 h-3');
 
     return (
-      <Comp ref={ref} onClick={handleClick} {...props} className={cn('h-6 w-6', className)}>
+      <Comp ref={ref} onClick={handleClick} {...props} className={cn('size-6', className)}>
         {copied ? <Check className={iconClass} /> : <Copy className={iconClass} />}
       </Comp>
     );

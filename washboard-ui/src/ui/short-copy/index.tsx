@@ -2,10 +2,10 @@ import {ReactElement} from 'react';
 import {cn} from '@/lib/utils';
 import {CopyButton} from '@/ui/copy-button';
 
-interface ShortCopyProps {
+type ShortCopyProps = {
   text: string;
   className?: string;
-}
+};
 
 const ShortCopy = ({text, className}: ShortCopyProps): ReactElement => {
   return (

@@ -1,8 +1,8 @@
 import {ReactElement} from 'react';
 import {Outlet} from 'react-router';
-import Navigation from './Navigation';
+import {Navigation} from './navigation';
 
-function AppLayout(): ReactElement {
+export function AppLayout(): ReactElement {
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-2 p-2 md:gap-4 md:p-6">
       <Navigation />
@@ -12,5 +12,3 @@ function AppLayout(): ReactElement {
     </div>
   );
 }
-
-export default AppLayout;
