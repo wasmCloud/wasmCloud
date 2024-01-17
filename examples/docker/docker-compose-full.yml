@@ -50,6 +50,7 @@ services:
       WASMCLOUD_LOG_LEVEL: debug
       WASMCLOUD_RPC_HOST: nats
       WASMCLOUD_CTL_HOST: nats
+      WASMCLOUD_ALLOW_FILE_LOAD: "true"
       WASMCLOUD_OCI_ALLOWED_INSECURE: registry:5000
       OTEL_TRACES_EXPORTER: otlp
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:55681/v1/traces
