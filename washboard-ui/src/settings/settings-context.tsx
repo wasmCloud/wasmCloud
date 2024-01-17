@@ -7,10 +7,10 @@ enum DarkModeOption {
   System = 'system',
 }
 
-export interface SettingsContextValue {
+export type SettingsContextValue = {
   darkMode: DarkModeOption;
   setDarkMode: (darkMode: DarkModeOption) => void;
-}
+};
 
 export const SettingsContext = createContext<SettingsContextValue>({
   darkMode: DarkModeOption.System,

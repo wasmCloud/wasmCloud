@@ -1,2 +1,2 @@
-export {Settings} from './Settings';
-export {DarkModeToggle} from './DarkModeToggle';
+export {Settings} from './settings';
+export {DarkModeToggle} from './dark-mode-toggle';

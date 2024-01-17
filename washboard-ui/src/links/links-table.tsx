@@ -23,7 +23,7 @@ const columns = [
   }),
 ];
 
-function LinksTable(): ReactElement {
+export function LinksTable(): ReactElement {
   const {links} = useLatticeData();
 
   return (
@@ -32,5 +32,3 @@ function LinksTable(): ReactElement {
     </div>
   );
 }
-
-export default LinksTable;

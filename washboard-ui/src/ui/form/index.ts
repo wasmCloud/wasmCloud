@@ -6,5 +6,5 @@ export {
   FormDescription,
   FormMessage,
   FormField,
-} from './Form';
+} from './form';
 export {useFormField} from './use-form-field';

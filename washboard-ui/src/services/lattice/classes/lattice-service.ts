@@ -208,5 +208,3 @@ export class LatticeService {
     });
   }
 }
-
-export default LatticeService;

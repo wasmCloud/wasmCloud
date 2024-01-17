@@ -20,7 +20,7 @@ export function ConnectionStatus(): React.ReactElement {
         'flex-none rounded-full p-1',
       )}
     >
-      <div className="h-2 w-2 rounded-full bg-current" />
+      <div className="size-2 rounded-full bg-current" />
     </div>
   );
 }

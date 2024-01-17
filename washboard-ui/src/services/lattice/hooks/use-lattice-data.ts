@@ -1,6 +1,6 @@
 import {useDebugValue, useEffect, useState} from 'react';
 import {LatticeCache} from '../classes/lattice-service';
-import {useLatticeService} from '../context/LatticeServiceProvider';
+import {useLatticeService} from './use-lattice-service';
 
 function useLatticeData(): LatticeCache {
   const service = useLatticeService();

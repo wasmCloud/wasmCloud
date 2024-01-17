@@ -8,5 +8,5 @@ export {
   ToastDescription,
   ToastClose,
   ToastAction,
-} from './Toast';
+} from './toast';
 export {useToast, toast} from './use-toast';

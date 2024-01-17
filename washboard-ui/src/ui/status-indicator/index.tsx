@@ -2,11 +2,11 @@ import {cva} from 'class-variance-authority';
 import * as React from 'react';
 import {cn} from '@/lib/utils';
 
-interface StatusIndicatorProps extends React.HTMLAttributes<HTMLDivElement> {
+type StatusIndicatorProps = React.HTMLAttributes<HTMLDivElement> & {
   status?: 'Running' | 'Pending' | 'Failed';
-}
+};
 
-const styles = cva('inline-block h-2 w-2 rounded-full bg-current', {
+const styles = cva('inline-block size-2 rounded-full bg-current', {
   variants: {
     status: {
       Running: 'text-green-500',

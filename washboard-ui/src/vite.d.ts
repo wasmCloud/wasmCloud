@@ -1,10 +1,9 @@
 /// <reference types="vite/client" />
 /// <reference types="vite-plugin-svgr/client" />
 
-interface ImportMetaEnv {
-  readonly VITE_NATS_WEBSOCKET_URL: string
-}
-
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- intended behavior
 interface ImportMeta {
-  readonly env: ImportMetaEnv
+  readonly env: {
+    readonly VITE_NATS_WEBSOCKET_URL: string;
+  };
 }

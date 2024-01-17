@@ -1,6 +1,6 @@
 import {SettingsIcon} from 'lucide-react';
 import {PropsWithChildren, ReactElement} from 'react';
-import LatticeSettings from '@/lattice/LatticeSettings';
+import {LatticeSettings} from '@/lattice/lattice-settings';
 import {Button} from '@/ui/button';
 import {Label} from '@/ui/label';
 import {
@@ -11,14 +11,14 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/ui/sheet';
-import {DarkModeToggle} from './DarkModeToggle';
+import {DarkModeToggle} from './dark-mode-toggle';
 
 function Settings(): ReactElement {
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-6 w-6 p-0.5">
-          <SettingsIcon className="h-full w-full" />
+        <Button variant="ghost" size="icon" className="size-6 p-0.5">
+          <SettingsIcon className="size-full" />
           <span className="sr-only">Settings</span>
         </Button>
       </SheetTrigger>

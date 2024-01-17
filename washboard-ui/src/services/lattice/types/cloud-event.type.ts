@@ -1,4 +1,4 @@
-export interface CloudEvent<T = unknown> {
+export type CloudEvent<T = unknown> = {
   data: T;
   datacontenttype: string;
   id: string;
@@ -6,4 +6,4 @@ export interface CloudEvent<T = unknown> {
   specversion: string;
   time: string;
   type: string;
-}
+};

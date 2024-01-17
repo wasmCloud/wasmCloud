@@ -10,7 +10,10 @@
     "test": "echo 'No tests yet'",
     "preview": "vite preview",
     "test:playwright:headless": "playwright test",
-    "test:playwright:ui": "playwright test --ui"
+    "test:playwright:ui": "playwright test --ui",
+    "format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern --write '**/*'",
+    "ci:format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern --check '**/*'",
+    "ci:lint:eslint": "npm run lint"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.3",
@@ -65,7 +68,6 @@
     "eslint-plugin-eslint-comments": "^3.2.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-jsx-a11y": "^6.8.0",
-    "eslint-plugin-prettier": "^5.1.2",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
