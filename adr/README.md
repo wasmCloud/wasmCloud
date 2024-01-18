@@ -2,8 +2,8 @@
 
 This log lists the architectural decisions for wasmCloud. When an architectural decision record has arisen from an RFC or other public issues, those issues will be linked from the record.
 
-|Status |                             ADR                             | Description                                                   |
-| :--: |:-----------------------------------------------------------:|---------------------------------------------------------------|
+|  Status  |                             ADR                             | Description                                                   |
+| :------: | :---------------------------------------------------------: | ------------------------------------------------------------- |
 | Accepted | [0000](0000-use-markdown-architectural-decision-records.md) | Use Markdown Architectural Decision Records                   |
 | Accepted |               [0001](0001-use-actor-model.md)               | Use the Actor model for WebAssembly modules                   |
 | Accepted |              [0002](0002-stateless-actors.md)               | Actors are Stateless                                          |
@@ -20,6 +20,7 @@ This log lists the architectural decisions for wasmCloud. When an architectural 
 | Accepted |      [0013](0013-transition-feature-focus-to-rust.md)       | Transition feature focus to Rust                              |
 | Accepted |             [0014](0014-detach-ui-from-host.md)             | Detach UI from Host                                           |
 | Accepted |              [0015](0015-actor-autoscaling.md)              | Actor Autoscaling & Scale to Zero                             |
+| Accepted |            [0016](0016-rename-lattice-prefix.md)            | Rename Lattice Prefix to Lattice                              |
 
 For new ADRs, please use [template.md](template.md).
 
