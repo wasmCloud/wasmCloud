@@ -8,7 +8,6 @@ export function ConnectionStatus(): React.ReactElement {
   React.useEffect(() => {
     canConnect(latticeConfig.latticeUrl).then((online) => setStatus(online ? 'ONLINE' : 'OFFLINE'));
   }, [latticeConfig.latticeUrl]);
-
   return (
     <div
       className={clsx(

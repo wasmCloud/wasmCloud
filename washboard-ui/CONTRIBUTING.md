@@ -4,23 +4,34 @@
 
 ### Contribute code
 
-1. Start the wasmCloud host using the `wash` CLI. Read more about it [here](#start-the-wasmcloud-host-using-wash-cli).
+1. Install the dependencies.
+2. Start the wasmCloud host using the `wash` CLI. Read more about it [here](#start-the-wasmcloud-host-using-wash-cli).
    1. Ensure the NATS service is running with the websocket listener enabled.
-2. Start a local frontend development server. Read more about it [here](#start-a-local-ui-development-server).
-3. Make changes to the UI.
-4. Commit your changes.
-5. Open a pull request.
-6. Wait for the CI to pass.
-7. Wait for a maintainer to review your changes.
-8. Wait for a maintainer to merge your changes.
-9. 🚀 🏁 Done
+3. Start a local frontend development server. Read more about it [here](#start-a-local-ui-development-server).
+4. Make changes to the UI.
+5. Commit your changes.
+6. Open a pull request.
+7. Wait for the CI to pass.
+8. Wait for a maintainer to review your changes.
+9. Wait for a maintainer to merge your changes.
+10. 🚀 🏁 Done
 
+### Install dependencies
+
+Enable `corepack` and install `yarn` using the following commands:
+
+```bash
+# optional, run only if you haven't enabled corepack before
+corepack enable
+yarn install
+```
+ 
 ### Start a local UI development server
 
 Run the following command to start a local frontend development server:
 
 ```bash
-npm run dev
+yarn run dev
 ```
 
 ### Start the wasmCloud Host using wash CLI

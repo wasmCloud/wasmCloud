@@ -1,0 +1,30 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["**/.env.*local"],
+  "pipeline": {
+    "lint:eslint": {
+      "dependsOn": ["^lint:eslint"]
+    },
+    "format:prettier:check": {
+      "dependsOn": ["^format:prettier:check"]
+    },
+    "format:prettier:fix": {
+      "dependsOn": ["^format:prettier:fix"]
+    },
+    "test:playwright:headless": {
+      "outputs": ["playwright-report", "test-results"]
+    },
+    "test:vitest": {},
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist"],
+      "dotEnv": [".env.production.local", ".env.local", ".env.production", ".env"],
+      "env": ["NODE_ENV"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dotEnv": [".env.development.local", ".env.local", ".env.development", ".env"]
+    }
+  }
+}

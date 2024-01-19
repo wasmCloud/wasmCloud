@@ -12,6 +12,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: washboard-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CI: true
 
@@ -32,28 +36,28 @@ jobs:
           cache-dependency-path: ./washboard-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: yarn install --immutable
 
       - name: Prettier
-        run: npm run ci:format:prettier
+        run: yarn run turbo:format:prettier:check
 
       - name: ESLint
-        run: npm run ci:lint:eslint
+        run: yarn run turbo:lint:eslint
 
-      - name: Test
-        run: npm run test
+      - name: Vitest
+        run: yarn run turbo:test:vitest
 
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright tests
-        run: npm run test:playwright:headless
+      - name: Playwright Tests
+        run: yarn run test:playwright:headless
 
       - name: Build
-        run: npm run build
+        run: yarn run turbo:build
 
       - name: Compress
-        run: tar -C dist -zcvf washboard.tar.gz .
+        run: tar -C ./packages/washboard-ui/dist -zcvf washboard.tar.gz .
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -68,8 +72,8 @@ jobs:
           name: playwright-report
           retention-days: 30
           path: |
-            washboard-ui/playwright-report
-            washboard-ui/test-results
+            washboard-ui/packages/washboard-ui/playwright-report
+            washboard-ui/packages/washboard-ui/test-results
 
   release:
     runs-on: ubuntu-latest

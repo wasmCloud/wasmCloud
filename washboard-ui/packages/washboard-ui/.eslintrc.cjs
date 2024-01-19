@@ -139,10 +139,7 @@ module.exports = {
     'import/resolver': {
       typescript: {
         alwaysTryTypes: true,
-        project: [
-          resolve(__dirname, './tsconfig.json'),
-          resolve(__dirname, './tsconfig.eslint.json'),
-        ],
+        project: [resolve(__dirname, './tsconfig.eslint.json')],
       },
       tailwindcss: {
         callees: ['classnames', 'clsx', 'ctl', 'cn', 'cva'],
