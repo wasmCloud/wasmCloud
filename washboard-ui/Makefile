@@ -2,7 +2,7 @@
 
 .PHONY: build-ui run-ui
 
-NPM ?= npm
+NPM ?= yarn
 
 ##@ Helpers
 
@@ -13,11 +13,14 @@ help:  ## Display this help
 
 build-ui: ## Build the UI from source
 	@$(NPM) install
-	@$(NPM) run build
+	@$(NPM) run turbo:build
 
 ##@ Running
 
 run-ui: ## Run UI from source
 	@$(NPM) install
-	@$(NPM) run dev
+	@$(NPM) run turbo:dev
 
+yarn-upgrade-stable:
+	@$(NPM) set version stable
+	@$(NPM) dlx @yarnpkg/sdks vscode

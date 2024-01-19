@@ -1,4 +1,4 @@
-const {resolve, join} = require('node:path');
+const path = require('node:path');
 
 module.exports = {
   root: true,
@@ -25,28 +25,12 @@ module.exports = {
   plugins: ['react-refresh'],
   rules: {
     '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
-    'object-curly-spacing': ['warn', 'never'],
-    'no-console': ['warn', {allow: ['info', 'warn', 'error']}],
-    'no-undef': 'warn',
-    'no-unreachable': 'warn',
-    'no-param-reassign': 'warn',
-    'no-case-declarations': 'warn',
-    'no-unneeded-ternary': 'warn',
-    'spaced-comment': ['warn', 'always', {markers: ['/']}],
-    'react-refresh/only-export-components': 'warn',
-    'react/react-in-jsx-scope': 'off',
-    'react/prop-types': 'off',
-    'eslint-comments/disable-enable-pair': ['error', {allowWholeFile: true}],
-    'eslint-comments/require-description': 'warn',
-    'eslint-comments/no-unused-disable': 'error',
-    '@typescript-eslint/no-unused-vars': ['warn', {ignoreRestSiblings: true}],
-    '@typescript-eslint/no-loss-of-precision': 'warn',
     '@typescript-eslint/explicit-function-return-type': [
       'warn',
       {
         allowExpressions: true,
-        allowTypedFunctionExpressions: true,
         allowHigherOrderFunctions: false,
+        allowTypedFunctionExpressions: true,
       },
     ],
     '@typescript-eslint/explicit-member-accessibility': 'warn',
@@ -57,7 +41,12 @@ module.exports = {
         classes: ['field', 'constructor', 'method'],
       },
     ],
-    'import/no-cycle': 'error',
+    '@typescript-eslint/no-loss-of-precision': 'warn',
+    '@typescript-eslint/no-unused-vars': ['warn', {ignoreRestSiblings: true}],
+    'eslint-comments/disable-enable-pair': ['error', {allowWholeFile: true}],
+    'eslint-comments/no-unused-disable': 'error',
+    'eslint-comments/require-description': 'warn',
+    'import/no-cycle': ['error', {ignoreExternal: false}],
     'import/no-named-as-default-member': 'off',
     'import/order': [
       'warn',
@@ -76,7 +65,6 @@ module.exports = {
           'sibling',
           'index',
         ],
-        warnOnUnassignedImports: true,
         pathGroups: [
           {
             group: 'unknown',
@@ -91,8 +79,34 @@ module.exports = {
             position: 'before',
           },
         ],
+        warnOnUnassignedImports: true,
       },
     ],
+    'import/no-default-export': 'error',
+    'no-case-declarations': 'warn',
+    'no-console': ['warn', {allow: ['info', 'warn', 'error']}],
+    'no-param-reassign': 'warn',
+    'no-restricted-imports': [
+      'error',
+      {
+        patterns: [
+          {
+            group: ['../../', './../../'],
+            message: 'Relative imports are not allowed. Please use the @/ alias.',
+          },
+        ],
+      },
+    ],
+    'no-undef': 'warn',
+    'no-unneeded-ternary': 'warn',
+    'no-unreachable': 'warn',
+    'object-curly-spacing': ['warn', 'never'],
+    'react-refresh/only-export-components': 'warn',
+    'react/prop-types': 'off',
+    'react/react-in-jsx-scope': 'off',
+    'spaced-comment': ['warn', 'always', {markers: ['/']}],
+    'unicorn/no-array-reduce': 'off',
+    'unicorn/no-null': 'off',
     'unicorn/prevent-abbreviations': [
       'error',
       {
@@ -104,16 +118,8 @@ module.exports = {
         },
       },
     ],
-    'unicorn/no-array-reduce': 'off',
-    'unicorn/no-null': 'off',
   },
   overrides: [
-    {
-      files: ['*.jsx', '*.tsx'],
-      rules: {
-        'unicorn/filename-case': ['error', {case: 'kebabCase'}],
-      },
-    },
     {
       files: [
         '*rc.cjs',
@@ -139,17 +145,16 @@ module.exports = {
     'import/resolver': {
       typescript: {
         alwaysTryTypes: true,
-        project: [
-          resolve(__dirname, './tsconfig.json'),
-          resolve(__dirname, './tsconfig.eslint.json'),
-        ],
-      },
-      tailwindcss: {
-        callees: ['classnames', 'clsx', 'ctl', 'cn', 'cva'],
+        project: [path.resolve(__dirname, './tsconfig.eslint.json')],
       },
     },
     react: {
       version: 'detect',
+    },
+    tailwindcss: {
+      cssFiles: [],
+      config: path.join(__dirname, './tailwind.config.ts'),
+      callees: ['classnames', 'clsx', 'ctl', 'cn', 'cva'],
     },
   },
   ignorePatterns: ['node_modules', 'dist', 'build', 'coverage'],

@@ -2,6 +2,8 @@ name: wasmCloud
 
 on:
   pull_request:
+    paths-ignore:
+      - washboard-ui/**
   merge_group:
   push:
     branches:
@@ -104,7 +106,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
       with:
@@ -199,7 +201,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
 
@@ -208,7 +210,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.doc
     - run: cp --no-preserve=mode -R ./result/share/doc ./doc
@@ -260,7 +262,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
     - name: Extract tag context
@@ -418,7 +420,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
-      
+
     - uses: snapcore/action-build@v1
       id: build
       with:
@@ -443,9 +445,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
-      
+
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - name: Install NFPM
       run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
@@ -484,7 +486,7 @@ jobs:
       working-directory: ./crates/wash-cli
       run: |
         rpms=(194 204 209 216 226 231 236 239 240 244 260 273)
-        for distro_version in "${rpms[@]}"; do 
+        for distro_version in "${rpms[@]}"; do
           curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
           curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
         done

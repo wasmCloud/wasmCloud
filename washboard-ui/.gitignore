@@ -25,3 +25,17 @@ dist
 
 /playwright-report
 /test-results
+
+
+.yarn/*
+# !.yarn/cache TODO: uncomment when we decide to take advantage of yarn's Zero-Install feature
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+.turbo
+build/**
+dist/**
+.next/**
