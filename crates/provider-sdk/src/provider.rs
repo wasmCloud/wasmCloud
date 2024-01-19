@@ -22,7 +22,7 @@ use wasmcloud_tracing::context::attach_span_context;
 use crate::{
     deserialize,
     error::{
-        InvocationError, ProviderError, ProviderInvocationError, ProviderResult, ValidationError,
+        InvocationError, InvocationResult, ProviderInitError, ProviderInitResult, ValidationError,
     },
     rpc_client::RpcClient,
     serialize, Context, Provider,
@@ -94,10 +94,10 @@ impl ProviderConnection {
     pub(crate) fn new(
         nats: async_nats::Client,
         host_data: &HostData,
-    ) -> ProviderResult<ProviderConnection> {
+    ) -> ProviderInitResult<ProviderConnection> {
         let key = Arc::new(
             KeyPair::from_seed(&host_data.invocation_seed)
-                .map_err(|e| ProviderError::Initialization(format!("key failure: {e}")))?,
+                .map_err(|e| ProviderInitError::Initialization(format!("key failure: {e}")))?,
         );
 
         let rpc_client = RpcClient::new(
@@ -146,7 +146,7 @@ impl ProviderConnection {
         provider: P,
         shutdown_tx: &tokio::sync::broadcast::Sender<bool>,
         lattice: &str,
-    ) -> ProviderResult<()>
+    ) -> ProviderInitResult<()>
     where
         P: Provider + Clone,
     {
@@ -198,7 +198,7 @@ impl ProviderConnection {
         provider: P,
         mut quit: QuitSignal,
         lattice: String,
-    ) -> ProviderResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<()>>
     where
         P: Provider + Clone,
     {
@@ -301,11 +301,7 @@ impl ProviderConnection {
         Ok(handle)
     }
 
-    async fn handle_rpc<P>(
-        &self,
-        provider: P,
-        inv: Invocation,
-    ) -> Result<Vec<u8>, ProviderInvocationError>
+    async fn handle_rpc<P>(&self, provider: P, inv: Invocation) -> InvocationResult<Vec<u8>>
     where
         P: Provider + Clone,
     {
@@ -336,7 +332,7 @@ impl ProviderConnection {
         &self,
         provider: P,
         shutdown_tx: tokio::sync::broadcast::Sender<bool>,
-    ) -> ProviderResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<()>>
     where
         P: Provider,
     {
@@ -397,7 +393,7 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<()>>
     where
         P: Provider + Clone,
     {
@@ -449,7 +445,7 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<()>>
     where
         P: Provider + Clone,
     {
@@ -485,7 +481,7 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<()>>
     where
         P: Provider,
     {

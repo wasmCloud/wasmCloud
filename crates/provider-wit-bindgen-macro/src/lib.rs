@@ -702,7 +702,7 @@ impl WitFunctionLatticeTranslationStrategy {
                         let func_ts = quote::quote!(
                             async fn #iface_fn_name(
                                 &self,
-                            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationResult<()> {
+                            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError<()> {
                                 let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                                 let client = connection.get_rpc_client();
                                 let response = client
@@ -722,7 +722,7 @@ impl WitFunctionLatticeTranslationStrategy {
                                     .await?;
 
                                 if let Some(err) = response.error {
-                                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(err.to_string()))
                                 } else {
                                     Ok(())
                                 }
@@ -831,7 +831,7 @@ impl WitFunctionLatticeTranslationStrategy {
             async fn #fn_name(
                 &self,
                 #arg_name_ident: #rust_type
-            ) -> Result<#result_rust_type, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<#result_rust_type> {
                 let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
                 let response = client
@@ -851,7 +851,7 @@ impl WitFunctionLatticeTranslationStrategy {
                     .await?;
 
                 if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(err.to_string()))
                 } else {
                     #deser_phrase
                 }
@@ -928,7 +928,7 @@ impl WitFunctionLatticeTranslationStrategy {
             async fn #fn_name(
                 &self,
                 args: #invocation_struct_name,
-            ) -> Result<#result_rust_type, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<#result_rust_type> {
                 let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                 let client = connection.get_rpc_client();
                 let response = client
@@ -948,7 +948,7 @@ impl WitFunctionLatticeTranslationStrategy {
                     .await?;
 
                 if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Failed(err.to_string()))
                 } else {
                     Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&response.msg)?)
                 }
@@ -1260,6 +1260,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
             })
             .collect::<Vec<TokenStream>>();
+
         // Invocation returns of the functions that are called for each lattice method
         let invocation_returns = methods
             .clone()
@@ -1343,10 +1344,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         self,
                         #post_self_args
                     )
-                        .await
-                        .map_err(|e| {
-                            ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(e.to_string())
-                        })?;
+                        .await;
                     Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&result)?)
                 }
             )*
@@ -1422,7 +1420,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 ctx: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context,
                 method: String,
                 body: std::borrow::Cow<'a, [u8]>,
-            ) -> Result<Vec<u8>, ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<Vec<u8>> {
                 match method.as_str() {
                     #(
                         #interface_dispatch_match_arms
@@ -1825,15 +1823,11 @@ impl VisitMut for WitBindgenOutputVisitor {
                                         acc
                                     });
 
-                                    let result_tokens = quote::quote!(
-                                            -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInvocationResult<#inner_tokens>
-                                        );
+                                    let result_tokens = quote::quote!(-> #inner_tokens);
 
                                     trimmed.sig.output = syn::parse2::<ReturnType>(result_tokens.clone())
                                         .expect("failed to purge wasmtime::Result from method return");
-                                    trace!("successfully converted type [{inner_tokens}] into ProivderInvocationResult<T>");
-
-                                    },
+                                     },
                                     _ => {},
                                 }
 

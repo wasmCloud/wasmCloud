@@ -1,3 +1,33 @@
+//! NOTE: to run the tests in this file, you must start a local instance
+//! of MinIO (or some other S3-compatible object store equivalent) to use.
+//!
+//! For example, with docker, you can start MinIO:
+//!
+//! ```console
+//! docker run --rm \
+//! -e MINIO_ROOT_USER=minioadmin \
+//! -e MINIO_ROOT_PASSWORD=minioadmin \
+//! -p 9000:9000 \
+//! -p 9001:9001 \
+//! bitnami/minio
+//! ```
+//!
+//! When running the tests, you must set the correct ENV variable to influence the
+//! creation of the test client (see `test_client()`), for example:
+//!
+//! ```console
+//! export AWS_ENDPOINT=http://localhost:9000
+//! export AWS_ACCESS_KEY_ID=minioadmin
+//! export AWS_SECRET_ACCESS_KEY=minioadmin
+//! cargo test test_create_container -- --nocapture
+//! ```
+//!
+//! To see warnings, make sure add & enable `tracing_subscriber` in the appropriate test(s):
+//!
+//! ```rust
+//! tracing_subscriber::fmt().init()
+//! ```
+
 use std::collections::HashMap;
 use std::env;
 
@@ -15,7 +45,7 @@ async fn test_client() -> StorageClient {
         secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
         aliases: HashMap::new(),
         max_attempts: None,
-        region: None,
+        region: Some("local".into()),
         session_token: None,
         sts_config: None,
         max_chunk_size_bytes: None,
@@ -38,19 +68,23 @@ async fn test_create_container() {
     let bucket = format!("test.bucket.{}", num);
 
     assert!(
-        !s3.container_exists(&ctx, &bucket).await.unwrap(),
+        !s3.container_exists(&ctx, &bucket).await,
         "Container should not exist"
     );
-    s3.create_container(&ctx, &bucket).await.unwrap();
+    s3.create_container(&ctx, &bucket).await;
 
     assert!(
-        s3.container_exists(&ctx, &bucket).await.unwrap(),
+        s3.container_exists(&ctx, &bucket).await,
         "Container should exist"
     );
 
-    s3.remove_containers(&ctx, &vec![bucket])
-        .await
-        .expect("remove containers");
+    assert!(
+        s3.remove_containers(&ctx, &vec![bucket])
+            .await
+            .iter()
+            .all(|result| result.success),
+        "no errors during removal",
+    );
 }
 
 /// Tests
@@ -65,7 +99,7 @@ async fn test_create_object() {
     let num = rand::random::<u64>();
     let bucket = format!("test.object.{}", num);
 
-    s3.create_container(&ctx, &bucket).await.unwrap();
+    s3.create_container(&ctx, &bucket).await;
 
     let object_bytes = b"hello-world!".to_vec();
     let resp = s3
@@ -83,8 +117,7 @@ async fn test_create_object() {
                 content_type: None,
             },
         )
-        .await
-        .expect("put object");
+        .await;
     assert_eq!(resp.stream_id, None);
 
     assert!(
@@ -95,20 +128,22 @@ async fn test_create_object() {
                 object_id: "object.1".to_string(),
             },
         )
-        .await
-        .expect("unable to check that object exists"),
+        .await,
         "Object should not exist"
     );
 
-    s3.remove_objects(
-        &ctx,
-        &RemoveObjectsRequest {
-            container_id: bucket.clone(),
-            objects: vec!["object.1".to_string()],
-        },
-    )
-    .await
-    .expect("remove object");
+    assert!(
+        s3.remove_objects(
+            &ctx,
+            &RemoveObjectsRequest {
+                container_id: bucket.clone(),
+                objects: vec!["object.1".to_string()],
+            },
+        )
+        .await
+        .is_empty(),
+        "no errors during object removal",
+    );
 
     assert!(
         !s3.object_exists(
@@ -118,14 +153,17 @@ async fn test_create_object() {
                 object_id: "object.1".to_string(),
             },
         )
-        .await
-        .expect("unable to check that object exists"),
+        .await,
         "Object should exist"
     );
 
-    s3.remove_containers(&ctx, &vec![bucket])
-        .await
-        .expect("remove containers");
+    assert!(
+        s3.remove_containers(&ctx, &vec![bucket])
+            .await
+            .iter()
+            .all(|result| result.success),
+        "no errors while removing containers",
+    )
 }
 
 /// Tests:
@@ -138,7 +176,7 @@ async fn test_list_objects() {
     let num = rand::random::<u64>();
     let bucket = format!("test.list.{}", num);
 
-    s3.create_container(&ctx, &bucket).await.unwrap();
+    s3.create_container(&ctx, &bucket).await;
 
     let req = ListObjectsRequest {
         container_id: bucket.clone(),
@@ -148,7 +186,7 @@ async fn test_list_objects() {
         max_items: None,
         start_with: None,
     };
-    let objs = s3.list_objects(&ctx, &req).await.expect("list objects");
+    let objs = s3.list_objects(&ctx, &req).await;
     assert_eq!(objs.continuation, None);
     assert!(objs.is_last);
     assert_eq!(objs.objects.len(), 0);
@@ -169,8 +207,7 @@ async fn test_list_objects() {
                 content_type: None,
             },
         )
-        .await
-        .expect("put object");
+        .await;
     assert_eq!(resp.stream_id, None);
 
     let req = ListObjectsRequest {
@@ -181,15 +218,29 @@ async fn test_list_objects() {
         max_items: None,
         start_with: None,
     };
-    let objs = s3.list_objects(&ctx, &req).await.expect("list objects");
+    let objs = s3.list_objects(&ctx, &req).await;
     let meta = objs.objects.first().unwrap();
     assert_eq!(&meta.container_id, &bucket);
     assert_eq!(meta.content_length as usize, object_bytes.len());
     assert_eq!(&meta.object_id, "object.1");
 
-    s3.remove_containers(&ctx, &vec![bucket])
-        .await
-        .expect("remove containers");
+    // Empty the bucket before attempting to delete it (minio requires this)
+    s3.remove_objects(
+        &ctx,
+        &RemoveObjectsRequest {
+            container_id: bucket.clone(),
+            objects: vec!["object.1".to_string()],
+        },
+    )
+    .await;
+
+    assert!(
+        s3.remove_containers(&ctx, &vec![bucket])
+            .await
+            .iter()
+            .all(|result| result.success),
+        "no errors while removing containers"
+    );
 }
 
 /// Tests
@@ -201,10 +252,10 @@ async fn test_get_object_range() {
     let num = rand::random::<u64>();
     let bucket = format!("test.range.{}", num);
 
-    s3.create_container(&ctx, &bucket).await.unwrap();
+    s3.create_container(&ctx, &bucket).await;
     let object_bytes = b"abcdefghijklmnopqrstuvwxyz".to_vec();
-    let _ = s3
-        .put_object(
+    assert!(
+        s3.put_object(
             &ctx,
             &PutObjectRequest {
                 chunk: Chunk {
@@ -219,7 +270,10 @@ async fn test_get_object_range() {
             },
         )
         .await
-        .expect("put object");
+        .stream_id
+        .is_none(),
+        "put object succeeded (stream_id is always missing on success)",
+    );
 
     let range_mid = s3
         .get_object(
@@ -231,8 +285,7 @@ async fn test_get_object_range() {
                 range_end: Some(12),
             },
         )
-        .await
-        .expect("get-object-range-0");
+        .await;
     assert_eq!(range_mid.content_length, 7);
     assert_eq!(
         range_mid.initial_chunk.as_ref().unwrap().bytes,
@@ -250,8 +303,7 @@ async fn test_get_object_range() {
                 range_end: None,
             },
         )
-        .await
-        .expect("get-object-range-2");
+        .await;
     assert_eq!(range_to_end.content_length, 4);
     assert_eq!(
         range_to_end.initial_chunk.as_ref().unwrap().bytes,
@@ -269,17 +321,30 @@ async fn test_get_object_range() {
                 range_end: Some(3),
             },
         )
-        .await
-        .expect("get-object-range-1");
+        .await;
     assert_eq!(
         range_from_start.initial_chunk.as_ref().unwrap().bytes,
         b"abcd".to_vec()
     );
     //assert_eq!(range_from_start.content_length, 4);
 
-    s3.remove_containers(&ctx, &vec![bucket])
-        .await
-        .expect("remove containers");
+    // Empty the bucket before attempting to delete it (minio requires this)
+    s3.remove_objects(
+        &ctx,
+        &RemoveObjectsRequest {
+            container_id: bucket.clone(),
+            objects: vec!["object.1".to_string()],
+        },
+    )
+    .await;
+
+    assert!(
+        s3.remove_containers(&ctx, &vec![bucket])
+            .await
+            .iter()
+            .all(|result| result.success),
+        "no errors when removing containers"
+    );
 }
 
 /// Tests
@@ -291,13 +356,13 @@ async fn test_get_object_chunks() {
     let num = rand::random::<u64>();
     let bucket = format!("test.chunk.{}", num);
 
-    s3.create_container(&ctx, &bucket).await.unwrap();
+    s3.create_container(&ctx, &bucket).await;
 
     for count in [4, 40, 400, 4000].iter() {
         let fname = format!("file_{}", (count * 25));
         let object_bytes = b"abcdefghijklmnopqrstuvwxy".repeat(*count);
-        let _ = s3
-            .put_object(
+        assert!(
+            s3.put_object(
                 &ctx,
                 &PutObjectRequest {
                     chunk: Chunk {
@@ -312,7 +377,10 @@ async fn test_get_object_chunks() {
                 },
             )
             .await
-            .expect("put object");
+            .stream_id
+            .is_none(),
+            "put object succeeded (stream_id is always missing on success)"
+        )
     }
 
     let obj = s3
@@ -325,11 +393,10 @@ async fn test_get_object_chunks() {
                 range_start: None,
             },
         )
-        .await
-        .expect("get-object-chunk");
+        .await;
     assert!(obj.initial_chunk.unwrap().bytes.len() >= 1000);
 
-    env::set_var("MAX_CHUNK_SIZE", "300");
+    env::set_var("MAX_CHUNK_SIZE_BYTES", "300");
     let obj = s3
         .get_object(
             &ctx,
@@ -340,7 +407,6 @@ async fn test_get_object_chunks() {
                 range_start: None,
             },
         )
-        .await
-        .expect("get-object-chunk");
+        .await;
     assert_eq!(obj.initial_chunk.unwrap().bytes.len(), 300);
 }

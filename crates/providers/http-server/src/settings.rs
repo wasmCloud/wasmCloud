@@ -630,6 +630,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::settings::{serde_json, CorsOrigin, ServiceSettings};
     use std::str::FromStr;
 
     use wasmcloud_provider_wit_bindgen::deps::serde_json;

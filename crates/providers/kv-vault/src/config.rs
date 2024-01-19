@@ -1,12 +1,9 @@
 //! Configuration for kv-vault capability provider
 //!
 
+use anyhow::{Context, Result};
 use std::{collections::HashMap, env};
 use url::Url;
-
-use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::{
-    ProviderInvocationError, ProviderInvocationResult,
-};
 
 /// Default address at which Vault is expected to be running,
 /// used if unspecified by configuration
@@ -39,7 +36,7 @@ impl Default for Config {
 
 impl Config {
     /// initialize from linkdef values, environment, and defaults
-    pub fn from_values(values: &HashMap<String, String>) -> ProviderInvocationResult<Config> {
+    pub fn from_values(values: &HashMap<String, String>) -> Result<Config> {
         let addr = env::var("VAULT_ADDR")
             .ok()
             .or_else(|| values.get("addr").cloned())
@@ -56,11 +53,7 @@ impl Config {
             .ok()
             .or_else(|| values.get("token").cloned())
             .or_else(|| values.get("TOKEN").cloned())
-            .ok_or_else(|| {
-                ProviderInvocationError::Provider(
-                    "missing setting for 'token' or VAULT_TOKEN".to_string(),
-                )
-            })?;
+            .context("missing setting for 'token' or VAULT_TOKEN")?;
         let mount = env::var("VAULT_MOUNT")
             .ok()
             .or_else(|| values.get("mount").cloned())
