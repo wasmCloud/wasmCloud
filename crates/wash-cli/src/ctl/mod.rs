@@ -177,8 +177,6 @@ mod test {
             CTL_PORT,
             "--timeout-ms",
             "2001",
-            "--count",
-            "2",
             "--host-id",
             HOST_ID,
             ACTOR_ID,
