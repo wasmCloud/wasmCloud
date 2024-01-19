@@ -3182,9 +3182,9 @@ checksum = "7ab9b36309365056cd639da3134bf87fa8f3d86008abf99e612384a6eecd459f"
 
 [[package]]
 name = "wasm-encoder"
-version = "0.39.0"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111495d6204760238512f57a9af162f45086504da332af210f2f75dd80b34f1d"
+checksum = "e09bca7d6388637d27fb5edbeab11f56bfabcef8743c55ae34370e1e5030a071"
 dependencies = [
  "leb128",
 ]
@@ -3253,6 +3253,7 @@ dependencies = [
 name = "wasmcloud-provider-blobstore-fs"
 version = "0.3.3"
 dependencies = [
+ "anyhow",
  "path-clean",
  "tokio",
  "tracing",
@@ -3263,6 +3264,7 @@ dependencies = [
 name = "wasmcloud-provider-blobstore-s3"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
@@ -3282,6 +3284,7 @@ dependencies = [
 name = "wasmcloud-provider-httpclient"
 version = "0.8.0"
 dependencies = [
+ "anyhow",
  "http",
  "reqwest",
  "tracing",
@@ -3322,6 +3325,7 @@ dependencies = [
 name = "wasmcloud-provider-kv-vault"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "thiserror",
  "tokio",
  "tracing",
@@ -3344,6 +3348,7 @@ dependencies = [
 name = "wasmcloud-provider-lattice-controller"
 version = "0.13.0"
 dependencies = [
+ "anyhow",
  "async-nats",
  "tokio",
  "tracing",

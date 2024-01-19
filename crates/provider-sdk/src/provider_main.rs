@@ -8,7 +8,7 @@ use base64::Engine;
 use once_cell::sync::OnceCell;
 use tracing::{error, info};
 
-use crate::error::{ProviderError, ProviderResult};
+use crate::error::{ProviderInitError, ProviderInitResult};
 use crate::provider::ProviderConnection;
 use crate::Provider;
 
@@ -31,14 +31,14 @@ pub fn get_connection() -> &'static ProviderConnection {
 }
 
 /// Starts a provider, reading all of the host data and starting the process
-pub fn start_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderResult<()>
+pub fn start_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderInitResult<()>
 where
     P: Provider + Clone,
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|e| ProviderError::Initialization(e.to_string()))?;
+        .map_err(|e| ProviderInitError::Initialization(e.to_string()))?;
 
     runtime.block_on(run_provider(provider, friendly_name))?;
     // in the unlikely case there are any stuck threads,
@@ -49,13 +49,15 @@ where
 
 /// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
 /// an async context
-pub async fn run_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderResult<()>
+pub async fn run_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderInitResult<()>
 where
     P: Provider + Clone,
 {
     let host_data = tokio::task::spawn_blocking(load_host_data)
         .await
-        .map_err(|e| ProviderError::Initialization(format!("Unable to load host data: {e}")))??;
+        .map_err(|e| {
+            ProviderInitError::Initialization(format!("Unable to load host data: {e}"))
+        })??;
     if let Err(e) = wasmcloud_tracing::configure_tracing(
         friendly_name.unwrap_or(host_data.provider_key.clone()),
         &host_data.otel_config,
@@ -78,7 +80,7 @@ where
         crate::DEFAULT_NATS_ADDR
     };
     let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
-        ProviderError::Initialization(format!("Invalid nats server url '{nats_addr}': {e}"))
+        ProviderInitError::Initialization(format!("Invalid nats server url '{nats_addr}': {e}"))
     })?;
 
     let nc = crate::with_connection_event_logging(
@@ -103,7 +105,7 @@ where
     // initialize HostBridge
     let connection = ProviderConnection::new(nc, host_data)?;
     CONNECTION.set(connection).map_err(|_| {
-        ProviderError::Initialization("Provider connection was already initialized".to_string())
+        ProviderInitError::Initialization("Provider connection was already initialized".to_string())
     })?;
     let connection = get_connection();
 
@@ -141,18 +143,18 @@ where
 ///
 /// NOTE: this function will read the data from stdin exactly once. If this function is called more
 /// than once, it will return a copy of the original data fetched
-pub fn load_host_data() -> ProviderResult<&'static HostData> {
+pub fn load_host_data() -> ProviderInitResult<&'static HostData> {
     HOST_DATA.get_or_try_init(_load_host_data)
 }
 
 // Internal function for populating the host data
-fn _load_host_data() -> ProviderResult<HostData> {
+fn _load_host_data() -> ProviderInitResult<HostData> {
     let mut buffer = String::new();
     let stdin = std::io::stdin();
     {
         let mut handle = stdin.lock();
         handle.read_line(&mut buffer).map_err(|e| {
-            ProviderError::Initialization(format!(
+            ProviderInitError::Initialization(format!(
                 "failed to read host data configuration from stdin: {e}"
             ))
         })?;
@@ -160,20 +162,20 @@ fn _load_host_data() -> ProviderResult<HostData> {
     // remove spaces, tabs, and newlines before and after base64-encoded data
     let buffer = buffer.trim();
     if buffer.is_empty() {
-        return Err(ProviderError::Initialization(
+        return Err(ProviderInitError::Initialization(
             "stdin is empty - expecting host data configuration".to_string(),
         ));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(buffer.as_bytes())
         .map_err(|e| {
-            ProviderError::Initialization(format!(
+            ProviderInitError::Initialization(format!(
             "host data configuration passed through stdin has invalid encoding (expected base64): \
              {e}"
         ))
         })?;
     let host_data: HostData = serde_json::from_slice(&bytes).map_err(|e| {
-        ProviderError::Initialization(format!(
+        ProviderInitError::Initialization(format!(
             "parsing host data: {}:\n{}",
             e,
             String::from_utf8_lossy(&bytes)

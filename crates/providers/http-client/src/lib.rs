@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use anyhow::Context as _;
+use anyhow::Result;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{error, instrument, trace, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
     wasmcloud_provider_sdk::Context,
 };
 
@@ -33,29 +33,42 @@ impl WasmcloudHttpclientHttpClient for HttpClientProvider {
     /// error (status other than 2xx), returns Ok with the status code and
     /// body returned from the remote server.
     #[instrument(level = "debug", skip(self, _ctx, req), fields(actor_id = ?_ctx.actor, method = %req.method, url = %req.url))]
-    async fn request(
-        &self,
-        _ctx: Context,
-        req: HttpRequest,
-    ) -> ProviderInvocationResult<HttpResponse> {
-        let headers: HeaderMap = build_http_header_map(&req.headers)?;
+    async fn request(&self, _ctx: Context, req: HttpRequest) -> HttpResponse {
+        let headers: HeaderMap = match build_http_header_map(&req.headers) {
+            Ok(headers) => headers,
+            Err(e) => {
+                error!("failed to build header map from request headers: {e}");
+                return HttpResponse {
+                    body: Vec::new(),
+                    header: HashMap::new(),
+                    status_code: 500,
+                };
+            }
+        };
 
-        let method = reqwest::Method::from_str(&req.method).map_err(|e| {
-            ProviderInvocationError::Provider(format!(
-                "failed to convert method: {}:{e}",
-                &req.method
-            ))
-        })?;
+        let method = match reqwest::Method::from_str(&req.method) {
+            Ok(method) => method,
+            Err(e) => {
+                error!("failed to convert method: {}:{e}", &req.method);
+                return HttpResponse {
+                    body: Vec::new(),
+                    header: HashMap::new(),
+                    status_code: 500,
+                };
+            }
+        };
 
         trace!("forwarding {} request to {}", &req.method, &req.url);
         // Perform request to upstream server that was requested by the actor
-        let response = reqwest::Client::new()
+        let response = match reqwest::Client::new()
             .request(method, &req.url)
             .headers(headers)
             .body(req.body)
             .send()
             .await
-            .map_err(|e| {
+        {
+            Ok(response) => response,
+            Err(e) => {
                 // send() can fail if there was an error while sending request,
                 // a redirect loop was detected, or redirect limit was exhausted.
                 // For now, we'll return an error (not HttpResponse with error
@@ -65,21 +78,28 @@ impl WasmcloudHttpclientHttpClient for HttpClientProvider {
                     error = %e,
                     "httpclient network error attempting to send"
                 );
-                ProviderInvocationError::Provider(format!("failed to send request: {e}"))
-            })?;
+                return HttpResponse {
+                    body: Vec::new(),
+                    header: HashMap::new(),
+                    status_code: 500,
+                };
+            }
+        };
 
         // Read information from the upstream server response to send back to the actor
         let resp_status_code = response.status().as_u16();
         let resp_headers = convert_header_map_to_hashmap(response.headers());
-        let resp_body = response
-            .bytes()
-            .await
-            // error receiving the body could occur if the connection was closed before it was fully received
-            .map_err(|e| {
-                ProviderInvocationError::Provider(format!(
-                    "failed reading response body bytes: {e}"
-                ))
-            })?;
+        let resp_body = match response.bytes().await {
+            Ok(resp_body) => resp_body,
+            Err(e) => {
+                error!("failed reading response body bytes: {e}");
+                return HttpResponse {
+                    body: Vec::new(),
+                    header: HashMap::new(),
+                    status_code: 500,
+                };
+            }
+        };
 
         // Log request status
         if (200..300).contains(&(resp_status_code as usize)) {
@@ -94,11 +114,11 @@ impl WasmcloudHttpclientHttpClient for HttpClientProvider {
             );
         }
 
-        Ok(HttpResponse {
+        HttpResponse {
             body: Vec::from(resp_body),
             header: resp_headers,
             status_code: resp_status_code,
-        })
+        }
     }
 }
 
@@ -129,19 +149,13 @@ impl WasmcloudCapabilityProvider for HttpClientProvider {
 
 /// Build a [`http::Headermap`] from the [`std::collections::HashMap`]
 /// that an incoming WIT HTTP request would produce
-fn build_http_header_map(
-    input: &HashMap<String, Vec<String>>,
-) -> ProviderInvocationResult<HeaderMap> {
+fn build_http_header_map(input: &HashMap<String, Vec<String>>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (k, v) in input.iter() {
         headers.append(
-            HeaderName::from_str(k.as_str()).map_err(|e| {
-                ProviderInvocationError::Provider(format!("failed to convert header name: {e}"))
-            })?,
+            HeaderName::from_str(k.as_str()).context("failed to convert header name: {e}")?,
             // Multiple values in a header string should be joined by comma
-            HeaderValue::from_str(&v.join(",")).map_err(|e| {
-                ProviderInvocationError::Provider(format!("failed to convert header value: {e}"))
-            })?,
+            HeaderValue::from_str(&v.join(",")).context("failed to convert header value: {e}")?,
         );
     }
     Ok(headers)
