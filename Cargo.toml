@@ -171,7 +171,7 @@ ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-wadm = { version = "0.9", default-features = false }
+wadm = { version = "0.10", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 warp-embed = { version = "0.4", default-features = false }
