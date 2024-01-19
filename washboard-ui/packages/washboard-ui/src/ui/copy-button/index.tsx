@@ -36,7 +36,7 @@ const CopyButton = forwardRef<HTMLButtonElement, CopyButtonProps>(
       );
     }
 
-    const iconClass = cn('w-3 h-3');
+    const iconClass = cn('size-3');
 
     return (
       <Comp ref={ref} onClick={handleClick} {...props} className={cn('size-6', className)}>

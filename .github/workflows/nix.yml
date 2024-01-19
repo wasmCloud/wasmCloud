@@ -2,8 +2,12 @@ name: nix
 
 on:
   pull_request:
+    paths-ignore:
+      - washboard-ui/**
   merge_group:
   push:
+    paths-ignore:
+      - washboard-ui/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,7 +19,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix fmt
 
@@ -24,7 +28,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix run -L . -- --version
 
@@ -33,6 +37,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix develop -L --ignore-environment -c cargo tree

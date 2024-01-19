@@ -1,7 +1,7 @@
 import {CellContext, RowData} from '@tanstack/react-table';
 import * as React from 'react';
 
-declare module '@tanstack/table-core' {
+declare module '@tanstack/react-table' {
   // eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- intended behavior
   interface ColumnMeta<TData extends RowData, TValue> {
     baseRow: 'visible' | 'hidden' | 'empty';
