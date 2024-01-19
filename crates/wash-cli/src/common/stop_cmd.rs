@@ -92,8 +92,6 @@ mod test {
             CONTEXT_PATH,
             "--js-domain",
             JS_DOMAIN,
-            "--count",
-            "1",
             "--skip-wait",
         ])?;
 
