@@ -1,1 +1,1 @@
-export { default } from '@wasmcloud/prettier-config';
+export {default} from '@wasmcloud/prettier-config';
