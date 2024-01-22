@@ -53,7 +53,7 @@
     "zod": "^3.22.3"
   },
   "devDependencies": {
-    "@playwright/test": "^1.40.1",
+    "@playwright/test": "^1.41.1",
     "@types/node": "^20.10.4",
     "@types/react": "^18.2.46",
     "@types/react-dom": "^18.2.18",
