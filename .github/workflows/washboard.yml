@@ -33,7 +33,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: ./washboard-ui/.tool-versions
-          cache: 'npm'
+          cache-dependency-path: ./washboard-ui/yarn.lock
 
       - name: Cache turbo build setup
         uses: actions/cache@v4
