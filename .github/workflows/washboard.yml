@@ -35,10 +35,15 @@ jobs:
           node-version-file: ./washboard-ui/.tool-versions
           cache-dependency-path: ./washboard-ui/yarn.lock
 
+      - name: Setup Yarn
+        run: |
+          corepack enable
+          yarn --version
+
       - name: Cache turbo build setup
         uses: actions/cache@v4
         with:
-          path: .turbo
+          path: ./washboard-ui/.turbo
           key: ${{ runner.os }}-turbo-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-turbo-

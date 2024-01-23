@@ -3,7 +3,7 @@
   "globalDependencies": ["**/.env.*local"],
   "pipeline": {
     "lint:eslint": {
-      "dependsOn": ["^lint:eslint"]
+      "dependsOn": ["^lint:eslint", "^build"]
     },
     "format:prettier:check": {
       "dependsOn": ["^format:prettier:check"]
@@ -17,7 +17,7 @@
     "test:vitest": {},
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist"],
+      "outputs": ["dist/**", "build/**"],
       "dotEnv": [".env.production.local", ".env.local", ".env.production", ".env"],
       "env": ["NODE_ENV"]
     },
