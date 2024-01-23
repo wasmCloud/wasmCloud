@@ -1,6 +1,6 @@
+import {useLatticeData} from '@wasmcloud/lattice-client-react';
 import {formatDistanceToNow, formatDuration, intervalToDuration} from 'date-fns';
 import {ReactElement} from 'react';
-import {useLatticeData} from '@/services/lattice';
 import {Accordion, AccordionContent, AccordionItem, AccordionTrigger} from '@/ui/accordion';
 import {Badge} from '@/ui/badge';
 import {ShortCopy} from '@/ui/short-copy';

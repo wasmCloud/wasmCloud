@@ -1,9 +1,9 @@
 import {useDebugValue, useEffect, useState} from 'react';
-import {LatticeCache} from '../classes/lattice-service';
-import {useLatticeService} from './use-lattice-service';
+import {useLatticeClient} from './lattice-client-provider';
+import {LatticeCache} from '@wasmcloud/lattice-client-core';
 
 function useLatticeData(): LatticeCache {
-  const service = useLatticeService();
+  const service = useLatticeClient();
   const [state, handleStateUpdate] = useState<LatticeCache>({
     hosts: {},
     actors: {},

@@ -22,6 +22,7 @@ updates:
     interval: "daily"
 - package-ecosystem: npm
   directory: "/washboard-ui"
+  open-pull-requests-limit: 20
   schedule:
     interval: "weekly"
 - package-ecosystem: "github-actions"

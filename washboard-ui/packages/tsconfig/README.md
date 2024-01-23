@@ -1,0 +1,1 @@
+# @wasmcloud/tsconfig
