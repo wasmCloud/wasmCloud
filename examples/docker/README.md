@@ -14,6 +14,13 @@ This directory contains Docker Compose files for starting containers helpful for
 docker compose -f docker-compose-full.yml up
 ```
 
+## Running the entire ecosystem in Docker (with a websocket port open)
+> A WebSocket connection is needed for the "Washboard UI" to work
+
+```bash
+docker compose -f docker-compose-websockets.yml up
+```
+
 ## Running supporting services in Docker
 
 ```bash
