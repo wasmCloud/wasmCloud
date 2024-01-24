@@ -168,44 +168,44 @@ async fn instantiate(
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
     let (store, guest_call, start) = spawn({
-              let mut wasi = WasiCtxBuilder::new();
-              let wasi = wasi
-                  .arg("main.wasm")
-                  .context("failed to set argv[0]")?
-                  .build();
-              let ctx = Ctx {
-                  wasi,
-                  wasmbus: wasmbus::Ctx::new(handler),
-              };
+        let mut wasi = WasiCtxBuilder::new();
+        let wasi = wasi
+            .arg("main.wasm")
+            .context("failed to set argv[0]")?
+            .build();
+        let ctx = Ctx {
+            wasi,
+            wasmbus: wasmbus::Ctx::new(handler),
+        };
 
-              let mut store = wasmtime::Store::new(module.engine(), ctx);
-              let memory = wasmtime::Memory::new(
-                  &mut store,
-                  wasmtime::MemoryType::new(config.min_memory_pages, config.max_memory_pages),
-              )
-                  .context("failed to initialize memory")?;
-              linker
-                  .define_name(&store, "memory", memory)
-                  .context("failed to define `memory`")?;
-              let instance = linker
-                  .instantiate_async(&mut store, module)
-                  .await
-                  .context("failed to instantiate module")?;
+        let mut store = wasmtime::Store::new(module.engine(), ctx);
+        let memory = wasmtime::Memory::new(
+            &mut store,
+            wasmtime::MemoryType::new(config.min_memory_pages, config.max_memory_pages),
+        )
+        .context("failed to initialize memory")?;
+        linker
+            .define_name(&store, "memory", memory)
+            .context("failed to define `memory`")?;
+        let instance = linker
+            .instantiate_async(&mut store, module)
+            .await
+            .context("failed to instantiate module")?;
 
-              let start = instance.get_typed_func(&mut store, "_start");
-              let guest_call = instance
-                  .get_typed_func::<guest_call::Params, guest_call::Result>(&mut store, "__guest_call");
-              let (start, guest_call) = match (start, guest_call) {
-                  (Ok(start), Ok(guest_call)) => (Some(start), Some(guest_call)),
-                  (Ok(start), Err(_)) => (Some(start), None),
-                  (Err(_), Ok(guest_call)) => (None, Some(guest_call)),
-                  (Err(_), Err(e)) => {
-                      bail!("failed to instantiate either  `_start`, or `__guest_call`: {e}")
-                  }
-              };
-                future::ready((store, guest_call, start))
-          })
-        .await?;
+        let start = instance.get_typed_func(&mut store, "_start");
+        let guest_call = instance
+            .get_typed_func::<guest_call::Params, guest_call::Result>(&mut store, "__guest_call");
+        let (start, guest_call) = match (start, guest_call) {
+            (Ok(start), Ok(guest_call)) => (Some(start), Some(guest_call)),
+            (Ok(start), Err(_)) => (Some(start), None),
+            (Err(_), Ok(guest_call)) => (None, Some(guest_call)),
+            (Err(_), Err(e)) => {
+                bail!("failed to instantiate either  `_start`, or `__guest_call`: {e}")
+            }
+        };
+        future::ready((store, guest_call, start))
+    })
+    .await?;
 
     Ok(Instance {
         store,

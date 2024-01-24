@@ -20,9 +20,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
+use futures::future;
 use futures::stream::{AbortHandle, Abortable};
 use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
-use futures::future;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -2450,10 +2450,10 @@ impl Host {
 
             let _calls = spawn({
                 let instance = Arc::clone(&instance);
-                let limit =  max_instances.get();
+                let limit = max_instances.get();
                 Abortable::new(calls, calls_abort_reg).for_each_concurrent(limit, move |msg| {
                     let instance = Arc::clone(&instance);
-                    spawn( async move{
+                    spawn(async move {
                         let instance = Arc::clone(&instance);
                         future::ready(instance.handle_rpc_message(msg).await)
                     });
