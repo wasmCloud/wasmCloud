@@ -119,7 +119,10 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     let client = wco.into_ctl_client(None).await?;
 
     let mut receiver = client
-        .events_receiver()
+        .events_receiver(vec![
+            "provider_stopped".to_string(),
+            "provider_stop_failed".to_string(),
+        ])
         .await
         .map_err(boxed_err_to_anyhow)?;
 
