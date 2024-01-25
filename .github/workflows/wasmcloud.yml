@@ -2,9 +2,8 @@ name: wasmCloud
 
 on:
   pull_request:
-    paths-ignore:
-      - washboard-ui/**
   merge_group:
+  workflow_dispatch:
   push:
     branches:
     - main
@@ -41,13 +40,15 @@ on:
     - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
     - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
     - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  check_for_changes:
+    uses: ./.github/workflows/_check-for-changes.yml
+    
   build-bin:
     strategy:
       matrix:
@@ -102,25 +103,33 @@ jobs:
             docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
+    needs: check_for_changes
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
+      # need to run condition inside job steps so that job will pass if all steps are skipped
+      # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
+      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         package: wasmcloud-${{ matrix.config.target }}
     - run: ${{ matrix.config.test-bin }}
+      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     - uses: ./.github/actions/build-nix
+      if: ${{ !endsWith(matrix.config.target, 'fhs') && needs.check_for_changes.outputs.rust == 'true' }}
       with:
         package: wasmcloud-${{ matrix.config.target }}-oci
-      if: ${{ !endsWith(matrix.config.target, 'fhs') }}
     - run: ${{ matrix.config.test-oci }}
-      if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+      if: ${{ !endsWith(matrix.config.target, 'fhs') && needs.check_for_changes.outputs.rust == 'true' }}
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
+    needs: check_for_changes
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     runs-on: windows-latest-8-cores
     steps:
     - uses: actions/checkout@v4.1.1
@@ -135,7 +144,10 @@ jobs:
 
   build-lipo:
     name: wasmcloud-universal-darwin
-    needs: build-bin
+    needs:
+      - build-bin
+      - check_for_changes
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     runs-on: macos-12
     steps:
     - uses: actions/download-artifact@v4
@@ -167,7 +179,10 @@ jobs:
 
   test-linux:
     runs-on: ubuntu-22.04
-    needs: build-bin
+    needs:
+      - build-bin
+      - check_for_changes
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     steps:
     - uses: actions/download-artifact@v4
       with:
@@ -179,7 +194,10 @@ jobs:
 
   test-windows:
     runs-on: windows-2022
-    needs: build-windows
+    needs:
+      - build-windows
+      - check_for_changes
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     steps:
     - uses: actions/download-artifact@v4
       with:
@@ -191,22 +209,29 @@ jobs:
     strategy:
       matrix:
         check:
-        - audit
-        - fmt
-        - clippy
-        - nextest
+          - audit
+          - fmt
+          - clippy
+          - nextest
 
     name: cargo ${{ matrix.check }}
     runs-on: ubuntu-22.04
+    needs: check_for_changes
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
+      # need to run condition inside job steps so that job will pass if all steps are skipped
+      # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
+      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
 
   build-doc:
     runs-on: ubuntu-22.04
+    needs: check_for_changes
+    if: ${{ needs.check_for_changes.outputs.docs == 'true' }}
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
@@ -245,6 +270,7 @@ jobs:
       id: deployment
 
   oci:
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     strategy:
       matrix:
         include:
@@ -259,6 +285,7 @@ jobs:
     needs:
     - build-bin
     - test-linux
+    - check_for_changes
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
@@ -537,7 +564,10 @@ jobs:
           workspace-dependencies: true
 
     name: publish ${{ matrix.crate }} to crates.io
-    needs: cargo
+    needs: 
+      - cargo
+      - check_for_changes
+    if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
