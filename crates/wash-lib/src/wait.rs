@@ -124,7 +124,7 @@ pub async fn wait_for_actor_start_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_started" => {
+            "com.wasmcloud.lattice.actor_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == actor_ref {
@@ -136,7 +136,7 @@ pub async fn wait_for_actor_start_event(
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_start_failed" => {
+            "com.wasmcloud.lattice.actor_scale_failed" => {
                 let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "actor_ref")?;
 
                 if returned_actor_ref == actor_ref {
@@ -335,7 +335,7 @@ pub async fn wait_for_actor_stop_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_stopped" => {
+            "com.wasmcloud.lattice.actor_scaled" => {
                 let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
                 if returned_actor_id == actor_id {
                     return Ok(EventCheckOutcome::Success(ActorStoppedInfo {
@@ -344,7 +344,7 @@ pub async fn wait_for_actor_stop_event(
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_stop_failed" => {
+            "com.wasmcloud.lattice.actor_scale_failed" => {
                 let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
 
                 if returned_actor_id == actor_id {

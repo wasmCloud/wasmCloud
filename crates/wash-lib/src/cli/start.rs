@@ -249,7 +249,10 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
     };
 
     let mut receiver = client
-        .events_receiver()
+        .events_receiver(vec![
+            "provider_started".to_string(),
+            "provider_start_failed".to_string(),
+        ])
         .await
         .map_err(boxed_err_to_anyhow)
         .context("Failed to get lattice event channel")?;
