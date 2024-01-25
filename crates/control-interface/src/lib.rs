@@ -704,12 +704,12 @@ impl Client {
         let futs = event_types.into_iter().map(|event_type| {
             self.nc
                 .subscribe(format!("wasmbus.evt.{}.{}", self.lattice, event_type))
-                .map_err(anyhow::Error::from)
+                .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
         });
         let subs: Vec<Subscriber> = futures::future::join_all(futs)
             .await
             .into_iter()
-            .collect::<std::result::Result<_, anyhow::Error>>()?;
+            .collect::<Result<_>>()?;
         let mut stream = futures::stream::select_all(subs);
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
