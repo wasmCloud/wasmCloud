@@ -5,7 +5,7 @@ use wasmcloud_provider_blobstore_s3::{
     Chunk, ContainerObjectSelector, GetObjectRequest, ListObjectsRequest, PutObjectRequest,
     RemoveObjectsRequest, StorageClient, StorageConfig,
 };
-use wasmcloud_provider_sdk::Context;
+use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context;
 
 /// Helper function to create a StorageClient with local testing overrides
 async fn test_client() -> StorageClient {
