@@ -46,6 +46,8 @@ pub async fn start_actor(
     // Create a receiver to use with the client
     let mut receiver = ctl_client
         .events_receiver(vec![
+            "actor_started".to_string(),
+            "actor_start_failed".to_string(),
             "actor_scaled".to_string(),
             "actor_scale_failed".to_string(),
         ])
@@ -130,6 +132,8 @@ pub async fn stop_actor(
 ) -> Result<ActorStoppedInfo> {
     let mut receiver = client
         .events_receiver(vec![
+            "actor_stopped".to_string(),
+            "actor_stop_failed".to_string(),
             "actor_scaled".to_string(),
             "actor_scale_failed".to_string(),
         ])
