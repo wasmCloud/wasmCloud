@@ -24,6 +24,7 @@ const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
 const ENV_NATS_URI: &str = "URI";
 const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
+const ENV_NATS_TLS_CA: &str = "TLS_CA";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -74,6 +75,8 @@ struct ConnectionConfig {
     auth_jwt: Option<String>,
     #[serde(default)]
     auth_seed: Option<String>,
+    #[serde(default)]
+    tls_ca: Option<String>,
 
     /// ping interval in seconds
     #[serde(default)]
@@ -101,6 +104,9 @@ impl ConnectionConfig {
         if extra.ping_interval_sec.is_some() {
             out.ping_interval_sec = extra.ping_interval_sec
         }
+        if extra.tls_ca.is_some() {
+            out.tls_ca = extra.tls_ca.clone()
+        }
         out
     }
 }
@@ -113,6 +119,7 @@ impl Default for ConnectionConfig {
             auth_jwt: None,
             auth_seed: None,
             ping_interval_sec: None,
+            tls_ca: None,
         }
     }
 }
@@ -153,6 +160,9 @@ impl ConnectionConfig {
         }
         if config.cluster_uris.is_empty() {
             config.cluster_uris.push(DEFAULT_NATS_URI.to_string());
+        }
+        if let Some(tls_ca) = values.get(ENV_NATS_TLS_CA) {
+            config.tls_ca = Some(tls_ca.clone());
         }
         Ok(config)
     }
@@ -197,27 +207,9 @@ impl NatsMessagingProvider {
         cfg: ConnectionConfig,
         ld: &LinkDefinition,
     ) -> Result<NatsClientBundle, RpcError> {
-        let opts = match (cfg.auth_jwt, cfg.auth_seed) {
-            (Some(jwt), Some(seed)) => {
-                let key_pair = std::sync::Arc::new(
-                    KeyPair::from_seed(&seed)
-                        .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
-                );
-                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
-                    let key_pair = key_pair.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-                })
-            }
-            (None, None) => async_nats::ConnectOptions::default(),
-            _ => {
-                return Err(RpcError::InvalidParameter(
-                    "must provide both jwt and seed for jwt authentication".into(),
-                ));
-            }
-        };
-
+        let opts = build_connect_options(&cfg)?;
         // Use the first visible cluster_uri
-        let url = cfg.cluster_uris.get(0).unwrap();
+        let url = cfg.cluster_uris.first().unwrap();
 
         let client_name = format!(
             "NATS Messaging Provider - {} - {} - {}",
@@ -483,6 +475,56 @@ impl Messaging for NatsMessagingProvider {
 // parse failures
 fn should_strip_headers(topic: &str) -> bool {
     topic.starts_with("$SYS")
+}
+
+fn build_connect_options(cfg: &ConnectionConfig) -> Result<async_nats::ConnectOptions, RpcError> {
+    let opts = match (cfg.auth_jwt.clone(), cfg.auth_seed.clone()) {
+        (Some(jwt), Some(seed)) => {
+            let key_pair = std::sync::Arc::new(
+                KeyPair::from_seed(&seed)
+                    .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
+            );
+            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                let key_pair = key_pair.clone();
+                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+            })
+        }
+        (None, None) => async_nats::ConnectOptions::default(),
+        _ => {
+            return Err(RpcError::InvalidParameter(
+                "must provide both jwt and seed for jwt authentication".into(),
+            ));
+        }
+    };
+
+    if let Some(tls_ca) = &cfg.tls_ca {
+        return add_tls_ca(tls_ca, opts);
+    }
+
+    Ok(opts)
+}
+
+fn add_tls_ca(
+    tls_ca: &str,
+    opts: async_nats::ConnectOptions,
+) -> Result<async_nats::ConnectOptions, RpcError> {
+    let mut store_builder = async_nats::rustls::RootCertStore::empty();
+    let parsed_ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes())
+        .map_err(|e| RpcError::ProviderInit(format!("tls ca: {}", e)))?;
+
+    if let Some(rustls_pemfile::Item::X509Certificate(cert)) = parsed_ca {
+        store_builder.add_parsable_certificates(&[cert]);
+    } else {
+        return Err(RpcError::ProviderInit(
+            "tls ca: invalid certificate type, must be a DER encoded PEM file".into(),
+        ));
+    };
+
+    let tls_client = async_nats::rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(store_builder)
+        .with_no_client_auth();
+    Ok(opts.tls_client_config(tls_client).require_tls(true))
 }
 
 #[cfg(test)]

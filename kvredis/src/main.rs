@@ -85,14 +85,17 @@ impl ProviderHandler for KvRedisProvider {
         let redis_url = get_redis_url(&ld.values, &self.default_connect_url);
 
         if let Ok(client) = redis::Client::open(redis_url.clone()) {
-            if let Ok(conn_manager) = client.get_tokio_connection_manager().await {
-                let mut update_map = self.actors.write().await;
-                update_map.insert(ld.actor_id.to_string(), RwLock::new(conn_manager));
-            } else {
-                warn!(
-                    "Could not create Redis connection manager for actor {}, keyvalue operations will fail",
-                    ld.actor_id
-                );
+            match client.get_connection_manager().await {
+                Ok(conn_manager) => {
+                    let mut update_map = self.actors.write().await;
+                    update_map.insert(ld.actor_id.to_string(), RwLock::new(conn_manager));
+                }
+                Err(e) => {
+                    warn!(
+                        "Could not create Redis connection manager for actor {}, keyvalue operations will fail: {}",
+                        ld.actor_id, e
+                    );
+                }
             }
         } else {
             warn!(
@@ -245,7 +248,7 @@ impl KeyValue for KvRedisProvider {
     async fn set(&self, ctx: &Context, arg: &SetRequest) -> RpcResult<()> {
         let mut cmd = match arg.expires {
             0 => redis::Cmd::set(&arg.key, &arg.value),
-            _ => redis::Cmd::set_ex(&arg.key, &arg.value, arg.expires as usize),
+            _ => redis::Cmd::set_ex(&arg.key, &arg.value, arg.expires as u64),
         };
         let _value: Option<String> = self.exec(ctx, &mut cmd).await?;
         Ok(())
