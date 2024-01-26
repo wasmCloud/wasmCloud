@@ -202,9 +202,9 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             let config = connections
                 .get(&ctx.actor.clone().unwrap())
                 .ok_or_else(|| {
-                    ProviderInvocationError::Provider(format!(
-                        "failed to find actor for connection"
-                    ))
+                    ProviderInvocationError::Provider(
+                        "failed to find actor for connection".to_string(),
+                    )
                 })?;
 
             config.connection_hosts.clone()
