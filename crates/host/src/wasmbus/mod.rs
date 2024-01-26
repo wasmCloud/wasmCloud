@@ -353,12 +353,6 @@ impl Handler {
             injector.into(),
         )?;
 
-        // Validate that the actor has the capability to call the target
-        ensure_actor_capability(
-            self.claims.metadata.as_ref(),
-            &invocation.target.contract_id,
-        )?;
-
         if needs_chunking {
             self.chunk_endpoint
                 .chunkify(&invocation.id, Cursor::new(invocation.msg))
@@ -823,7 +817,6 @@ impl Bus for Handler {
         let origin = self.origin.clone();
         let cluster_key = self.cluster_key.clone();
         let host_key = self.host_key.clone();
-        let claims_metadata = self.claims.metadata.clone();
         Ok((
             async move {
                 // TODO: Stream data
@@ -855,10 +848,6 @@ impl Bus for Handler {
                     injector.into(),
                 )
                 .map_err(|e| e.to_string())?;
-
-                // Validate that the actor has the capability to call the target
-                ensure_actor_capability(claims_metadata.as_ref(), &invocation.target.contract_id)
-                    .map_err(|e| e.to_string())?;
 
                 if needs_chunking {
                     chunk_endpoint
@@ -1085,7 +1074,6 @@ impl Logging for Handler {
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        ensure_actor_capability(self.claims.metadata.as_ref(), wascap::caps::LOGGING)?;
         match level {
             logging::Level::Trace => {
                 tracing::event!(
@@ -1267,9 +1255,6 @@ impl ActorInstance {
         operation: &str,
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        // Validate that the actor has the capability to receive the invocation
-        ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
-
         let mut instance = self
             .actor
             .instantiate()
@@ -4560,31 +4545,6 @@ fn human_friendly_uptime(uptime: Duration) -> String {
         uptime.saturating_sub(Duration::from_nanos(uptime.subsec_nanos().into())),
     )
     .to_string()
-}
-
-/// Ensure actor has the capability claim to send or receive this invocation. This
-/// should be called whenever an actor is about to send or receive an invocation.
-fn ensure_actor_capability(
-    claims_metadata: Option<&jwt::Actor>,
-    contract_id: impl AsRef<str>,
-) -> anyhow::Result<()> {
-    let contract_id = contract_id.as_ref();
-    match claims_metadata {
-        // [ADR-0006](https://github.com/wasmCloud/wasmCloud/blob/main/adr/0006-actor-to-actor.md)
-        // Allow actor to actor calls by default
-        _ if contract_id.is_empty() => {}
-        Some(jwt::Actor {
-            caps: Some(ref caps),
-            ..
-        }) => {
-            ensure!(
-                caps.iter().any(|cap| cap == contract_id),
-                "actor does not have capability claim `{contract_id}`"
-            );
-        }
-        Some(_) | None => bail!("actor missing capability claims, denying invocation"),
-    }
-    Ok(())
 }
 
 fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::HeaderMap {
