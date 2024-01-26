@@ -4846,7 +4846,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "uuid 1.7.0",
- "wasmcloud-control-interface 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-control-interface 0.32.1",
 ]
 
 [[package]]
@@ -4982,7 +4982,7 @@ dependencies = [
  "warp-embed",
  "wascap",
  "wash-lib",
- "wasmcloud-control-interface 0.32.1",
+ "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5043,7 +5043,7 @@ dependencies = [
  "wascap",
  "wasm-encoder 0.39.0",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 0.32.1",
+ "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmparser",
  "wat",
@@ -5266,7 +5266,7 @@ dependencies = [
  "uuid 1.7.0",
  "vaultrs",
  "wascap",
- "wasmcloud-control-interface 0.32.1",
+ "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-host",
  "wasmcloud-tracing",
@@ -5331,6 +5331,8 @@ dependencies = [
 [[package]]
 name = "wasmcloud-control-interface"
 version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "158ad8ec71616b82465ba2eb3f6a431a9b5a6c1b59630ec10730924b6019f806"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5348,9 +5350,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158ad8ec71616b82465ba2eb3f6a431a9b5a6c1b59630ec10730924b6019f806"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5419,7 +5419,7 @@ dependencies = [
  "uuid 1.7.0",
  "wascap",
  "wasmcloud-compat",
- "wasmcloud-control-interface 0.32.1",
+ "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
