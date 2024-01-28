@@ -1,0 +1,10 @@
+name = "python-http-hello-world"
+language = "python"
+type = "actor"
+version = "0.1.0"
+
+[actor]
+claims = ["wasmcloud:httpserver"]
+build_command = "componentize-py -d ./wit -w hello componentize app -o build/http_hello_world.wasm"
+build_artifact = "build/http_hello_world.wasm"
+destination = "build/http_hello_world_s.wasm"
