@@ -1,6 +1,7 @@
 #![warn(clippy::pedantic)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use clap::Parser;
 use nkeys::KeyPair;
 use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
-use tracing::Level as TracingLogLevel;
+use tracing::{warn, Level as TracingLogLevel};
 use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
@@ -318,13 +319,29 @@ async fn main() -> anyhow::Result<()> {
         policy_changes_topic: args.policy_changes_topic,
         policy_timeout_ms: args.policy_timeout_ms,
     };
-    let labels = args
+    let mut labels = args
         .label
         .unwrap_or_default()
         .iter()
         .map(|labelpair| parse_label(labelpair))
         .collect::<anyhow::Result<HashMap<String, String>, anyhow::Error>>()
         .context("failed to parse labels")?;
+    let labels_from_args: HashSet<String> = labels.keys().cloned().collect();
+    labels.extend(env::vars().filter_map(|(key, value)| {
+        let key = if key.starts_with("WASMCLOUD_LABEL_") {
+            key.strip_prefix("WASMCLOUD_LABEL_")?.to_string()
+        } else {
+            return None;
+        };
+        if labels_from_args.contains(&key) {
+            warn!(
+                ?key,
+                "label provided via args will override label set via environment variable"
+            );
+            return None;
+        }
+        Some((key, value))
+    }));
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice: args.lattice,
