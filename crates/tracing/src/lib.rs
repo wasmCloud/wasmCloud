@@ -14,8 +14,9 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
 use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::{Layered, SubscriberExt};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::reload;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 use wasmcloud_core::logging::Level;
 use wasmcloud_core::OtelConfig;
@@ -121,13 +122,14 @@ pub fn configure_tracing(
     otel_config: &OtelConfig,
     structured_logging_enabled: bool,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<reload::Handle<EnvFilter, Registry>> {
     STDERR
         .set(std::io::stderr())
         .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
 
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
+    let (level_filter, level_reload_handle) = reload::Layer::new(level_filter);
     let normalized_service_name = service_name.to_kebab_case();
 
     let exporter = otel_config
@@ -196,7 +198,8 @@ pub fn configure_tracing(
         }
     };
 
-    res.map_err(|e| anyhow::anyhow!(e).context("Logger/tracer was already created"))
+    res.map(|()| level_reload_handle)
+        .map_err(|e| anyhow::anyhow!(e).context("Logger/tracer was already created"))
 }
 
 #[cfg(feature = "otel")]
@@ -231,7 +234,11 @@ fn get_tracer(
         .install_batch(opentelemetry::runtime::Tokio)
 }
 
-fn get_default_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
+fn get_default_log_layer<S>() -> anyhow::Result<impl Layer<S>>
+where
+    S: Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
     let stderr = STDERR.get().context("stderr not initialized")?;
     Ok(tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
@@ -240,7 +247,11 @@ fn get_default_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Regis
         .fmt_fields(DefaultFields::new()))
 }
 
-fn get_json_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
+fn get_json_log_layer<S>() -> anyhow::Result<impl Layer<S>>
+where
+    S: Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
     let stderr = STDERR.get().context("stderr not initialized")?;
     Ok(tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
@@ -249,9 +260,10 @@ fn get_json_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry
         .fmt_fields(JsonFields::new()))
 }
 
-fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
+#[allow(clippy::missing_panics_doc)] // This can't actually panic (famous last words?)
+pub fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
     if let Some(log_level) = log_level_override {
-        let level = wasi_level_to_tracing_level(log_level);
+        let level = wasi_level_to_tracing_level(*log_level);
         // SAFETY: We can unwrap here because we control all inputs
         let mut filter = EnvFilter::builder()
             .with_default_directive(level.into())
@@ -286,7 +298,7 @@ fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
     }
 }
 
-fn wasi_level_to_tracing_level(level: &Level) -> LevelFilter {
+fn wasi_level_to_tracing_level(level: Level) -> LevelFilter {
     match level {
         Level::Error | Level::Critical => LevelFilter::ERROR,
         Level::Warn => LevelFilter::WARN,
