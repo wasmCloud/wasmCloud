@@ -3811,14 +3811,14 @@ impl Host {
         opentelemetry_nats::attach_span_context(&message);
         // Skip the topic prefix and then the lattice prefix
         // e.g. `wasmbus.ctl.{prefix}`
-        let mut parts = message
-            .subject
+        let subject = message.subject;
+        let mut parts = subject
             .trim()
             .trim_start_matches(&self.ctl_topic_prefix)
             .trim_start_matches('.')
             .split('.')
             .skip(1);
-        trace!("handling control interface request");
+        trace!(%subject, "handling control interface request");
 
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
@@ -3891,7 +3891,7 @@ impl Host {
                 self.handle_config_clear(entity_id).await.map(Some)
             }
             _ => {
-                warn!("received control interface request on unsupported subject");
+                warn!(%subject, "received control interface request on unsupported subject");
                 Ok(Some(
                     r#"{"accepted":false,"error":"unsupported subject"}"#.to_string().into(),
                 ))
@@ -3899,9 +3899,9 @@ impl Host {
         };
 
         if let Err(err) = &res {
-            error!(?err, "failed to handle control interface request");
+            error!(%subject, ?err, "failed to handle control interface request");
         } else {
-            trace!("handled control interface request");
+            trace!(%subject, "handled control interface request");
         }
 
         if let Some(reply) = message.reply {
@@ -3924,7 +3924,7 @@ impl Host {
                     .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
-                    error!(?err, "failed to publish reply to control interface request");
+                    error!(%subject, ?err, "failed to publish reply to control interface request");
                 }
             }
         }
