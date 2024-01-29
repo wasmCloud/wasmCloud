@@ -14,6 +14,7 @@ use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
+use wasmcloud_host::wasmbus::config::Logging as LoggingConfig;
 use wasmcloud_host::wasmbus::config::PolicyService as PolicyServiceConfig;
 use wasmcloud_host::WasmbusHostConfig;
 use wasmcloud_tracing::configure_tracing;
@@ -248,14 +249,22 @@ async fn main() -> anyhow::Result<()> {
         traces_exporter: args.otel_traces_exporter,
         exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
     };
+
     let log_level = WasmcloudLogLevel::from(args.log_level);
-    if let Err(e) = configure_tracing(
+    let level_reload_handle = configure_tracing(
         "wasmcloud-host".to_string(),
         &otel_config,
         args.enable_structured_logging,
         Some(&log_level),
-    ) {
+    )
+    .map_err(|e| {
         eprintln!("Failed to configure tracing: {e}");
+    })
+    .ok();
+    let logging_config = LoggingConfig {
+        enable_structured_logging: args.enable_structured_logging,
+        log_level,
+        level_reload_handle,
     };
 
     let ctl_nats_url = Url::parse(&format!(
@@ -346,8 +355,7 @@ async fn main() -> anyhow::Result<()> {
         rpc_key: rpc_key.or_else(|| nats_key.clone()),
         rpc_tls: args.rpc_tls,
         allow_file_load: args.allow_file_load,
-        log_level,
-        enable_structured_logging: args.enable_structured_logging,
+        logging_config,
         otel_config,
         policy_service_config,
     }))

@@ -50,10 +50,8 @@ pub struct Host {
     pub oci_opts: OciConfig,
     /// Whether to allow loading actor or provider components from the filesystem
     pub allow_file_load: bool,
-    /// Whether or not structured logging is enabled
-    pub enable_structured_logging: bool,
-    /// Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
-    pub log_level: LogLevel,
+    /// Configuration for logging
+    pub logging_config: Logging,
     /// Whether to enable loading supplemental configuration
     pub config_service_enabled: bool,
     /// configuration for OpenTelemetry tracing
@@ -71,6 +69,22 @@ pub struct PolicyService {
     pub policy_changes_topic: Option<String>,
     /// The timeout for policy requests
     pub policy_timeout_ms: Option<Duration>,
+}
+
+/// Configuration for logging
+#[derive(Clone, Debug, Default)]
+pub struct Logging {
+    /// Whether or not structured logging is enabled
+    pub enable_structured_logging: bool,
+    /// Log level for the host and capability providers to use. Should be parsed from a [`tracing::Level`]
+    pub log_level: LogLevel,
+    /// A handle to dynamically reload the level filter
+    pub level_reload_handle: Option<
+        tracing_subscriber::reload::Handle<
+            tracing_subscriber::EnvFilter,
+            tracing_subscriber::Registry,
+        >,
+    >,
 }
 
 impl Default for Host {
@@ -97,8 +111,7 @@ impl Default for Host {
             provider_shutdown_delay: None,
             oci_opts: OciConfig::default(),
             allow_file_load: false,
-            enable_structured_logging: false,
-            log_level: LogLevel::Info,
+            logging_config: Logging::default(),
             config_service_enabled: false,
             otel_config: OtelConfig::default(),
             policy_service_config: PolicyService::default(),
