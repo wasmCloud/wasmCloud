@@ -39,6 +39,7 @@ pub mod get;
 pub mod inspect;
 pub mod label;
 pub mod link;
+pub mod logs;
 pub mod output;
 pub mod par;
 pub mod registry;
