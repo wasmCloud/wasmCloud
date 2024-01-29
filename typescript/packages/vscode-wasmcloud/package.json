@@ -1,0 +1,158 @@
+{
+  "name": "vscode-wasmcloud",
+  "displayName": "VSCode wasmCloud",
+  "description": "The official wasmCloud VSCode Extension",
+  "version": "0.1.0-rc1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "publisher": "wasmcloud",
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsWelcome": [
+      {
+        "view": "wasmCloudExplorer",
+        "contents": "Connecting to lattice",
+        "when": "wasmCloud.lattice.isLoading == true"
+      },
+      {
+        "view": "wasmCloudExplorer",
+        "contents": "Could not connect to lattice ([learn more](https://wasmcloud.com/docs/getting-started)).\n[Configure Settings](command:wasmCloud.openSettings)",
+        "when": "wasmCloud.lattice.isLoading == false && wasmCloud.lattice.isConnected == false"
+      },
+      {
+        "view": "wasmCloudExplorer",
+        "contents": "Lattice connected. Nothing to display.",
+        "when": "wasmCloud.lattice.isLoading == false && wasmCloud.lattice.isConnected == true"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wasmCloud",
+          "title": "wasmCloud",
+          "icon": "media/logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "wasmCloud": [
+        {
+          "id": "wasmCloudExplorer",
+          "name": "Lattice",
+          "command": "wasmcloud.explorer",
+          "contextualTitle": "wasmCloud",
+          "icon": "media/logo.svg"
+        },
+        {
+          "id": "wasmCloudApplications",
+          "name": "Applications",
+          "command": "wasmcloud.applcations",
+          "contextualTitle": "wasmCloud",
+          "icon": "media/logo.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "wasmCloud.reconnect",
+          "when": "view == wasmCloudExplorer && wasmCloud.lattice.isConnected == false",
+          "group": "navigation"
+        },
+        {
+          "command": "wasmCloud.openSettings",
+          "when": "view == wasmCloudExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "wasmCloud.copyToClipboard",
+          "when": "view == wasmCloudExplorer && (viewItem == copyText || viewItem == goToHost)",
+          "group": "inline"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wasmCloud.copyToClipboard",
+        "title": "Copy to Clipboard",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "wasmCloud.openSettings",
+        "title": "Settings",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "wasmCloud.reconnect",
+        "title": "Refresh connection to Lattice",
+        "icon": "$(sync)"
+      }
+    ],
+    "configuration": {
+      "title": "wasmCloud",
+      "properties": {
+        "wasmCloud.websocketAddress": {
+          "title": "WebSocket Address",
+          "type": "string",
+          "default": "",
+          "description": "Specifies the WebSocket port to connect to. If not specified, the default address (ws://localhost:4001) will be used.",
+          "pattern": "(^wss?://[a-zA-Z0-9-_.]+(:[0-9]+)?$|^$)",
+          "order": 0
+        },
+        "wasmCloud.ctlTopicPrefix": {
+          "title": "Control Topic Prefix",
+          "type": "string",
+          "default": "",
+          "description": "Specifies the prefix path for wasmCloud control topic. If not specified, the default prefix (wasmbus) will be used.",
+          "pattern": "(^[a-zA-Z0-9-_.]+$|^$)",
+          "order": 1
+        },
+        "wasmCloud.latticeId": {
+          "title": "Lattice ID",
+          "type": "string",
+          "default": "",
+          "description": "Specifies the lattice ID to connect to. If not specified, the default lattice ID (default) will be used.",
+          "pattern": "(^[a-zA-Z0-9-_.]+$|^$)",
+          "order": 2
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "npm run build --watch",
+    "lint:eslint": "eslint src --ext ts",
+    "format:prettier:fix": "prettier --write src/**/*.ts",
+    "pretest": "yarn run build-tests && yarn run build && yarn run lint",
+    "test": "vscode-test",
+    "vscode:prepublish": "npm run build",
+    "publish": "vsce publish",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.4",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@wasmcloud/lattice-client-core": "workspace:^",
+    "@wasmcloud/tsconfig": "workspace:^",
+    "ws": "^8.16.0"
+  }
+}

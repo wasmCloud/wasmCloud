@@ -25,16 +25,18 @@ Enable `corepack` and install `yarn` using the following commands:
 corepack enable
 yarn install
 ```
+
 ### Building ts files
 
 Run the following command to build typescript files in @wasmcloud/.. workspace package
-to avoid the following error: 
+to avoid the following error:
 
 `Unable to resolve path to module '@wasmcloud/lattice-client-react'  import/no-unresolved`
 
 ```bash
 yarn run turbo:build
 ```
+
 ### Start a local UI development server
 
 Run the following command to start a local frontend development server:
