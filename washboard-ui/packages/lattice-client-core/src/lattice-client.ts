@@ -29,6 +29,7 @@ export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl'>> = 
 
 export class LatticeClient {
   config$: BehaviorSubject<LatticeClientConfig>;
+  latticeCache$: BehaviorSubject<LatticeCache>;
 
   #connection?: NatsConnection;
   #linkState$: Subject<Pick<LatticeCache, 'links'>>;
@@ -40,6 +41,12 @@ export class LatticeClient {
     this.config$ = new BehaviorSubject({
       ...defaultConfig,
       ...config,
+    });
+    this.latticeCache$ = new BehaviorSubject<LatticeCache>({
+      hosts: {},
+      actors: {},
+      providers: {},
+      links: [],
     });
   }
 
@@ -91,12 +98,7 @@ export class LatticeClient {
   };
 
   getLatticeCache$ = (): Observable<LatticeCache> => {
-    const subject = new BehaviorSubject<LatticeCache>({
-      hosts: {},
-      actors: {},
-      providers: {},
-      links: [],
-    });
+    const subject = this.latticeCache$;
 
     // join wadmState and #linkState into a single observable
     merge(this.#wadmState$, this.#linkState$)
