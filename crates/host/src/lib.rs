@@ -19,6 +19,10 @@ pub mod registry;
 /// Provider archive functionality
 mod par;
 
+/// wasmCloud host metrics
+pub(crate) mod metrics;
+
+pub use metrics::HostMetrics;
 pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
 pub use policy::{
     Action as PolicyAction, HostInfo as PolicyHostInfo, Manager as PolicyManager,

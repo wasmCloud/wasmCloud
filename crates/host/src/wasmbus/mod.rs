@@ -36,6 +36,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
+use wasmcloud_tracing::{global, KeyValue};
 
 pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
@@ -60,7 +61,7 @@ use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::{
-    fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
+    fetch_actor, socket_pair, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
     PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
     RegistryType,
 };
@@ -269,6 +270,7 @@ struct ActorInstance {
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
     // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+    metrics: Arc<HostMetrics>,
 }
 
 impl Deref for ActorInstance {
@@ -1444,7 +1446,20 @@ impl ActorInstance {
                 let target = invocation.target.clone();
                 let operation = invocation.operation.clone();
 
+                let start_at = Instant::now();
                 let res = self.handle_call(invocation).await;
+                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+
+                self.metrics
+                    .wasmcloud_host_handle_rpc_message_duration_ns
+                    .record(
+                        elapsed,
+                        &[
+                            KeyValue::new("actor.ref", self.image_reference.clone()),
+                            KeyValue::new("operation", operation.clone()),
+                        ],
+                    );
+
                 match res {
                     Ok((msg, content_length)) => InvocationResponse {
                         msg,
@@ -1585,6 +1600,7 @@ pub struct Host {
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
+    metrics: Arc<HostMetrics>,
 }
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
@@ -2024,6 +2040,17 @@ impl Host {
         )
         .await?;
 
+        let meter = global::meter_with_version(
+            "wasmcloud-host",
+            Some(env!("CARGO_PKG_VERSION")),
+            None::<&str>,
+            Some(vec![
+                KeyValue::new("host.id", host_key.public_key()),
+                KeyValue::new("host.version", env!("CARGO_PKG_VERSION")),
+            ]),
+        );
+        let metrics = HostMetrics::new(&meter);
+
         let host = Host {
             actors: RwLock::default(),
             chunk_endpoint,
@@ -2055,6 +2082,7 @@ impl Host {
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
             config_data_cache: Arc::default(),
+            metrics: Arc::new(metrics),
         };
 
         let host = Arc::new(host);
@@ -2446,6 +2474,7 @@ impl Host {
                 image_reference: actor_ref.to_string(),
                 actor_claims: Arc::clone(&self.actor_claims),
                 provider_claims: Arc::clone(&self.provider_claims),
+                metrics: Arc::clone(&self.metrics),
             });
 
             let _calls = spawn({

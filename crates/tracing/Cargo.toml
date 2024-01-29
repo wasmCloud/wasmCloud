@@ -26,6 +26,7 @@ once_cell = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true, features = [
     "logs",
+    "metrics",
     "trace",
     "rt-tokio",
 ] }
@@ -35,6 +36,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "logs",
     "trace",
+    "metrics",
     "reqwest-client",
 ], optional = true }
 serde = { workspace = true, features = ["derive"] }
