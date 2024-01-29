@@ -14,15 +14,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 async-nats = { workspace = true }
 bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"] }
 opentelemetry = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
-anyhow = { workspace = true }
+wasmcloud-core = { workspace = true }

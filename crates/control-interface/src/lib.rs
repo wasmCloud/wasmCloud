@@ -12,6 +12,7 @@ mod types;
 
 use async_nats::Subscriber;
 pub use types::*;
+use wasmcloud_core::logging::Level;
 
 use core::fmt::{self, Debug};
 use core::time::Duration;
@@ -500,6 +501,39 @@ impl Client {
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive remove label acknowledgement: {e}").into()),
+        }
+    }
+
+    /// Get the logging config for the given host
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if there is a communication problem with the host
+    pub async fn get_logging_config(&self, host_id: &str) -> Result<GetLoggingConfigResponse> {
+        let subject = broker::queries::logging_config(&self.topic_prefix, &self.lattice, host_id);
+        debug!(%subject, "getting logging config");
+        match self
+            .request_timeout(subject, Vec::default(), self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.payload),
+            Err(e) => Err(format!("Did not receive a response to get logging config: {e}").into()),
+        }
+    }
+
+    /// Set the logging config for the given host
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if there is a communication problem with the host
+    pub async fn set_logging_config(&self, host_id: &str, level: Level) -> Result<CtlOperationAck> {
+        let subject =
+            broker::commands::set_logging_config(&self.topic_prefix, &self.lattice, host_id);
+        debug!(%subject, "setting logging config");
+        let bytes = json_serialize(SetLoggingConfigCommand { level })?;
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive a response to set logging config: {e}").into()),
         }
     }
 
