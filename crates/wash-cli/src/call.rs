@@ -138,6 +138,15 @@ pub struct ConnectionOpts {
     #[clap(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
     rpc_credsfile: Option<PathBuf>,
 
+    /// CA file for RPC authentication.
+    /// See https://docs.nats.io/using-nats/developer/security/securing_nats for details.
+    #[clap(
+        long = "rpc-ca-file",
+        env = "WASH_RPC_TLS_CA_FILE",
+        hide_env_values = true
+    )]
+    rpc_ca_file: Option<PathBuf>,
+
     /// Lattice for wasmcloud command interface, defaults to "default"
     #[clap(
         short = 'x',
@@ -337,6 +346,7 @@ async fn rpc_client_from_opts(
     let rpc_jwt = opts.rpc_jwt.or_else(|| ctx.rpc_jwt.clone());
     let rpc_seed = opts.rpc_seed.or_else(|| ctx.rpc_seed.clone());
     let rpc_credsfile = opts.rpc_credsfile.or_else(|| ctx.rpc_credsfile.clone());
+    let rpc_ca_file = opts.rpc_ca_file.or_else(|| ctx.rpc_ca_file.clone());
 
     // Cluster seed is optional on the CLI to allow for context to supply that variable.
     // If no context is supplied, and there is no default context, then the cluster seed
@@ -349,8 +359,15 @@ async fn rpc_client_from_opts(
         })
     });
 
-    let nc = create_nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile)
-        .await?;
+    let nc = create_nats_client_from_opts(
+        &rpc_host,
+        &rpc_port,
+        rpc_jwt,
+        rpc_seed,
+        rpc_credsfile,
+        rpc_ca_file,
+    )
+    .await?;
 
     let lattice = opts.lattice.as_deref().unwrap_or(DEFAULT_LATTICE);
     Ok((

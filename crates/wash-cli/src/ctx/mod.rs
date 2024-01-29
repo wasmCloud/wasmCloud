@@ -302,6 +302,14 @@ fn prompt_for_context() -> Result<WashContext> {
         Ok(s) => Some(s),
         _ => None,
     };
+    let ctl_tls_ca_file = match user_question(
+        "Enter the absolute path to the CTL connection CA file, if applicable",
+        &Some(String::new()),
+    ) {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(s),
+        _ => None,
+    };
     let ctl_timeout = user_question(
         "What should the control interface timeout be (in milliseconds)?",
         &Some(DEFAULT_NATS_TIMEOUT_MS.to_string()),
@@ -353,6 +361,14 @@ fn prompt_for_context() -> Result<WashContext> {
         Ok(s) => Some(s),
         _ => None,
     };
+    let rpc_tls_ca_file = match user_question(
+        "Enter the absolute path to the RPC connection CA file, if applicable",
+        &Some(String::new()),
+    ) {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(s),
+        _ => None,
+    };
     let rpc_timeout = user_question(
         "What should the RPC timeout be (in milliseconds)?",
         &Some(DEFAULT_NATS_TIMEOUT_MS.to_string()),
@@ -366,6 +382,7 @@ fn prompt_for_context() -> Result<WashContext> {
         ctl_jwt,
         ctl_seed,
         ctl_credsfile: ctl_credsfile.map(PathBuf::from),
+        ctl_ca_file: ctl_tls_ca_file.map(PathBuf::from),
         ctl_timeout: ctl_timeout.parse()?,
         lattice,
         js_domain,
@@ -374,6 +391,7 @@ fn prompt_for_context() -> Result<WashContext> {
         rpc_jwt,
         rpc_seed,
         rpc_credsfile: rpc_credsfile.map(PathBuf::from),
+        rpc_ca_file: rpc_tls_ca_file.map(PathBuf::from),
         rpc_timeout: rpc_timeout.parse()?,
     })
 }
