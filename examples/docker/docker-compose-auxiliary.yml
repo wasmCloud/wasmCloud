@@ -27,5 +27,5 @@ services:
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
+      - 4318:4318 # otlp http
       - 7999:7999 # tempo
-      - 55681:55681 # otlp http  

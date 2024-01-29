@@ -53,7 +53,7 @@ impl<'a> Drop for LockedWriter<'a> {
 static STDERR: OnceCell<std::io::Stderr> = OnceCell::new();
 
 #[cfg(feature = "otel")]
-const DEFAULT_TRACING_ENDPOINT: &str = "http://localhost:55681/v1/traces";
+const DEFAULT_TRACING_ENDPOINT: &str = "http://localhost:4318/v1/traces";
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
 /// This is just so we avoid any sort of possible slow down in logging code
