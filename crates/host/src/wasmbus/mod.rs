@@ -5,7 +5,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 use std::collections::hash_map::{self, Entry};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
@@ -1904,24 +1904,6 @@ impl Host {
             ("hostcore.osfamily".into(), FAMILY.into()),
         ]);
         labels.extend(config.labels.clone().into_iter());
-        let existing_labels: HashSet<String> = labels.keys().cloned().collect();
-        labels.extend(env::vars().filter_map(|(key, value)| {
-            let key = if key.starts_with("HOST_") {
-                warn!("labels set via HOST_ environment variables are deprecated and will be removed in a future version. Please use WASMCLOUD_LABEL_ as the prefix instead");
-                key.strip_prefix("HOST_")?.to_string()
-            } else if key.starts_with("WASMCLOUD_LABEL_") {
-                key.strip_prefix("WASMCLOUD_LABEL_")?.to_string()
-            } else {
-                return None;
-            };
-            if existing_labels.contains(&key) {
-                warn!(
-                    ?key,
-                    "label provided via environment variable will override existing label"
-                );
-            }
-            Some((key, value))
-        }));
         let friendly_name =
             Self::generate_friendly_name().context("failed to generate friendly name")?;
 

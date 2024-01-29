@@ -249,7 +249,6 @@ async fn wasmbus() -> anyhow::Result<()> {
     let cluster_key_two = KeyPair::new_cluster();
     let host_key_two = KeyPair::new_server();
 
-    env::set_var("HOST_PATH", "test-path");
     let base_labels = HashMap::from([
         ("hostcore.arch".into(), ARCH.into()),
         ("hostcore.os".into(), OS.into()),
@@ -265,7 +264,10 @@ async fn wasmbus() -> anyhow::Result<()> {
         rpc_nats_url: rpc_nats_url.clone(),
         lattice: TEST_LATTICE.to_string(),
         js_domain: None,
-        labels: HashMap::from([("label1".into(), "value1".into())]),
+        labels: HashMap::from([
+            ("label1".into(), "value1".into()),
+            ("PATH".into(), "test-path".into()),
+        ]),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -282,7 +284,10 @@ async fn wasmbus() -> anyhow::Result<()> {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: rpc_nats_url.clone(),
         lattice: TEST_LATTICE.to_string(),
-        labels: HashMap::from([("label1".into(), "value1".into())]),
+        labels: HashMap::from([
+            ("label1".into(), "value1".into()),
+            ("PATH".into(), "test-path".into()),
+        ]),
         cluster_key: Some(Arc::clone(&cluster_key_two)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_key: Some(Arc::clone(&host_key_two)),
