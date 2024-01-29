@@ -25,7 +25,7 @@ Enable `corepack` and install `yarn` using the following commands:
 corepack enable
 yarn install
 ```
- 
+
 ### Start a local UI development server
 
 Run the following command to start a local frontend development server:

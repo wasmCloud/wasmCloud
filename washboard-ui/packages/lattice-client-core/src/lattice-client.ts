@@ -1,5 +1,5 @@
 import {produce} from 'immer';
-import {NatsConnection, connect} from 'nats.ws';
+import {NatsConnection, NatsError, connect} from 'nats.ws';
 import {BehaviorSubject, Observable, Subject, map, merge, tap} from 'rxjs';
 import {CloudEvent, WadmActor, WadmHost, WadmLink, WadmProvider} from './types';
 
@@ -54,6 +54,10 @@ export class LatticeClient {
     return this.config$.value;
   }
 
+  get isConnected(): boolean {
+    return this.#connection?.isClosed() === false;
+  }
+
   setPartialConfig(newConfig: Partial<LatticeClientConfig>) {
     const oldConfig = this.config$.value;
     this.config$.next({
@@ -84,11 +88,31 @@ export class LatticeClient {
         console.error(`closed with an error: ${error.message}`);
       }
     });
-    this.#subscribeToWadmState();
-    this.#subscribeToLinks();
+
+    try {
+      await this.#subscribeToWadmState();
+      await this.#subscribeToLinks();
+      return Promise.resolve();
+    } catch (error) {
+      if (error instanceof NatsError) {
+        throw Error('Failed to connect to NATS. Error: ' + error.message)
+      }
+
+      if (error instanceof Error) {
+        throw Error('Failed to connect to lattice. Error: ' + error.message)
+      }
+
+      throw error;
+    }
   };
 
   disconnect = async (): Promise<void> => {
+    this.latticeCache$.next({
+      hosts: {},
+      actors: {},
+      providers: {},
+      links: [],
+    })
     await this.#connection?.drain().catch(() => null);
   };
 
@@ -118,14 +142,15 @@ export class LatticeClient {
     return subject;
   };
 
-  #subscribeToLinks = (): void => {
-    (async (): Promise<void> => {
-      const connection = await this.#waitForConnection();
-      const message = await connection.request(`${this.#ctlTopic}.get.links`);
-      this.#linkState$.next(message.json<{links: WadmLink[]}>());
+  #subscribeToLinks = async (): Promise<void> => {
+    const connection = await this.#waitForConnection();
+    const message = await connection.request(`${this.#ctlTopic}.get.links`);
+    this.#linkState$.next(message.json<{links: WadmLink[]}>());
 
-      // TODO: ideally we'll want to subscribe to the individual event topics but for now, that'll do 🐷
-      const watch = await connection.subscribe(`wasmbus.evt.${this.#latticeId}.*`);
+    // TODO: ideally we'll want to subscribe to the individual event topics but for now, that'll do 🐷
+    const watch = await connection.subscribe(`wasmbus.evt.${this.#latticeId}.*`);
+
+    (async () => {
       for await (const event of watch) {
         const parsedEvent = event.json<CloudEvent>();
         switch (parsedEvent.type) {
@@ -139,13 +164,16 @@ export class LatticeClient {
       }
       this.#linkState$.complete();
     })();
+
+    return Promise.resolve();
   };
 
-  #subscribeToWadmState = (): void => {
-    (async (): Promise<void> => {
-      const connection = await this.#waitForConnection();
-      const wadm = await connection.jetstream().views.kv('wadm_state');
-      const watch = await wadm.watch();
+  #subscribeToWadmState = async (): Promise<void> => {
+    const connection = await this.#waitForConnection();
+    const wadm = await connection.jetstream().views.kv('wadm_state');
+    const watch = await wadm.watch();
+
+    (async () => {
       for await (const event of watch) {
         switch (event.key) {
           case 'host_default': {
@@ -163,7 +191,9 @@ export class LatticeClient {
         }
       }
       this.#wadmState$.complete();
-    })();
+    })()
+
+    return Promise.resolve();
   };
 
   #waitForConnection = (count = 0): Promise<NatsConnection> => {
@@ -182,7 +212,7 @@ export class LatticeClient {
           }, 100);
         }
       } catch (error) {
-        reject(error);
+        reject('Failed to connect to lattice: ' + error);
       }
     });
   };
