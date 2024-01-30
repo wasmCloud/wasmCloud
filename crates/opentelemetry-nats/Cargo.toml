@@ -14,6 +14,11 @@ default = []
 
 [dependencies]
 async-nats = { workspace = true }
-opentelemetry = { workspace = true, features = ["rt-tokio"] }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "trace",
+    "logs",
+    "rt-tokio",
+] }
 tracing = { workspace = true, features = ["log"] }
 tracing-opentelemetry = { workspace = true }

@@ -6,9 +6,14 @@ pub mod context;
 use std::env;
 use std::io::{IsTerminal, StderrLock, Write};
 
+#[cfg(feature = "otel")]
+use anyhow::bail;
 use anyhow::Context;
+#[cfg(feature = "otel")]
 use heck::ToKebabCase;
 use once_cell::sync::OnceCell;
+#[cfg(feature = "otel")]
+use opentelemetry_otlp::WithExportConfig;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
@@ -53,7 +58,7 @@ impl<'a> Drop for LockedWriter<'a> {
 static STDERR: OnceCell<std::io::Stderr> = OnceCell::new();
 
 #[cfg(feature = "otel")]
-const DEFAULT_TRACING_ENDPOINT: &str = "http://localhost:4318/v1/traces";
+static LOG_PROVIDER: OnceCell<opentelemetry_sdk::logs::LoggerProvider> = OnceCell::new();
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
 /// This is just so we avoid any sort of possible slow down in logging code
@@ -83,9 +88,17 @@ where
     }
 }
 
+/// Configures a global tracing subscriber, which includes:
+/// - A level filter, which forms the base and applies to all other layers
+/// - A local logging layer, which is either plaintext or structured (JSON)
+///
+/// # Errors
+///
+/// This will return an error if the function has already been called, or if we fail to create any
+/// of the layers
 #[cfg(not(feature = "otel"))]
 pub fn configure_tracing(
-    _: String,
+    _: &str,
     _: &OtelConfig,
     structured_logging_enabled: bool,
     log_level_override: Option<&Level>,
@@ -102,7 +115,7 @@ pub fn configure_tracing(
         let layered = base_reg.with(level_filter).with(log_layer);
         tracing::subscriber::set_global_default(layered)
     } else {
-        let log_layer = get_default_log_layer()?;
+        let log_layer = get_plaintext_log_layer()?;
         let layered = base_reg.with(level_filter).with(log_layer);
         tracing::subscriber::set_global_default(layered)
     };
@@ -110,13 +123,20 @@ pub fn configure_tracing(
     res.map_err(|e| anyhow::anyhow!(e).context("Logger was already created"))
 }
 
+/// Configures a global tracing subscriber, which includes:
+/// - A level filter, which forms the base and applies to all other layers
+/// - OTEL tracing and logging layers, if OTEL configuration is provided
+/// - A local logging layer, which is either plaintext or structured (JSON)
+///
+/// # Errors
+///
+/// This will return an error if the function has already been called, or if we fail to create any
+/// of the layers
 #[cfg(feature = "otel")]
-#[allow(clippy::missing_errors_doc)] // TODO: Document errors
-#[allow(clippy::needless_pass_by_value)]
 pub fn configure_tracing(
-    service_name: String,
+    service_name: &str,
     otel_config: &OtelConfig,
-    structured_logging_enabled: bool,
+    use_structured_logging: bool,
     log_level_override: Option<&Level>,
 ) -> anyhow::Result<()> {
     STDERR
@@ -124,71 +144,65 @@ pub fn configure_tracing(
         .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
 
     let base_reg = tracing_subscriber::Registry::default();
+
     let level_filter = get_level_filter(log_level_override);
-    let normalized_service_name = service_name.to_kebab_case();
 
     let exporter = otel_config
         .traces_exporter
         .as_ref()
         .map(|s| s.to_ascii_lowercase());
-    let maybe_tracer = match exporter.as_deref() {
-        Some("otlp") => {
-            let endpoint = if let Some(ref endpoint) = otel_config.exporter_otlp_endpoint {
-                endpoint.clone()
-            } else {
-                eprintln!(
-                    "OTEL exporter endpoint not set, defaulting to '{DEFAULT_TRACING_ENDPOINT}'"
-                );
-                DEFAULT_TRACING_ENDPOINT.to_string()
-            };
-            Some(get_tracer(endpoint, normalized_service_name))
-        }
-        Some(exporter) => {
-            eprintln!("unsupported OTEL exporter: '{exporter}'");
-            None
-        }
-        None => None,
-    };
 
-    let res = match (maybe_tracer, structured_logging_enabled) {
-        (Some(Ok(t)), true) => {
-            let log_layer = get_json_log_layer()?;
-            let tracing_layer = tracing_opentelemetry::layer().with_tracer(t);
+    // Check for unsupported exporters
+    if let Some(ref exporter) = exporter {
+        if exporter != "otlp" {
+            bail!("unsupported OTEL exporter: '{exporter}'");
+        }
+    }
+
+    // At this point, we just need a boolean, since we only support otlp
+    let export_otel = exporter.is_some();
+
+    // NOTE: this logic would be simpler if we could conditionally/imperatively construct and add
+    // layers, but due to the dynamic types, this is not possible
+    let res = match (export_otel, use_structured_logging) {
+        (true, true) => {
+            let exporter_endpoint = otel_config.exporter_otlp_endpoint.clone();
+            let normalized_service_name = service_name.to_kebab_case();
             let layered = base_reg
                 .with(level_filter)
-                .with(log_layer)
-                .with(tracing_layer);
+                .with(get_json_log_layer()?)
+                .with(get_otel_tracing_layer(
+                    &exporter_endpoint,
+                    normalized_service_name.clone(),
+                )?)
+                .with(get_otel_logging_layer(
+                    &exporter_endpoint,
+                    normalized_service_name,
+                )?);
             tracing::subscriber::set_global_default(layered)
         }
-        (Some(Ok(t)), false) => {
-            let log_layer = get_default_log_layer()?;
-            let tracing_layer = tracing_opentelemetry::layer().with_tracer(t);
+        (true, false) => {
+            let exporter_endpoint = otel_config.exporter_otlp_endpoint.clone();
+            let normalized_service_name = service_name.to_kebab_case();
             let layered = base_reg
                 .with(level_filter)
-                .with(log_layer)
-                .with(tracing_layer);
+                .with(get_plaintext_log_layer()?)
+                .with(get_otel_tracing_layer(
+                    &exporter_endpoint,
+                    normalized_service_name.clone(),
+                )?)
+                .with(get_otel_logging_layer(
+                    &exporter_endpoint,
+                    normalized_service_name,
+                )?);
             tracing::subscriber::set_global_default(layered)
         }
-        (Some(Err(err)), true) => {
-            eprintln!("Unable to configure OTEL tracing, defaulting to logging only: {err:?}");
-            let log_layer = get_json_log_layer()?;
-            let layered = base_reg.with(level_filter).with(log_layer);
+        (false, true) => {
+            let layered = base_reg.with(level_filter).with(get_json_log_layer()?);
             tracing::subscriber::set_global_default(layered)
         }
-        (Some(Err(err)), false) => {
-            eprintln!("Unable to configure OTEL tracing, defaulting to logging only: {err:?}");
-            let log_layer = get_default_log_layer()?;
-            let layered = base_reg.with(level_filter).with(log_layer);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (None, true) => {
-            let log_layer = get_json_log_layer()?;
-            let layered = base_reg.with(level_filter).with(log_layer);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (None, false) => {
-            let log_layer = get_default_log_layer()?;
-            let layered = base_reg.with(level_filter).with(log_layer);
+        (false, false) => {
+            let layered = base_reg.with(level_filter).with(get_plaintext_log_layer()?);
             tracing::subscriber::set_global_default(layered)
         }
     };
@@ -197,35 +211,88 @@ pub fn configure_tracing(
 }
 
 #[cfg(feature = "otel")]
-fn get_tracer(
-    tracing_endpoint: String,
+fn get_otel_tracing_layer<S>(
+    exporter_endpoint: &Option<String>,
     service_name: String,
-) -> Result<opentelemetry::sdk::trace::Tracer, opentelemetry::trace::TraceError> {
-    use opentelemetry_otlp::WithExportConfig;
+) -> anyhow::Result<impl Layer<S>>
+where
+    S: Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    let mut builder = opentelemetry_otlp::new_exporter()
+        .http()
+        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
 
-    opentelemetry_otlp::new_pipeline()
+    if let Some(ref endpoint) = exporter_endpoint {
+        builder = builder.with_endpoint(endpoint);
+    }
+
+    let tracer = opentelemetry_otlp::new_pipeline()
         .tracing()
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_endpoint(tracing_endpoint)
-                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary),
-        )
+        .with_exporter(builder)
         .with_trace_config(
-            opentelemetry::sdk::trace::config()
-                .with_sampler(opentelemetry::sdk::trace::Sampler::AlwaysOn)
-                .with_id_generator(opentelemetry::sdk::trace::RandomIdGenerator::default())
+            opentelemetry_sdk::trace::config()
+                .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+                .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
                 .with_max_events_per_span(64)
                 .with_max_attributes_per_span(16)
                 .with_max_events_per_span(16)
-                .with_resource(opentelemetry::sdk::Resource::new(vec![
+                .with_resource(opentelemetry_sdk::Resource::new(vec![
                     opentelemetry::KeyValue::new("service.name", service_name),
                 ])),
         )
-        .install_batch(opentelemetry::runtime::Tokio)
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .context("failed to create OTEL tracer")?;
+
+    Ok(tracing_opentelemetry::layer().with_tracer(tracer))
 }
 
-fn get_default_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
+#[cfg(feature = "otel")]
+fn get_otel_logging_layer<S>(
+    exporter_endpoint: &Option<String>,
+    service_name: String,
+) -> anyhow::Result<impl Layer<S>>
+where
+    S: Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    let mut builder = opentelemetry_otlp::HttpExporterBuilder::default();
+
+    if let Some(ref endpoint) = exporter_endpoint {
+        builder = builder.with_endpoint(endpoint);
+    }
+
+    let exporter = opentelemetry_otlp::LogExporterBuilder::Http(builder)
+        .build_log_exporter()
+        .context("failed to create OTEL log exporter")?;
+
+    let log_provider = opentelemetry_sdk::logs::LoggerProvider::builder()
+        .with_config(opentelemetry_sdk::logs::Config::default().with_resource(
+            opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                "service.name",
+                service_name,
+            )]),
+        ))
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .build();
+
+    // Prevent the exporter/provider from being dropped
+    LOG_PROVIDER
+        .set(log_provider)
+        .map_err(|_| anyhow::anyhow!("Logger provider already initialized"))?;
+
+    let log_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+        LOG_PROVIDER.get().unwrap(),
+    );
+
+    Ok(log_layer)
+}
+
+fn get_plaintext_log_layer<S>() -> anyhow::Result<impl Layer<S>>
+where
+    S: Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
     let stderr = STDERR.get().context("stderr not initialized")?;
     Ok(tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)

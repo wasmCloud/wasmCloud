@@ -1,10 +1,8 @@
 use std::sync::OnceLock;
 
 use async_nats::header::{HeaderMap, HeaderValue};
-use opentelemetry::{
-    propagation::{Extractor, Injector, TextMapPropagator},
-    sdk::propagation::TraceContextPropagator,
-};
+use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 

@@ -59,7 +59,7 @@ where
             ProviderInitError::Initialization(format!("Unable to load host data: {e}"))
         })??;
     if let Err(e) = wasmcloud_tracing::configure_tracing(
-        friendly_name.unwrap_or(host_data.provider_key.clone()),
+        &friendly_name.unwrap_or(host_data.provider_key.clone()),
         &host_data.otel_config,
         host_data.structured_logging,
         host_data.log_level.as_ref(),

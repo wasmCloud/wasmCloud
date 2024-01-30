@@ -19,6 +19,11 @@ bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "trace",
+    "logs",
+    "rt-tokio",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
