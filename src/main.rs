@@ -32,20 +32,10 @@ struct Args {
     #[clap(long = "nats-port", default_value_t = 4222, env = "NATS_PORT")]
     nats_port: u16,
     /// A user JWT to use to authenticate to NATS
-    #[clap(
-        long = "nats-jwt",
-        env = "WASMCLOUD_NATS_JWT",
-        alias = "NATS_JWT",
-        requires = "nats_seed"
-    )]
+    #[clap(long = "nats-jwt", env = "WASMCLOUD_NATS_JWT", requires = "nats_seed")]
     nats_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS
-    #[clap(
-        long = "nats-seed",
-        env = "WASMCOULD_NATS_SEED",
-        alias = "NATS_SEED",
-        requires = "nats_jwt"
-    )]
+    #[clap(long = "nats-seed", env = "WASMCOULD_NATS_SEED", requires = "nats_jwt")]
     nats_seed: Option<String>,
     /// The lattice the host belongs to
     #[clap(
@@ -193,7 +183,6 @@ struct Args {
     #[clap(
         long = "oci-registry",
         env = "WASMCLOUD_OCI_REGISTRY",
-        alias = "OCI_REGISTRY",
         requires = "oci_user",
         requires = "oci_password"
     )]
@@ -202,7 +191,6 @@ struct Args {
     #[clap(
         long = "oci-user",
         env = "WASMCLOUD_OCI_REGISTRY_USER",
-        alias = "OCI_REGISTRY_USER",
         requires = "oci_registry",
         requires = "oci_password"
     )]
@@ -211,7 +199,6 @@ struct Args {
     #[clap(
         long = "oci-password",
         env = "WASMCLOUD_OCI_REGISTRY_PASSWORD",
-        alias = "OCI_REGISTRY_PASSWORD",
         requires = "oci_registry",
         requires = "oci_user"
     )]
