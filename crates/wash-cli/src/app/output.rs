@@ -3,7 +3,7 @@ use term_table::{
     table_cell::{Alignment, TableCell},
     Table,
 };
-use wadm::server::VersionInfo;
+use wadm::server::{Status, VersionInfo};
 
 use super::ModelSummary;
 
@@ -56,6 +56,27 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
             ),
         ]))
     });
+
+    table.render()
+}
+
+pub fn status_table(model_name: String, status: Status) -> String {
+    let mut table = Table::new();
+    crate::util::configure_table_style(&mut table);
+
+    table.add_row(Row::new(vec![
+        TableCell::new_with_alignment("Name", 1, Alignment::Left),
+        TableCell::new_with_alignment("Deployed Version", 1, Alignment::Left),
+        TableCell::new_with_alignment("Deploy Status", 1, Alignment::Left),
+        TableCell::new_with_alignment("Status Message", 1, Alignment::Left),
+    ]));
+
+    table.add_row(Row::new(vec![
+        TableCell::new_with_alignment(model_name, 1, Alignment::Left),
+        TableCell::new_with_alignment(status.version, 1, Alignment::Left),
+        TableCell::new_with_alignment(format!("{:?}", status.info.status_type), 1, Alignment::Left),
+        TableCell::new_with_alignment(status.info.message, 1, Alignment::Left),
+    ]));
 
     table.render()
 }
