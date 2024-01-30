@@ -53,9 +53,6 @@ impl<'a> Drop for LockedWriter<'a> {
 static STDERR: OnceCell<std::io::Stderr> = OnceCell::new();
 
 #[cfg(feature = "otel")]
-const TRACING_PATH: &str = "/v1/traces";
-
-#[cfg(feature = "otel")]
 const DEFAULT_TRACING_ENDPOINT: &str = "http://localhost:55681/v1/traces";
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
@@ -201,14 +198,11 @@ pub fn configure_tracing(
 
 #[cfg(feature = "otel")]
 fn get_tracer(
-    mut tracing_endpoint: String,
+    tracing_endpoint: String,
     service_name: String,
 ) -> Result<opentelemetry::sdk::trace::Tracer, opentelemetry::trace::TraceError> {
     use opentelemetry_otlp::WithExportConfig;
 
-    if !tracing_endpoint.ends_with(TRACING_PATH) {
-        tracing_endpoint.push_str(TRACING_PATH);
-    };
     opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(
