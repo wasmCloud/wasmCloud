@@ -2515,7 +2515,7 @@ __metadata:
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.3.3"
-    usehooks-ts: "npm:^2.9.5"
+    usehooks-ts: "npm:^2.10.0"
     vite: "npm:^5.0.12"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.1"
@@ -7264,13 +7264,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"usehooks-ts@npm:^2.9.5":
-  version: 2.9.5
-  resolution: "usehooks-ts@npm:2.9.5"
+"usehooks-ts@npm:^2.10.0":
+  version: 2.10.0
+  resolution: "usehooks-ts@npm:2.10.0"
   peerDependencies:
     react: ^16.8.0  || ^17.0.0 || ^18.0.0
     react-dom: ^16.8.0  || ^17.0.0 || ^18.0.0
-  checksum: 8a6c791b9aa0b08d4407f967e8f9976d76b078bd9fc140fec2d0b4c1ba8bd70e215fe83705d07ad981853271b2d348be1013a5d2394e45399dfcbf5fbdc7539e
+  checksum: 35dfc898c3b593817a11eb4aa1e8b9e3d28f0250df497196a29255fbb49a8a21a4281aeeae2679ff3b462c6845a01f3c0b5d40b2cb4b4425e01860ebd5a920af
   languageName: node
   linkType: hard
 
