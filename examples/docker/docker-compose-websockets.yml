@@ -15,7 +15,7 @@ services:
       - "8222:8222"
       - "4001:4001"
     command:
-     - "-c=/etc/nats/nats-server.conf"
+      - "-c=/etc/nats/nats-server.conf"
     volumes:
       - ./nats.websocket.conf:/etc/nats/nats-server.conf
   registry:

@@ -5,10 +5,8 @@
 //! is only available with the `otel` feature enabled
 
 use async_nats::header::HeaderMap;
-use opentelemetry::{
-    propagation::{Injector, TextMapPropagator},
-    sdk::propagation::TraceContextPropagator,
-};
+use opentelemetry::propagation::{Injector, TextMapPropagator};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 

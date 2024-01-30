@@ -21,7 +21,7 @@ data-encoding = { workspace = true }
 futures = { workspace = true }
 nkeys = { workspace = true }
 once_cell = { workspace = true }
-opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
+opentelemetry = { workspace = true, optional = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["default"] }

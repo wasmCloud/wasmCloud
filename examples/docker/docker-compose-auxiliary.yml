@@ -1,4 +1,4 @@
-# This docker-compose file starts supporting services for a wasmCloud ecosystem, including: 
+# This docker-compose file starts supporting services for a wasmCloud ecosystem, including:
 #   a local OCI registry
 #   grafana + tempo for tracing
 # This file is intended to be used with `wash up` to start a NATS server, wasmCloud host, and WADM server
@@ -20,7 +20,7 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_DISABLE_LOGIN_FORM=true
     depends_on:
-      - tempo  
+      - tempo
   tempo:
     image: grafana/tempo:2.3.1
     command: ["-config.file=/etc/tempo.yaml"]
