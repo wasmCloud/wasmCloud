@@ -1,6 +1,6 @@
 package wasmcloud:provider-blobstore;
 
 world provider-blobstore {
-    import wasmcloud:blobstore/blobstore;
-    export wasmcloud:blobstore/chunk-receiver;
+    import wasmcloud:blobstore/chunk-receiver;
+    export wasmcloud:blobstore/blobstore;
 }

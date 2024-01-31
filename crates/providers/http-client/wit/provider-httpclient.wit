@@ -1,5 +1,5 @@
 package wasmcloud:provider-http-client;
 
 world provider-http-client {
-    import wasmcloud:httpclient/http-client;
+    export wasmcloud:httpclient/http-client;
 }
