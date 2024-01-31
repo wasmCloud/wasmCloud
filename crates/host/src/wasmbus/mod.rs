@@ -42,8 +42,8 @@ use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
     HostLabel, LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
     ProviderDescription, RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest,
-    ScaleActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand,
+    ScaleActorCommand, SetLoggingConfigCommand, StartProviderCommand, StopActorCommand,
+    StopHostCommand, StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
@@ -57,7 +57,9 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
+use wasmcloud_tracing::get_level_filter;
 
+use crate::wasmbus::config::Logging as LoggingConfig;
 use crate::{
     fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
     PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
@@ -79,6 +81,7 @@ struct Queue {
     inventory: async_nats::Subscriber,
     labels: async_nats::Subscriber,
     links: async_nats::Subscriber,
+    logging_config: async_nats::Subscriber,
     queries: async_nats::Subscriber,
     registries: async_nats::Subscriber,
     config: async_nats::Subscriber,
@@ -101,6 +104,11 @@ impl Stream for Queue {
             Poll::Pending => pending = true,
         }
         match Pin::new(&mut self.links).poll_next(cx) {
+            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
+            Poll::Ready(None) => {}
+            Poll::Pending => pending = true,
+        }
+        match Pin::new(&mut self.logging_config).poll_next(cx) {
             Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
             Poll::Ready(None) => {}
             Poll::Pending => pending = true,
@@ -208,6 +216,7 @@ impl Queue {
             commands,
             inventory,
             labels,
+            logging_config,
             config,
             config_get,
         ) = try_join!(
@@ -225,6 +234,7 @@ impl Queue {
             nats.subscribe(format!("{topic_prefix}.{lattice}.cmd.{host_id}.*",)),
             nats.subscribe(format!("{topic_prefix}.{lattice}.get.{host_id}.inv",)),
             nats.subscribe(format!("{topic_prefix}.{lattice}.labels.{host_id}.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice}.logs.*.{host_id}",)),
             nats.queue_subscribe(
                 format!("{topic_prefix}.{lattice}.config.>"),
                 format!("{topic_prefix}.{lattice}.config"),
@@ -242,6 +252,7 @@ impl Queue {
             inventory,
             labels,
             links,
+            logging_config,
             queries,
             registries,
             config,
@@ -1583,6 +1594,7 @@ pub struct Host {
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
+    logging_config: LoggingConfig,
 }
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
@@ -2053,6 +2065,7 @@ impl Host {
             labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats,
+            logging_config: config.logging_config.clone(),
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
@@ -3205,7 +3218,7 @@ impl Host {
                 cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
                 log_level,
-                structured_logging: self.host_config.enable_structured_logging,
+                structured_logging: self.host_config.logging_config.enable_structured_logging,
                 otel_config,
             };
             let host_data =
@@ -3778,6 +3791,25 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
+    fn handle_get_log_level(&self) -> anyhow::Result<Bytes> {
+        let buf = serde_json::to_vec(&json!({ "level": self.logging_config.log_level }))
+            .context("failed to encode log level response")?;
+        Ok(buf.into())
+    }
+
+    fn handle_set_log_level(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        let SetLoggingConfigCommand { level } = serde_json::from_slice(payload.as_ref())?;
+
+        info!(?level, "updating log level");
+
+        self.logging_config
+            .level_reload_handle
+            .as_ref()
+            .map(|handle| handle.reload(get_level_filter(Some(&level))));
+
+        Ok(ACCEPTED.into())
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         trace!("replying to ping");
@@ -3873,6 +3905,12 @@ impl Host {
             }
             (Some("linkdefs"), Some("del"), None, None) => {
                 self.handle_linkdef_del(message.payload).await.map(Some)
+            }
+            (Some("logs"), Some("get"), Some(_host_id), None) => {
+                self.handle_get_log_level().map(Some)
+            }
+            (Some("logs"), Some("set"), Some(_host_id), None) => {
+                self.handle_set_log_level(message.payload).map(Some)
             }
             (Some("registries"), Some("put"), None, None) => {
                 self.handle_registries_put(message.payload).await.map(Some)

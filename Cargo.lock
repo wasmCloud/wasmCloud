@@ -5355,6 +5355,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
+ "wasmcloud-core",
 ]
 
 [[package]]
@@ -5405,6 +5406,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber",
  "ulid",
  "url",
  "uuid 1.7.0",

@@ -92,6 +92,10 @@ pub mod commands {
     pub fn stop_host(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
         format!("{}.cmd.{}.stop", prefix(topic_prefix, lattice), host)
     }
+
+    pub fn set_logging_config(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
+        format!("{}.logs.set.{}", prefix(topic_prefix, lattice), host)
+    }
 }
 
 pub mod queries {
@@ -127,5 +131,9 @@ pub mod queries {
 
     pub fn all_config(topic_prefix: &Option<String>, lattice: &str, entity_id: &str) -> String {
         format!("{}.get.config.{entity_id}", prefix(topic_prefix, lattice),)
+    }
+
+    pub fn logging_config(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
+        format!("{}.logs.get.{}", prefix(topic_prefix, lattice), host)
     }
 }

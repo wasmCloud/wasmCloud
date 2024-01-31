@@ -26,6 +26,7 @@ use wash_lib::cli::get::GetCommand;
 use wash_lib::cli::inspect::InspectCliCommand;
 use wash_lib::cli::label::LabelHostCommand;
 use wash_lib::cli::link::LinkCommand;
+use wash_lib::cli::logs::LogsCommand;
 use wash_lib::cli::registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand};
 use wash_lib::cli::scale::ScaleCommand;
 use wash_lib::cli::spy::SpyCommand;
@@ -73,6 +74,7 @@ Iterate:
   call         Invoke a wasmCloud actor
   ctl          Interact with a wasmCloud control interface (deprecated, use above commands)
   label        Label (or un-label) a host with a key=value label pair
+  logs         Set or get the log level for a host
 
 Publish:
   pull         Pull an artifact from an OCI compliant registry
@@ -173,12 +175,18 @@ enum CliCommand {
     /// Utilities for generating and managing keys
     #[clap(name = "keys", alias = "key", subcommand)]
     Keys(KeysCliCommand),
+    /// Label (or un-label) a host
+    #[clap(name = "label", alias = "tag")]
+    Label(LabelHostCommand),
     /// Perform lint checks on smithy models
     #[clap(name = "lint")]
     Lint(LintCli),
     /// Link an actor and a provider
     #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
+    /// Set or get the log level for a host
+    #[clap(name = "logs", subcommand)]
+    Logs(LogsCommand),
     /// Create a new project from template
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
@@ -206,9 +214,6 @@ enum CliCommand {
     /// Stop an actor, provider, or host
     #[clap(name = "stop", subcommand)]
     Stop(StopCommand),
-    /// Label (or un-label) a host
-    #[clap(name = "label", alias = "tag")]
-    Label(LabelHostCommand),
     /// Update an actor running in a host to a newer version
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
@@ -273,8 +278,12 @@ async fn main() {
             wash_lib::cli::inspect::handle_command(inspect_cli, output_kind).await
         }
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
+        CliCommand::Label(label_cli) => {
+            common::label_cmd::handle_command(label_cli, output_kind).await
+        }
         CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
+        CliCommand::Logs(logs_cli) => common::logs_cmd::handle_command(logs_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
         CliCommand::Reg(reg_cli) => {
@@ -300,9 +309,6 @@ async fn main() {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
         CliCommand::Stop(stop_cli) => common::stop_cmd::handle_command(stop_cli, output_kind).await,
-        CliCommand::Label(label_cli) => {
-            common::label_cmd::handle_command(label_cli, output_kind).await
-        }
         CliCommand::Update(update_cli) => {
             common::update_cmd::handle_command(update_cli, output_kind).await
         }

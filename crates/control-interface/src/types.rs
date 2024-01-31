@@ -92,6 +92,11 @@ pub struct GetConfigKeyResponse {
     pub data: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct GetLoggingConfigResponse {
+    pub level: wasmcloud_core::logging::Level,
+}
+
 /// A summary representation of a host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {
@@ -309,6 +314,11 @@ pub struct RemoveLinkDefinitionRequest {
     /// The provider's link name
     #[serde(default)]
     pub link_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SetLoggingConfigCommand {
+    pub level: wasmcloud_core::logging::Level,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
