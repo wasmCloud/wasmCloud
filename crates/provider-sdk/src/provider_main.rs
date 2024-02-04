@@ -99,6 +99,7 @@ where
             }
         },
     )
+    .request_timeout(None)
     .connect(nats_server)
     .await?;
 
