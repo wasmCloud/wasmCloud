@@ -3,10 +3,18 @@
 This directory contains Docker Compose files for starting containers helpful for running wasmCloud examples. These containers include:
 
 - a [NATS](https://nats.io) server with JetStream enabled, needed to support the network for a lattice
-- an OCI registry, to support pushing and pulling locally-built artifacts
-- [Grafana](https://grafana.com/) + [Tempo](https://grafana.com/oss/tempo/), for viewing distributed traces
 - the wasmCloud host
 - a [WADM](/docs/category/declarative-application-deployment-wadm) server, for managing wasmCloud applications
+- an OCI registry, to support pushing and pulling locally-built artifacts
+- [Grafana](https://grafana.com/) + [Tempo](https://grafana.com/oss/tempo/), for viewing distributed traces
+
+## Running the minimal wasmCloud infrastructure
+
+The minimum required infrastructure for wasmCloud is a NATS server and a wasmCloud host.
+
+```bash
+docker compose -f docker-compose.minimal.yml up
+```
 
 ## Running the entire ecosystem in Docker
 
@@ -22,6 +30,7 @@ docker compose -f docker-compose-websockets.yml up
 ```
 
 ## Running supporting services in Docker
+The auxiliary services include a local registry for managing OCI components and Grafana and Tempo in order to view distributed traces.
 
 ```bash
 docker compose -f docker-compose-auxiliary.yml up
