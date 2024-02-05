@@ -218,6 +218,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: check_for_changes
     steps:
+    - run: df -h
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
       # need to run condition inside job steps so that job will pass if all steps are skipped
