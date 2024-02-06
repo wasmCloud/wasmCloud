@@ -2432,7 +2432,7 @@ __metadata:
     "@types/node": "npm:^20.11.10"
     "@wasmcloud/prettier-config": "workspace:*"
     eslint: "npm:^8.56.0"
-    eslint-config-turbo: "npm:^1.11.3"
+    eslint-config-turbo: "npm:^1.12.2"
     prettier: "npm:^3.2.4"
     turbo: "npm:^1.11.3"
     typescript: "npm:^5.3.3"
@@ -3611,14 +3611,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-config-turbo@npm:^1.11.3":
-  version: 1.11.3
-  resolution: "eslint-config-turbo@npm:1.11.3"
+"eslint-config-turbo@npm:^1.12.2":
+  version: 1.12.2
+  resolution: "eslint-config-turbo@npm:1.12.2"
   dependencies:
-    eslint-plugin-turbo: "npm:1.11.3"
+    eslint-plugin-turbo: "npm:1.12.2"
   peerDependencies:
     eslint: ">6.6.0"
-  checksum: 288591d73ff168593e01d924aaacbe419be4a25e460e8b809c4bfde8e9112ab155f6ce2d796adadc12a8f6814dac0d502428db9d1e05810fa68407e1f90b6a40
+  checksum: 239fafe9e8108330d9f6470a38005acc8424d93fced295a2e979783d767ebe26a2c897a2680094fa572d36c4ea5aec9718a70ff761cb52ee9593aab7233f0910
   languageName: node
   linkType: hard
 
@@ -3791,14 +3791,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-turbo@npm:1.11.3":
-  version: 1.11.3
-  resolution: "eslint-plugin-turbo@npm:1.11.3"
+"eslint-plugin-turbo@npm:1.12.2":
+  version: 1.12.2
+  resolution: "eslint-plugin-turbo@npm:1.12.2"
   dependencies:
     dotenv: "npm:16.0.3"
   peerDependencies:
     eslint: ">6.6.0"
-  checksum: 1eec81bcb64a54b9b74bb454eefd181c38969975a6d0588e80de04032a5ac9e4d49f545fd614594a3281765687e0568894e5b6f5742a96ebde1ff88135853554
+  checksum: fa01701c6b2dfa4310f727bcd67596d52f51afe78e296c0caf05d8722c0dff5f8110e594c235fa4b7d8e61e80e33f15c721b93b170ee131021c153a510d6a425
   languageName: node
   linkType: hard
 
