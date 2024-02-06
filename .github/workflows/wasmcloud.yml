@@ -215,7 +215,7 @@ jobs:
           - nextest
 
     name: cargo ${{ matrix.check }}
-    runs-on: ubuntu-latest-16-cores
+    runs-on: ubuntu-22.04
     needs: check_for_changes
     steps:
     - uses: actions/checkout@v4.1.1
