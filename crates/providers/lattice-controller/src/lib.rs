@@ -782,41 +782,6 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             })
     }
 
-    /// Stop an actor on the lattice
-    #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn stop_actor(&self, _ctx: Context, cmd: StopActorCommand) -> CtlOperationAck {
-        let client = match self
-            .get_connections()
-            .await
-            .get_client(&cmd.lattice_id)
-            .await
-        {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to get client for connection: {e}");
-                return CtlOperationAck {
-                    accepted: false,
-                    error: "failed to start actor".into(),
-                };
-            }
-        };
-
-        client
-            .stop_actor(&cmd.host_id, &cmd.actor_id, Some(cmd.annotations.clone()))
-            .await
-            .map(|a| CtlOperationAck {
-                accepted: a.accepted,
-                error: a.error,
-            })
-            .unwrap_or_else(|e| {
-                error!("failed to stop actor: {e}");
-                CtlOperationAck {
-                    accepted: false,
-                    error: "failed to stop actor".into(),
-                }
-            })
-    }
-
     /// Stop a host on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
     async fn stop_host(&self, _ctx: Context, cmd: StopHostCommand) -> CtlOperationAck {

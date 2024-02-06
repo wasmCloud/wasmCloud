@@ -15,14 +15,17 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as ErrContext};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
+use async_nats::Subscriber;
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
-use futures::future;
-use futures::stream::{AbortHandle, Abortable};
-use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::stream::{AbortHandle, Abortable, SelectAll};
+use futures::{
+    future::{self, Either},
+    join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt,
+};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -44,8 +47,8 @@ use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
     HostLabel, LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
     ProviderDescription, RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest,
-    ScaleActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand,
+    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand,
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
@@ -75,78 +78,14 @@ const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
 
 #[derive(Debug)]
 struct Queue {
-    auction: async_nats::Subscriber,
-    commands: async_nats::Subscriber,
-    pings: async_nats::Subscriber,
-    inventory: async_nats::Subscriber,
-    labels: async_nats::Subscriber,
-    links: async_nats::Subscriber,
-    queries: async_nats::Subscriber,
-    registries: async_nats::Subscriber,
-    config: async_nats::Subscriber,
-    config_get: async_nats::Subscriber,
+    all_streams: SelectAll<Subscriber>,
 }
 
 impl Stream for Queue {
     type Item = async_nats::Message;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut pending = false;
-        match Pin::new(&mut self.commands).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.labels).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.links).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.queries).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.registries).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.inventory).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.auction).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.pings).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.config).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        match Pin::new(&mut self.config_get).poll_next(cx) {
-            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
-            Poll::Ready(None) => {}
-            Poll::Pending => pending = true,
-        }
-        if pending {
-            Poll::Pending
-        } else {
-            Poll::Ready(None)
-        }
+        self.all_streams.poll_next_unpin(cx)
     }
 }
 
@@ -201,53 +140,33 @@ impl Queue {
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
-        let (
-            registries,
-            pings,
-            links,
-            queries,
-            auction,
-            commands,
-            inventory,
-            labels,
-            config,
-            config_get,
-        ) = try_join!(
-            nats.subscribe(format!("{topic_prefix}.{lattice}.registries.put",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice}.ping.hosts",)),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.linkdefs.*"),
-                format!("{topic_prefix}.{lattice}.linkdefs",)
-            ),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.get.*"),
-                format!("{topic_prefix}.{lattice}.get")
-            ),
-            nats.subscribe(format!("{topic_prefix}.{lattice}.auction.>",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice}.cmd.{host_id}.*",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice}.get.{host_id}.inv",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice}.labels.{host_id}.*",)),
-            nats.queue_subscribe(
+        let streams = futures::future::join_all([
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.registry.put",))),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.host.ping",))),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.*.auction",))),
+            Either::Right(nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice}.link.*"),
+                format!("{topic_prefix}.{lattice}.link",),
+            )),
+            Either::Right(nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice}.claims.get"),
+                format!("{topic_prefix}.{lattice}.claims"),
+            )),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.actor.*.{host_id}"))),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.provider.*.{host_id}"))),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.label.*.{host_id}"))),
+            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.host.*.{host_id}"))),
+            Either::Right(nats.queue_subscribe(
                 format!("{topic_prefix}.{lattice}.config.>"),
                 format!("{topic_prefix}.{lattice}.config"),
-            ),
-            nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.get.config.>"),
-                format!("{topic_prefix}.{lattice}.get.config")
-            ),
-        )
+            )),
+        ])
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, async_nats::SubscribeError>>()
         .context("failed to subscribe to queues")?;
         Ok(Self {
-            auction,
-            commands,
-            pings,
-            inventory,
-            labels,
-            links,
-            queries,
-            registries,
-            config,
-            config_get,
+            all_streams: futures::stream::select_all(streams),
         })
     }
 }
@@ -3006,32 +2925,6 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_stop_actor(
-        &self,
-        payload: impl AsRef<[u8]>,
-        host_id: &str,
-    ) -> anyhow::Result<Bytes> {
-        let StopActorCommand {
-            actor_ref,
-            annotations,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor stop command")?;
-
-        debug!(actor_ref, ?annotations, "handling stop actor");
-
-        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
-        match self.actors.write().await.entry(actor_ref.clone()) {
-            hash_map::Entry::Occupied(entry) => {
-                self.stop_actor(entry, &annotations, host_id).await?;
-                info!(actor_ref, "actor stopped");
-                Ok(ACCEPTED.into())
-            }
-            hash_map::Entry::Vacant(_) => bail!("actor is not running on this host"),
-        }
-    }
-
-    #[instrument(level = "debug", skip_all)]
     async fn handle_update_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -3117,7 +3010,7 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_launch_provider_task(
+    async fn handle_start_provider_task(
         &self,
         configuration: Option<String>,
         link_name: &str,
@@ -3125,7 +3018,7 @@ impl Host {
         annotations: HashMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        trace!(provider_ref, link_name, "launch provider task");
+        trace!(provider_ref, link_name, "start provider task");
 
         let registry_config = self.registry_config.read().await;
         let (path, claims) = crate::fetch_provider(
@@ -3405,7 +3298,7 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_launch_provider(
+    async fn handle_start_provider(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
@@ -3417,14 +3310,14 @@ impl Host {
             annotations,
             ..
         } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize provider launch command")?;
+            .context("failed to deserialize provider start command")?;
 
-        info!(provider_ref, link_name, "handling launch provider"); // Log at info since launching providers can take a while
+        info!(provider_ref, link_name, "handling start provider"); // Log at info since starting providers can take a while
 
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
-                .handle_launch_provider_task(
+                .handle_start_provider_task(
                     configuration,
                     &link_name,
                     &provider_ref,
@@ -3433,7 +3326,7 @@ impl Host {
                 )
                 .await
             {
-                error!(provider_ref, link_name, ?err, "failed to launch provider");
+                error!(provider_ref, link_name, ?err, "failed to start provider");
                 if let Err(err) = self
                     .publish_event(
                         "provider_start_failed",
@@ -3833,64 +3726,66 @@ impl Host {
         trace!(%subject, "handling control interface request");
 
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
-            (Some("auction"), Some("actor"), None, None) => {
+            (Some("actor"), Some("auction"), None, None) => {
                 self.handle_auction_actor(message.payload).await.map(Some)
             }
-            (Some("auction"), Some("provider"), None, None) => {
-                self.handle_auction_provider(message.payload).await
-            }
-            (Some("cmd"), Some(host_id), Some("lp"), None) => Arc::clone(&self)
-                .handle_launch_provider(message.payload, host_id)
-                .await
-                .map(Some),
-            (Some("cmd"), Some(host_id), Some("sa"), None) => self
-                .handle_stop_actor(message.payload, host_id)
-                .await
-                .map(Some),
-            (Some("cmd"), Some(host_id), Some("scale"), None) => Arc::clone(&self)
+            (Some("actor"), Some("scale"), Some(host_id), None) => Arc::clone(&self)
                 .handle_scale_actor(message.payload, host_id)
                 .await
                 .map(Some),
-            (Some("cmd"), Some(host_id), Some("sp"), None) => self
-                .handle_stop_provider(message.payload, host_id)
-                .await
-                .map(Some),
-            (Some("cmd"), Some(host_id), Some("stop"), None) => self
-                .handle_stop_host(message.payload, host_id)
-                .await
-                .map(Some),
-            (Some("cmd"), Some(host_id), Some("upd"), None) => self
+            (Some("actor"), Some("update"), Some(host_id), None) => self
                 .handle_update_actor(message.payload, host_id)
                 .await
                 .map(Some),
-            (Some("get"), Some(_host_id), Some("inv"), None) => {
+            (Some("provider"), Some("stop"), Some(host_id), None) => self
+                .handle_stop_provider(message.payload, host_id)
+                .await
+                .map(Some),
+            (Some("provider"), Some("auction"), None, None) => {
+                self.handle_auction_provider(message.payload).await
+            }
+            (Some("provider"), Some("start"), Some(host_id), None) => Arc::clone(&self)
+                .handle_start_provider(message.payload, host_id)
+                .await
+                .map(Some),
+
+            (Some("host"), Some("stop"), Some(host_id), None) => self
+                .handle_stop_host(message.payload, host_id)
+                .await
+                .map(Some),
+            (Some("host"), Some("get"), Some(_host_id), None) => {
                 self.handle_inventory().await.map(Some)
             }
-            (Some("get"), Some("claims"), None, None) => self.handle_claims().await.map(Some),
-            (Some("get"), Some("links"), None, None) => self.handle_links().await.map(Some),
-            (Some("get"), Some("config"), Some(entity_id), Some(key)) => {
-                self.handle_config_get_one(entity_id, key).await.map(Some)
+            (Some("host"), Some("ping"), None, None) => {
+                self.handle_ping_hosts(message.payload).await.map(Some)
             }
-            (Some("get"), Some("config"), Some(entity_id), None) => {
-                self.handle_config_get(entity_id).await.map(Some)
-            }
-            (Some("labels"), Some(_host_id), Some("del"), None) => {
-                self.handle_label_del(message.payload).await.map(Some)
-            }
-            (Some("labels"), Some(_host_id), Some("put"), None) => {
-                self.handle_label_put(message.payload).await.map(Some)
-            }
-            (Some("linkdefs"), Some("put"), None, None) => {
+
+            (Some("claims"), Some("get"), None, None) => self.handle_claims().await.map(Some),
+
+            (Some("link"), Some("get"), None, None) => self.handle_links().await.map(Some),
+            (Some("link"), Some("put"), None, None) => {
                 self.handle_linkdef_put(message.payload).await.map(Some)
             }
-            (Some("linkdefs"), Some("del"), None, None) => {
+            (Some("link"), Some("del"), None, None) => {
                 self.handle_linkdef_del(message.payload).await.map(Some)
             }
-            (Some("registries"), Some("put"), None, None) => {
+
+            (Some("label"), Some("del"), Some(_host_id), None) => {
+                self.handle_label_del(message.payload).await.map(Some)
+            }
+            (Some("label"), Some("put"), Some(_host_id), None) => {
+                self.handle_label_put(message.payload).await.map(Some)
+            }
+
+            (Some("registry"), Some("put"), None, None) => {
                 self.handle_registries_put(message.payload).await.map(Some)
             }
-            (Some("ping"), Some("hosts"), None, None) => {
-                self.handle_ping_hosts(message.payload).await.map(Some)
+
+            (Some("config"), Some("get"), Some(entity_id), Some(key)) => {
+                self.handle_config_get_one(entity_id, key).await.map(Some)
+            }
+            (Some("config"), Some("get"), Some(entity_id), None) => {
+                self.handle_config_get(entity_id).await.map(Some)
             }
             (Some("config"), Some("put"), Some(entity_id), Some(key)) => self
                 .handle_config_put(entity_id, key, message.payload)

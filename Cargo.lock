@@ -5080,7 +5080,7 @@ dependencies = [
  "warp-embed",
  "wascap",
  "wash-lib",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 0.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5142,7 +5142,7 @@ dependencies = [
  "wascap",
  "wasm-encoder 0.41.2",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 0.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-core",
  "wasmparser 0.121.2",
  "wat",
@@ -5455,6 +5455,26 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry 0.22.0",
+]
+
+[[package]]
+name = "wasmcloud-control-interface"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4513791a2a28f4be7e128bf00afae3cefa05dd84f3594a80afd5b2afae071f27"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "cloudevents-sdk",
+ "futures",
+ "oci-distribution",
+ "opentelemetry 0.20.0",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry 0.20.0",
 ]
 
 [[package]]

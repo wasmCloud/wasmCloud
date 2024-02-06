@@ -282,31 +282,7 @@ interface lattice-controller {
       annotations-map: list<tuple<string,string>>,
 
       /// The target number of actors
-      count: u16,
-    }
-
-    /// A command sent to a specific host requesting instance of a given actor
-    /// be terminated on that host
-    record stop-actor-command {
-      /// The ID of the lattice for this request
-      lattice-id: string,
-
-      /// The host ID on which to stop the actor
-      host-id: string,
-
-      /// Public key ID of the actor to scale
-      actor-id: string,
-
-      /// The target number of actors to stop
-      ///
-      /// A zero value means stop all actors
-      count: u16,
-
-      /// Annotations that were used when starting this instance
-      //
-      // This member expects/requires the use of bindgen's `replace_witified_maps` option,
-      // which will turn this member into `annotations: Vec<HashMap<String, String>>`
-      annotations-map: list<tuple<string,string>>,
+      count: u32,
     }
 
     /// A request to stop the given provider on the indicated host
@@ -510,9 +486,6 @@ interface lattice-controller {
 
     /// Instructs a given host to perform a live update on the indicated actor
     update-actor: func(cmd: update-actor-command) -> ctl-operation-ack;
-
-    /// Instructs a given host to stop the indicated actor
-    stop-actor: func(cmd: stop-actor-command) -> ctl-operation-ack;
 
     ////////////////////////////////
     // Link definition Operations //

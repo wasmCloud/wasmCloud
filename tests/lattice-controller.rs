@@ -279,9 +279,9 @@ async fn test_ops_actors(
     let host_id = &ack.host_id;
     assert!(!host_id.is_empty(), "host ID is non-empty");
 
-    // Perform POST request to trigger a lattice-control start-actor
+    // Perform POST request to trigger a lattice-control scale-actor (starting the first actor)
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
-        .post(format!("{base_url}/start-actor"))
+        .post(format!("{base_url}/scale-actor"))
         .body(serde_json::to_string(&json!({
             "latticeId": lattice.as_ref(),
             "actorRef": actor_ref,
@@ -291,11 +291,11 @@ async fn test_ops_actors(
         }))?)
         .send()
         .await
-        .context("failed to perform POST /start-actor")?
+        .context("failed to perform POST /scale-actor")?
         .json()
         .await
-        .context("failed to read /start-actor response body as json")?;
-    assert_eq!(resp_json.status, "success", "start-actor succeeded");
+        .context("failed to read /scale-actor response body as json")?;
+    assert_eq!(resp_json.status, "success", "scale-actor succeeded");
     assert!(
         resp_json.data.accepted && resp_json.data.error.is_empty(),
         "ctl operation accepted"
@@ -370,50 +370,68 @@ async fn test_ops_actors(
         "ctl operation accepted"
     );
 
-    // Perform POST request to trigger a lattice-control stop-actor
+    // NOTE(thomastaylor312): The old smithy interface doesn't return the max_instances number, so
+    // we can't verify that it scales. Doing 2 scale commands so close to each other actually is a
+    // race condition because we spawn the handle scale task in parallel in the host. This means if
+    // two requests go in at the same time, the scale actor up could happen after the scale actor
+    // down. Only one happens at a time due to the RwLock on the actors map but who gets the lock
+    // first is not deterministic. So we wait here instead
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    // Perform POST request to trigger a lattice-control scale-actor to go to 0
     let resp_json: ResponseEnvelope<CtlOperationAck> = http_client
-        .post(format!("{base_url}/stop-actor"))
+        .post(format!("{base_url}/scale-actor"))
         .body(serde_json::to_string(&json!({
             "latticeId": lattice.as_ref(),
+            "actorRef": actor_ref,
             "hostId": host_id,
             "actorId": actor_id,
-            "count": 0,
             "annotations": HashMap::<String, String>::new(),
+            "count": 0,
         }))?)
         .send()
         .await
-        .context("failed to perform POST /stop-actor")?
+        .context("failed to perform POST /scale-actor")?
         .json()
         .await
-        .context("failed to read /stop-actor response body as json")?;
-    assert_eq!(resp_json.status, "success", "stop-actor succeeded");
+        .context("failed to read /scale-actor response body as json")?;
+    assert_eq!(resp_json.status, "success", "scale-actor succeeded");
     assert!(
         resp_json.data.accepted && resp_json.data.error.is_empty(),
         "ctl operation accepted"
     );
 
     // Perform POST request to trigger a lattice-control host-inventory
-    let resp_json: ResponseEnvelope<HostInventory> = http_client
-        .post(format!("{base_url}/get-host-inventory"))
-        .body(serde_json::to_string(&json!({
-            "latticeId": lattice.as_ref(),
-            "hostId": host_id,
-        }))?)
-        .send()
-        .await
-        .context("failed to perform POST /get-host-inventory")?
-        .json()
-        .await
-        .context("failed to read /get-host-inventory response body as json")?;
-    assert_eq!(resp_json.status, "success", "get-host-inventory succeeded");
-    assert!(
-        !resp_json
-            .data
-            .actors
-            .iter()
-            .any(|a| a.image_ref.as_ref().is_some_and(|v| v == actor_ref)),
-        "actor is stopped and removed from inventory",
-    );
+    tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        loop {
+            let resp_json: ResponseEnvelope<HostInventory> = http_client
+                .post(format!("{base_url}/get-host-inventory"))
+                .body(serde_json::to_string(&json!({
+                    "latticeId": lattice.as_ref(),
+                    "hostId": host_id,
+                }))?)
+                .send()
+                .await
+                .context("failed to perform POST /get-host-inventory")?
+                .json()
+                .await
+                .context("failed to read /get-host-inventory response body as json")?;
+            assert_eq!(resp_json.status, "success", "get-host-inventory succeeded");
+            if !resp_json
+                .data
+                .actors
+                .iter()
+                .any(|a| a.image_ref.as_ref().is_some_and(|v| v == actor_ref))
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .context("reached timeout waiting for actor scale down")?
+    .expect("inventory fetch failed");
 
     Ok(())
 }

@@ -1,6 +1,5 @@
 //! wasmCloud runtime library
 
-#![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]

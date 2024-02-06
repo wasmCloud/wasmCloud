@@ -1,4 +1,3 @@
-#![warn(clippy::pedantic)]
 #![forbid(clippy::unwrap_used)]
 
 pub mod chunking;

@@ -193,24 +193,6 @@ impl HttpServer for SmithyKvActor {
                 })
             }
 
-            "/start-actor" => {
-                let data = LatticeControllerSender::new()
-                    .start_actor(
-                        ctx,
-                        &serde_json::from_slice(&req.body).map_err(|e| {
-                            RpcError::Deser(format!("failed to deserialize request body: {e}"))
-                        })?,
-                    )
-                    .await?;
-                Ok(HttpResponse {
-                    body: serde_json::to_vec(&json!({ "status": "success", "data": data }))
-                        .map_err(|e| {
-                            RpcError::ActorHandler(format!("serialization failure: {e}"))
-                        })?,
-                    ..HttpResponse::default()
-                })
-            }
-
             "/scale-actor" => {
                 let data = LatticeControllerSender::new()
                     .scale_actor(
@@ -232,24 +214,6 @@ impl HttpServer for SmithyKvActor {
             "/update-actor" => {
                 let data = LatticeControllerSender::new()
                     .update_actor(
-                        ctx,
-                        &serde_json::from_slice(&req.body).map_err(|e| {
-                            RpcError::Deser(format!("failed to deserialize request body: {e}"))
-                        })?,
-                    )
-                    .await?;
-                Ok(HttpResponse {
-                    body: serde_json::to_vec(&json!({ "status": "success", "data": data }))
-                        .map_err(|e| {
-                            RpcError::ActorHandler(format!("serialization failure: {e}"))
-                        })?,
-                    ..HttpResponse::default()
-                })
-            }
-
-            "/stop-actor" => {
-                let data = LatticeControllerSender::new()
-                    .stop_actor(
                         ctx,
                         &serde_json::from_slice(&req.body).map_err(|e| {
                             RpcError::Deser(format!("failed to deserialize request body: {e}"))
