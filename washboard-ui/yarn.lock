@@ -2515,7 +2515,7 @@ __metadata:
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.3.3"
-    usehooks-ts: "npm:^2.10.0"
+    usehooks-ts: "npm:^2.12.1"
     vite: "npm:^5.0.12"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.1"
@@ -5052,6 +5052,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"lodash.debounce@npm:^4.0.8":
+  version: 4.0.8
+  resolution: "lodash.debounce@npm:4.0.8"
+  checksum: cd0b2819786e6e80cb9f5cda26b1a8fc073daaf04e48d4cb462fa4663ec9adb3a5387aa22d7129e48eed1afa05b482e2a6b79bfc99b86886364449500cbb00fd
+  languageName: node
+  linkType: hard
+
 "lodash.merge@npm:^4.6.2":
   version: 4.6.2
   resolution: "lodash.merge@npm:4.6.2"
@@ -7264,13 +7271,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"usehooks-ts@npm:^2.10.0":
-  version: 2.10.0
-  resolution: "usehooks-ts@npm:2.10.0"
+"usehooks-ts@npm:^2.12.1":
+  version: 2.12.1
+  resolution: "usehooks-ts@npm:2.12.1"
+  dependencies:
+    lodash.debounce: "npm:^4.0.8"
   peerDependencies:
-    react: ^16.8.0  || ^17.0.0 || ^18.0.0
-    react-dom: ^16.8.0  || ^17.0.0 || ^18.0.0
-  checksum: 35dfc898c3b593817a11eb4aa1e8b9e3d28f0250df497196a29255fbb49a8a21a4281aeeae2679ff3b462c6845a01f3c0b5d40b2cb4b4425e01860ebd5a920af
+    react: ^16.8.0  || ^17 || ^18
+  checksum: 7665ec1ce56bcb5d92bd317fb3c97e6e57e91a7ff98c6a60a0a9b4fc21bd0ea9320778178d89dcaabdc295a318c08f019ae8d80d9e9b477ace9745e030dde421
   languageName: node
   linkType: hard
 
