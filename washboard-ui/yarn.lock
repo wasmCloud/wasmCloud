@@ -2501,7 +2501,7 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.14.1"
     eslint-plugin-unicorn: "npm:^50.0.1"
     immer: "npm:^10.0.3"
-    lucide-react: "npm:^0.317.0"
+    lucide-react: "npm:^0.323.0"
     nats.ws: "npm:^1.20.0"
     postcss: "npm:^8.4.34"
     prettier: "npm:^3.2.4"
@@ -5111,12 +5111,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.317.0":
-  version: 0.317.0
-  resolution: "lucide-react@npm:0.317.0"
+"lucide-react@npm:^0.323.0":
+  version: 0.323.0
+  resolution: "lucide-react@npm:0.323.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 465d6e1d46ad7747f7e22d89acf759ed7bb71b3984c5a2a1b1cd232f8f546dee902c60919e804d2afcf6c781b0e7381d1beb27d603b027163a9593c0f8c64699
+  checksum: 960bdccba07d01bc19903ffc14c5091a3597a27bca0375916f6f2b10d2d32bf8f0beba2a14fbd53691c936ed5c2ab39ad25324f136d61a38ec414b30f2c865df
   languageName: node
   linkType: hard
 
