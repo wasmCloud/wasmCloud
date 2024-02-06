@@ -1,8 +1,3 @@
-use crate::{
-    error::{InvocationError, InvocationResult, NetworkError, ValidationError},
-    rpc_topic,
-};
-
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_nats::{Client, Subject};
@@ -15,12 +10,18 @@ use tracing::{
 };
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
+
 use wasmcloud_core::{
     chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES},
     Invocation, InvocationResponse, WasmCloudEntity,
 };
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::TraceContextInjector;
+
+use crate::{
+    error::{InvocationError, InvocationResult, NetworkError, ValidationError},
+    rpc_topic,
+};
 
 /// Send wasmbus rpc messages
 ///
@@ -132,7 +133,13 @@ impl RpcClient {
         let subject = make_uuid();
         let issuer = self.key.public_key();
         let target_url = crate::url(&target, Some(&method));
-        let topic = rpc_topic(&target, &self.lattice);
+
+        let topic = rpc_topic(
+            &target,
+            &self.lattice,
+            method.as_str(),
+            crate::provider::WRPC_VERSION,
+        )?;
 
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values

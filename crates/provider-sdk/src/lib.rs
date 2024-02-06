@@ -37,19 +37,45 @@ pub fn serialize<T: Serialize>(data: &T) -> InvocationResult<Vec<u8>> {
 }
 
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
+///
 /// A provider entity must have the public_key and link_name fields filled in.
 /// An actor entity must have a public_key and an empty link_name.
-pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
-    if !entity.link_name.is_empty() {
-        // provider target
-        format!(
-            "wasmbus.rpc.{}.{}.{}",
-            lattice, entity.public_key, entity.link_name
-        )
-    } else {
-        // actor target
-        format!("wasmbus.rpc.{}.{}", lattice, entity.public_key)
-    }
+///
+/// For wRPC, this function requires slightly more information, and ends up
+/// sending to a completely separate place
+pub fn rpc_topic(
+    entity: &WasmCloudEntity,
+    lattice: &str,
+    method: &str,
+    wrpc_version: &str,
+) -> InvocationResult<String> {
+    let pubkey = &entity.public_key;
+
+    // Extract the WIT-specific parts from the method
+    let mut split = method.split(':');
+    let wit_ns = split.next();
+    let wit_pkg_and_iface = split.next().and_then(|rhs| rhs.split_once('/'));
+    let (wit_ns, wit_pkg, wit_iface, wit_fn) = match (wit_ns, wit_pkg_and_iface) {
+        (Some(wit_ns), Some((wit_pkg, wit_iface_and_fn))) => {
+            match wit_iface_and_fn.split_once(".") {
+                Some((wit_iface, wit_fn)) => (wit_ns, wit_pkg, wit_iface, wit_fn),
+                _ => {
+                    return Err(InvocationError::Unexpected(format!(
+                        "failed to convert WIT invocation for method [{method}]"
+                    )));
+                }
+            }
+        }
+        _ => {
+            return Err(InvocationError::Unexpected(format!(
+                "failed to convert WIT invocation for method [{method}]"
+            )));
+        }
+    };
+
+    Ok(format!(
+        "{lattice}.{pubkey}.{wrpc_version}.{wit_ns}:{wit_pkg}/{wit_iface}.{wit_fn}"
+    ))
 }
 
 /// Generates a fully qualified wasmbus URL for use in wascap claims. The optional method parameter is used for generating URLs for targets being invoked
@@ -102,7 +128,8 @@ pub struct Context {
 }
 
 /// The super trait containing all necessary traits for a provider
-pub trait Provider: MessageDispatch + ProviderHandler + Send + Sync + 'static {}
+/// In the case of enabling wrpc, the Wrpc
+pub trait Provider: MessageDispatch + ProviderHandler + WitRpc + Send + Sync + 'static {}
 
 /// Handler for receiving messages from an actor and sending them to the right method for a provider. This will likely be automatically generated but
 /// can be overridden if you know what you're doing
@@ -141,4 +168,36 @@ pub trait ProviderHandler: Sync {
 
     /// Handle system shutdown message
     async fn shutdown(&self) {}
+}
+
+/// Human readable name of a [`wit_parser::WorldKey`] which includes interface ID if necessary
+/// see: https://docs.rs/wit-parser/latest/wit_parser/struct.Resolve.html#method.name_world_key
+pub type WorldKeyName = String;
+
+/// WIT function name
+pub type WitFunctionName = String;
+
+/// A NATS subject which is used for wRPC
+pub type WrpcNatsSubject = String;
+
+/// A trait for providers that are powered by WIT contracts and communicate with wRPC
+///
+/// Providers are responsible for carrying the contents of their `wit`
+/// directories so they can be made available to code (ex. in `provider-sdk`)
+#[async_trait]
+pub trait WitRpc {
+    /// Produces a mapping of NATS subjects to functions that can be invoked by the provider
+    async fn incoming_wrpc_invocations_by_subject(
+        &self,
+        _lattice_name: impl AsRef<str> + Send,
+        _component_id: impl AsRef<str> + Send,
+        _wrpc_version: impl AsRef<str> + Send,
+    ) -> crate::error::ProviderInitResult<
+        HashMap<
+            WrpcNatsSubject,
+            (WorldKeyName, WitFunctionName, ()), // TODO: replace () with wrpc_types::DynamicFunction
+        >,
+    > {
+        Ok(HashMap::new())
+    }
 }

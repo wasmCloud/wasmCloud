@@ -37,7 +37,7 @@ use syn::{
 };
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
-use wit_parser::WorldKey;
+use wit_parser::{Resolve, WorldKey};
 
 mod bindgen_visitor;
 use bindgen_visitor::WitBindgenOutputVisitor;
@@ -54,6 +54,8 @@ mod wit;
 use wit::{
     extract_witified_map, WitFunctionName, WitInterfacePath, WitNamespaceName, WitPackageName,
 };
+
+mod wrpc;
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
 const EXPORTS_MODULE_NAME: &str = "exports";
@@ -424,6 +426,10 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .map(|(_, (_, s))| s.to_token_stream())
         .collect();
 
+    // Build mapping of of exports (all exports) to use, only if wrpc feature flag is enabled
+    let wrpc_impl_tokens = build_wrpc_impls(&impl_struct_name, &wit_bindgen_cfg.resolve)
+        .expect("failed to build provider-sdk wrpc implementation");
+
     // Build the final chunk of code
     let tokens = quote::quote!(
         // START: per-interface codegen
@@ -530,6 +536,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             )*
         }
 
+        #wrpc_impl_tokens
     );
 
     tokens.into()
@@ -620,6 +627,77 @@ fn is_ignored_invocation_handler_pkg(pkg: &wit_parser::PackageName) -> bool {
         (pkg.namespace.as_ref(), pkg.name.as_ref()),
         ("wasmcloud", "bus") | ("wasi", "io")
     )
+}
+
+/// Build wRPC implementations needed by the provider, primarily `wasmcloud_provider_sdk::WitRpc`
+fn build_wrpc_impls(impl_struct_name: &Ident, resolve: &Resolve) -> anyhow::Result<TokenStream> {
+    let mapping = crate::wrpc::generate_wrpc_nats_subject_to_fn_mapping(resolve)
+        .context("failed to generate wrpc NATS subject mappings")?;
+
+    // Process `WrpcExport` objects into statements that use the incoming lattice_name
+    // and wRPC version for map inserts to build the lookup that should be returned
+    let mut insertion_lines: Vec<TokenStream> = Vec::new();
+    for crate::wrpc::WrpcExport {
+        wit_ns,
+        wit_pkg,
+        wit_iface,
+        wit_iface_fn,
+        types,
+    } in mapping.into_iter()
+    {
+        let wit_ns = LitStr::new(&wit_ns, Span::call_site());
+        let wit_pkg = LitStr::new(&wit_pkg, Span::call_site());
+        let wit_iface = LitStr::new(&wit_iface, Span::call_site());
+        let wit_iface_fn = LitStr::new(&wit_iface_fn, Span::call_site());
+        let world_key_name = LitStr::new(&types.0, Span::call_site());
+        let function_name = LitStr::new(&types.1, Span::call_site());
+        let dynamic_fn = LitStr::new(
+            // TODO: replace () with wrpc_types::DynamicFunction
+            &serde_json::to_string::<()>(&()).context("failed to deserialize dynamic function with world_key_name [{world_key_name}],  function name [{function_name}]")?, 
+            Span::call_site(),
+        );
+
+        insertion_lines.push(quote::quote!(
+            mapping.insert(
+                format!("{lattice_name}.{component_id}.wrpc.{wrpc_version}.{}:{}/{}.{}", #wit_ns, #wit_pkg, #wit_iface, #wit_iface_fn),
+                // TODO: replace () in below line with wrpc_types::DynamicFunction
+                (#world_key_name.into(), #function_name.into(), ::wasmcloud_provider_wit_bindgen::deps::serde_json::from_slice::<()>(#dynamic_fn.as_bytes()).expect("failed to deserialize DynamicFunction")),
+            );
+        ));
+    }
+
+    // Build the trait impl
+    let tokens = quote::quote!(
+        use ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::{WitRpc, WrpcNatsSubject, WorldKeyName, WitFunctionName};
+        use ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInitResult;
+
+        static WRPC_FNS_BY_NATS_ADDR: ::std::sync::OnceLock<HashMap<WrpcNatsSubject, (WorldKeyName, WitFunctionName, ())>>  = ::std::sync::OnceLock::new(); // TODO: replace () with wrpc_types::DynamicFunction
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
+        impl WitRpc for #impl_struct_name {
+            async fn incoming_wrpc_invocations_by_subject(
+                &self,
+                lattice_name: impl AsRef<str> + Send,
+                component_id: impl AsRef<str> + Send,
+                wrpc_version: impl AsRef<str> + Send,
+            ) -> ProviderInitResult<
+            // TODO: replace () with wrpc_types::DynamicFunction
+                ::std::collections::HashMap<WrpcNatsSubject, (WorldKeyName, WitFunctionName, ())>
+            > {
+                let lattice_name = lattice_name.as_ref();
+                let wrpc_version = wrpc_version.as_ref();
+                let component_id = component_id.as_ref();
+                Ok(WRPC_FNS_BY_NATS_ADDR.get_or_init(|| {
+                    let mut mapping = ::std::collections::HashMap::new();
+                    #(
+                        #insertion_lines
+                    )*
+                    mapping
+                }).clone())
+            }
+        }
+    );
+
+    Ok(tokens)
 }
 
 #[cfg(test)]

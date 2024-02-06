@@ -26,7 +26,7 @@ pub struct Config {
     opts: Opts,
     pub(crate) resolve: Resolve,
     world: WorldId,
-    files: Vec<PathBuf>,
+    pub(crate) files: Vec<PathBuf>,
 }
 
 pub fn expand(input: &Config) -> Result<TokenStream> {

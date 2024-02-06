@@ -102,8 +102,19 @@ where
     .connect(nats_server)
     .await?;
 
-    // initialize HostBridge
-    let connection = ProviderConnection::new(nc, host_data)?;
+    // Build the ProviderConnection which will bridge the host
+    let connection = ProviderConnection::new(
+        nc,
+        host_data,
+        provider
+            .incoming_wrpc_invocations_by_subject(
+                &host_data.lattice_rpc_prefix,
+                &host_data.provider_key,
+                crate::provider::WRPC_VERSION,
+            )
+            .await?,
+    )?;
+
     CONNECTION.set(connection).map_err(|_| {
         ProviderInitError::Initialization("Provider connection was already initialized".to_string())
     })?;
