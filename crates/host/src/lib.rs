@@ -1,6 +1,5 @@
 //! wasmCloud host library
 
-#![warn(clippy::pedantic)]
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 

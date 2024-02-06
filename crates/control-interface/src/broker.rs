@@ -11,23 +11,23 @@ fn prefix(topic_prefix: &Option<String>, lattice: &str) -> String {
 }
 
 pub fn provider_auction_subject(topic_prefix: &Option<String>, lattice: &str) -> String {
-    format!("{}.auction.provider", prefix(topic_prefix, lattice))
+    format!("{}.provider.auction", prefix(topic_prefix, lattice))
 }
 
 pub fn actor_auction_subject(topic_prefix: &Option<String>, lattice: &str) -> String {
-    format!("{}.auction.actor", prefix(topic_prefix, lattice))
+    format!("{}.actor.auction", prefix(topic_prefix, lattice))
 }
 
 pub fn advertise_link(topic_prefix: &Option<String>, lattice: &str) -> String {
-    format!("{}.linkdefs.put", prefix(topic_prefix, lattice))
+    format!("{}.link.put", prefix(topic_prefix, lattice))
 }
 
 pub fn remove_link(topic_prefix: &Option<String>, lattice: &str) -> String {
-    format!("{}.linkdefs.del", prefix(topic_prefix, lattice))
+    format!("{}.link.del", prefix(topic_prefix, lattice))
 }
 
 pub fn publish_registries(topic_prefix: &Option<String>, lattice: &str) -> String {
-    format!("{}.registries.put", prefix(topic_prefix, lattice))
+    format!("{}.registry.put", prefix(topic_prefix, lattice))
 }
 
 pub fn put_config(
@@ -59,38 +59,34 @@ pub fn clear_config(topic_prefix: &Option<String>, lattice: &str, entity_id: &st
 }
 
 pub fn put_label(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
-    format!("{}.labels.{}.put", prefix(topic_prefix, lattice), host_id)
+    format!("{}.label.put.{host_id}", prefix(topic_prefix, lattice))
 }
 
 pub fn delete_label(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
-    format!("{}.labels.{}.del", prefix(topic_prefix, lattice), host_id)
+    format!("{}.label.del.{host_id}", prefix(topic_prefix, lattice))
 }
 
 pub mod commands {
     use super::prefix;
 
-    pub fn scale_actor(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.scale", prefix(topic_prefix, lattice), host)
+    pub fn scale_actor(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.actor.scale.{host_id}", prefix(topic_prefix, lattice))
     }
 
-    pub fn stop_actor(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.sa", prefix(topic_prefix, lattice), host) // sa - stop actor
+    pub fn start_provider(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.provider.start.{host_id}", prefix(topic_prefix, lattice))
     }
 
-    pub fn start_provider(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.lp", prefix(topic_prefix, lattice), host)
+    pub fn stop_provider(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.provider.stop.{host_id}", prefix(topic_prefix, lattice))
     }
 
-    pub fn stop_provider(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.sp", prefix(topic_prefix, lattice), host)
+    pub fn update_actor(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.actor.update.{host_id}", prefix(topic_prefix, lattice))
     }
 
-    pub fn update_actor(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.upd", prefix(topic_prefix, lattice), host)
-    }
-
-    pub fn stop_host(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.cmd.{}.stop", prefix(topic_prefix, lattice), host)
+    pub fn stop_host(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.host.stop.{host_id}", prefix(topic_prefix, lattice))
     }
 }
 
@@ -98,19 +94,19 @@ pub mod queries {
     use super::prefix;
 
     pub fn link_definitions(topic_prefix: &Option<String>, lattice: &str) -> String {
-        format!("{}.get.links", prefix(topic_prefix, lattice))
+        format!("{}.link.get", prefix(topic_prefix, lattice))
     }
 
     pub fn claims(topic_prefix: &Option<String>, lattice: &str) -> String {
-        format!("{}.get.claims", prefix(topic_prefix, lattice))
+        format!("{}.claims.get", prefix(topic_prefix, lattice))
     }
 
-    pub fn host_inventory(topic_prefix: &Option<String>, lattice: &str, host: &str) -> String {
-        format!("{}.get.{}.inv", prefix(topic_prefix, lattice), host)
+    pub fn host_inventory(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        format!("{}.host.get.{host_id}", prefix(topic_prefix, lattice))
     }
 
     pub fn hosts(topic_prefix: &Option<String>, lattice: &str) -> String {
-        format!("{}.ping.hosts", prefix(topic_prefix, lattice))
+        format!("{}.host.ping", prefix(topic_prefix, lattice))
     }
 
     pub fn config(
@@ -120,12 +116,12 @@ pub mod queries {
         key: &str,
     ) -> String {
         format!(
-            "{}.get.config.{entity_id}.{key}",
+            "{}.config.get.{entity_id}.{key}",
             prefix(topic_prefix, lattice),
         )
     }
 
     pub fn all_config(topic_prefix: &Option<String>, lattice: &str, entity_id: &str) -> String {
-        format!("{}.get.config.{entity_id}", prefix(topic_prefix, lattice),)
+        format!("{}.config.get.{entity_id}", prefix(topic_prefix, lattice),)
     }
 }

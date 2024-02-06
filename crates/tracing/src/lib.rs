@@ -1,5 +1,3 @@
-#![warn(clippy::pedantic)]
-
 #[cfg(feature = "otel")]
 pub mod context;
 

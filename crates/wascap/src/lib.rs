@@ -53,8 +53,6 @@
 //!
 //! The `Ed25519` key functionality is provided by the [nkeys](https://docs.rs/nkeys) crate.
 
-#![warn(clippy::pedantic)]
-
 /// Wascap-specific result type
 pub type Result<T> = std::result::Result<T, errors::Error>;
 pub use errors::Error;

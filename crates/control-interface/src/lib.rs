@@ -4,8 +4,6 @@
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
 
-#![warn(clippy::pedantic)]
-
 mod broker;
 mod otel;
 mod types;
@@ -600,32 +598,6 @@ impl Client {
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {e}").into()),
-        }
-    }
-
-    /// Issues a command to a host to stop an actor for the given OCI reference. The target
-    /// wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a
-    /// discrete confirmation that the actor has terminated. For that kind of information, the
-    /// client must also monitor the control event stream
-    #[instrument(level = "debug", skip_all)]
-    pub async fn stop_actor(
-        &self,
-        host_id: &str,
-        actor_ref: &str,
-        annotations: Option<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject =
-            broker::commands::stop_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
-        debug!("stop_actor:request {}", &subject);
-        let bytes = json_serialize(StopActorCommand {
-            host_id,
-            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
-            annotations,
-        })?;
-        match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive stop actor acknowledgement: {e}").into()),
         }
     }
 

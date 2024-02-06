@@ -1,5 +1,3 @@
-#![warn(clippy::pedantic)]
-
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
