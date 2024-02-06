@@ -25,6 +25,20 @@ updates:
   open-pull-requests-limit: 20
   schedule:
     interval: "weekly"
+    day: "monday"
+    time: "09:00"
+    timezone: "America/New_York"
+  groups:
+    dev-dependencies:
+      dependency-type: "development"
+      update-types:
+        - "minor"
+        - "patch"
+    prod-dependencies:
+      dependency-type: "production"
+      update-types:
+        - "minor"
+        - "patch"
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
