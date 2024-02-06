@@ -2065,22 +2065,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-table@npm:^8.11.7":
-  version: 8.11.7
-  resolution: "@tanstack/react-table@npm:8.11.7"
+"@tanstack/react-table@npm:^8.11.8":
+  version: 8.11.8
+  resolution: "@tanstack/react-table@npm:8.11.8"
   dependencies:
-    "@tanstack/table-core": "npm:8.11.7"
+    "@tanstack/table-core": "npm:8.11.8"
   peerDependencies:
     react: ">=16"
     react-dom: ">=16"
-  checksum: 205bec47bd17841248ca30f538764faf8b5392f7fda4d474045b71087d5db735d0e5019827a0dad3bd84c67b6f9b9fd0e4053c1986f9d4f29b820f9a590f7b2b
+  checksum: f003112ac153922db18fe458cb816958c743f32c921febf6e2ead4e8ad8527001bc258e987d80957394bf85de82fcdb0116ecc3324b93d059bf06c95c532603f
   languageName: node
   linkType: hard
 
-"@tanstack/table-core@npm:8.11.7":
-  version: 8.11.7
-  resolution: "@tanstack/table-core@npm:8.11.7"
-  checksum: 78d7a7f000726015b41134d5e19e1c5c110805a4c71e58a111a23fab7b21c6fd76c35666abebe835b4f37234f3361fa91555ae05ec5e5eabed9793d04a70e044
+"@tanstack/table-core@npm:8.11.8":
+  version: 8.11.8
+  resolution: "@tanstack/table-core@npm:8.11.8"
+  checksum: 579244b5cc23da0056d8d5b491d725afe49bc917f3b1baaf863fcc3f82568e94c7781deabbef9109fa6ee163f8c067728603021e3161e66e763af1e46364953c
   languageName: node
   linkType: hard
 
@@ -2474,7 +2474,7 @@ __metadata:
     "@radix-ui/react-toast": "npm:^1.1.5"
     "@radix-ui/react-toggle": "npm:^1.0.3"
     "@radix-ui/react-tooltip": "npm:^1.0.7"
-    "@tanstack/react-table": "npm:^8.11.7"
+    "@tanstack/react-table": "npm:^8.11.8"
     "@types/node": "npm:^20.11.10"
     "@types/react": "npm:^18.2.48"
     "@types/react-dom": "npm:^18.2.18"

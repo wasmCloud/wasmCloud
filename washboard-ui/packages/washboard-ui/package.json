@@ -33,7 +33,7 @@
     "@radix-ui/react-toast": "^1.1.5",
     "@radix-ui/react-toggle": "^1.0.3",
     "@radix-ui/react-tooltip": "^1.0.7",
-    "@tanstack/react-table": "^8.11.7",
+    "@tanstack/react-table": "^8.11.8",
     "@wasmcloud/lattice-client-react": "workspace:^",
     "@wasmcloud/prettier-config": "workspace:^",
     "class-variance-authority": "^0.7.0",
