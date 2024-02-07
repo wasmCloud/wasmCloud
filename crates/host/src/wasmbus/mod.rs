@@ -52,7 +52,7 @@ use wasmcloud_core::{
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp,
-    KeyValueAtomic, KeyValueReadWrite, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
+    KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
     TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
@@ -976,7 +976,7 @@ impl KeyValueAtomic for Handler {
 }
 
 #[async_trait]
-impl KeyValueReadWrite for Handler {
+impl KeyValueEventual for Handler {
     #[instrument(skip(self))]
     async fn get(
         &self,
@@ -987,7 +987,7 @@ impl KeyValueReadWrite for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:keyvalue/KeyValue.Get", &key)
@@ -1020,7 +1020,7 @@ impl KeyValueReadWrite for Handler {
             .await
             .context("failed to read value")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
             .await?;
         self.call_operation(
             target,
@@ -1041,7 +1041,7 @@ impl KeyValueReadWrite for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:keyvalue/KeyValue.Del", &key)
@@ -1057,7 +1057,7 @@ impl KeyValueReadWrite for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
             .await?;
         self.call_operation(target, "wasmcloud:keyvalue/KeyValue.Contains", &key)
             .await
@@ -1267,7 +1267,7 @@ impl ActorInstance {
             .blobstore(Arc::new(self.handler.clone()))
             .bus(Arc::new(self.handler.clone()))
             .keyvalue_atomic(Arc::new(self.handler.clone()))
-            .keyvalue_readwrite(Arc::new(self.handler.clone()))
+            .keyvalue_eventual(Arc::new(self.handler.clone()))
             .logging(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()))
             .outgoing_http(Arc::new(self.handler.clone()));

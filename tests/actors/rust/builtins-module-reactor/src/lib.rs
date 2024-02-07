@@ -149,7 +149,7 @@ impl HttpHandler for HttpLogRng {
         let keyvalue_target = TargetEntity::Link(Some("keyvalue".into()));
         bus::lattice::set_target(
             Some(&keyvalue_target),
-            vec![bus::lattice::TargetInterface::wasi_keyvalue_readwrite()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_eventual()],
         );
 
         let foo_key = String::from("foo");
