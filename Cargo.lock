@@ -5317,7 +5317,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "0.81.0"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -5390,9 +5390,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-component-adapters"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "723e26862f961cd3a2ed48689d4644cffcfea3fe6930093446b6f827d0cf8d09"
+checksum = "290f09a86ae98bdc7b8d7af7d8b4e07aa2e7d878825ff3686e6de746f5a514a3"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
