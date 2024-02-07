@@ -594,7 +594,7 @@ fn embed_wasm_component_metadata(
 
     // Encode the metadata
     let encoded_metadata =
-        wit_component::metadata::encode(&resolver, world_id, StringEncoding::UTF8, None, None)
+        wit_component::metadata::encode(&resolver, world_id, StringEncoding::UTF8, None)
             .context("failed to encode WIT metadata for component")?;
 
     // Load the wasm binary
