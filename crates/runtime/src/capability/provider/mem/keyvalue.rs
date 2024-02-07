@@ -1,4 +1,4 @@
-use crate::capability::{KeyValueAtomic, KeyValueReadWrite};
+use crate::capability::{KeyValueAtomic, KeyValueEventual};
 
 use core::sync::atomic::AtomicU64;
 
@@ -23,7 +23,7 @@ pub enum Entry {
 
 type Bucket = HashMap<String, Entry>;
 
-/// In-memory [`KeyValueReadWrite`] and [`KeyValueAtomic`] implementation
+/// In-memory [`KeyValueEventual`] and [`KeyValueAtomic`] implementation
 #[derive(Debug)]
 pub struct KeyValue(RwLock<HashMap<String, RwLock<Bucket>>>);
 
@@ -131,7 +131,7 @@ impl KeyValueAtomic for KeyValue {
 }
 
 #[async_trait]
-impl KeyValueReadWrite for KeyValue {
+impl KeyValueEventual for KeyValue {
     #[instrument]
     async fn get(
         &self,

@@ -6,7 +6,7 @@ pub(crate) const WASI_BLOBSTORE_BLOBSTORE_TARGET: Lazy<RwLock<Option<TargetEntit
     Lazy::new(RwLock::default);
 pub(crate) const WASI_KEYVALUE_ATOMIC_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
-pub(crate) const WASI_KEYVALUE_READWRITE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) const WASI_KEYVALUE_EVENTUAL_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 pub(crate) const WASI_LOGGING_LOGGING_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
@@ -34,7 +34,7 @@ pub enum TargetEntity {
 pub enum TargetInterface {
     WasiBlobstoreBlobstore,
     WasiKeyvalueAtomic,
-    WasiKeyvalueReadwrite,
+    WasiKeyvalueEventual,
     WasiLoggingLogging,
     WasmcloudMessagingConsumer,
     Custom(String),
@@ -47,8 +47,8 @@ impl TargetInterface {
     pub fn wasi_keyvalue_atomic() -> TargetInterface {
         TargetInterface::WasiKeyvalueAtomic
     }
-    pub fn wasi_keyvalue_readwrite() -> TargetInterface {
-        TargetInterface::WasiKeyvalueReadwrite
+    pub fn wasi_keyvalue_eventual() -> TargetInterface {
+        TargetInterface::WasiKeyvalueEventual
     }
     pub fn wasi_logging_logging() -> TargetInterface {
         TargetInterface::WasiLoggingLogging
@@ -66,15 +66,14 @@ pub fn set_target(target: Option<&TargetEntity>, interfaces: Vec<TargetInterface
                     .write()
                     .expect("failed to lock target") = target.cloned();
             }
-
             TargetInterface::WasiKeyvalueAtomic => {
                 *WASI_KEYVALUE_ATOMIC_TARGET
                     .write()
                     .expect("failed to lock target") = target.cloned();
             }
 
-            TargetInterface::WasiKeyvalueReadwrite => {
-                *WASI_KEYVALUE_READWRITE_TARGET
+            TargetInterface::WasiKeyvalueEventual => {
+                *WASI_KEYVALUE_EVENTUAL_TARGET
                     .write()
                     .expect("failed to lock target") = target.cloned();
             }

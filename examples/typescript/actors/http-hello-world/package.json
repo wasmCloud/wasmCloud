@@ -21,8 +21,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@bytecodealliance/componentize-js": "^0.6.0",
-    "@bytecodealliance/jco": "^0.14.2",
+    "@bytecodealliance/componentize-js": "^0.7.0",
+    "@bytecodealliance/jco": "^1.0",
     "@types/node": "^20.10.8",
     "typescript": "^5.3.3"
   }

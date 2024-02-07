@@ -12,7 +12,7 @@ pub use module::{
 
 use crate::capability::logging::logging;
 use crate::capability::{
-    Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
     OutgoingHttp,
 };
 use crate::Runtime;
@@ -373,17 +373,17 @@ impl Instance {
         self
     }
 
-    /// Set [`KeyValueReadWrite`] handler for this [Instance].
-    pub fn keyvalue_readwrite(
+    /// Set [`KeyValueEventual`] handler for this [Instance].
+    pub fn keyvalue_eventual(
         &mut self,
-        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
+        keyvalue_eventual: Arc<dyn KeyValueEventual + Send + Sync>,
     ) -> &mut Self {
         match self {
             Self::Module(module) => {
-                module.keyvalue_readwrite(keyvalue_readwrite);
+                module.keyvalue_eventual(keyvalue_eventual);
             }
             Self::Component(component) => {
-                component.keyvalue_readwrite(keyvalue_readwrite);
+                component.keyvalue_eventual(keyvalue_eventual);
             }
         }
         self
