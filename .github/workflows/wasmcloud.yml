@@ -104,7 +104,7 @@ jobs:
 
     name: wasmcloud-${{ matrix.config.target }}
     needs: check_for_changes
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
@@ -178,7 +178,7 @@ jobs:
         path: artifact
 
   test-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     needs:
       - build-bin
       - check_for_changes
@@ -193,7 +193,7 @@ jobs:
     - run: ./bin/wasmcloud --version
 
   test-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest-8-cores
     needs:
       - build-windows
       - check_for_changes
@@ -215,7 +215,7 @@ jobs:
           - nextest
 
     name: cargo ${{ matrix.check }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     needs: check_for_changes
     steps:
     - uses: actions/checkout@v4.1.1
@@ -229,7 +229,7 @@ jobs:
       if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
 
   build-doc:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     needs: check_for_changes
     if: ${{ needs.check_for_changes.outputs.docs == 'true' }}
     steps:
@@ -256,7 +256,7 @@ jobs:
         path: doc
 
   deploy-doc:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     needs: build-doc
     permissions:
       pages: write
@@ -279,7 +279,7 @@ jobs:
         - bin: wash
           prefix: wash-cli-
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     permissions:
       packages: write
     needs:
@@ -397,7 +397,7 @@ jobs:
     - oci
     - test-linux
     - test-windows
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     permissions:
       contents: write
     steps:
@@ -444,7 +444,7 @@ jobs:
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs: cargo
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@v4.1.1
 
@@ -469,7 +469,7 @@ jobs:
     - cargo
     - build-bin
     - test-linux
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@v4.1.1
 
@@ -568,7 +568,7 @@ jobs:
       - cargo
       - check_for_changes
     if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@v4.1.1
 
