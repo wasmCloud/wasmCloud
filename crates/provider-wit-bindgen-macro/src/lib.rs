@@ -224,7 +224,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // wasmtime::component macro output code in order to:
     //
     // - Generate struct declarations
-    // - Generate traits for each interface (ex. "wasi:keyvalue/readwrite" -> `WasiKeyvalueReadWrite`)
+    // - Generate traits for each interface (ex. "wasi:keyvalue/eventual" -> `WasiKeyvalueEventual`)
     //
     for (wit_iface_name, methods) in methods_by_iface.iter() {
         // Convert the WIT interface name into an ident
@@ -306,7 +306,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             .map(|lm| lm.invocation_return)
             .collect::<Vec<ReturnType>>();
 
-        // Generate main trait for this interface (ex. `WasiKeyvalueReadWrite`) that facilitates invocations
+        // Generate main trait for this interface (ex. `WasiKeyvalueEventual`) that facilitates invocations
         // and pipes through calls to provider impl
         //
         // Create and append the trait for the iface along with

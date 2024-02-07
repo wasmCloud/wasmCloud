@@ -1,4 +1,4 @@
-blobstore = "../../runtime/wit/deps/blobstore"
+#blobstore = "../../runtime/wit/deps/blobstore"
 io = "../../../wit/deps/io"
 keyvalue = "../../runtime/wit/deps/keyvalue"
 logging = "../../runtime/wit/deps/logging"

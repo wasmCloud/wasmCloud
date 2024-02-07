@@ -3,7 +3,7 @@ import {
   ResponseOutparam,
   OutgoingResponse,
   Fields,
-} from "wasi:http/types@0.2.0-rc-2023-12-05";
+} from "wasi:http/types@0.2.0";
 
 // Implementation of wasi-http incoming-handler
 //

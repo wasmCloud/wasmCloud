@@ -4,7 +4,7 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging,
+    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging,
     Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity, TargetInterface,
 };
 
@@ -18,23 +18,23 @@ mod bindgen {
         async: true,
         with: {
            "wasmcloud:bus/lattice/target-interface": super::TargetInterface,
-           "wasi:cli/environment@0.2.0-rc-2023-12-05": preview2::bindings::cli::environment,
-           "wasi:cli/exit@0.2.0-rc-2023-12-05": preview2::bindings::cli::exit,
-           "wasi:cli/preopens@0.2.0-rc-2023-12-05": preview2::bindings::cli::preopens,
-           "wasi:cli/stderr@0.2.0-rc-2023-12-05": preview2::bindings::cli::stderr,
-           "wasi:cli/stdin@0.2.0-rc-2023-12-05": preview2::bindings::cli::stdin,
-           "wasi:cli/stdout@0.2.0-rc-2023-12-05": preview2::bindings::cli::stdout,
-           "wasi:clocks/monotonic-clock@0.2.0-rc-2023-11-10": preview2::bindings::clocks::monotonic_clock,
-           "wasi:clocks/timezone@0.2.0-rc-2023-11-10": preview2::bindings::clocks::timezone,
-           "wasi:clocks/wall_clock@0.2.0-rc-2023-11-10": preview2::bindings::clocks::wall_clock,
-           "wasi:filesystem/filesystem@0.2.0-rc-2023-11-10": preview2::bindings::filesystem::filesystem,
-           "wasi:http/incoming-handler@0.2.0-rc-2023-12-05": wasmtime_wasi_http::bindings::http::incoming_handler,
-           "wasi:http/outgoing-handler@0.2.0-rc-2023-12-05": wasmtime_wasi_http::bindings::http::incoming_handler,
-           "wasi:http/types@0.2.0-rc-2023-12-05": wasmtime_wasi_http::bindings::http::types,
-           "wasi:io/error@0.2.0-rc-2023-11-10": preview2::bindings::io::error,
-           "wasi:io/poll@0.2.0-rc-2023-11-10": preview2::bindings::io::poll,
-           "wasi:io/streams@0.2.0-rc-2023-11-10": preview2::bindings::io::streams,
-           "wasi:random/random@0.2.0-rc-2023-11-10": preview2::bindings::random::random,
+           "wasi:cli/environment@0.2.0": preview2::bindings::cli::environment,
+           "wasi:cli/exit@0.2.0": preview2::bindings::cli::exit,
+           "wasi:cli/preopens@0.2.0": preview2::bindings::cli::preopens,
+           "wasi:cli/stderr@0.2.0": preview2::bindings::cli::stderr,
+           "wasi:cli/stdin@0.2.0": preview2::bindings::cli::stdin,
+           "wasi:cli/stdout@0.2.0": preview2::bindings::cli::stdout,
+           "wasi:clocks/monotonic-clock@0.2.0": preview2::bindings::clocks::monotonic_clock,
+           "wasi:clocks/timezone@0.2.0": preview2::bindings::clocks::timezone,
+           "wasi:clocks/wall_clock@0.2.0": preview2::bindings::clocks::wall_clock,
+           "wasi:filesystem/filesystem@0.2.0": preview2::bindings::filesystem::filesystem,
+           "wasi:http/incoming-handler@0.2.0": wasmtime_wasi_http::bindings::http::incoming_handler,
+           "wasi:http/outgoing-handler@0.2.0": wasmtime_wasi_http::bindings::http::incoming_handler,
+           "wasi:http/types@0.2.0": wasmtime_wasi_http::bindings::http::types,
+           "wasi:io/error@0.2.0": preview2::bindings::io::error,
+           "wasi:io/poll@0.2.0": preview2::bindings::io::poll,
+           "wasi:io/streams@0.2.0": preview2::bindings::io::streams,
+           "wasi:random/random@0.2.0": preview2::bindings::random::random,
         },
     });
 }

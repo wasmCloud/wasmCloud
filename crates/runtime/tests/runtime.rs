@@ -21,7 +21,7 @@ use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
 use wasmcloud_runtime::capability::{
-    self, guest_config, messaging, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
+    self, guest_config, messaging, IncomingHttp, KeyValueAtomic, KeyValueEventual, Messaging,
     OutgoingHttp,
 };
 use wasmcloud_runtime::{Actor, Runtime};
@@ -49,7 +49,7 @@ struct Handler {
     #[allow(unused)] // TODO: Verify resulting contents and remove
     blobstore: Arc<MemoryBlobstore>,
     keyvalue_atomic: Arc<MemoryKeyValue>,
-    keyvalue_readwrite: Arc<MemoryKeyValue>,
+    keyvalue_eventual: Arc<MemoryKeyValue>,
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     outgoing_http: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
@@ -108,7 +108,7 @@ impl capability::Bus for Handler {
     ) -> anyhow::Result<()> {
         match (target, interfaces.as_slice()) {
             (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
-                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
+                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueEventual]) if name == "keyvalue" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiBlobstoreBlobstore]) if name == "blobstore" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiHttpOutgoingHandler]) if name == "httpclient" => Ok(()),
 (Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))), [capability::TargetInterface::Custom{ namespace, package, interface }]) if (name == "foobar-component-command-preview2" || name == "unknown/alias") && namespace == "test-actors" && package == "foobar" && interface == "foobar" => Ok(()),
@@ -183,7 +183,7 @@ impl capability::Bus for Handler {
                     expires,
                 } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
                 assert_eq!(expires, 0);
-                self.keyvalue_readwrite
+                self.keyvalue_eventual
                     .set("", key, Box::new(Cursor::new(value)))
                     .await
                     .expect("failed to call `set`");
@@ -196,7 +196,7 @@ impl capability::Bus for Handler {
             ) if name == "keyvalue" => {
                 let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
                 let (mut reader, _) = self
-                    .keyvalue_readwrite
+                    .keyvalue_eventual
                     .get("", key)
                     .await
                     .expect("failed to call `get`");
@@ -219,7 +219,7 @@ impl capability::Bus for Handler {
             ) if name == "keyvalue" => {
                 let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
                 let ok = self
-                    .keyvalue_readwrite
+                    .keyvalue_eventual
                     .exists("", key)
                     .await
                     .expect("failed to call `exists`");
@@ -232,7 +232,7 @@ impl capability::Bus for Handler {
                 "wasmcloud:keyvalue/KeyValue.Del",
             ) if name == "keyvalue" => {
                 let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                self.keyvalue_readwrite
+                self.keyvalue_eventual
                     .delete("", key)
                     .await
                     .expect("failed to call `delete`");
@@ -425,7 +425,7 @@ fn new_runtime(
     let handler = Arc::new(Handler {
         blobstore: Arc::clone(&blobstore),
         keyvalue_atomic: Arc::clone(&keyvalue),
-        keyvalue_readwrite: Arc::clone(&keyvalue),
+        keyvalue_eventual: Arc::clone(&keyvalue),
         logging: logs,
         messaging: published,
         outgoing_http: sent,
@@ -435,7 +435,7 @@ fn new_runtime(
         .bus(Arc::clone(&handler))
         .blobstore(Arc::clone(&blobstore))
         .keyvalue_atomic(Arc::clone(&keyvalue))
-        .keyvalue_readwrite(Arc::clone(&keyvalue))
+        .keyvalue_eventual(Arc::clone(&keyvalue))
         .logging(Arc::clone(&handler))
         .messaging(Arc::clone(&handler))
         .outgoing_http(Arc::clone(&handler))

@@ -17,8 +17,8 @@ use http_body::Body;
 use http_body_util::combinators::BoxBody;
 use tokio::io::{AsyncRead, AsyncSeekExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
-use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{self, Table};
+use wasmtime::component::{Resource, ResourceTable};
+use wasmtime_wasi::preview2::{self};
 use wasmtime_wasi_http::types::{
     HostFutureIncomingResponse, IncomingResponseInternal, OutgoingRequest,
 };
@@ -29,7 +29,7 @@ pub mod incoming_http_bindings {
         world: "incoming-http",
         async: true,
         with: {
-           "wasi:http/types@0.2.0-rc-2023-12-05": wasmtime_wasi_http::bindings::http::types,
+           "wasi:http/types@0.2.0": wasmtime_wasi_http::bindings::http::types,
         },
     });
 }
@@ -39,7 +39,7 @@ impl WasiHttpView for Ctx {
         &mut self.http
     }
 
-    fn table(&mut self) -> &mut Table {
+    fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 

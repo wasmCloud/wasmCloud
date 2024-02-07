@@ -207,35 +207,35 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("keyvalue".into()))),
-            vec![bus::lattice::TargetInterface::wasi_keyvalue_readwrite()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_eventual()],
         );
         let foo_key = String::from("foo");
         let bucket = keyvalue::types::open_bucket("")
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to open empty bucket");
-        keyvalue::readwrite::exists(bucket, &foo_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        keyvalue::eventual::exists(bucket, &foo_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to check whether `foo` exists")
             .then_some(())
             .expect("`foo` does not exist");
 
-        let foo_value = keyvalue::readwrite::get(bucket, &foo_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        let foo_value = keyvalue::eventual::get(bucket, &foo_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get `foo`");
 
         let size = keyvalue::types::size(foo_value);
         assert_eq!(size, 3);
 
         let foo_value = keyvalue::types::incoming_value_consume_sync(foo_value)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get incoming value buffer");
         assert_eq!(foo_value, b"bar");
 
-        let foo_value = keyvalue::readwrite::get(bucket, &foo_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        let foo_value = keyvalue::eventual::get(bucket, &foo_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get `foo`");
         let mut foo_stream = keyvalue::types::incoming_value_consume_async(foo_value)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get incoming value stream");
         let mut foo_value = vec![];
         let n = InputStreamReader::from(&mut foo_stream)
@@ -244,14 +244,14 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         assert_eq!(n, 3);
         assert_eq!(foo_value, b"bar");
 
-        keyvalue::readwrite::delete(bucket, &foo_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        keyvalue::eventual::delete(bucket, &foo_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to delete `foo`");
 
         // NOTE: If https://github.com/WebAssembly/wasi-keyvalue/pull/18 is merged, this should not
         // return an error
-        keyvalue::readwrite::exists(bucket, &foo_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        keyvalue::eventual::exists(bucket, &foo_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect_err(
                 "`exists` method should have returned an error for `foo` key, which was deleted",
             );
@@ -261,15 +261,15 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let result_value = keyvalue::types::new_outgoing_value();
         keyvalue::types::outgoing_value_write_body_sync(result_value, &body)
             .expect("failed to write outgoing value");
-        keyvalue::readwrite::set(bucket, &result_key, result_value)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        keyvalue::eventual::set(bucket, &result_key, result_value)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to set `result`");
 
-        let result_value = keyvalue::readwrite::get(bucket, &result_key)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        let result_value = keyvalue::eventual::get(bucket, &result_key)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get `result`");
         let result_value = keyvalue::types::incoming_value_consume_sync(result_value)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to get incoming value buffer");
         assert_eq!(result_value, body);
 
@@ -283,8 +283,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         result_stream_writer
             .flush()
             .expect("failed to flush keyvalue output stream");
-        keyvalue::readwrite::set(bucket, &result_key, result_value)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+        keyvalue::eventual::set(bucket, &result_key, result_value)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to set `result`");
 
         bus::lattice::set_target(
@@ -293,11 +293,11 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         );
         let counter_key = String::from("counter");
         let value = keyvalue::atomic::increment(bucket, &counter_key, 1)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to increment `counter`");
         assert_eq!(value, 1);
         let value = keyvalue::atomic::increment(bucket, &counter_key, 41)
-            .map_err(keyvalue::wasi_cloud_error::trace)
+            .map_err(keyvalue::wasi_keyvalue_error::trace)
             .expect("failed to increment `counter`");
         assert_eq!(value, 42);
 
