@@ -64,6 +64,7 @@ pub struct WashContext {
     /// timeout in milliseconds
     #[serde(default = "default_timeout_ms")]
     pub ctl_timeout: u64,
+    pub ctl_ca_file: Option<PathBuf>,
 
     // NOTE: lattice_prefix was renamed to lattice in most places, but this alias will need to remain for backwards compatibility with existing context files
     #[serde(alias = "lattice_prefix", default = "default_lattice")]
@@ -83,6 +84,7 @@ pub struct WashContext {
     /// rpc timeout in milliseconds
     #[serde(default = "default_timeout_ms")]
     pub rpc_timeout: u64,
+    pub rpc_ca_file: Option<PathBuf>,
 }
 
 impl WashContext {
@@ -106,6 +108,7 @@ impl Default for WashContext {
             ctl_seed: None,
             ctl_credsfile: None,
             ctl_timeout: DEFAULT_NATS_TIMEOUT_MS,
+            ctl_ca_file: None,
             lattice: DEFAULT_LATTICE.to_string(),
             js_domain: None,
             rpc_host: DEFAULT_NATS_HOST.to_string(),
@@ -114,6 +117,7 @@ impl Default for WashContext {
             rpc_seed: None,
             rpc_credsfile: None,
             rpc_timeout: DEFAULT_NATS_TIMEOUT_MS,
+            rpc_ca_file: None,
         }
     }
 }

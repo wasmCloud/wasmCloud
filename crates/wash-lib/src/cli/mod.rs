@@ -160,6 +160,10 @@ pub struct CliConnectionOpts {
     #[clap(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
     pub ctl_credsfile: Option<PathBuf>,
 
+    /// TLS CA file for CTL authentication. See https://docs.nats.io/using-nats/developer/connecting/tls for details.
+    #[clap(long = "ca-file", env = "WASH_CA_FILE", hide_env_values = true)]
+    pub ca_file: Option<PathBuf>,
+
     /// JS domain for wasmcloud control interface. Defaults to None
     #[clap(
         long = "js-domain",
@@ -200,6 +204,7 @@ impl Default for CliConnectionOpts {
             ctl_jwt: None,
             ctl_seed: None,
             ctl_credsfile: None,
+            ca_file: None,
             js_domain: None,
             lattice: Some(DEFAULT_LATTICE.to_string()),
             timeout_ms: DEFAULT_NATS_TIMEOUT_MS,
@@ -218,6 +223,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_jwt,
             ctl_seed,
             ctl_credsfile,
+            ca_file,
             js_domain,
             lattice,
             timeout_ms,
@@ -242,6 +248,7 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_jwt,
             ctl_seed,
             ctl_credsfile,
+            ca_file,
             js_domain,
             lattice,
             timeout_ms,
