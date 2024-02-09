@@ -1,7 +1,7 @@
 [blobstore]
 url = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
-sha256 = "ec00852a7960e3816e0b6842fecc1607d3dd9cbd722c0618a5fae5a034020edf"
-sha512 = "49db6d6600dbc5241c4f531993812e2a73dc02dbc7f3bf610341ac884401434140c0dc3f260b741dcd6c7fa8c0d5c1223d0f3cc9da3975a097451f1a5459b075"
+sha256 = "f1829eeab5bf721b5e922b894de30d91ac6badeb1b64d6ce239353fe39c21556"
+sha512 = "e34daf3ea4fbc3d9b7a6ba4399fdbf384254b309f0eacf39a7b685ef7e77ac0e26934f911c713089a9d19a2b6bd93f6eb95ca09239dc18becba7bba3fb794fd7"
 
 [cli]
 sha256 = "285865a31d777181b075f39e92bcfe59c89cd6bacce660be1b9a627646956258"
@@ -16,7 +16,7 @@ sha256 = "498c465cfd04587db40f970fff2185daa597d074c20b68a8bcbae558f261499b"
 sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00230d730873361567cc209ec218c41fb4e95bad194268592c49e7964347"
 
 [http]
-url = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
 sha512 = "760695f9a25c25bf75a25b731cb21c3bda9e288e450edda823324ecbc73d5d798bbb5de2edad999566980836f037463ee9e57d61789d04b3f3e381475b1a9a0f"
 deps = ["cli", "clocks", "filesystem", "random", "sockets"]

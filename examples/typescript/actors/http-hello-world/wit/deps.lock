@@ -11,7 +11,7 @@ sha256 = "498c465cfd04587db40f970fff2185daa597d074c20b68a8bcbae558f261499b"
 sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00230d730873361567cc209ec218c41fb4e95bad194268592c49e7964347"
 
 [http]
-url = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
 sha512 = "760695f9a25c25bf75a25b731cb21c3bda9e288e450edda823324ecbc73d5d798bbb5de2edad999566980836f037463ee9e57d61789d04b3f3e381475b1a9a0f"
 deps = ["cli", "clocks", "filesystem", "io", "random", "sockets"]
