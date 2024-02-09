@@ -333,8 +333,6 @@ fn get_redis_url(link_values: &[(String, String)], default_connect_url: &str) ->
 
 #[cfg(test)]
 mod test {
-    use wasmcloud_provider_wit_bindgen::deps::serde_json;
-
     use super::{get_redis_url, KvRedisConfig};
     use crate::serde_json;
 

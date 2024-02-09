@@ -245,7 +245,6 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         if let Err(e) = client.put_registries(hm).await {
             error!("failed to set registry credentials: {e}");
         };
-
     }
 
     /// Auction a provider on the lattice
