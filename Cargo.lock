@@ -2544,6 +2544,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "normpath"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec60c60a693226186f5d6edf073232bfb6464ed97eb22cf3b01c1e8198fd97f5"
+dependencies = [
+ "windows-sys 0.48.0",
+]
+
+[[package]]
 name = "notify"
 version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5108,6 +5117,7 @@ dependencies = [
  "ignore",
  "indicatif",
  "nkeys",
+ "normpath",
  "oci-distribution",
  "path-absolutize",
  "provider-archive",
