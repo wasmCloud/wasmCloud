@@ -4,7 +4,7 @@ wit_bindgen::generate!({
         "wasi:http/incoming-handler": Actor,
     },
     with: {
-        "wasi:io/streams@0.2.0-rc-2023-11-10": wasmcloud_actor::wasi::io::streams,
+        "wasi:io/streams@0.2.0": wasmcloud_actor::wasi::io::streams,
     }
 });
 
