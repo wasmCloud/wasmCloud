@@ -45,10 +45,10 @@ pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
-    HostLabel, LinkDefinition, LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest,
-    ProviderDescription, RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest,
-    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand,
+    HostLabel, InterfaceLinkDefinition, LinkDefinition, LinkDefinitionList, ProviderAuctionAck,
+    ProviderAuctionRequest, ProviderDescription, RegistryCredential, RegistryCredentialMap,
+    RemoveLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
+    StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
@@ -57,8 +57,8 @@ use wasmcloud_core::{
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp,
-    KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
-    TargetEntity, TargetInterface,
+    InterfaceTarget, KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp,
+    OutgoingHttpRequest, TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -75,6 +75,8 @@ pub mod config;
 mod event;
 
 const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
+const WRPC: &str = "wrpc";
+const WRPC_VERSION: &str = "0.0.1";
 
 #[derive(Debug)]
 struct Queue {
@@ -200,6 +202,33 @@ impl Deref for ActorInstance {
     }
 }
 
+impl ActorInstance {
+    pub(crate) async fn instantiate(&self) -> anyhow::Result<wasmcloud_runtime::actor::Instance> {
+        self.actor
+            .instantiate()
+            .await
+            .context("failed to instantiate actor")
+    }
+
+    pub(crate) async fn add_handlers<'a>(
+        &self,
+        instance: &'a mut wasmcloud_runtime::actor::Instance,
+    ) -> anyhow::Result<()> {
+        instance
+            .stderr(stderr())
+            .await
+            .context("failed to set stderr")?
+            .blobstore(Arc::new(self.handler.clone()))
+            .bus(Arc::new(self.handler.clone()))
+            .keyvalue_atomic(Arc::new(self.handler.clone()))
+            .keyvalue_eventual(Arc::new(self.handler.clone()))
+            .logging(Arc::new(self.handler.clone()))
+            .messaging(Arc::new(self.handler.clone()))
+            .outgoing_http(Arc::new(self.handler.clone()));
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
@@ -211,7 +240,13 @@ struct Handler {
     origin: WasmCloudEntity,
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
-    targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
+    /// The current link name to use for interface targets, overridable in actor code via set_target()
+    interface_link_name: Arc<RwLock<String>>,
+    // link name -> package -> interface -> target
+    #[allow(clippy::type_complexity)]
+    interface_links: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>>,
+    // NOTE(brooksmtownsend): needs deduplication of responsibility with interface_links
+    wrpc_targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     chunk_endpoint: ChunkEndpoint,
 }
@@ -231,6 +266,14 @@ async fn resolve_target(
             .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
             .context("link not found")?
             .clone(),
+        Some(TargetEntity::Wrpc(target)) => {
+            let (namespace, package, _) = target.interface.as_parts();
+            WasmCloudEntity {
+                public_key: target.id.clone(),
+                contract_id: format!("{namespace}:{package}"),
+                link_name: target.link_name.clone(),
+            }
+        }
         Some(TargetEntity::Link(link_name)) => links
             .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
             .context("link not found")?
@@ -258,7 +301,7 @@ impl Handler {
         let links = self.links.read().await;
         let aliases = self.aliases.read().await;
         let operation = operation.into();
-        let (package, _) = operation
+        let (package, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
         let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
@@ -269,8 +312,8 @@ impl Handler {
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
-            inv_target,
-            operation,
+            inv_target.clone(),
+            operation.clone(),
             request,
             injector.into(),
         )?;
@@ -286,6 +329,16 @@ impl Handler {
         let payload =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
         let topic = match target {
+            Some(TargetEntity::Wrpc(target)) => {
+                let (namespace, package, interface) = target.interface.as_parts();
+                let (_, function) = interface_and_func
+                    .split_once('.')
+                    .context("interface and function should be specified")?;
+                format!(
+                    "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
+                    self.lattice, target.id, namespace, package, interface, function
+                )
+            }
             None | Some(TargetEntity::Link(_)) => format!(
                 "wasmbus.rpc.{}.{}.{}",
                 self.lattice, invocation.target.public_key, invocation.target.link_name,
@@ -666,10 +719,22 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
-        interface: &TargetInterface,
+        target_interface: &TargetInterface,
     ) -> anyhow::Result<Option<TargetEntity>> {
-        let targets = self.targets.read().await;
-        Ok(targets.get(interface).cloned())
+        let links = self.interface_links.read().await;
+        let link_name = self.interface_link_name.read().await.clone();
+        let (namespace, package, interface) = target_interface.as_parts();
+        let target_component_id = links
+            .get(self.interface_link_name.read().await.as_str())
+            .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
+            .and_then(|interfaces| interfaces.get(interface));
+        Ok(target_component_id.map(|id| {
+            TargetEntity::Wrpc(InterfaceTarget {
+                id: id.clone(),
+                interface: target_interface.clone(),
+                link_name,
+            })
+        }))
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -678,7 +743,9 @@ impl Bus for Handler {
         target: Option<TargetEntity>,
         interfaces: Vec<TargetInterface>,
     ) -> anyhow::Result<()> {
-        let mut targets = self.targets.write().await;
+        // TODO: See note about wrpc_targets and interface_links, need clarification on if I'm duplicating
+        // functionality
+        let mut targets = self.wrpc_targets.write().await;
         if let Some(target) = target {
             for interface in interfaces {
                 targets.insert(interface, target.clone());
@@ -750,7 +817,7 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 let links = links.read().await;
                 let aliases = aliases.read().await;
-                let (package, _) = operation
+                let (package, interface_and_func) = operation
                     .rsplit_once('/')
                     .context("failed to parse operation")
                     .map_err(|e| e.to_string())?;
@@ -764,8 +831,8 @@ impl Bus for Handler {
                     &cluster_key,
                     &host_key,
                     origin,
-                    inv_target,
-                    operation,
+                    inv_target.clone(),
+                    operation.clone(),
                     request,
                     injector.into(),
                 )
@@ -784,6 +851,16 @@ impl Bus for Handler {
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
                 let topic = match target {
+                    Some(TargetEntity::Wrpc(target)) => {
+                        let (_, function) = interface_and_func
+                            .split_once('.')
+                            .expect("interface and function should be specified");
+                        let (namespace, package, interface) = target.interface.as_parts();
+                        format!(
+                            "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
+                            lattice, target.id, namespace, package, interface, function
+                        )
+                    }
                     None | Some(TargetEntity::Link(_)) => format!(
                         "wasmbus.rpc.{lattice}.{}.{}",
                         invocation.target.public_key, invocation.target.link_name,
@@ -1178,21 +1255,12 @@ impl ActorInstance {
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         let mut instance = self
-            .actor
             .instantiate()
             .await
-            .context("failed to instantiate actor")?;
-        instance
-            .stderr(stderr())
+            .expect("should be able to instantiate actor");
+        self.add_handlers(&mut instance)
             .await
-            .context("failed to set stderr")?
-            .blobstore(Arc::new(self.handler.clone()))
-            .bus(Arc::new(self.handler.clone()))
-            .keyvalue_atomic(Arc::new(self.handler.clone()))
-            .keyvalue_eventual(Arc::new(self.handler.clone()))
-            .logging(Arc::new(self.handler.clone()))
-            .messaging(Arc::new(self.handler.clone()))
-            .outgoing_http(Arc::new(self.handler.clone()));
+            .expect("should be able to setup handlers");
         #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
         match (contract_id, operation) {
             ("wasmcloud:httpserver", "HttpServer.HandleRequest") => {
@@ -1350,6 +1418,13 @@ impl ActorInstance {
         let headers = injector_to_headers(&injector);
         let trace_context = injector.into();
 
+        // NOTE(brooksmtownsend): This is some branching code to help us test wRPC handlers. Not
+        // robust but it will help us test.
+        if subject.contains("wrpc") && !subject.contains("wasmbus") && reply.is_some() {
+            self.handle_wrpc_message(message).await;
+            return;
+        }
+
         let inv_resp = match rmp_serde::from_slice::<Invocation>(payload) {
             Ok(invocation) => {
                 if !invocation.trace_context.is_empty() {
@@ -1433,6 +1508,74 @@ impl ActorInstance {
             }
         }
     }
+
+    // NOTE(brooksmtownsend): I doubt this is the proper way to split out the wrpc message handling,
+    // but I'm intentionally keeping it in a separate place for now to make it easier to remove.
+    //
+    // There's no notion of an [`Invocation`] here, as wRPC will deal with encoding and transport, so I'm
+    // working solely with the message payload for now. This is basically set up to enable invoking a component
+    // on its wRPC wasi:http/incoming-handler interface easily.
+    async fn handle_wrpc_message(&self, message: async_nats::Message) {
+        let async_nats::Message {
+            ref subject,
+            ref reply,
+            ref payload,
+            ..
+        } = message;
+        // <lattice>.<id>.wrpc.0.0.1.<interface>.<operation>
+        let subject_parts = subject.split('.').collect::<Vec<_>>();
+        let interface = subject_parts.get(6).unwrap_or(&"UNKNOWNINTERFACE");
+        let operation = subject_parts.get(7).unwrap_or(&"UNKNOWNOPERATION");
+
+        let resp = match (*interface, *operation) {
+            ("wasi:http/incoming-handler", "handle") => {
+                let mut instance = self
+                    .instantiate()
+                    .await
+                    .expect("should be able to instantiate actor");
+                self.add_handlers(&mut instance)
+                    .await
+                    .expect("should be able to setup handlers");
+                let http_request = http::Request::new(payload.clone());
+                let res = match instance
+                    .into_incoming_http()
+                    .await
+                    .context("failed to instantiate `wasi:http/incoming-handler`")
+                    .expect("to instantiate `wasi:http/incoming-handler`")
+                    .handle(
+                        http_request.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+                            Box::new(Cursor::new(body))
+                        }),
+                    )
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(err = err.to_string(), "Failure handling wRPC invocation");
+                        return;
+                    }
+                };
+                let wasmcloud_http_response = wasmcloud_compat::HttpResponse::from_http(res)
+                    .await
+                    .expect("failed to convert response");
+                wasmcloud_http_response.body
+            }
+            _ => format!("Unknown WASI handler {interface} {operation}").into_bytes(),
+        };
+
+        if let Err(e) = self
+            .nats
+            .publish_with_headers(
+                // SAFETY: we know it's safe because we checked for a reply before calling this function
+                reply.clone().expect("reply to exist"),
+                async_nats::HeaderMap::new(),
+                resp.into(),
+            )
+            .await
+        {
+            error!(?reply, ?e, "failed to publish response to request");
+        }
+    }
 }
 
 type Annotations = BTreeMap<String, String>;
@@ -1452,6 +1595,30 @@ impl Deref for Actor {
 
     fn deref(&self) -> &Self::Target {
         &self.actor
+    }
+}
+
+impl Actor {
+    /// Returns the component specification for this unique actor
+    pub(crate) async fn component_specification(&self) -> ComponentSpecification {
+        let image_ref = self
+            .instances
+            .read()
+            .await
+            // FIXME: Indexing on annotations won't work for wadm instances. We may need to
+            // reapproach the way we allow a single host to run multiple "instances" of a
+            // component based on annotations.
+            .get(&BTreeMap::new())
+            .map_or_else(
+                || {
+                    error!("Found no empty annotations thing so assuming echo for testing");
+                    "wasmcloud.azurecr.io/echo:0.3.4".to_string()
+                },
+                |i| i.image_reference.clone(),
+            );
+        let mut spec = ComponentSpecification::new(&image_ref);
+        spec.links = self.handler.interface_links.read().await.clone();
+        spec
     }
 }
 
@@ -1520,6 +1687,37 @@ pub struct Host {
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
     metrics: Arc<HostMetrics>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// The specification of a component that is or did run in the lattice. This contains all of the information necessary to
+/// instantiate a component in the lattice (url and digest) as well as configuration and links in order to facilitate
+/// runtime execution of the component. Each `import` in a component's WIT world will need a corresponding link for the
+/// host runtime to route messages to the correct component.
+pub struct ComponentSpecification {
+    /// The URL of the component, file, OCI, or otherwise
+    url: String,
+    /// All outbound links from this component to other components, used for routing when calling a component `import`
+    links: HashMap<String, HashMap<String, HashMap<String, String>>>,
+    ////
+    // Possible additions in the future, left in as comments to facilitate discussion
+    ////
+    // /// The claims embedded in the component, if present
+    // claims: Option<Claims>,
+    // /// SHA256 digest of the component, used for checking uniqueness of component IDs
+    // digest: String
+    // /// (Advanced) Additional routing topics to subscribe on in addition to the component ID.
+    // routing_groups: Vec<String>,
+}
+
+impl ComponentSpecification {
+    /// Create a new empty component specification with the given ID and URL
+    pub fn new(url: impl AsRef<str>) -> Self {
+        Self {
+            url: url.as_ref().to_string(),
+            links: HashMap::new(),
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
@@ -2363,11 +2561,31 @@ impl Host {
         );
 
         let actor_ref = actor_ref.as_ref();
-        let topic = format!(
-            "wasmbus.rpc.{lattice}.{subject}",
-            lattice = self.host_config.lattice,
-            subject = claims.subject
-        );
+        let topic = match actor {
+            wasmcloud_runtime::Actor::Module(_) => {
+                debug!(actor_ref, "instantiating module");
+                // (DEPRECATED) Modules communicate over wasmbus RPC
+                // Example incoming topic: wasmbus.rpc.default.MBASDMYACTORID
+                format!(
+                    "wasmbus.rpc.{lattice}.{subject}",
+                    lattice = self.host_config.lattice,
+                    subject = claims.subject
+                )
+            }
+            wasmcloud_runtime::Actor::Component(_) => {
+                debug!(actor_ref, "instantiating component");
+                let wrpc = "wrpc";
+                let wrpc_version = "0.0.1";
+                // Components communicate over wRPC
+                // Example incoming topic:
+                //   default.echo.wrpc.0.0.1.wasi:http/incoming-handler.handle
+                format!(
+                    "{lattice}.{component_id}.{wrpc}.{wrpc_version}.>",
+                    lattice = self.host_config.lattice,
+                    component_id = sanitize_reference(actor_ref),
+                )
+            }
+        };
         let actor = actor.clone();
         let handler = handler.clone();
         let instance = async move {
@@ -2443,6 +2661,23 @@ impl Host {
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
+        // TODO: Receive component ID from the control interface. Not changing until #1466 merges
+        // let component_id = sanitize_reference(&actor_ref);
+        let component_id = claims.subject.clone();
+        let component_spec = if let Ok(spec) = self.get_component_spec(&component_id).await {
+            if spec.url != actor_ref {
+                bail!(
+                    "component spec URL does not match actor reference: {} != {}",
+                    spec.url,
+                    actor_ref
+                );
+            }
+            spec
+        } else {
+            let spec = ComponentSpecification::new(&actor_ref);
+            self.store_component_spec(&component_id, &spec).await?;
+            spec
+        };
         self.store_claims(Claims::Actor(claims.clone()))
             .await
             .context("failed to store claims")?;
@@ -2484,7 +2719,9 @@ impl Host {
             claims: claims.clone(),
             aliases: Arc::clone(&self.aliases),
             links: Arc::new(RwLock::new(links)),
-            targets: Arc::new(RwLock::default()),
+            interface_link_name: Arc::new(RwLock::new("default".to_string())),
+            interface_links: Arc::new(RwLock::new(component_spec.links)),
+            wrpc_targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
             chunk_endpoint: self.chunk_endpoint.clone(),
         };
@@ -2740,7 +2977,6 @@ impl Host {
 
         let actor = self.fetch_actor(actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
-        let actor_id = claims.subject.clone();
         let resp = self
             .policy_manager
             .evaluate_action(
@@ -2758,8 +2994,11 @@ impl Host {
         };
 
         let actor_ref = actor_ref.to_string();
+        // TODO: Receive component ID from the control interface. Not changing until #1466 merges
+        // let component_id = sanitize_reference(&actor_ref);
+        let component_id = claims.subject.clone();
         match (
-            self.actors.write().await.entry(actor_id),
+            self.actors.write().await.entry(component_id),
             NonZeroUsize::new(max_instances as usize),
         ) {
             // No actor is running and we requested to scale to zero, noop
@@ -3044,6 +3283,24 @@ impl Host {
             permitted,
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
+
+        //
+        // let component_id = sanitize_reference(provider_ref);
+        let component_id = claims.subject.clone();
+        if let Ok(spec) = self.get_component_spec(&component_id).await {
+            if spec.url != provider_ref {
+                bail!(
+                    "componnet specification URL does not match provider reference: {} != {}",
+                    spec.url,
+                    provider_ref
+                );
+            }
+            spec
+        } else {
+            let spec = ComponentSpecification::new(provider_ref);
+            self.store_component_spec(&component_id, &spec).await?;
+            spec
+        };
         self.store_claims(Claims::Provider(claims.clone()))
             .await
             .context("failed to store claims")?;
@@ -3051,7 +3308,7 @@ impl Host {
         let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
         let Provider { instances, .. } =
-            providers.entry(claims.subject.clone()).or_insert(Provider {
+            providers.entry(component_id.clone()).or_insert(Provider {
                 claims: claims.clone(),
                 image_ref: provider_ref.into(),
                 instances: HashMap::default(),
@@ -3103,7 +3360,7 @@ impl Host {
                 lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
                 env_values: vec![],
                 instance_id: Uuid::from_u128(id.into()).to_string(),
-                provider_key: claims.subject.clone(),
+                provider_key: component_id.clone(),
                 link_definitions,
                 config_json: configuration,
                 default_rpc_timeout_ms,
@@ -3547,6 +3804,70 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
+    async fn handle_interface_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        let payload = payload.as_ref();
+        let InterfaceLinkDefinition {
+            source_id,
+            target,
+            package,
+            interfaces,
+            name: link_name,
+            ..
+        } = serde_json::from_slice(payload)
+            .context("failed to deserialize wrpc link definition")?;
+
+        let actors = self.actors.read().await;
+
+        let Ok(actor) = actors.get(&source_id).context("actor not found") else {
+            tracing::error!("no actor found for the unique id so bailing");
+            return Ok(r#"{"accepted":false,"error":"no actor found for that ID"}"#.into());
+        };
+
+        // NOTE: We can't leave it as an Option<String> as a `None` key cannot be serialized to JSON
+        let name = link_name.clone().unwrap_or("default".to_string());
+
+        info!(
+            source_id,
+            target, package, name, "handling put wrpc link definition"
+        );
+
+        // Write link for each interface in the package
+        actor
+            .handler
+            .interface_links
+            .write()
+            .await
+            .entry(name)
+            .and_modify(|link_for_name| {
+                link_for_name
+                    .entry(package.clone())
+                    .and_modify(|package| {
+                        for interface in &interfaces {
+                            package.insert(interface.clone(), target.clone());
+                        }
+                    })
+                    .or_insert({
+                        interfaces
+                            .iter()
+                            .map(|interface| (interface.clone(), target.clone()))
+                            .collect::<HashMap<String, String>>()
+                    });
+            })
+            .or_insert({
+                let interfaces_map = interfaces
+                    .iter()
+                    .map(|interface| (interface.clone(), target.clone()))
+                    .collect::<HashMap<String, String>>();
+                HashMap::from_iter([(package.clone(), interfaces_map)])
+            });
+
+        let spec = actor.component_specification().await;
+        self.store_component_spec(&source_id, &spec).await?;
+
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
     async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
         let LinkDefinition {
@@ -3797,6 +4118,10 @@ impl Host {
             (Some("config"), Some("clear"), Some(entity_id), None) => {
                 self.handle_config_clear(entity_id).await.map(Some)
             }
+            (Some("linkdefs"), Some("wrpc"), None, None) => self
+                .handle_interface_link_put(message.payload)
+                .await
+                .map(Some),
             _ => {
                 warn!(%subject, "received control interface request on unsupported subject");
                 Ok(Some(
@@ -3838,6 +4163,37 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
+    async fn get_component_spec(&self, id: &str) -> anyhow::Result<ComponentSpecification> {
+        let key = format!("COMPONENT_{id}");
+        let spec = self
+            .data
+            .get(key)
+            .await
+            .context("failed to get component spec")?
+            .map(|spec_bytes| serde_json::from_slice(&spec_bytes))
+            .ok_or_else(|| anyhow!("component spec not found"))??;
+        Ok(spec)
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn store_component_spec(
+        &self,
+        id: impl AsRef<str>,
+        spec: &ComponentSpecification,
+    ) -> anyhow::Result<()> {
+        let id = id.as_ref();
+        let key = format!("COMPONENT_{id}");
+        let bytes = serde_json::to_vec(spec)
+            .context("failed to serialize component spec")?
+            .into();
+        self.data
+            .put(key, bytes)
+            .await
+            .context("failed to put component spec")?;
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
     async fn store_claims(&self, claims: Claims) -> anyhow::Result<()> {
         match &claims {
             Claims::Actor(claims) => {
@@ -3863,6 +4219,43 @@ impl Host {
             .put(key, bytes)
             .await
             .context("failed to put claims")?;
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn process_component_spec_put(
+        &self,
+        id: impl AsRef<str>,
+        value: impl AsRef<[u8]>,
+        _publish: bool,
+    ) -> anyhow::Result<()> {
+        let id = id.as_ref();
+        debug!(id, "process component spec put");
+
+        let spec: ComponentSpecification = serde_json::from_slice(value.as_ref())
+            .context("failed to deserialize component specification")?;
+        if let Some(actor) = self.actors.write().await.get(id) {
+            // Update links
+            *actor.handler.interface_links.write().await = spec.links;
+            // NOTE(brooksmtownsend): We can consider updating the actor if the image URL changes
+        };
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn process_component_spec_delete(
+        &self,
+        id: impl AsRef<str>,
+        _value: impl AsRef<[u8]>,
+        _publish: bool,
+    ) -> anyhow::Result<()> {
+        let id = id.as_ref();
+        debug!(id, "process component delete");
+        // TODO: TBD: stop actor if spec deleted?
+        if let Some(_actor) = self.actors.write().await.get(id) {
+            warn!("Component spec deleted but actor {} still running", id);
+        }
         Ok(())
     }
 
@@ -4061,21 +4454,27 @@ impl Host {
         }: KvEntry,
         publish: bool,
     ) {
-        let mut key_parts = key.split('_');
-        let res = match (operation, key_parts.next(), key_parts.next()) {
-            (Operation::Put, Some("LINKDEF"), Some(id)) => {
+        let key_id = key.split_once('_');
+        let res = match (operation, key_id) {
+            (Operation::Put, Some(("COMPONENT", id))) => {
+                self.process_component_spec_put(id, value, publish).await
+            }
+            (Operation::Delete, Some(("COMPONENT", id))) => {
+                self.process_component_spec_delete(id, value, publish).await
+            }
+            (Operation::Put, Some(("LINKDEF", id))) => {
                 self.process_linkdef_put(id, value, publish).await
             }
-            (Operation::Delete, Some("LINKDEF"), Some(id)) => {
+            (Operation::Delete, Some(("LINKDEF", id))) => {
                 self.process_linkdef_delete(id, value, publish).await
             }
-            (Operation::Put, Some("CLAIMS"), Some(pubkey)) => {
+            (Operation::Put, Some(("CLAIMS", pubkey))) => {
                 self.process_claims_put(pubkey, value).await
             }
-            (Operation::Delete, Some("CLAIMS"), Some(pubkey)) => {
+            (Operation::Delete, Some(("CLAIMS", pubkey))) => {
                 self.process_claims_delete(pubkey, value).await
             }
-            (operation, Some("REFMAP"), id) => {
+            (operation, Some(("REFMAP", id))) => {
                 // TODO: process REFMAP entries
                 debug!(?operation, id, "ignoring REFMAP entry");
                 Ok(())
@@ -4196,6 +4595,24 @@ impl Host {
         stopped?;
         scaled
     }
+}
+
+/// Santize a component reference to create a NATS/storage safe key. This is a placeholder
+/// for what will eventually go into `wash` and `wadm` as a more specific utility.
+fn sanitize_reference(reference: &str) -> String {
+    if reference.starts_with("file://") {
+        // Transforms a possibly complex file reference, e.g. "file:///path/to/http_hello_s.wasm" into a
+        // nicer key, "http_hello"
+        reference
+            .split('/')
+            .last()
+            .unwrap_or(reference)
+            .trim_end_matches(".wasm")
+            .trim_end_matches("_s")
+    } else {
+        reference
+    }
+    .replace([':', '/', '.', '-'], "_")
 }
 
 // TODO: remove StoredClaims in #1093
