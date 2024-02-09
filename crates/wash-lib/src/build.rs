@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use normpath::PathExt;
 use tracing::{debug, info, warn};
 use wasm_encoder::{Encode, Section};
 use wit_bindgen_core::Files;
@@ -240,10 +241,7 @@ fn build_rust_actor(
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
-    let metadata = cargo_metadata::MetadataCommand::new().exec()?;
-    let target_path = metadata.target_directory.as_path();
-    let build_target = rust_config.build_target(&actor_config.wasm_target);
-
+    let build_target: &str = rust_config.build_target(&actor_config.wasm_target);
     let result = command
         .args(["build", "--release", "--target", build_target])
         .status()
@@ -265,23 +263,27 @@ fn build_rust_actor(
         .as_ref()
         .unwrap_or(&common_config.name);
 
-    let wasm_file = PathBuf::from(format!(
-        "{}/{}/release/{}.wasm",
-        rust_config
-            .target_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(target_path))
-            .to_string_lossy(),
-        build_target,
-        wasm_bin_name,
-    ));
+    // NOTE: Windows paths are tricky.
+    // We're using a third-party library normpath to ensure that the paths are normalized.
+    // Once out of nightly, we should be able to use std::path::absolute
+    // https://github.com/rust-lang/rust/pull/91673
+    let metadata = cargo_metadata::MetadataCommand::new().exec()?;
+    let target_path = rust_config
+        .target_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
+    let mut wasm_path_buf = PathBuf::from(target_path);
+    wasm_path_buf.push(build_target);
+    wasm_path_buf.push("release");
+    wasm_path_buf.push(format!("{}.wasm", wasm_bin_name));
 
-    if !wasm_file.exists() {
-        bail!(
-            "Could not find compiled wasm file, please ensure {} exists",
-            wasm_file.display()
-        );
-    }
+    // Ensure the file exists, normalize uses the fs and file must exist
+    let wasm_file = match wasm_path_buf.normalize() {
+        Ok(p) => p,
+        Err(e) => bail!(
+            "Could not find compiled wasm file, please ensure {:?} exists. Error: {:?}", wasm_path_buf, e
+        ),
+    };
 
     // move the file out into the build/ folder for parity with tinygo and convienience for users.
     let copied_wasm_file = PathBuf::from(format!("build/{}.wasm", wasm_bin_name));
