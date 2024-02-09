@@ -54,6 +54,7 @@ heck = { workspace = true, optional = true }
 ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
 nkeys = { workspace = true }
+normpath = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 path-absolutize = { workspace = true, features = [
     "once_cell_cache",
