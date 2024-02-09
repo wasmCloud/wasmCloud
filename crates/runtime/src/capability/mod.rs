@@ -4,8 +4,9 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging,
-    Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity, TargetInterface,
+    ActorIdentifier, Blobstore, Bus, IncomingHttp, InterfaceTarget, KeyValueAtomic,
+    KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
+    TargetInterface,
 };
 
 #[allow(clippy::doc_markdown)]
