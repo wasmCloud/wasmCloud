@@ -410,7 +410,7 @@ fn should_strip_headers(topic: &str) -> bool {
 #[cfg(test)]
 mod test {
     use crate::{serde_json, ConnectionConfig, NatsMessagingProvider};
-    use wasmcloud_provider_wit_bindgen::deps::serde_json;
+
     use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition;
     use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler;
 
