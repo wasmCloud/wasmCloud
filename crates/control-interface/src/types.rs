@@ -433,6 +433,31 @@ pub struct LinkDefinition {
     pub values: LinkSettings,
 }
 
+/// A link definition between a source and target component (actor or provider) on a given
+/// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
+/// component's export, specifying the configuration each component needs in order to execute
+/// the request, and represents an operator's intent to allow the source to invoke the target.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InterfaceLinkDefinition {
+    /// Source identifier for the link
+    pub source_id: String,
+    /// Target for the link, which can be a unique identifier or (future) a routing group
+    pub target: String,
+    /// Name of the link. Not providing this is equivalent to specifying Some("default")
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Package of the link operation, e.g. `wasi:keyvalue`
+    pub package: String,
+    /// Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
+    pub interfaces: Vec<String>,
+    /// List of named configurations to provide to the source upon request
+    #[serde(default)]
+    pub source_config: Vec<String>,
+    /// List of named configurations to provide to the target upon request
+    #[serde(default)]
+    pub target_config: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostLabel {
     pub key: String,
