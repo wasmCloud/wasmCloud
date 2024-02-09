@@ -1,0 +1,69 @@
+# This docker-compose file starts the entire wasmCloud observability ecosystem, including:
+#   grafana for dashboards
+#   otel-collector for ingesting the OTLP signals from wasmcloud host
+# . prometheus for metrics
+# . tempo for traces
+# . loki for logs
+
+version: "3"
+services:
+  grafana:
+    image: grafana/grafana:10.0.10
+    ports:
+      - 5050:3000
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    depends_on:
+      - loki
+      - prometheus
+      - tempo
+
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.93.0
+    command:
+      - '--config=/etc/otelcol/config.yaml'
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otelcol/config.yaml
+    ports:
+      - 4317:4317
+      - 4318:4318
+    depends_on:
+      - loki
+      - prometheus
+      - tempo
+
+  loki:
+    image: grafana/loki:2.9.4
+    command:
+      - '-config.file=/etc/loki/config.yaml'
+    volumes:
+      - ./config/loki.yaml:/etc/loki/config.yaml
+    ports:
+      - 3100:3100
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    command:
+      - '--config.file=/etc/prometheus/config.yaml'
+      - '--web.enable-remote-write-receiver'
+      - '--enable-feature=native-histograms'
+    volumes:
+      - ./config/prometheus.yaml:/etc/prometheus/config.yaml
+    ports:
+      - 9090:9090
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    command:
+      - '-config.file=/etc/tempo/config.yaml'
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo/config.yaml
+    ports:
+      - 4318 # This port is used for sending traces from otel-collector to tempo
+      - 7999:7999 # tempo
