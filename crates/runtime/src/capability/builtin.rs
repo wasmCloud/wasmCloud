@@ -189,12 +189,25 @@ impl PartialEq for ActorIdentifier {
 impl Eq for ActorIdentifier {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Interface target to be invoked over `wRPC`
+pub struct InterfaceTarget {
+    /// wRPC component routing identifier
+    pub id: String,
+    /// wRPC component interface
+    pub interface: TargetInterface,
+    /// Link name used to resolve the target
+    pub link_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 /// Target entity
 pub enum TargetEntity {
     /// Link target entity
     Link(Option<String>),
     /// Actor target entity
     Actor(ActorIdentifier),
+    /// WRPC component
+    Wrpc(InterfaceTarget),
 }
 
 impl TryFrom<bus::lattice::ActorIdentifier> for ActorIdentifier {
@@ -247,6 +260,26 @@ pub enum TargetInterface {
         /// Interface name
         interface: String,
     },
+}
+
+impl TargetInterface {
+    /// Returns the 3-tuple of (namespace, package, interface) for this interface
+    #[must_use]
+    pub fn as_parts(&self) -> (&str, &str, &str) {
+        match self {
+            Self::WasiBlobstoreBlobstore => ("wasi", "blobstore", "blobstore"),
+            Self::WasiHttpOutgoingHandler => ("wasi", "http", "outgoing-handler"),
+            Self::WasiKeyvalueAtomic => ("wasi", "keyvalue", "atomic"),
+            Self::WasiKeyvalueEventual => ("wasi", "keyvalue", "eventual"),
+            Self::WasiLoggingLogging => ("wasi", "logging", "logging"),
+            Self::WasmcloudMessagingConsumer => ("wasmcloud", "messaging", "consumer"),
+            Self::Custom {
+                namespace,
+                package,
+                interface,
+            } => (namespace, package, interface),
+        }
+    }
 }
 
 /// Outgoing HTTP request
