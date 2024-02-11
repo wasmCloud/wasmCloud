@@ -52,6 +52,7 @@ pub struct ListCommand {
 }
 
 #[derive(Args, Debug, Clone)]
+// This is were I start to dig into the problem for Issue #1444 - MarkusEicher
 pub struct UndeployCommand {
     /// Name of the app specification to undeploy
     #[clap(name = "name")]
