@@ -1,5 +1,5 @@
 package wasmcloud:provider-http-server;
 
 world provider-http-server {
-    export wasmcloud:bus/host;
+    import wasmcloud:bus/host;
 }

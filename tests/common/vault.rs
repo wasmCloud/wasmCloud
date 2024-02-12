@@ -47,7 +47,10 @@ pub async fn start_vault(
             .context("failed to build vault client settings")?,
     )
     .context("failed to build vault client")?;
-    let vault_client = timeout(Duration::from_secs(3), async move {
+    // NOTE(thomastaylor312): Vault sometimes takes a while to start up, even on local machines. I
+    // got to this number by figuring out the time needed on my machine (about 6-7 seconds) and then
+    // adding a little extra time to account for GH runner slowness
+    let vault_client = timeout(Duration::from_secs(10), async move {
         loop {
             if let Ok(ServerStatus::OK) = vault_client.status().await {
                 return vault_client;

@@ -1,9 +1,9 @@
+import {useLatticeData} from '@wasmcloud/lattice-client-react';
 import {ReactElement} from 'react';
 import {ActorsTable} from '@/actors/actors-table';
 import {HostsSummary} from '@/hosts/hosts-summary';
 import {LinksTable} from '@/links/links-table';
 import {ProvidersTable} from '@/providers/providers-table';
-import {useLatticeData} from '@/services/lattice';
 import {Card, CardContent, CardHeader} from '@/ui/card';
 import {StatsTile} from './stats-tile';
 

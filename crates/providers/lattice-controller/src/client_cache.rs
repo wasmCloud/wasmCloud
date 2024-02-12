@@ -1,15 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::{bail, Context, Result};
 use tokio::sync::RwLock;
 use tokio::time::{interval_at, Duration, Instant};
 use tracing::{debug, trace};
 use wascap::prelude::KeyPair;
 use wasmcloud_control_interface::Client;
-
-use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::{
-    ProviderInvocationError, ProviderInvocationResult,
-};
 
 use crate::ConnectionConfig;
 
@@ -85,7 +82,7 @@ impl ClientCache {
     /// one will be created from the stored connection configuration. If there is no active client
     /// and no suitable configuration, this function returns an error and will _not_ resort to
     /// fallback credentials
-    pub(crate) async fn get_client(&self, lattice_id: &str) -> ProviderInvocationResult<Client> {
+    pub(crate) async fn get_client(&self, lattice_id: &str) -> Result<Client> {
         let c = {
             // Don't hold the read lock for the whole func
             let lock = self.clients.read().await;
@@ -105,9 +102,7 @@ impl ClientCache {
                 self.store_client(lattice_id, client.clone()).await;
                 Ok(client)
             } else {
-                Err(ProviderInvocationError::Provider(format!(
-                    "No client configuration for lattice [{lattice_id}] stored",
-                )))
+                bail!("no client configuration for lattice [{lattice_id}] stored");
             }
         }
     }
@@ -124,9 +119,7 @@ impl ClientCache {
 }
 
 /// Create and connect a [`wasmcloud_control_interface::Client`] interface client, given a [`ConnectionConfig`]
-async fn create_client(
-    config: &ConnectionConfig,
-) -> ProviderInvocationResult<wasmcloud_control_interface::Client> {
+async fn create_client(config: &ConnectionConfig) -> Result<wasmcloud_control_interface::Client> {
     let timeout = Duration::from_millis(config.timeout_ms);
     let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
     let lattice = config.lattice.clone();
@@ -140,14 +133,11 @@ async fn create_client(
 }
 
 /// Create a new nats connection
-async fn connect(cfg: &ConnectionConfig) -> ProviderInvocationResult<async_nats::Client> {
+async fn connect(cfg: &ConnectionConfig) -> Result<async_nats::Client> {
     let cfg = cfg.clone();
     let opts = match (cfg.auth_jwt, cfg.auth_seed) {
         (Some(jwt), Some(seed)) => {
-            let key_pair = std::sync::Arc::new(
-                KeyPair::from_seed(&seed)
-                    .map_err(|e| ProviderInvocationError::Provider(format!("key init: {e}")))?,
-            );
+            let key_pair = std::sync::Arc::new(KeyPair::from_seed(&seed).context("key init: {e}")?);
             async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                 let key_pair = key_pair.clone();
                 async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
@@ -155,15 +145,11 @@ async fn connect(cfg: &ConnectionConfig) -> ProviderInvocationResult<async_nats:
         }
         (None, None) => async_nats::ConnectOptions::default(),
         _ => {
-            return Err(ProviderInvocationError::Provider(
-                "must provide both jwt and seed for jwt authentication".into(),
-            ));
+            bail!("must provide both jwt and seed for jwt authentication");
         }
     };
     if cfg.cluster_uris.is_empty() {
-        return Err(ProviderInvocationError::Provider(
-            "No NATS URIs supplied".to_string(),
-        ));
+        bail!("No NATS URIs supplied");
     }
 
     let url = cfg.cluster_uris.first().unwrap();
@@ -182,7 +168,7 @@ async fn connect(cfg: &ConnectionConfig) -> ProviderInvocationResult<async_nats:
         })
         .connect(url)
         .await
-        .map_err(|e| ProviderInvocationError::Provider(format!("Nats connection to {url}: {e}")))?;
+        .with_context(|| format!("Nats connection to {url}"))?;
 
     Ok(conn)
 }
@@ -214,7 +200,13 @@ async fn evacuate_cache(
     conns.retain(|k, _v| !expired_keys.contains(k));
 }
 
-// The test below requires an anonymous localhost NATS
+/// The test suite below requires an anonymous localhost NATS
+///
+/// You can run one locally using `docker`:
+///
+/// ```console
+/// docker run --rm -p 4222:4222 nats -js
+/// ```
 #[cfg(test)]
 mod test {
     use std::time::Duration;

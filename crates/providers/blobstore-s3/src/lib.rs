@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Context as _;
+use anyhow::Result;
 use aws_sdk_s3::primitives::ByteStream;
 use tokio::sync::RwLock;
 use tracing::error;
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
     wasmcloud_provider_sdk::Context,
 };
 
@@ -43,19 +43,15 @@ pub struct BlobstoreS3Provider {
 
 impl BlobstoreS3Provider {
     /// Retrieve the per-actor [`StorageClient`] for a given link context
-    async fn client(&self, ctx: &Context) -> ProviderInvocationResult<StorageClient> {
-        let actor_id = ctx
-            .actor
-            .as_ref()
-            .ok_or_else(|| ProviderInvocationError::Provider("no actor in request".to_string()))?;
+    async fn client(&self, ctx: &Context) -> Result<StorageClient> {
+        let actor_id = ctx.actor.as_ref().context("no actor in request")?;
+
         let client = self
             .actors
             .read()
             .await
             .get(actor_id)
-            .ok_or_else(|| {
-                ProviderInvocationError::Provider(format!("actor not linked:{}", actor_id))
-            })?
+            .with_context(|| format!("actor not linked:{}", actor_id))?
             .clone();
         Ok(client)
     }
@@ -108,109 +104,179 @@ impl WasmcloudCapabilityProvider for BlobstoreS3Provider {
 /// To simplify testing, the methods are also implemented for StorageClient,
 #[async_trait]
 impl WasmcloudBlobstoreBlobstore for BlobstoreS3Provider {
-    async fn container_exists(
-        &self,
-        ctx: Context,
-        container_name: String,
-    ) -> ProviderInvocationResult<bool> {
-        self.client(&ctx)
-            .await?
-            .container_exists(&ctx, &container_name)
-            .await
+    async fn container_exists(&self, ctx: Context, container_name: String) -> bool {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return false;
+            }
+        };
+        client.container_exists(&ctx, &container_name).await
     }
 
-    async fn create_container(
-        &self,
-        ctx: Context,
-        container_name: ContainerId,
-    ) -> ProviderInvocationResult<()> {
-        self.client(&ctx)
-            .await?
-            .create_container(&ctx, &container_name)
-            .await
+    async fn create_container(&self, ctx: Context, container_name: ContainerId) -> () {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return;
+            }
+        };
+
+        client.create_container(&ctx, &container_name).await
     }
 
     async fn get_container_info(
         &self,
         ctx: Context,
         container_name: ContainerId,
-    ) -> ProviderInvocationResult<ContainerMetadata> {
-        self.client(&ctx)
-            .await?
-            .get_container_info(&ctx, &container_name)
-            .await
+    ) -> ContainerMetadata {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return ContainerMetadata {
+                    container_id: String::default(),
+                    created_at: None,
+                };
+            }
+        };
+
+        client.get_container_info(&ctx, &container_name).await
     }
 
-    async fn get_object_info(
-        &self,
-        ctx: Context,
-        arg: ContainerObjectSelector,
-    ) -> ProviderInvocationResult<ObjectMetadata> {
-        self.client(&ctx).await?.get_object_info(&ctx, &arg).await
+    async fn get_object_info(&self, ctx: Context, arg: ContainerObjectSelector) -> ObjectMetadata {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return ObjectMetadata {
+                    container_id: String::default(),
+                    content_encoding: None,
+                    content_length: 0,
+                    content_type: None,
+                    last_modified: None,
+                    object_id: String::default(),
+                };
+            }
+        };
+
+        client.get_object_info(&ctx, &arg).await
     }
 
-    async fn list_containers(
-        &self,
-        ctx: Context,
-    ) -> ProviderInvocationResult<Vec<ContainerMetadata>> {
-        self.client(&ctx).await?.list_containers(&ctx).await
+    async fn list_containers(&self, ctx: Context) -> Vec<ContainerMetadata> {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return Vec::new();
+            }
+        };
+
+        client.list_containers(&ctx).await
     }
 
     async fn remove_containers(
         &self,
         ctx: Context,
         container_names: Vec<String>,
-    ) -> ProviderInvocationResult<Vec<OperationResult>> {
-        self.client(&ctx)
-            .await?
-            .remove_containers(&ctx, &container_names)
-            .await
+    ) -> Vec<OperationResult> {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return Vec::new();
+            }
+        };
+
+        client.remove_containers(&ctx, &container_names).await
     }
 
-    async fn object_exists(
-        &self,
-        ctx: Context,
-        selector: ContainerObjectSelector,
-    ) -> ProviderInvocationResult<bool> {
-        self.client(&ctx)
-            .await?
-            .object_exists(&ctx, &selector)
-            .await
+    async fn object_exists(&self, ctx: Context, selector: ContainerObjectSelector) -> bool {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return false;
+            }
+        };
+
+        client.object_exists(&ctx, &selector).await
     }
 
-    async fn list_objects(
-        &self,
-        ctx: Context,
-        req: ListObjectsRequest,
-    ) -> ProviderInvocationResult<ListObjectsResponse> {
-        self.client(&ctx).await?.list_objects(&ctx, &req).await
+    async fn list_objects(&self, ctx: Context, req: ListObjectsRequest) -> ListObjectsResponse {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return ListObjectsResponse {
+                    continuation: None,
+                    is_last: true,
+                    objects: Vec::new(),
+                };
+            }
+        };
+
+        client.list_objects(&ctx, &req).await
     }
 
     async fn remove_objects(
         &self,
         ctx: Context,
         arg: RemoveObjectsRequest,
-    ) -> ProviderInvocationResult<Vec<OperationResult>> {
-        self.client(&ctx).await?.remove_objects(&ctx, &arg).await
+    ) -> Vec<OperationResult> {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return Vec::new();
+            }
+        };
+
+        client.remove_objects(&ctx, &arg).await
     }
 
-    async fn put_object(
-        &self,
-        ctx: Context,
-        req: PutObjectRequest,
-    ) -> ProviderInvocationResult<PutObjectResponse> {
-        self.client(&ctx).await?.put_object(&ctx, &req).await
+    async fn put_object(&self, ctx: Context, req: PutObjectRequest) -> PutObjectResponse {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return PutObjectResponse { stream_id: None };
+            }
+        };
+
+        client.put_object(&ctx, &req).await
     }
 
-    async fn get_object(
-        &self,
-        ctx: Context,
-        req: GetObjectRequest,
-    ) -> ProviderInvocationResult<GetObjectResponse> {
-        self.client(&ctx).await?.get_object(&ctx, &req).await
+    async fn get_object(&self, ctx: Context, req: GetObjectRequest) -> GetObjectResponse {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return GetObjectResponse {
+                    content_encoding: None,
+                    content_length: 0,
+                    content_type: None,
+                    error: Some("failed to read file".into()),
+                    initial_chunk: None,
+                    success: false,
+                };
+            }
+        };
+
+        client.get_object(&ctx, &req).await
     }
 
-    async fn put_chunk(&self, ctx: Context, req: PutChunkRequest) -> ProviderInvocationResult<()> {
-        self.client(&ctx).await?.put_chunk(&ctx, &req).await
+    async fn put_chunk(&self, ctx: Context, req: PutChunkRequest) -> () {
+        let client = match self.client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return;
+            }
+        };
+
+        client.put_chunk(&ctx, &req).await
     }
 }

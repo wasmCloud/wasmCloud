@@ -1,0 +1,88 @@
+name: 🔄 Check for File Changes
+
+on:
+  workflow_call:
+    outputs:
+      adr:
+        description: 'Changes have occurred in the ADR related directories'
+        value: ${{ jobs.check_for_changes.outputs.adr }}
+      any:
+        description: 'Changes have occurred in any directory'
+        value: ${{ jobs.check_for_changes.outputs.any }}
+      ci:
+        description: 'Changes have occurred in any of the ci related directories'
+        value: ${{ jobs.check_for_changes.outputs.ci }}
+      devcontainer:
+        description: 'Changes have occurred in the devcontainer directory'
+        value: ${{ jobs.check_for_changes.outputs.devcontainer }}
+      docs:
+        description: 'Changes have occurred in the docs directory'
+        value: ${{ jobs.check_for_changes.outputs.docs }}
+      examples:
+        description: 'Changes have occurred in the examples directory'
+        value: ${{ jobs.check_for_changes.outputs.examples }}
+      github:
+        description: 'Changes have occurred in the github related directories'
+        value: ${{ jobs.check_for_changes.outputs.github }}
+      javascript:
+        description: 'Changes have occurred in the javascript/typescript related directories. Includes CI changes.'
+        value: ${{ jobs.check_for_changes.outputs.javascript || jobs.check_for_changes.outputs.ci }}
+      nix:
+        description: 'Changes have occurred in the nix related directories'
+        value: ${{ jobs.check_for_changes.outputs.nix }}
+      rust:
+        description: 'Changes have occurred in the rust/cargo related directories. Includes CI changes.'
+        value: ${{ jobs.check_for_changes.outputs.rust || jobs.check_for_changes.outputs.ci }}
+
+jobs:
+  check_for_changes:
+    runs-on: ubuntu-latest
+
+    outputs:
+      adr: ${{ steps.check.outputs.adr_any_changed }}
+      any: ${{ steps.check.outputs.any_any_changed }}
+      ci: ${{ steps.check.outputs.nix_any_changed || steps.check.outputs.github_any_changed }}
+      devcontainer: ${{ steps.check.outputs.devcontainer_any_changed }}
+      docs: ${{ steps.check.outputs.docs_any_changed }}
+      examples: ${{ steps.check.outputs.examples_any_changed }}
+      github: ${{ steps.check.outputs.github_any_changed }}
+      javascript: ${{ steps.check.outputs.javascript_any_changed }}
+      nix: ${{ steps.check.outputs.nix_any_changed }}
+      rust: ${{ steps.check.outputs.rust_any_changed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: check
+        uses: tj-actions/changed-files@v42
+        with:
+          files_yaml: |
+            adr:
+              - 'adr/**'
+            any:
+              - '**'
+            devcontainer:
+              - '.devcontainer/**'
+            docs:
+              - '**/*.md'
+            examples:
+              - 'examples/**'
+            github:
+              - '.github/**'
+            javascript:
+              - 'washboard-ui/**'
+            nix:
+              - 'flake.lock'
+              - 'flake.nix'
+              - 'garnix.nix'
+            rust:
+              - 'Cargo.*'
+              - 'rust*.toml'
+              - 'src/**'
+              - 'tests/**'
+              - 'crates/**'
+              - '!**/*.md'

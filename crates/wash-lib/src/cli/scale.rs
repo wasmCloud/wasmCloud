@@ -56,11 +56,17 @@ pub async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput>
     )
     .await?;
 
+    let scale_msg = if cmd.max_instances == u32::MAX {
+        "unbounded concurrency".to_string()
+    } else {
+        format!("{} max concurrent instances", cmd.max_instances)
+    };
+
     Ok(CommandOutput::from_key_and_text(
         "result",
         format!(
-            "Request to scale actor {} to {} max concurrent instances received",
-            cmd.actor_ref, cmd.max_instances
+            "Request to scale actor {} to {scale_msg} has been accepted",
+            cmd.actor_ref
         ),
     ))
 }

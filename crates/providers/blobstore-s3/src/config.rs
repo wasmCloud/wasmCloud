@@ -6,15 +6,12 @@
 use std::collections::HashMap;
 use std::env;
 
+use anyhow::{Context, Result};
 use aws_config::SdkConfig;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
 use base64::Engine;
 
-use wasmcloud_provider_wit_bindgen::deps::{
-    serde::Deserialize,
-    serde_json,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
-};
+use wasmcloud_provider_wit_bindgen::deps::{serde::Deserialize, serde_json};
 
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
 
@@ -62,30 +59,21 @@ pub struct StsAssumeRoleConfig {
 
 impl StorageConfig {
     /// initialize from linkdef values
-    pub fn from_values(
-        values: &HashMap<String, String>,
-    ) -> ProviderInvocationResult<StorageConfig> {
+    pub fn from_values(values: &HashMap<String, String>) -> Result<StorageConfig> {
         let mut config = if let Some(config_b64) = values.get("config_b64") {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(config_b64.as_bytes())
-                .map_err(|e| {
-                    ProviderInvocationError::Provider(format!("invalid base64 encoding: {e}",))
-                })?;
-            serde_json::from_slice::<StorageConfig>(&bytes).map_err(|e| {
-                ProviderInvocationError::Provider(format!("corrupt config_b64: {e}"))
-            })?
+                .context("invalid base64 encoding")?;
+            serde_json::from_slice::<StorageConfig>(&bytes).context("corrupt config_b64")?
         } else if let Some(config) = values.get("config_json") {
-            serde_json::from_str::<StorageConfig>(config).map_err(|e| {
-                ProviderInvocationError::Provider(format!("corrupt config_json: {e}"))
-            })?
+            serde_json::from_str::<StorageConfig>(config).context("corrupt config_json")?
         } else {
             StorageConfig::default()
         };
         // load environment variables from file
         if let Some(env_file) = values.get("env") {
-            let data = std::fs::read_to_string(env_file).map_err(|e| {
-                ProviderInvocationError::Provider(format!("reading env file '{env_file}': {e}",))
-            })?;
+            let data = std::fs::read_to_string(env_file)
+                .with_context(|| format!("reading env file '{env_file}'"))?;
             simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
         }
 

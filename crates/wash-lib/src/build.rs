@@ -392,13 +392,24 @@ fn build_custom_actor(
     let (command, args) = parse_custom_command(raw_command)?;
     let mut command = process::Command::new(command);
     // All remaining elements of the split command are interpreted as arguments
-    command.args(args).status().map_err(|e| {
+    command
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = command.output().map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
             anyhow!("`{:?}` was not found", command.get_program())
         } else {
             anyhow!(format!("failed to run `{:?}`: {e}", command.get_program()))
         }
     })?;
+    if !output.status.success() {
+        bail!(
+            "failed to build actor with custom command: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     let actor_path = actor_config
         .build_artifact

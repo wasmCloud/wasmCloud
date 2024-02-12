@@ -15,6 +15,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+anyhow = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 tracing = { workspace = true }

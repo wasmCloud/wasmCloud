@@ -1,0 +1,4 @@
+{
+  "extends": "@wasmcloud/tsconfig/configs/base.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", ".eslintrc.cjs", "tsup.config.js", "vite.config.ts"],
+}

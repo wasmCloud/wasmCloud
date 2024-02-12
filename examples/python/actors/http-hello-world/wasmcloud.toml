@@ -1,0 +1,11 @@
+name = "python-http-hello-world"
+# TODO: fix language once https://github.com/wasmCloud/wasmCloud/pull/1295 merges
+language = "rust" 
+type = "actor"
+version = "0.1.0"
+
+[actor]
+claims = ["wasmcloud:httpserver", "wasmcloud:builtin:logging", "wasmcloud:keyvalue"]
+build_command = "componentize-py -d ./wit -w hello componentize app -o build/http_hello_world.wasm"
+build_artifact = "build/http_hello_world.wasm"
+destination = "build/http_hello_world_s.wasm"

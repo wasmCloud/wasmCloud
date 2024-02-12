@@ -6,7 +6,7 @@ use crate::{
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_nats::{Client, Subject};
-use futures::{Future, TryFutureExt};
+use futures::TryFutureExt;
 use sha2::Digest;
 use tracing::{
     debug, error,
@@ -51,8 +51,8 @@ impl fmt::Debug for RpcClient {
 
 impl RpcClient {
     /// Constructs a new RpcClient with an async nats connection.
-    /// parameters: async nats client, rpc timeout
-    /// secret key for signing messages, host_id, and optional timeout.
+    /// parameters: async nats client, host_id, optional timeout,
+    /// secret key for signing messages,, and lattice id.
     pub fn new(
         nats: Client,
         host_id: String,
@@ -209,22 +209,13 @@ impl RpcClient {
             timeout
         };
 
-        // let this = self.clone();
-        // let topic_ = topic.clone();
-        let payload = if let Some(timeout) = timeout {
-            // match tokio::time::timeout(timeout, this.request(topic, nats_body)).await {
-            match tokio::time::timeout(timeout, self.request(topic, nats_body)).await {
-                Err(_) => Err(InvocationError::Timeout),
-                Ok(Ok(data)) => Ok(data),
-                Ok(Err(err)) => Err(err),
-            }
-        } else {
-            self.request(topic, nats_body).await
-        }
-        .map_err(|err| {
-            error!(%err, "sending request");
-            err
-        })?;
+        let payload = self
+            .request_timeout(topic, nats_body, timeout)
+            .await
+            .map_err(|err| {
+                error!(%err, "sending request");
+                err
+            })?;
 
         let mut inv_response = crate::deserialize::<InvocationResponse>(&payload)?;
         if inv_response.error.is_none() {
@@ -249,17 +240,31 @@ impl RpcClient {
     /// the appropriate time, an error will be returned.
     #[instrument(level = "debug", skip_all, fields(subject = %subject))]
     pub async fn request(&self, subject: String, payload: Vec<u8>) -> InvocationResult<Vec<u8>> {
-        match maybe_timeout(
-            self.timeout,
-            self.client
-                .request(subject, payload.into())
-                .map_err(|e| InvocationError::from(NetworkError::from(e))),
-        )
-        .await
-        {
+        self.request_timeout(subject, payload, self.timeout).await
+    }
+
+    async fn request_timeout(
+        &self,
+        subject: String,
+        payload: Vec<u8>,
+        timeout: Option<Duration>,
+    ) -> InvocationResult<Vec<u8>> {
+        let timeout = if timeout.is_none() {
+            self.timeout
+        } else {
+            timeout
+        };
+
+        let req = async_nats::Request::new()
+            .payload(payload.into())
+            .timeout(timeout);
+        match self.client.send_request(subject, req).await {
             Err(err) => {
                 error!(%err, "error when performing NATS request");
-                Err(err)
+                Err(match err.kind() {
+                    async_nats::RequestErrorKind::TimedOut => InvocationError::Timeout,
+                    _ => InvocationError::from(NetworkError::from(err)),
+                })
             }
             Ok(message) => Ok(message.payload.into()),
         }
@@ -269,13 +274,10 @@ impl RpcClient {
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     #[instrument(level = "trace", skip(self, payload))]
     pub(crate) async fn publish(&self, subject: Subject, payload: Vec<u8>) -> InvocationResult<()> {
-        maybe_timeout(
-            self.timeout,
-            self.client
-                .publish(subject, payload.into())
-                .map_err(|e| InvocationError::from(NetworkError::from(e))),
-        )
-        .await?;
+        self.client
+            .publish(subject, payload.into())
+            .map_err(|e| InvocationError::from(NetworkError::from(e)))
+            .await?;
         let nc = self.client();
         // TODO: revisit after doing some performance tuning and review of callers of pubish().
         // For high throughput use cases, it may be better to change the flush interval timer
@@ -379,23 +381,6 @@ impl RpcClient {
             ));
         }
         Ok((inv, claims))
-    }
-}
-
-/// Invoke future with optional timeout. This is to work around async_nats
-/// not implementing request_with_timeout or publish_with_timeout anymore.
-async fn maybe_timeout<F, T>(t: Option<Duration>, f: F) -> InvocationResult<T>
-where
-    F: Future<Output = InvocationResult<T>> + Send + Sync,
-{
-    if let Some(timeout) = t {
-        match tokio::time::timeout(timeout, f).await {
-            Err(_) => Err(InvocationError::Timeout),
-            Ok(Ok(data)) => Ok(data),
-            Ok(Err(err)) => Err(err),
-        }
-    } else {
-        f.await
     }
 }
 

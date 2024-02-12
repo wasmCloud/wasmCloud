@@ -1,0 +1,9 @@
+{
+  "name": "@wasmcloud/tsconfig",
+  "packageManager": "yarn@4.0.2",
+  "files": [
+    "configs",
+    "README.md"
+  ],
+  "main": "configs/base.json"
+}

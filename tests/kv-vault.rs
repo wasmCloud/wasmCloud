@@ -128,19 +128,6 @@ async fn kv_vault_suite() -> Result<()> {
     )
     .await?;
 
-    // Start the HTTP provider
-    assert_start_provider(
-        &ctl_client,
-        &nats_client,
-        LATTICE,
-        &host_key,
-        &httpserver_provider_key,
-        "default",
-        httpserver_provider_url,
-        None,
-    )
-    .await?;
-
     // Start the kv-vault provider
     assert_start_provider(
         &ctl_client,
@@ -150,6 +137,19 @@ async fn kv_vault_suite() -> Result<()> {
         &kv_vault_provider_key,
         "default",
         kv_vault_provider_url,
+        None,
+    )
+    .await?;
+
+    // Start the HTTP provider
+    assert_start_provider(
+        &ctl_client,
+        &nats_client,
+        LATTICE,
+        &host_key,
+        &httpserver_provider_key,
+        "default",
+        httpserver_provider_url,
         None,
     )
     .await?;

@@ -1,0 +1,24 @@
+# This docker-compose file starts the required services for wasmCloud, which is just:
+#   a NATS server
+#   a wasmCloud host
+
+version: "3"
+services:
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+    command: ["-js"]
+  wasmcloud:
+    depends_on:
+      - "nats"
+    image: wasmcloud/wasmcloud:latest
+    environment:
+      RUST_LOG: debug,hyper=info,async_nats=info,oci_distribution=info,cranelift_codegen=warn
+      WASMCLOUD_LOG_LEVEL: debug
+      WASMCLOUD_RPC_HOST: nats
+      WASMCLOUD_CTL_HOST: nats
+    ports:
+      - "8000-8100:8000-8100" # Expose ports 8000-8100 for examples that use an HTTP server

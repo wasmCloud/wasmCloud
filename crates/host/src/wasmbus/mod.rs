@@ -5,7 +5,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 use std::collections::hash_map::{self, Entry};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
@@ -352,12 +352,6 @@ impl Handler {
             operation,
             request,
             injector.into(),
-        )?;
-
-        // Validate that the actor has the capability to call the target
-        ensure_actor_capability(
-            self.claims.metadata.as_ref(),
-            &invocation.target.contract_id,
         )?;
 
         if needs_chunking {
@@ -824,7 +818,6 @@ impl Bus for Handler {
         let origin = self.origin.clone();
         let cluster_key = self.cluster_key.clone();
         let host_key = self.host_key.clone();
-        let claims_metadata = self.claims.metadata.clone();
         Ok((
             async move {
                 // TODO: Stream data
@@ -856,10 +849,6 @@ impl Bus for Handler {
                     injector.into(),
                 )
                 .map_err(|e| e.to_string())?;
-
-                // Validate that the actor has the capability to call the target
-                ensure_actor_capability(claims_metadata.as_ref(), &invocation.target.contract_id)
-                    .map_err(|e| e.to_string())?;
 
                 if needs_chunking {
                     chunk_endpoint
@@ -1086,7 +1075,6 @@ impl Logging for Handler {
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        ensure_actor_capability(self.claims.metadata.as_ref(), wascap::caps::LOGGING)?;
         match level {
             logging::Level::Trace => {
                 tracing::event!(
@@ -1268,9 +1256,6 @@ impl ActorInstance {
         operation: &str,
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        // Validate that the actor has the capability to receive the invocation
-        ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
-
         let mut instance = self
             .actor
             .instantiate()
@@ -1920,24 +1905,6 @@ impl Host {
             ("hostcore.osfamily".into(), FAMILY.into()),
         ]);
         labels.extend(config.labels.clone().into_iter());
-        let existing_labels: HashSet<String> = labels.keys().cloned().collect();
-        labels.extend(env::vars().filter_map(|(key, value)| {
-            let key = if key.starts_with("HOST_") {
-                warn!("labels set via HOST_ environment variables are deprecated and will be removed in a future version. Please use WASMCLOUD_LABEL_ as the prefix instead");
-                key.strip_prefix("HOST_")?.to_string()
-            } else if key.starts_with("WASMCLOUD_LABEL_") {
-                key.strip_prefix("WASMCLOUD_LABEL_")?.to_string()
-            } else {
-                return None;
-            };
-            if existing_labels.contains(&key) {
-                warn!(
-                    ?key,
-                    "label provided via environment variable will override existing label"
-                );
-            }
-            Some((key, value))
-        }));
         let friendly_name =
             Self::generate_friendly_name().context("failed to generate friendly name")?;
 
@@ -3829,14 +3796,14 @@ impl Host {
         opentelemetry_nats::attach_span_context(&message);
         // Skip the topic prefix and then the lattice prefix
         // e.g. `wasmbus.ctl.{prefix}`
-        let mut parts = message
-            .subject
+        let subject = message.subject;
+        let mut parts = subject
             .trim()
             .trim_start_matches(&self.ctl_topic_prefix)
             .trim_start_matches('.')
             .split('.')
             .skip(1);
-        trace!("handling control interface request");
+        trace!(%subject, "handling control interface request");
 
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
@@ -3909,7 +3876,7 @@ impl Host {
                 self.handle_config_clear(entity_id).await.map(Some)
             }
             _ => {
-                warn!("received control interface request on unsupported subject");
+                warn!(%subject, "received control interface request on unsupported subject");
                 Ok(Some(
                     r#"{"accepted":false,"error":"unsupported subject"}"#.to_string().into(),
                 ))
@@ -3917,9 +3884,9 @@ impl Host {
         };
 
         if let Err(err) = &res {
-            error!(?err, "failed to handle control interface request");
+            error!(%subject, ?err, "failed to handle control interface request");
         } else {
-            trace!("handled control interface request");
+            trace!(%subject, "handled control interface request");
         }
 
         if let Some(reply) = message.reply {
@@ -3942,7 +3909,7 @@ impl Host {
                     .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
-                    error!(?err, "failed to publish reply to control interface request");
+                    error!(%subject, ?err, "failed to publish reply to control interface request");
                 }
             }
         }
@@ -4563,31 +4530,6 @@ fn human_friendly_uptime(uptime: Duration) -> String {
         uptime.saturating_sub(Duration::from_nanos(uptime.subsec_nanos().into())),
     )
     .to_string()
-}
-
-/// Ensure actor has the capability claim to send or receive this invocation. This
-/// should be called whenever an actor is about to send or receive an invocation.
-fn ensure_actor_capability(
-    claims_metadata: Option<&jwt::Actor>,
-    contract_id: impl AsRef<str>,
-) -> anyhow::Result<()> {
-    let contract_id = contract_id.as_ref();
-    match claims_metadata {
-        // [ADR-0006](https://github.com/wasmCloud/wasmCloud/blob/main/adr/0006-actor-to-actor.md)
-        // Allow actor to actor calls by default
-        _ if contract_id.is_empty() => {}
-        Some(jwt::Actor {
-            caps: Some(ref caps),
-            ..
-        }) => {
-            ensure!(
-                caps.iter().any(|cap| cap == contract_id),
-                "actor does not have capability claim `{contract_id}`"
-            );
-        }
-        Some(_) | None => bail!("actor missing capability claims, denying invocation"),
-    }
-    Ok(())
 }
 
 fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::HeaderMap {

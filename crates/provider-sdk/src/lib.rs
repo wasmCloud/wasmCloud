@@ -2,7 +2,6 @@ use std::{borrow::Cow, collections::HashMap, time::Duration};
 
 use async_nats::{ConnectOptions, Event};
 use async_trait::async_trait;
-use error::ProviderInvocationError;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
@@ -114,7 +113,7 @@ pub trait MessageDispatch {
         ctx: Context,
         method: String,
         body: Cow<'a, [u8]>,
-    ) -> Result<Vec<u8>, ProviderInvocationError>;
+    ) -> InvocationResult<Vec<u8>>;
 }
 
 /// CapabilityProvider handling of messages from host

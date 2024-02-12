@@ -1,0 +1,7 @@
+{
+  "extends": "@wasmcloud/tsconfig/configs/base.json",
+  "compilerOptions": {
+    "jsx": "react",
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", ".eslintrc.cjs", "tsup.config.js", "vite.config.ts"],
+}

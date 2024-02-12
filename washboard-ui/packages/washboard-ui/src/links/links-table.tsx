@@ -1,6 +1,6 @@
 import {ColumnDef, createColumnHelper} from '@tanstack/react-table';
+import {useLatticeData, WadmLink} from '@wasmcloud/lattice-client-react';
 import {ReactElement} from 'react';
-import {useLatticeData, WadmLink} from '@/services/lattice';
 import {DataTable} from '@/ui/data-table';
 import {ShortCopy} from '@/ui/short-copy';
 

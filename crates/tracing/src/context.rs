@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
-use opentelemetry::sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wasmcloud_core::TraceContext;
