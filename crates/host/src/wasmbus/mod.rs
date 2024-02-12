@@ -1504,6 +1504,7 @@ type Annotations = BTreeMap<String, String>;
 
 #[derive(Debug)]
 struct Actor {
+    #[allow(clippy::struct_field_names)]
     actor: wasmcloud_runtime::Actor,
     /// `instances` is a map from a set of Annotations to the instance associated
     /// with those annotations
