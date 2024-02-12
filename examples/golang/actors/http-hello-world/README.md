@@ -6,8 +6,8 @@ This is a simple TinyGo Wasm example that responds with a "Hello World" message 
 
 - `go` 1.21.1
 - `tinygo` 0.30
-- `wash` 0.25.0
-- `wasmtime` 16.0.0 (if running with wasmtime)
+- [`wash`](https://wasmcloud.com/docs/installation) 0.26.0
+- `wasmtime` 17.0.0 (if running with wasmtime)
 
 ## Building
 
@@ -17,10 +17,10 @@ wash build
 
 ## Running with wasmtime
 
-You must have wasmtime 16.0.0 for this to work. Make sure to follow the build step above first.
+You must have wasmtime 17.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
-wasmtime serve -Scommon ./build/http-hello-world_s.wasm
+wasmtime serve -Scommon ./build/http_hello_world_s.wasm
 ```
 
 ## Running with wasmCloud
