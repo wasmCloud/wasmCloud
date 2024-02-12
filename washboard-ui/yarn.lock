@@ -2417,7 +2417,7 @@ __metadata:
     immer: "npm:^10.0.3"
     nats.ws: "npm:^1.20.0"
     rxjs: "npm:^7.8.1"
-    tsup: "npm:^8.0.1"
+    tsup: "npm:^8.0.2"
   languageName: unknown
   linkType: soft
 
@@ -2430,7 +2430,7 @@ __metadata:
     "@types/react-dom": "npm:^18.2.19"
     "@wasmcloud/lattice-client-core": "workspace:^"
     "@wasmcloud/tsconfig": "workspace:^"
-    tsup: "npm:^8.0.1"
+    tsup: "npm:^8.0.2"
   peerDependencies:
     react: ^18.0.0
   languageName: unknown
@@ -2512,7 +2512,7 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.14.2"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.3"
-    lucide-react: "npm:^0.323.0"
+    lucide-react: "npm:^0.330.0"
     nats.ws: "npm:^1.20.0"
     postcss: "npm:^8.4.35"
     prettier: "npm:^3.2.5"
@@ -2526,7 +2526,7 @@ __metadata:
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.3.3"
-    usehooks-ts: "npm:^2.13.0"
+    usehooks-ts: "npm:^2.14.0"
     vite: "npm:^5.1.1"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.1"
@@ -5129,12 +5129,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.323.0":
-  version: 0.323.0
-  resolution: "lucide-react@npm:0.323.0"
+"lucide-react@npm:^0.330.0":
+  version: 0.330.0
+  resolution: "lucide-react@npm:0.330.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 960bdccba07d01bc19903ffc14c5091a3597a27bca0375916f6f2b10d2d32bf8f0beba2a14fbd53691c936ed5c2ab39ad25324f136d61a38ec414b30f2c865df
+  checksum: d14704db7fe7e9dcab40b16b5b68bc977d2f089d745642e759d4fc4f688715cb9200d7b0c1312548e5a29f604b685abf71289141d100116e21198b02cc65bcb7
   languageName: node
   linkType: hard
 
@@ -6988,9 +6988,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsup@npm:^8.0.1":
-  version: 8.0.1
-  resolution: "tsup@npm:8.0.1"
+"tsup@npm:^8.0.2":
+  version: 8.0.2
+  resolution: "tsup@npm:8.0.2"
   dependencies:
     bundle-require: "npm:^4.0.0"
     cac: "npm:^6.7.12"
@@ -7023,7 +7023,7 @@ __metadata:
   bin:
     tsup: dist/cli-default.js
     tsup-node: dist/cli-node.js
-  checksum: f5866035ac96c5f421856a3e41ae25afaccae4eba0c9e747626a691be9d017b32b799a533f1e57bf1da6808395452608bb52d16625d2223022448f0d4e42e9ec
+  checksum: dd8c375181a748cdeb86aa3d779d6d755596881f47fe38b7c4b810ff1ef6424d485b23065fda0f6e32d9988bae19cd64e49f6e2f11295d5184485ab7528a37d1
   languageName: node
   linkType: hard
 
@@ -7293,14 +7293,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"usehooks-ts@npm:^2.13.0":
-  version: 2.13.0
-  resolution: "usehooks-ts@npm:2.13.0"
+"usehooks-ts@npm:^2.14.0":
+  version: 2.14.0
+  resolution: "usehooks-ts@npm:2.14.0"
   dependencies:
     lodash.debounce: "npm:^4.0.8"
   peerDependencies:
     react: ^16.8.0  || ^17 || ^18
-  checksum: 50eef67e5578ac4db54ecd8635893f2ebc96a40776c2f68ec76048d8c769440d6a7df7e1b2ae8c3819019bfd0da94fce591ee367c7c856f5cb7b11aace0c00da
+  checksum: 5ceaafbed357b08553ce3b97c4286b2f514a642a30a350b7715f672834654b385ea3c7d24d0a9dd82af51c7de86c003944d13b4b22542a814a2f733745cbe530
   languageName: node
   linkType: hard
 
