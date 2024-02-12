@@ -13,28 +13,28 @@
 # path        path to template on disk          - either git or path is required
 
 [[actor]]
-name = "hello"
-description = "a hello-world actor (in Rust) that responds over an http connection"
-git = "wasmCloud/project-templates"
-subfolder = "actor/hello"
+name = "hello-world-rust"
+description = "a hello-world actor component (in Rust) that responds over an HTTP connection"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/rust/actors/http-hello-world"
 
 [[actor]]
-name = "echo-tinygo"
-description = "a hello-world actor (in TinyGo) that responds over an http connection"
-git = "wasmCloud/project-templates"
-subfolder = "actor/echo-tinygo"
+name = "hello-world-tinygo"
+description = "a hello-world actor component (in TinyGo) that responds over an HTTP connection"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/golang/actors/http-hello-world"
 
 [[actor]]
-name = "echo-messaging"
-description = "a hello-world actor (in Rust) that echoes a request back over a NATS connection"
-git = "wasmCloud/project-templates"
-subfolder = "actor/echo-messaging"
+name = "hello-world-typescript"
+description = "a hello-world actor component (in TypeScript) that responds over an HTTP connection"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/typescript/actors/http-hello-world"
 
 [[actor]]
-name = "kvcounter"
-description = "an example actor (in Rust) that increments a counter in a key-value store"
-git = "wasmCloud/project-templates"
-subfolder = "actor/kvcounter"
+name = "hello-world-python"
+description = "a hello-world actor component (in Python) that responds over an HTTP connection"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/python/actors/http-hello-world"
 
 [[interface]]
 name = "converter-interface"

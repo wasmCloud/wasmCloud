@@ -350,7 +350,7 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
 
     // Execute wash new to create an actor with the given name
     let mut new_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["new", "actor", "dashed-actor", "-t", "hello"])
+        .args(["new", "actor", "dashed-actor", "-t", "hello-world-rust"])
         .kill_on_drop(true)
         .current_dir(&root_dir)
         .stdout(stdout.try_clone()?)
