@@ -281,7 +281,9 @@ fn build_rust_actor(
     let wasm_file = match wasm_path_buf.normalize() {
         Ok(p) => p,
         Err(e) => bail!(
-            "Could not find compiled wasm file, please ensure {:?} exists. Error: {:?}", wasm_path_buf, e
+            "Could not find compiled wasm file, please ensure {:?} exists. Error: {:?}",
+            wasm_path_buf,
+            e
         ),
     };
 
