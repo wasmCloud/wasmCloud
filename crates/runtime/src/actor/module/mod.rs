@@ -167,6 +167,8 @@ async fn instantiate(
     config: &Config,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
+    // We also need to wrap the instantiation in a task to ensure that the wasm module can spread on all CPU cores
+    // Needs more investigation to be sure why this is necessary
     let (store, guest_call, start) = spawn({
         let mut wasi = WasiCtxBuilder::new();
         let wasi = wasi

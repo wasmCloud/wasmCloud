@@ -2483,11 +2483,12 @@ impl Host {
             let _calls = spawn({
                 let instance = Arc::clone(&instance);
                 let limit = max_instances.get();
+                // Each Nats request needs to be handled by a different async task, to use all CPU core
                 Abortable::new(calls, calls_abort_reg).for_each_concurrent(limit, move |msg| {
                     let instance = Arc::clone(&instance);
                     spawn(async move {
                         let instance = Arc::clone(&instance);
-                        future::ready(instance.handle_rpc_message(msg).await)
+                        instance.handle_rpc_message(msg).await
                     });
                     future::ready(())
                 })
