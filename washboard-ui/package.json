@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "turbo:build": "turbo run build",
+    "turbo:build": "turbo run build --cache-dir .turbo/cache",
     "turbo:dev": "turbo run dev",
     "turbo:lint:eslint": "turbo run lint:eslint",
     "turbo:format:prettier:fix": "turbo run format:prettier:fix",
@@ -20,12 +20,12 @@
     "format:prettier:check": "yarn format:prettier --check"
   },
   "devDependencies": {
-    "@types/node": "^20.10.4",
+    "@types/node": "^20.11.16",
     "@wasmcloud/prettier-config": "workspace:*",
     "eslint": "^8.56.0",
-    "eslint-config-turbo": "^1.11.2",
-    "prettier": "^3.1.1",
-    "turbo": "^1.10.16",
+    "eslint-config-turbo": "^1.12.2",
+    "prettier": "^3.2.5",
+    "turbo": "^1.12.2",
     "typescript": "^5.3.3"
   }
 }

@@ -9,12 +9,10 @@ use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use rskafka::record::{Record, RecordAndOffset};
 use tokio::task::JoinHandle;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
+    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
     wasmcloud_provider_sdk::Context,
 };
 
@@ -191,33 +189,45 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
         skip_all,
         fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len())
     )]
-    async fn publish(&self, ctx: Context, msg: Message) -> ProviderInvocationResult<()> {
+    async fn publish(&self, ctx: Context, msg: Message) -> () {
         debug!("publishing message: {msg:?}");
 
         let hosts = {
-            let connections = self.connections.read().map_err(|e| {
-                ProviderInvocationError::Provider(format!("failed to read connections: {e}"))
-            })?;
+            let connections = match self.connections.read() {
+                Ok(connections) => connections,
+                Err(e) => {
+                    error!("failed to read connections: {e}");
+                    return;
+                }
+            };
 
-            let config = connections
-                .get(&ctx.actor.clone().unwrap())
-                .ok_or_else(|| {
-                    ProviderInvocationError::Provider(format!(
-                        "failed to find actor for connection"
-                    ))
-                })?;
+            let config = match connections.get(&ctx.actor.clone().unwrap()) {
+                Some(config) => config,
+                None => {
+                    error!("no actor config for connection");
+                    return;
+                }
+            };
 
             config.connection_hosts.clone()
         };
 
-        let client = ClientBuilder::new(hosts).build().await.map_err(|e| {
-            ProviderInvocationError::Provider(format!("failed to build client: {e}"))
-        })?;
+        let client = match ClientBuilder::new(hosts).build().await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to build client: {e}");
+                return;
+            }
+        };
 
         // Ensure topic exists
-        let controller_client = client.controller_client().map_err(|e| {
-            ProviderInvocationError::Provider(format!("failed to build controller client: {e}"))
-        })?;
+        let controller_client = match client.controller_client() {
+            Ok(controller_client) => controller_client,
+            Err(e) => {
+                error!("failed to build controller client: {e}");
+                return;
+            }
+        };
 
         // TODO: accept linkdef tunable values for these
         if let Err(e) = controller_client
@@ -233,16 +243,20 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
         }
 
         // Get a partition-bound client
-        let partition_client = client
+        let partition_client = match client
             .partition_client(
                 msg.subject.to_owned(),
                 0, // partition
                 UnknownTopicHandling::Error,
             )
             .await
-            .map_err(|e| {
-                ProviderInvocationError::Provider(format!("failed to create partition client: {e}"))
-            })?;
+        {
+            Ok(partition_client) => partition_client,
+            Err(e) => {
+                error!("failed to create partition client: {e}");
+                return;
+            }
+        };
 
         // produce some data
         let records = vec![Record {
@@ -252,28 +266,24 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             timestamp: chrono::offset::Utc::now(),
         }];
 
-        partition_client
+        if let Err(e) = partition_client
             .produce(records, Compression::default())
             .await
-            .map_err(|e| {
-                ProviderInvocationError::Provider(format!("failed to produce record: {e}"))
-            })?;
-
-        Ok(())
+        {
+            error!("failed to produce record: {e}");
+        };
     }
 
     #[instrument(level = "debug", skip_all, fields(subject = %_msg.subject))]
-    async fn request(
-        &self,
-        _ctx: Context,
-        _msg: RequestMessage,
-    ) -> ProviderInvocationResult<Message> {
+    async fn request(&self, _ctx: Context, _msg: RequestMessage) -> Message {
         // Kafka does not support request-reply in the traditional sense. You can publish to a
         // topic, and get an acknowledgement that it was received, but you can't get a
         // reply from a consumer on the other side.
-
-        Err(ProviderInvocationError::Provider(
-            "not implemented (Kafka does not officially support the request-reply paradigm)".into(),
-        ))
+        error!("not implemented (Kafka does not officially support the request-reply paradigm)");
+        Message {
+            subject: String::default(),
+            reply_to: None,
+            body: Vec::new(),
+        }
     }
 }

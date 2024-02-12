@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm::server::{
     DeleteModelResponse, DeployModelResponse, GetModelResponse, GetResult, ModelSummary,
-    PutModelResponse, PutResult, VersionResponse,
+    PutModelResponse, PutResult, StatusResponse, VersionResponse,
 };
 use wash_lib::{
     app::{load_app_manifest, AppManifest},
@@ -25,6 +25,9 @@ pub enum AppCliCommand {
     /// Retrieve the details for a specific version of an app specification
     #[clap(name = "get")]
     Get(GetCommand),
+    /// Retrieve the status of a given model within the lattice
+    #[clap(name = "status")]
+    Status(StatusCommand),
     /// Retrieve the version history of a given model within the lattice
     #[clap(name = "history")]
     History(HistoryCommand),
@@ -118,6 +121,16 @@ pub struct GetCommand {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct StatusCommand {
+    /// The name of the app spec
+    #[clap(name = "name")]
+    model_name: String,
+
+    #[clap(flatten)]
+    opts: CliConnectionOpts,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct HistoryCommand {
     /// The name of the app spec
     #[clap(name = "name")]
@@ -143,6 +156,12 @@ pub async fn handle_command(
             sp.update_spinner_message("Querying app spec details ... ".to_string());
             let results = get_model_details(cmd).await?;
             show_model_output(results)
+        }
+        Status(cmd) => {
+            sp.update_spinner_message("Querying app status ... ".to_string());
+            let model_name = cmd.model_name.clone();
+            let results = get_model_status(cmd).await?;
+            show_model_status(model_name, results)
         }
         History(cmd) => {
             sp.update_spinner_message("Querying app revision history ... ".to_string());
@@ -259,6 +278,16 @@ async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     wash_lib::app::get_model_history(&client, lattice, &cmd.model_name).await
 }
 
+async fn get_model_status(cmd: StatusCommand) -> Result<StatusResponse> {
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice = Some(connection_opts.get_lattice());
+
+    let client = connection_opts.into_nats_client().await?;
+
+    wash_lib::app::get_model_status(&client, lattice, &cmd.model_name).await
+}
+
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
@@ -340,4 +369,13 @@ fn show_model_history(results: VersionResponse) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("revisions".to_string(), json!(results));
     CommandOutput::new(output::list_revisions_table(results.versions), map)
+}
+
+fn show_model_status(model_name: String, results: StatusResponse) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("status".to_string(), json!(results));
+    CommandOutput::new(
+        output::status_table(model_name, results.status.unwrap_or_default()),
+        map,
+    )
 }

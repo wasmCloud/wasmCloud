@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 
+use anyhow::Context as _;
+use anyhow::Result;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    serde_json,
-    serde_json::Value,
-    wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
-    wasmcloud_provider_sdk::Context,
+    async_trait::async_trait, serde_json, serde_json::Value,
+    wasmcloud_provider_sdk::core::LinkDefinition, wasmcloud_provider_sdk::Context,
 };
 
 pub(crate) mod client;
@@ -38,22 +36,20 @@ pub struct KvVaultProvider {
 
 impl KvVaultProvider {
     /// Retrieve a client for a given context (determined by actor_id)
-    async fn get_client(&self, ctx: &Context) -> ProviderInvocationResult<Client> {
-        // get the
-        let actor_id = ctx.actor.as_ref().ok_or_else(|| {
-            ProviderInvocationError::Provider("invalid parameter: no actor in request".into())
-        })?;
+    async fn get_client(&self, ctx: &Context) -> Result<Client> {
+        // get the actor ID
+        let actor_id = ctx
+            .actor
+            .as_ref()
+            .context("invalid parameter: no actor in request")?;
+
         // Clone the existing client for the given actor from the internal hash map
         let client = self
             .actors
             .read()
             .await
             .get(actor_id)
-            .ok_or_else(|| {
-                ProviderInvocationError::Provider(format!(
-                    "invalid parameter: actor [{actor_id}] not linked"
-                ))
-            })?
+            .with_context(|| format!("invalid parameter: actor [{actor_id}] not linked"))?
             .read()
             .await
             .clone();
@@ -133,131 +129,140 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
     /// If the stored value is a plain string, returns the plain value
     /// All other values are returned as serialized json
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn get(&self, ctx: Context, arg: String) -> ProviderInvocationResult<GetResponse> {
-        let client = self.get_client(&ctx).await?;
+    async fn get(&self, ctx: Context, arg: String) -> GetResponse {
+        let client = match self.get_client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return GetResponse {
+                    exists: false,
+                    value: String::default(),
+                };
+            }
+        };
+
         match client.read_secret::<Value>(&arg.to_string()).await {
             Ok(Value::Object(mut map)) => {
                 if let Some(Value::String(value)) = map.remove(STRING_VALUE_MARKER) {
-                    Ok(GetResponse {
+                    GetResponse {
                         value,
                         exists: true,
-                    })
+                    }
                 } else {
-                    Ok(GetResponse {
+                    GetResponse {
                         value: serde_json::to_string(&map).unwrap(),
                         exists: true,
-                    })
+                    }
                 }
             }
-            Ok(Value::String(value)) => Ok(GetResponse {
+            Ok(Value::String(value)) => GetResponse {
                 value,
                 exists: true,
-            }),
-            Ok(value) => Ok(GetResponse {
+            },
+            Ok(value) => GetResponse {
                 value: serde_json::to_string(&value).unwrap(),
                 exists: true,
-            }),
+            },
             Err(VaultError::NotFound { namespace, path }) => {
                 debug!(
                     %namespace, %path,
                     "vault read NotFound error"
                 );
-                Ok(GetResponse {
+                GetResponse {
                     exists: false,
                     value: String::default(),
-                })
+                }
             }
             Err(e) => {
-                debug!(error = %e, "vault read: other error");
-                Err(e.into())
+                error!(error = %e, "vault read: other error");
+                GetResponse {
+                    exists: false,
+                    value: String::default(),
+                }
             }
         }
     }
 
     /// Returns true if the store contains the key
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn contains(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
-        Ok(matches!(
+    async fn contains(&self, ctx: Context, arg: String) -> bool {
+        matches!(
             self.get(ctx.clone(), arg.to_string()).await,
-            Ok(GetResponse { exists: true, .. })
-        ))
+            GetResponse { exists: true, .. }
+        )
     }
 
     /// Deletes a key, returning true if the key was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn del(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
-        let client = self.get_client(&ctx).await?;
+    async fn del(&self, ctx: Context, arg: String) -> bool {
+        let client = match self.get_client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return false;
+            }
+        };
 
         match client.delete_latest(&arg.to_string()).await {
-            Ok(_) => Ok(true),
+            Ok(_) => true,
             Err(VaultError::NotFound { namespace, path }) => {
                 debug!(%namespace, %path, "vault delete NotFound error");
-                Ok(false)
+                false
             }
             Err(e) => {
                 debug!(error = %e, "Error while deleting from vault");
-                Err(e.into())
+                false
             }
         }
     }
 
     /// Increments a numeric value, returning the new value
-    async fn increment(
-        &self,
-        _ctx: Context,
-        _arg: IncrementRequest,
-    ) -> ProviderInvocationResult<i32> {
-        Err(ProviderInvocationError::Provider(
-            "`increment` not implemented".into(),
-        ))
+    async fn increment(&self, _ctx: Context, _arg: IncrementRequest) -> i32 {
+        error!("`increment` not implemented");
+        0
     }
 
     /// Append a value onto the end of a list. Returns the new list size
-    async fn list_add(&self, _ctx: Context, _arg: ListAddRequest) -> ProviderInvocationResult<u32> {
-        Err(ProviderInvocationError::Provider(
-            "`list_add` not implemented".into(),
-        ))
+    async fn list_add(&self, _ctx: Context, _arg: ListAddRequest) -> u32 {
+        error!("`list_add` not implemented");
+        0
     }
 
     /// Deletes a list and its contents
     /// input: list name
     /// returns: true if the list existed and was deleted
-    async fn list_clear(&self, _ctx: Context, _arg: String) -> ProviderInvocationResult<bool> {
-        Err(ProviderInvocationError::Provider(
-            "`list_clear` not implemented".into(),
-        ))
+    async fn list_clear(&self, _ctx: Context, _arg: String) -> bool {
+        error!("`list_clear` not implemented");
+        false
     }
 
     /// Deletes an item from a list. Returns true if the item was removed.
-    async fn list_del(
-        &self,
-        _ctx: Context,
-        _arg: ListDelRequest,
-    ) -> ProviderInvocationResult<bool> {
-        Err(ProviderInvocationError::Provider(
-            "`list_del` not implemented".into(),
-        ))
+    async fn list_del(&self, _ctx: Context, _arg: ListDelRequest) -> bool {
+        error!("`list_del` not implemented");
+        false
     }
 
     /// Retrieves a range of values from a list using 0-based indices.
     /// Start and end values are inclusive, for example, (0,10) returns
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
-    async fn list_range(
-        &self,
-        _ctx: Context,
-        _arg: ListRangeRequest,
-    ) -> ProviderInvocationResult<Vec<String>> {
-        Err(ProviderInvocationError::Provider(
-            "`list_range` not implemented".into(),
-        ))
+    async fn list_range(&self, _ctx: Context, _arg: ListRangeRequest) -> Vec<String> {
+        error!("`list_range` not implemented");
+        Vec::new()
     }
 
     /// Sets the value of a key.
     /// expiration times are not supported by this api and should be 0.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
-    async fn set(&self, ctx: Context, arg: SetRequest) -> ProviderInvocationResult<()> {
-        let client = self.get_client(&ctx).await?;
+    async fn set(&self, ctx: Context, arg: SetRequest) -> () {
+        let client = match self.get_client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return;
+            }
+        };
+
         let value: Value = serde_json::from_str(&arg.value).unwrap_or_else(|_| {
             let mut map = serde_json::Map::new();
             map.insert(
@@ -269,82 +274,73 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
         match client.write_secret(&arg.key, &value).await {
             Ok(metadata) => {
                 debug!(?metadata, "set returned metadata");
-                Ok(())
             }
             Err(VaultError::NotFound { namespace, path }) => {
-                debug!(
+                error!(
                     %namespace, %path,
                     "write secret returned not found, returning empty results",
                 );
-                Ok(())
             }
             Err(e) => {
-                debug!(error = %e, "vault set: other error");
-                Err(e.into())
+                error!(error = %e, "vault set: other error");
             }
         }
     }
 
     /// Add an item into a set. Returns number of items added
-    async fn set_add(&self, _ctx: Context, _arg: SetAddRequest) -> ProviderInvocationResult<u32> {
-        Err(ProviderInvocationError::Provider(
-            "`set_add` not implemented".into(),
-        ))
+    async fn set_add(&self, _ctx: Context, _arg: SetAddRequest) -> u32 {
+        error!("`set_add` not implemented");
+        0
     }
 
     /// Remove a item from the set. Returns
-    async fn set_del(&self, _ctx: Context, _arg: SetDelRequest) -> ProviderInvocationResult<u32> {
-        Err(ProviderInvocationError::Provider(
-            "`set_del` not implemented".into(),
-        ))
+    async fn set_del(&self, _ctx: Context, _arg: SetDelRequest) -> u32 {
+        error!("`set_del` not implemented");
+        0
     }
 
-    async fn set_intersection(
-        &self,
-        _ctx: Context,
-        _arg: Vec<String>,
-    ) -> Result<Vec<String>, ProviderInvocationError> {
-        Err(ProviderInvocationError::Provider(
-            "`set_intersection` not implemented".into(),
-        ))
+    async fn set_intersection(&self, _ctx: Context, _arg: Vec<String>) -> Vec<String> {
+        error!("`set_intersection` not implemented");
+        Vec::new()
     }
 
     /// returns a list of all secrets at the path
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> ProviderInvocationResult<Vec<String>> {
-        let client = self.get_client(&ctx).await?;
+    async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
+        let client = match self.get_client(&ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                return Vec::new();
+            }
+        };
+
         match client.list_secrets(&arg.to_string()).await {
-            Ok(list) => Ok(list),
+            Ok(list) => list,
             Err(VaultError::NotFound { namespace, path }) => {
-                debug!(
+                error!(
                     %namespace, %path,
                     "list secrets not found, returning empty results",
                 );
-                Ok(Vec::new())
+                Vec::new()
             }
             Err(e) => {
-                debug!(error = %e, "vault list: other error");
-                Err(e.into())
+                error!(error = %e, "vault list: other error");
+                Vec::new()
             }
         }
     }
 
-    async fn set_union(
-        &self,
-        _ctx: Context,
-        _arg: Vec<String>,
-    ) -> ProviderInvocationResult<Vec<String>> {
-        Err(ProviderInvocationError::Provider(
-            "`set_union` not implemented".into(),
-        ))
+    async fn set_union(&self, _ctx: Context, _arg: Vec<String>) -> Vec<String> {
+        error!("`set_union` not implemented");
+        Vec::new()
     }
 
     /// Deletes a set and its contents
     /// input: set name
     /// returns: true if the set existed and was deleted
-    async fn set_clear(&self, _ctx: Context, _arg: String) -> ProviderInvocationResult<bool> {
-        Err(ProviderInvocationError::Provider(
-            "`set_clear` not implemented".into(),
-        ))
+    async fn set_clear(&self, _ctx: Context, _arg: String) -> bool {
+        error!("`set_clear` not implemented");
+        false
     }
 }

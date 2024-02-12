@@ -15,6 +15,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+anyhow = { workspace = true }
 async-nats = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }

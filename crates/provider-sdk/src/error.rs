@@ -1,12 +1,11 @@
 //! Error types for interacting with a provider
 
 pub type InvocationResult<T> = Result<T, InvocationError>;
-pub type ProviderResult<T> = Result<T, ProviderError>;
-pub type ProviderInvocationResult<T> = Result<T, ProviderInvocationError>;
+pub type ProviderInitResult<T> = Result<T, ProviderInitError>;
 
 /// All errors that that can be returned by a provider when it is being initialized
 #[derive(Debug, thiserror::Error)]
-pub enum ProviderError {
+pub enum ProviderInitError {
     /// Errors when connecting to the lattice NATS cluster
     #[error(transparent)]
     Connect(#[from] async_nats::ConnectError),
@@ -16,30 +15,6 @@ pub enum ProviderError {
     /// Initialization error when setting up a provider (such as invalid information or configuration)
     #[error("Initialization error: {0}")]
     Initialization(String),
-}
-
-/// A wrapper around a provider invocation error that allows for the provider to return an error but
-/// allows the provider-sdk to still handle an invocation error properly
-// NOTE(thomastaylor312): I don't _love_ this, but it does allow us to keep the provider SDK errors
-// separate from what each provider can return
-#[derive(Debug, thiserror::Error)]
-pub enum ProviderInvocationError {
-    #[error(transparent)]
-    Invocation(#[from] InvocationError),
-    #[error("{0}")]
-    Provider(String),
-}
-
-impl From<std::io::Error> for ProviderInvocationError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Provider(format!("i/o error: {e}"))
-    }
-}
-
-impl From<String> for ProviderInvocationError {
-    fn from(e: String) -> Self {
-        Self::Provider(e)
-    }
 }
 
 /// Errors that can occur when sending or receiving an invocation, including the `dispatch` method
@@ -71,6 +46,9 @@ pub enum InvocationError {
     /// Returned when an invocation is malformed (e.g. has a method type that isn't supported)
     #[error("Malformed invocation: {0}")]
     Malformed(String),
+    /// Returned when an invocation returns an error
+    #[error("Unexpected error: {0}")]
+    Unexpected(String),
 }
 
 /// All errors that can occur when validating an invocation

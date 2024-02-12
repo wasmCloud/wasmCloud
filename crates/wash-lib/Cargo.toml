@@ -1,6 +1,6 @@
 [package]
 name = "wash-lib"
-version = "0.16.0"
+version = "0.17.0"
 categories = ["wasm", "wasmcloud"]
 description = "wasmCloud Shell (wash) libraries"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]
@@ -55,7 +55,9 @@ ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
 nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
-path-absolutize = { workspace = true, features = ["once_cell_cache"], optional = true }
+path-absolutize = { workspace = true, features = [
+    "once_cell_cache",
+], optional = true }
 provider-archive = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }

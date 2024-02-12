@@ -8,7 +8,7 @@
 version: "3"
 services:
   nats:
-    image: nats:2.10.7-alpine
+    image: nats:2.10-alpine
     ports:
       - "4222:4222"
       - "6222:6222"
@@ -36,8 +36,8 @@ services:
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
+      - 4318:4318 # otlp http
       - 7999:7999 # tempo
-      - 55681:55681 # otlp http
 
   wasmcloud:
     depends_on:
@@ -53,7 +53,7 @@ services:
       WASMCLOUD_ALLOW_FILE_LOAD: "true"
       WASMCLOUD_OCI_ALLOWED_INSECURE: registry:5000
       OTEL_TRACES_EXPORTER: otlp
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:55681/v1/traces
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     ports:
       - "8000-8100:8000-8100" # Expose ports 8000-8100 for examples that use an HTTP server
 

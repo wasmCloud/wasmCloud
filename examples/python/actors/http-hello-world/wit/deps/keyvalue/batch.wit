@@ -1,0 +1,27 @@
+/// A keyvalue interface that provides batch operations.
+interface batch {
+	/// A keyvalue interface that provides batch get operations.
+	use types.{bucket, error, key, keys, incoming-value, outgoing-value};
+
+	/// Get the values associated with the keys in the bucket. It returns a list of
+	/// incoming-values that can be consumed to get the values.
+	///
+	/// If any of the keys do not exist in the bucket, it returns an error.
+	get-many: func(bucket: bucket, keys: keys) -> result<list<incoming-value>, error>;
+
+	/// Get all the keys in the bucket. It returns a list of keys.
+	get-keys: func(bucket: bucket) -> keys;
+
+	/// Set the values associated with the keys in the bucket. If the key already
+	/// exists in the bucket, it overwrites the value.
+	///
+	/// If any of the keys do not exist in the bucket, it creates a new key-value pair.
+	/// If any other error occurs, it returns an error.
+	set-many: func(bucket: bucket, key-values: list<tuple<key, outgoing-value>>) -> result<_, error>;
+
+	/// Delete the key-value pairs associated with the keys in the bucket.
+	///
+	/// If any of the keys do not exist in the bucket, it skips the key.
+	/// If any other error occurs, it returns an error.
+	delete-many: func(bucket: bucket, keys: keys) -> result<_, error>;
+}

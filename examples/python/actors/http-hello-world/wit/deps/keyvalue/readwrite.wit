@@ -1,0 +1,26 @@
+/// A keyvalue interface that provides simple read and write operations.
+interface readwrite {
+	/// A keyvalue interface that provides simple read and write operations.
+	use types.{bucket, error, incoming-value, key, outgoing-value};
+	
+	/// Get the value associated with the key in the bucket. It returns a incoming-value
+	/// that can be consumed to get the value.
+	///
+	/// If the key does not exist in the bucket, it returns an error.
+	get: func(bucket: bucket, key: key) -> result<incoming-value, error>;
+
+	/// Set the value associated with the key in the bucket. If the key already
+	/// exists in the bucket, it overwrites the value.
+	///
+	/// If the key does not exist in the bucket, it creates a new key-value pair.
+	/// If any other error occurs, it returns an error.
+	set: func(bucket: bucket, key: key, outgoing-value: outgoing-value) -> result<_, error>;
+
+	/// Delete the key-value pair associated with the key in the bucket.
+	///
+	/// If the key does not exist in the bucket, it returns an error.
+	delete: func(bucket: bucket, key: key) -> result<_, error>;
+
+	/// Check if the key exists in the bucket.
+	exists: func(bucket: bucket, key: key) -> result<bool, error>;
+}

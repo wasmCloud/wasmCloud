@@ -50,7 +50,7 @@ use wasmcloud_provider_wit_bindgen::deps::{
     serde::{Deserialize, Serialize},
     wasmcloud_provider_sdk,
     wasmcloud_provider_sdk::core::{LinkDefinition, WasmCloudEntity},
-    wasmcloud_provider_sdk::error::{InvocationError, ProviderInvocationError},
+    wasmcloud_provider_sdk::error::InvocationError,
 };
 
 mod hashmap_ci;
@@ -164,10 +164,7 @@ impl<'a> Server<'a> {
         Self { ld, timeout }
     }
 
-    pub async fn handle_request(
-        &self,
-        req: HttpRequest,
-    ) -> Result<HttpResponse, ProviderInvocationError> {
+    pub async fn handle_request(&self, req: HttpRequest) -> Result<HttpResponse, InvocationError> {
         let connection = wasmcloud_provider_sdk::provider_main::get_connection();
 
         let client = connection.get_rpc_client();
@@ -194,7 +191,7 @@ impl<'a> Server<'a> {
         };
 
         if let Some(e) = response.error {
-            return Err(ProviderInvocationError::Provider(e));
+            return Err(InvocationError::Unexpected(e));
         }
 
         let response: HttpResponse = wasmcloud_provider_sdk::deserialize(&response.msg)?;
@@ -209,12 +206,12 @@ async fn call_actor(
     ld: Arc<LinkDefinition>,
     req: HttpRequest,
     timeout: Option<std::time::Duration>,
-) -> Result<HttpResponse, ProviderInvocationError> {
+) -> Result<HttpResponse, InvocationError> {
     let sender = Server::new(&ld, timeout);
 
     let rc = sender.handle_request(req).await;
     match rc {
-        Err(ProviderInvocationError::Invocation(InvocationError::Timeout)) => {
+        Err(InvocationError::Timeout) => {
             error!("actor request timed out: returning 503",);
             Ok(HttpResponse {
                 status_code: 503,
@@ -269,11 +266,9 @@ pub type AsyncCallActorFn = Box<
             Arc<LinkDefinition>,
             HttpRequest,
             Option<Duration>,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<HttpResponse, ProviderInvocationError>> + Send + 'static,
-            >,
-        > + Send
+        )
+            -> Pin<Box<dyn Future<Output = Result<HttpResponse, InvocationError>> + Send + 'static>>
+        + Send
         + Sync,
 >;
 
@@ -286,8 +281,7 @@ impl CallActorFn {
         ld: Arc<LinkDefinition>,
         req: HttpRequest,
         timeout: Option<Duration>,
-    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, ProviderInvocationError>> + Send + 'static>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, InvocationError>> + Send + 'static>> {
         Box::pin((self.0.as_ref())(ld, req, timeout))
     }
 }
@@ -326,7 +320,7 @@ impl HttpServerCore {
     pub fn new<F, Fut>(settings: ServiceSettings, call_actor_fn: F) -> Self
     where
         F: Fn(Arc<LinkDefinition>, HttpRequest, Option<Duration>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<HttpResponse, ProviderInvocationError>> + 'static + Send,
+        Fut: Future<Output = Result<HttpResponse, InvocationError>> + 'static + Send,
     {
         let (shutdown_tx, shutdown_rx) = bounded(1);
         let call_actor_fn = Arc::new(call_actor_fn);

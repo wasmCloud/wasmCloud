@@ -10,7 +10,7 @@
     "build": "npm run build:tsc && npm run build:component && npm run build:actor",
     "actor:start": "wash start actor file://$(realpath dist/index_s.wasm) --auction-timeout-ms 10000 --timeout-ms 10000",
     "actor:stop": "wash stop actor typescript-http-hello-world",
-    "wadm:start": "wash app deploy typescript-http-hello-world.wadm.yaml",
+    "wadm:start": "wash app deploy wadm.yaml",
     "wadm:stop": "wash app delete typescript-http-hello-world v0.0.1",
     "start": "npm run build && npm run wadm:start",
     "reload": "npm run build && npm run wadm:stop && npm run wadm:start",

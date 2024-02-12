@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.32.1"
+version = "0.33.0"
 homepage = "https://wasmcloud.com"
 description = "A client library for communicating with hosts on a wasmCloud lattice"
 documentation = "https://docs.rs/wasmcloud-control-interface"
@@ -19,6 +19,11 @@ bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "trace",
+    "logs",
+    "rt-tokio",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }

@@ -10,6 +10,7 @@ mod broker;
 mod otel;
 mod types;
 
+use async_nats::Subscriber;
 pub use types::*;
 
 use core::fmt::{self, Debug};
@@ -18,7 +19,7 @@ use core::time::Duration;
 use std::collections::HashMap;
 
 use cloudevents::event::Event;
-use futures::StreamExt;
+use futures::{StreamExt, TryFutureExt};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
@@ -677,7 +678,7 @@ impl Client {
         Ok(collect_sub_timeout::<D>(sub, self.auction_timeout, subject.as_str()).await)
     }
 
-    /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
+    /// Returns the receiver end of a channel that subscribes to the lattice event stream.
     /// Any [`Event`](struct@Event)s that are published after this channel is created
     /// will be added to the receiver channel's buffer, which can be observed or handled if needed.
     /// See the example for how you could use this receiver to handle events.
@@ -690,59 +691,34 @@ impl Client {
     ///   let client = ClientBuilder::new(nc)
     ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
     ///                 .auction_timeout(std::time::Duration::from_millis(1000))
-    ///                 .build();
-    ///   let mut receiver = client.events_receiver().await.unwrap();
-    ///   tokio::spawn( async move {
-    ///       while let Some(evt) = receiver.recv().await {
-    ///           println!("Event received: {:?}", evt);
-    ///       }
-    ///   });
-    ///   // perform other operations on client
-    ///   client.get_host_inventory("NAEXHW...").await.unwrap();
-    /// };
-    /// ```
-    ///
-    /// Once you're finished with the event receiver, be sure to call `drop` with the receiver
-    /// as an argument. This closes the channel and will prevent the sender from endlessly
-    /// sending messages into the channel buffer.
-    ///
-    /// # Example
-    /// ```rust
-    /// use wasmcloud_control_interface::{Client, ClientBuilder};
-    /// async {
-    ///   let nc = async_nats::connect("0.0.0.0:4222").await.unwrap();
-    ///   let client = ClientBuilder::new(nc)
-    ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
-    ///                 .auction_timeout(std::time::Duration::from_millis(1000))
     ///                 .build();    
-    ///   let mut receiver = client.events_receiver().await.unwrap();
-    ///   // read the docs for flume receiver. You can use it in either sync or async code
-    ///   // The receiver can be cloned() as needed.
-    ///   // If you drop the receiver. The subscriber will exit
-    ///   // If the nats connection ic closed, the loop below will exit.
+    ///   let mut receiver = client.events_receiver("actor_scaled").await.unwrap();
     ///   while let Some(evt) = receiver.recv().await {
     ///       println!("Event received: {:?}", evt);
     ///   }
     /// };
     /// ```
     #[allow(clippy::missing_errors_doc)] // TODO: Document errors
-    pub async fn events_receiver(&self) -> Result<Receiver<Event>> {
-        use futures::StreamExt as _;
+    pub async fn events_receiver(&self, event_types: Vec<String>) -> Result<Receiver<Event>> {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
-        let mut sub = self
-            .nc
-            .subscribe(format!("wasmbus.evt.{}", self.lattice))
-            .await?;
+        let futs = event_types.into_iter().map(|event_type| {
+            self.nc
+                .subscribe(format!("wasmbus.evt.{}.{}", self.lattice, event_type))
+                .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
+        });
+        let subs: Vec<Subscriber> = futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .collect::<Result<_>>()?;
+        let mut stream = futures::stream::select_all(subs);
         tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
+            while let Some(msg) = stream.next().await {
                 let Ok(evt) = json_deserialize::<Event>(&msg.payload) else {
                     error!("Object received on event stream was not a CloudEvent");
                     continue;
                 };
                 trace!("received event: {:?}", evt);
                 let Ok(()) = sender.send(evt).await else {
-                    // If the channel is disconnected, stop sending events
-                    let _ = sub.unsubscribe().await;
                     break;
                 };
             }
@@ -850,7 +826,10 @@ mod tests {
             .timeout(Duration::from_millis(1000))
             .auction_timeout(Duration::from_millis(1000))
             .build();
-        let mut receiver = client.events_receiver().await.unwrap();
+        let mut receiver = client
+            .events_receiver(vec!["foobar".to_string()])
+            .await
+            .unwrap();
         tokio::spawn(async move {
             while let Some(evt) = receiver.recv().await {
                 println!("Event received: {evt:?}");

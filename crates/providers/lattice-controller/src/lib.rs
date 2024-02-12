@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{RwLock, RwLockReadGuard};
-use tracing::{instrument, warn};
+use tracing::{error, instrument, warn};
 use wasmcloud_control_interface as interface_client;
 
 mod client_cache;
@@ -24,7 +24,6 @@ const DEFAULT_LATTICE: &str = "default";
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde::{Deserialize, Serialize},
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
     wasmcloud_provider_sdk::{load_host_data, Context},
 };
 
@@ -154,7 +153,7 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         &self,
         _ctx: Context,
         arg: SetLatticeCredentialsRequest,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
+    ) -> CtlOperationAck {
         let config = ConnectionConfig {
             cluster_uris: vec![arg
                 .nats_url
@@ -175,9 +174,17 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         //
         // Since auctions will *wait* until the auction_timeout to do operations like gathering hosts,
         // we must manually ensure this value is unlikely to cause timeouts.
-        let host_data = load_host_data().map_err(|e| {
-            ProviderInvocationError::Provider(format!("failed to load host data: {e}"))
-        })?;
+        let host_data = match load_host_data() {
+            Ok(host_data) => host_data,
+            Err(e) => {
+                error!("failed to load host data: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to load host data".into(),
+                };
+            }
+        };
+
         if host_data
             .default_rpc_timeout_ms
             .is_some_and(|v| v < config.timeout_ms)
@@ -194,10 +201,10 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             .put_config(&arg.lattice_id, config)
             .await;
 
-        Ok(CtlOperationAck {
+        CtlOperationAck {
             accepted: true,
             error: "".to_string(),
-        })
+        }
     }
 
     /// Sets registry credentials, storing them in the cache
@@ -206,12 +213,20 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         &self,
         _ctx: Context,
         arg: SetRegistryCredentialsRequest,
-    ) -> ProviderInvocationResult<()> {
-        let client = self
+    ) -> () {
+        let client = match self
             .get_connections()
             .await
             .get_client(&arg.lattice_id)
-            .await?;
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return;
+            }
+        };
+
         let mut hm = HashMap::new();
         if let Some(ref c) = arg.credentials {
             for (k, v) in c {
@@ -227,11 +242,9 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             }
         }
 
-        client
-            .put_registries(hm)
-            .await
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?;
-        Ok(())
+        if let Err(e) = client.put_registries(hm).await {
+            error!("failed to set registry credentials: {e}");
+        };
     }
 
     /// Auction a provider on the lattice
@@ -240,12 +253,21 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         &self,
         _ctx: Context,
         arg: ProviderAuctionRequest,
-    ) -> ProviderInvocationResult<Vec<ProviderAuctionAck>> {
-        Ok(self
+    ) -> Vec<ProviderAuctionAck> {
+        let client = match self
             .get_connections()
             .await
             .get_client(&arg.lattice_id)
-            .await?
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return Vec::new();
+            }
+        };
+
+        client
             .perform_provider_auction(&arg.provider_ref, &arg.link_name, arg.constraints.clone())
             .await
             .map(|v| {
@@ -257,21 +279,29 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                     })
                     .collect::<Vec<_>>()
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to auction provider: {e}");
+                Vec::new()
+            })
     }
 
     /// Auction an actor on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
-    async fn auction_actor(
-        &self,
-        _ctx: Context,
-        arg: ActorAuctionRequest,
-    ) -> ProviderInvocationResult<Vec<ActorAuctionAck>> {
-        Ok(self
+    async fn auction_actor(&self, _ctx: Context, arg: ActorAuctionRequest) -> Vec<ActorAuctionAck> {
+        let client = match self
             .get_connections()
             .await
             .get_client(&arg.lattice_id)
-            .await?
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return Vec::new();
+            }
+        };
+
+        client
             .perform_actor_auction(&arg.actor_ref, arg.constraints.clone())
             .await
             .map(|v| {
@@ -282,17 +312,24 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                     })
                     .collect::<Vec<_>>()
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to auction actor: {e}");
+                Vec::new()
+            })
     }
 
     /// Retrieve all hosts on the lattice
-    #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = %arg.to_string()))]
-    async fn get_hosts(&self, _ctx: Context, arg: String) -> ProviderInvocationResult<Vec<Host>> {
-        Ok(self
-            .get_connections()
-            .await
-            .get_client(&arg.to_string())
-            .await?
+    #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = %lattice_id))]
+    async fn get_hosts(&self, _ctx: Context, lattice_id: String) -> Vec<Host> {
+        let client = match self.get_connections().await.get_client(&lattice_id).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return Vec::new();
+            }
+        };
+
+        client
             .get_hosts()
             .await
             .map(|v| {
@@ -300,21 +337,25 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                     .map(|h| {
                         let lattice_prefix = h.lattice().cloned();
                         Host {
-                        cluster_issuers: h.cluster_issuers,
-                        ctl_host: h.ctl_host,
-                        id: h.id,
-                        js_domain: h.js_domain,
-                        labels: h.labels,
-                        lattice_prefix, // NOTE: the control interface type has been updated to just `lattice`, but the wit type is still `lattice_prefix`
-                        prov_rpc_host: h.rpc_host.clone(),
-                        rpc_host: h.rpc_host,
-                        uptime_human: h.uptime_human,
-                        uptime_seconds: h.uptime_seconds,
-                        version: h.version,
-                    }})
+                            cluster_issuers: h.cluster_issuers,
+                            ctl_host: h.ctl_host,
+                            id: h.id,
+                            js_domain: h.js_domain,
+                            labels: h.labels,
+                            lattice_prefix, // NOTE: the control interface type has been updated to just `lattice`, but the wit type is still `lattice_prefix`
+                            prov_rpc_host: h.rpc_host.clone(),
+                            rpc_host: h.rpc_host,
+                            uptime_human: h.uptime_human,
+                            uptime_seconds: h.uptime_seconds,
+                            version: h.version,
+                        }
+                    })
                     .collect::<Vec<_>>()
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to get hosts: {e}");
+                Vec::new()
+            })
     }
 
     /// Retrieve inventory for a given host on the lattice
@@ -323,12 +364,26 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         &self,
         _ctx: Context,
         arg: GetHostInventoryRequest,
-    ) -> ProviderInvocationResult<HostInventory> {
-        Ok(self
+    ) -> HostInventory {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&arg.lattice_id.to_string())
-            .await?
+            .get_client(&arg.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return HostInventory {
+                    host_id: String::default(),
+                    labels: HashMap::new(),
+                    actors: Vec::new(),
+                    providers: Vec::new(),
+                };
+            }
+        };
+
+        client
             .get_host_inventory(&arg.host_id)
             .await
             .map(|hi| HostInventory {
@@ -365,44 +420,64 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                     })
                     .collect::<Vec<_>>(),
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to get host inventory : {e}");
+                HostInventory {
+                    host_id: String::default(),
+                    labels: HashMap::new(),
+                    actors: Vec::new(),
+                    providers: Vec::new(),
+                }
+            })
     }
 
     /// Retrieve claims for a given client
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id))]
-    async fn get_claims(
-        &self,
-        _ctx: Context,
-        lattice_id: String,
-    ) -> ProviderInvocationResult<GetClaimsResponse> {
-        Ok(self
-            .get_connections()
-            .await
-            .get_client(&lattice_id)
-            .await?
+    async fn get_claims(&self, _ctx: Context, lattice_id: String) -> GetClaimsResponse {
+        let client = match self.get_connections().await.get_client(&lattice_id).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return GetClaimsResponse { claims: Vec::new() };
+            }
+        };
+
+        client
             .get_claims()
             .await
             .map(|claims| GetClaimsResponse { claims })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to get claims: {e}");
+                GetClaimsResponse { claims: Vec::new() }
+            })
     }
 
     /// Start an actor on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn start_actor(
-        &self,
-        _ctx: Context,
-        cmd: StartActorCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
+    async fn start_actor(&self, _ctx: Context, cmd: StartActorCommand) -> CtlOperationAck {
         let count = if cmd.count == 0 {
             1_u32
         } else {
             cmd.count.into()
         };
-        Ok(self
+
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to get client for connection".into(),
+                };
+            }
+        };
+
+        client
             .scale_actor(
                 &cmd.host_id,
                 &cmd.actor_ref,
@@ -414,21 +489,35 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: ack.accepted,
                 error: ack.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to start actor: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start actor".into(),
+                }
+            })
     }
 
     /// Scale an actor on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn scale_actor(
-        &self,
-        _ctx: Context,
-        cmd: ScaleActorCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn scale_actor(&self, _ctx: Context, cmd: ScaleActorCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to get client for connection".into(),
+                };
+            }
+        };
+
+        client
             .scale_actor(
                 &cmd.host_id,
                 &cmd.actor_ref,
@@ -440,21 +529,35 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to scale actor: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to scale actor".into(),
+                }
+            })
     }
 
     /// Advertise a link on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?req.lattice_id))]
-    async fn advertise_link(
-        &self,
-        _ctx: Context,
-        req: AdvertiseLinkRequest,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn advertise_link(&self, _ctx: Context, req: AdvertiseLinkRequest) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&req.lattice_id.to_string())
-            .await?
+            .get_client(&req.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to get client for connection".into(),
+                };
+            }
+        };
+
+        client
             .advertise_link(
                 &req.link.actor_id,
                 &req.link.provider_id,
@@ -467,7 +570,13 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: ack.accepted,
                 error: ack.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to advertise link: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to advertise link".into(),
+                }
+            })
     }
 
     /// Remove a link on the lattice
@@ -476,33 +585,51 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
         &self,
         _ctx: Context,
         req: RemoveLinkDefinitionRequest,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    ) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&req.lattice_id.to_string())
-            .await?
+            .get_client(&req.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start actor".into(),
+                };
+            }
+        };
+
+        client
             .remove_link(&req.actor_id, &req.actor_id, &req.link_name)
             .await
             .map(|a| CtlOperationAck {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to remove link: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to remove link".into(),
+                }
+            })
     }
 
     /// Retrieve links on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id))]
-    async fn get_links(
-        &self,
-        _ctx: Context,
-        lattice_id: String,
-    ) -> ProviderInvocationResult<Vec<LinkDefinition>> {
-        Ok(self
-            .get_connections()
-            .await
-            .get_client(&lattice_id)
-            .await?
+    async fn get_links(&self, _ctx: Context, lattice_id: String) -> Vec<LinkDefinition> {
+        let client = match self.get_connections().await.get_client(&lattice_id).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return Vec::new();
+            }
+        };
+
+        client
             .query_links()
             .await
             .map(|links| {
@@ -517,21 +644,32 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                     })
                     .collect()
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to get links: {e}");
+                Vec::new()
+            })
     }
 
     /// Update an actor running on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn update_actor(
-        &self,
-        _ctx: Context,
-        cmd: UpdateActorCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn update_actor(&self, _ctx: Context, cmd: UpdateActorCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to get client for connection".into(),
+                };
+            }
+        };
+
+        client
             .update_actor(
                 &cmd.host_id,
                 &cmd.actor_id,
@@ -543,7 +681,13 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to update actor: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to update actor".into(),
+                }
+            })
     }
 
     /// Start a provider on the lattice
@@ -558,16 +702,24 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
             lattice_id = ?cmd.lattice_id
         )
     )]
-    async fn start_provider(
-        &self,
-        _ctx: Context,
-        cmd: StartProviderCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn start_provider(&self, _ctx: Context, cmd: StartProviderCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start actor".into(),
+                };
+            }
+        };
+
+        client
             .start_provider(
                 &cmd.host_id,
                 &cmd.provider_ref,
@@ -580,21 +732,35 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to start provider: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start provider".into(),
+                }
+            })
     }
 
     /// Stop a provider on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn stop_provider(
-        &self,
-        _ctx: Context,
-        cmd: StopProviderCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn stop_provider(&self, _ctx: Context, cmd: StopProviderCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to get client for connection".into(),
+                };
+            }
+        };
+
+        client
             .stop_provider(
                 &cmd.host_id,
                 &cmd.provider_id,
@@ -607,48 +773,82 @@ impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to stop provider: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to stop provider".into(),
+                }
+            })
     }
 
     /// Stop an actor on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn stop_actor(
-        &self,
-        _ctx: Context,
-        cmd: StopActorCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn stop_actor(&self, _ctx: Context, cmd: StopActorCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start actor".into(),
+                };
+            }
+        };
+
+        client
             .stop_actor(&cmd.host_id, &cmd.actor_id, Some(cmd.annotations.clone()))
             .await
             .map(|a| CtlOperationAck {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to stop actor: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to stop actor".into(),
+                }
+            })
     }
 
     /// Stop a host on the lattice
     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
-    async fn stop_host(
-        &self,
-        _ctx: Context,
-        cmd: StopHostCommand,
-    ) -> ProviderInvocationResult<CtlOperationAck> {
-        Ok(self
+    async fn stop_host(&self, _ctx: Context, cmd: StopHostCommand) -> CtlOperationAck {
+        let client = match self
             .get_connections()
             .await
-            .get_client(&cmd.lattice_id.to_string())
-            .await?
+            .get_client(&cmd.lattice_id)
+            .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to get client for connection: {e}");
+                return CtlOperationAck {
+                    accepted: false,
+                    error: "failed to start actor".into(),
+                };
+            }
+        };
+
+        client
             .stop_host(&cmd.host_id, cmd.timeout)
             .await
             .map(|a| CtlOperationAck {
                 accepted: a.accepted,
                 error: a.error,
             })
-            .map_err(|e| ProviderInvocationError::Provider(e.to_string()))?)
+            .unwrap_or_else(|e| {
+                error!("failed to stop host: {e}");
+                CtlOperationAck {
+                    accepted: false,
+                    error: "failed to stop host".into(),
+                }
+            })
     }
 }

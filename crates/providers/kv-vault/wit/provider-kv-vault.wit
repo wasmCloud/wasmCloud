@@ -1,5 +1,5 @@
 package wasmcloud:provider-kv-vault;
 
 world provider-kv-vault {
-    import wasmcloud:keyvalue/key-value;
+    export wasmcloud:keyvalue/key-value;
 }

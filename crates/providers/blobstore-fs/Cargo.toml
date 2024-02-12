@@ -15,6 +15,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+anyhow = { workspace = true }
 path-clean = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

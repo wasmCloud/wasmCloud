@@ -19,14 +19,13 @@ use std::sync::Arc;
 use redis::aio::ConnectionManager;
 use redis::FromRedisValue;
 use tokio::sync::RwLock;
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde::Deserialize,
     serde_json,
     wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
     wasmcloud_provider_sdk::provider_main::start_provider,
     wasmcloud_provider_sdk::{load_host_data, Context},
 };
@@ -163,87 +162,60 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
 impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Increments a numeric value, returning the new value
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
-    async fn increment(
-        &self,
-        ctx: Context,
-        arg: IncrementRequest,
-    ) -> ProviderInvocationResult<i32> {
+    async fn increment(&self, ctx: Context, arg: IncrementRequest) -> i32 {
         let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Returns true if the store contains the key
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn contains(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
+    async fn contains(&self, ctx: Context, arg: String) -> bool {
         let mut cmd = redis::Cmd::exists(arg.to_string());
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Deletes a key, returning true if the key was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn del(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
+    async fn del(&self, ctx: Context, arg: String) -> bool {
         let mut cmd = redis::Cmd::del(arg.to_string());
-        let val: i32 = self
-            .exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)?;
-        Ok(val > 0)
+        let v = self.exec::<i32>(&ctx, &mut cmd).await;
+        v > 0
     }
 
     /// Gets a value for a specified key. If the key exists,
     /// the return structure contains exists: true and the value,
     /// otherwise the return structure contains exists == false.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn get(&self, ctx: Context, arg: String) -> ProviderInvocationResult<GetResponse> {
+    async fn get(&self, ctx: Context, arg: String) -> GetResponse {
         let mut cmd = redis::Cmd::get(arg.to_string());
-        let val: Option<String> = self
-            .exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)?;
-
-        let resp = match val {
-            Some(s) => GetResponse {
-                exists: true,
-                value: s,
-            },
-            None => GetResponse {
-                exists: false,
-                value: String::default(),
-            },
-        };
-        Ok(resp)
+        let value: String = self.exec(&ctx, &mut cmd).await;
+        GetResponse {
+            exists: value != String::default(),
+            value,
+        }
     }
 
     /// Append a value onto the end of a list. Returns the new list size
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> ProviderInvocationResult<u32> {
+    async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> u32 {
         let mut cmd = redis::Cmd::rpush(&arg.list_name, &arg.value);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Deletes a list and its contents
     /// input: list name
     /// returns: true if the list existed and was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn list_clear(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
+    async fn list_clear(&self, ctx: Context, arg: String) -> bool {
         self.del(ctx, arg).await
     }
 
     /// Deletes an item from a list. Returns true if the item was removed.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> ProviderInvocationResult<bool> {
+    async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> bool {
         let mut cmd = redis::Cmd::lrem(&arg.list_name, 1, &arg.value);
-        let val: u32 = self
-            .exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)?;
-        Ok(val > 0)
+        let v = self.exec::<i32>(&ctx, &mut cmd).await;
+        v > 0
     }
 
     /// Retrieves a range of values from a list using 0-based indices.
@@ -251,89 +223,61 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_range(
-        &self,
-        ctx: Context,
-        arg: ListRangeRequest,
-    ) -> ProviderInvocationResult<Vec<String>> {
+    async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Vec<String> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Sets the value of a key.
     /// expires is an optional number of seconds before the value should be automatically deleted,
     /// or 0 for no expiration.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
-    async fn set(&self, ctx: Context, arg: SetRequest) -> ProviderInvocationResult<()> {
+    async fn set(&self, ctx: Context, arg: SetRequest) -> () {
         let mut cmd = match arg.expires {
             0 => redis::Cmd::set(&arg.key, &arg.value),
             _ => redis::Cmd::set_ex(&arg.key, &arg.value, arg.expires as usize),
         };
-        let _value: Option<String> = self
-            .exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)?;
-        Ok(())
+        self.exec::<()>(&ctx, &mut cmd).await;
     }
 
     /// Add an item into a set. Returns number of items added
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> ProviderInvocationResult<u32> {
+    async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> u32 {
         let mut cmd = redis::Cmd::sadd(&arg.set_name, &arg.value);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Remove a item from the set. Returns
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> ProviderInvocationResult<u32> {
+    async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> u32 {
         let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     /// Deletes a set and its contents
     /// input: set name
     /// returns: true if the set existed and was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_clear(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
+    async fn set_clear(&self, ctx: Context, arg: String) -> bool {
         self.del(ctx, arg).await
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
-    async fn set_intersection(
-        &self,
-        ctx: Context,
-        arg: Vec<String>,
-    ) -> ProviderInvocationResult<Vec<String>> {
+    async fn set_intersection(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
         let mut cmd = redis::Cmd::sinter(arg);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> ProviderInvocationResult<Vec<String>> {
+    async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
         let mut cmd = redis::Cmd::smembers(arg.to_string());
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
-    async fn set_union(
-        &self,
-        ctx: Context,
-        arg: Vec<String>,
-    ) -> ProviderInvocationResult<Vec<String>> {
+    async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
         let mut cmd = redis::Cmd::sunion(arg);
-        self.exec(&ctx, &mut cmd)
-            .await
-            .map_err(ProviderInvocationError::Provider)
+        self.exec(&ctx, &mut cmd).await
     }
 }
 
@@ -354,25 +298,28 @@ impl KvRedisProvider {
     /// with redis operations, but any control commands for new actor links
     /// or removal of actor links may need to wait for in-progress operations to complete.
     /// That should be rare, because most links are passed to the provider at startup.
-    async fn exec<T: FromRedisValue>(
-        &self,
-        ctx: &Context,
-        cmd: &mut redis::Cmd,
-    ) -> Result<T, String> {
-        let actor_id = ctx
-            .actor
-            .as_ref()
-            .ok_or_else(|| "no actor in request".to_string())?;
+    async fn exec<T: FromRedisValue + Default>(&self, ctx: &Context, cmd: &mut redis::Cmd) -> T {
+        let Some(actor_id) = ctx.actor.as_ref() else {
+            error!("missing actor reference in execution context");
+            return T::default();
+        };
+
         // get read lock on actor-connections hashmap
         let rd = self.actors.read().await;
-        let rc = rd
-            .get(actor_id)
-            .ok_or_else(||format!("No Redis connection found for {}. Please ensure the URL supplied in the link definition is a valid Redis URL", actor_id))?;
+        let Some(rc) = rd.get(actor_id) else {
+            error!("No Redis connection found for actor {actor_id}. Please ensure the URL supplied in the link definition is a valid Redis URL");
+            return T::default();
+        };
+
         // get write lock on this actor's connection
         let mut con = rc.write().await;
-        cmd.query_async(con.deref_mut())
-            .await
-            .map_err(|e| e.to_string())
+        match cmd.query_async(con.deref_mut()).await {
+            Ok(v) => v,
+            Err(e) => {
+                error!("failed to perform redis command: {e}");
+                T::default()
+            }
+        }
     }
 }
 
@@ -387,6 +334,7 @@ fn get_redis_url(link_values: &[(String, String)], default_connect_url: &str) ->
 #[cfg(test)]
 mod test {
     use super::{get_redis_url, KvRedisConfig};
+    use crate::serde_json;
 
     const PROPER_URL: &str = "redis://127.0.0.1:6379";
 

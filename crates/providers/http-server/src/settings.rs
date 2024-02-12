@@ -630,9 +630,9 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::settings::{CorsOrigin, ServiceSettings};
-    //use assert_matches::assert_matches;
     use std::str::FromStr;
+
+    use crate::settings::{serde_json, CorsOrigin, ServiceSettings};
 
     const GOOD_ORIGINS: &[&str] = &[
         // origins that should be parsed correctly

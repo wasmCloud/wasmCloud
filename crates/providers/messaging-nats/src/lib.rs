@@ -15,7 +15,6 @@ use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde_json,
     wasmcloud_provider_sdk::core::{HostData, LinkDefinition},
-    wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult},
     wasmcloud_provider_sdk::Context,
 };
 
@@ -272,20 +271,27 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
 #[async_trait]
 impl WasmcloudMessagingMessaging for NatsMessagingProvider {
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
-    async fn publish(&self, ctx: Context, msg: Message) -> ProviderInvocationResult<()> {
-        let actor_id = ctx
-            .actor
-            .as_ref()
-            .ok_or_else(|| "no actor in request".to_string())?;
+    async fn publish(&self, ctx: Context, msg: Message) -> () {
+        let actor_id = match ctx.actor.as_ref() {
+            Some(actor_id) => actor_id,
+            None => {
+                error!("no actor in request");
+                return;
+            }
+        };
 
         // get read lock on actor-client hashmap to get the connection, then drop it
         let _rd = self.actors.read().await;
 
         let nats_client = {
             let rd = self.actors.read().await;
-            let nats_bundle = rd
-                .get(actor_id)
-                .ok_or_else(|| format!("actor not linked:{}", actor_id))?;
+            let nats_bundle = match rd.get(actor_id) {
+                Some(nats_bundle) => nats_bundle,
+                None => {
+                    error!("actor not linked: {actor_id}");
+                    return;
+                }
+            };
             nats_bundle.client.clone()
         };
 
@@ -313,25 +319,36 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
                 .map_err(|e| e.to_string()),
         };
         let _ = nats_client.flush().await;
-        res.map_err(ProviderInvocationError::Provider)
+        res.unwrap_or(())
     }
 
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject))]
-    async fn request(
-        &self,
-        ctx: Context,
-        msg: RequestMessage,
-    ) -> ProviderInvocationResult<Message> {
-        let actor_id = ctx
-            .actor
-            .as_ref()
-            .ok_or_else(|| "no actor in request".to_string())?;
+    async fn request(&self, ctx: Context, msg: RequestMessage) -> Message {
+        let actor_id = match ctx.actor.as_ref() {
+            Some(actor_id) => actor_id,
+            None => {
+                error!("no actor in request");
+                return Message {
+                    subject: String::default(),
+                    reply_to: None,
+                    body: Vec::new(),
+                };
+            }
+        };
 
         let nats_client = {
             let rd = self.actors.read().await;
-            let nats_bundle = rd
-                .get(actor_id)
-                .ok_or_else(|| format!("actor not linked:{}", actor_id))?;
+            let nats_bundle = match rd.get(actor_id) {
+                Some(nats_bundle) => nats_bundle,
+                None => {
+                    error!("actor not linked: {actor_id}");
+                    return Message {
+                        subject: String::default(),
+                        reply_to: None,
+                        body: Vec::new(),
+                    };
+                }
+            };
             nats_bundle.client.clone()
         }; // early release of actor-client map
 
@@ -359,17 +376,27 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
 
         // Process results of request
         match request_with_timeout {
-            Err(timeout_err) => Err(ProviderInvocationError::Provider(format!(
-                "nats request timed out: {timeout_err}"
-            ))),
-            Ok(Err(send_err)) => Err(ProviderInvocationError::Provider(format!(
-                "nats send error: {send_err}",
-            ))),
-            Ok(Ok(resp)) => Ok(Message {
+            Err(timeout_err) => {
+                error!("nats request timed out: {timeout_err}");
+                Message {
+                    subject: String::default(),
+                    reply_to: None,
+                    body: Vec::new(),
+                }
+            }
+            Ok(Err(send_err)) => {
+                error!("nats send error: {send_err}");
+                Message {
+                    subject: String::default(),
+                    reply_to: None,
+                    body: Vec::new(),
+                }
+            }
+            Ok(Ok(resp)) => Message {
                 body: resp.payload.to_vec(),
                 reply_to: resp.reply.map(|s| s.to_string()),
                 subject: resp.subject.to_string(),
-            }),
+            },
         }
     }
 }
@@ -382,9 +409,10 @@ fn should_strip_headers(topic: &str) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::{ConnectionConfig, NatsMessagingProvider};
-    use wasmcloud_provider_sdk::core::LinkDefinition;
-    use wasmcloud_provider_sdk::ProviderHandler;
+    use crate::{serde_json, ConnectionConfig, NatsMessagingProvider};
+
+    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition;
+    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler;
 
     #[test]
     fn test_default_connection_serialize() {
