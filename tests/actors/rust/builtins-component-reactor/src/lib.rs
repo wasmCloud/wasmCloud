@@ -210,32 +210,37 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             vec![bus::lattice::TargetInterface::wasi_keyvalue_eventual()],
         );
         let foo_key = String::from("foo");
-        let bucket = keyvalue::types::open_bucket("")
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let bucket = keyvalue::types::Bucket::open_bucket("")
+            .map_err(|e| e.trace())
             .expect("failed to open empty bucket");
-        keyvalue::eventual::exists(bucket, &foo_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        keyvalue::eventual::exists(&bucket, &foo_key)
+            .map_err(|e| e.trace())
             .expect("failed to check whether `foo` exists")
             .then_some(())
             .expect("`foo` does not exist");
 
-        let foo_value = keyvalue::eventual::get(bucket, &foo_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
-            .expect("failed to get `foo`");
+        let foo_value = keyvalue::eventual::get(&bucket, &foo_key)
+            .map_err(|e| e.trace())
+            .expect("failed to get `foo`")
+            .expect("`foo` does not exist in bucket");
+        let foo_value_size = foo_value
+            .incoming_value_size()
+            .expect("failed to get `foo` size");
+        assert_eq!(foo_value_size, 3);
 
-        let size = keyvalue::types::size(foo_value);
-        assert_eq!(size, 3);
-
-        let foo_value = keyvalue::types::incoming_value_consume_sync(foo_value)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let foo_value = foo_value
+            .incoming_value_consume_sync()
+            .map_err(|e| e.trace())
             .expect("failed to get incoming value buffer");
         assert_eq!(foo_value, b"bar");
 
-        let foo_value = keyvalue::eventual::get(bucket, &foo_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
-            .expect("failed to get `foo`");
-        let mut foo_stream = keyvalue::types::incoming_value_consume_async(foo_value)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let foo_value = keyvalue::eventual::get(&bucket, &foo_key)
+            .map_err(|e| e.trace())
+            .expect("failed to get `foo`")
+            .expect("`foo` does not exist in bucket");
+        let mut foo_stream = foo_value
+            .incoming_value_consume_async()
+            .map_err(|e| e.trace())
             .expect("failed to get incoming value stream");
         let mut foo_value = vec![];
         let n = InputStreamReader::from(&mut foo_stream)
@@ -244,37 +249,41 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         assert_eq!(n, 3);
         assert_eq!(foo_value, b"bar");
 
-        keyvalue::eventual::delete(bucket, &foo_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        keyvalue::eventual::delete(&bucket, &foo_key)
+            .map_err(|e| e.trace())
             .expect("failed to delete `foo`");
 
         // NOTE: If https://github.com/WebAssembly/wasi-keyvalue/pull/18 is merged, this should not
         // return an error
-        keyvalue::eventual::exists(bucket, &foo_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        keyvalue::eventual::exists(&bucket, &foo_key)
+            .map_err(|e| e.trace())
             .expect_err(
                 "`exists` method should have returned an error for `foo` key, which was deleted",
             );
 
         let result_key = String::from("result");
 
-        let result_value = keyvalue::types::new_outgoing_value();
-        keyvalue::types::outgoing_value_write_body_sync(result_value, &body)
+        let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();
+        result_value
+            .outgoing_value_write_body_sync(&body)
             .expect("failed to write outgoing value");
-        keyvalue::eventual::set(bucket, &result_key, result_value)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        keyvalue::eventual::set(&bucket, &result_key, &result_value)
+            .map_err(|e| e.trace())
             .expect("failed to set `result`");
 
-        let result_value = keyvalue::eventual::get(bucket, &result_key)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
-            .expect("failed to get `result`");
-        let result_value = keyvalue::types::incoming_value_consume_sync(result_value)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let result_value = keyvalue::eventual::get(&bucket, &result_key)
+            .map_err(|e| e.trace())
+            .expect("failed to get `result`")
+            .expect("`result` does not exist in bucket");
+        let result_value = result_value
+            .incoming_value_consume_sync()
+            .map_err(|e| e.trace())
             .expect("failed to get incoming value buffer");
         assert_eq!(result_value, body);
 
-        let result_value = keyvalue::types::new_outgoing_value();
-        let mut result_stream = keyvalue::types::outgoing_value_write_body_async(result_value)
+        let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();
+        let mut result_stream = result_value
+            .outgoing_value_write_body_async()
             .expect("failed to get outgoing value output stream");
         let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
         result_stream_writer
@@ -283,8 +292,9 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         result_stream_writer
             .flush()
             .expect("failed to flush keyvalue output stream");
-        keyvalue::eventual::set(bucket, &result_key, result_value)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+
+        keyvalue::eventual::set(&bucket, &result_key, &result_value)
+            .map_err(|e| e.trace())
             .expect("failed to set `result`");
 
         bus::lattice::set_target(
@@ -292,18 +302,18 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             vec![bus::lattice::TargetInterface::wasi_keyvalue_atomic()],
         );
         let counter_key = String::from("counter");
-        let value = keyvalue::atomic::increment(bucket, &counter_key, 1)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let value = keyvalue::atomic::increment(&bucket, &counter_key, 1)
+            .map_err(|e| e.trace())
             .expect("failed to increment `counter`");
         assert_eq!(value, 1);
-        let value = keyvalue::atomic::increment(bucket, &counter_key, 41)
-            .map_err(keyvalue::wasi_keyvalue_error::trace)
+        let value = keyvalue::atomic::increment(&bucket, &counter_key, 41)
+            .map_err(|e| e.trace())
             .expect("failed to increment `counter`");
         assert_eq!(value, 42);
 
         // TODO: Verify return value when implemented for all hosts
-        let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 42, 4242);
-        let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 4242, 42);
+        let _ = keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242);
+        let _ = keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 4242, 42);
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("blobstore".into()))),
@@ -317,37 +327,41 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .expect("failed to create container");
         assert!(blobstore::blobstore::container_exists(&container_name)
             .expect("failed to check whether container exists"));
-        let got_container =
-            blobstore::blobstore::get_container(&container_name).expect("failed to get container");
+        {
+            let got_container = blobstore::blobstore::get_container(&container_name)
+                .expect("failed to get container");
 
-        let blobstore::container::ContainerMetadata { name, created_at } =
-            blobstore::container::info(created_container)
+            let blobstore::container::ContainerMetadata { name, created_at } = created_container
+                .info()
                 .expect("failed to get info of created container");
-        assert_eq!(name, "container");
-        assert!(created_at > 0);
+            assert_eq!(name, "container");
+            assert!(created_at > 0);
 
-        let got_info =
-            blobstore::container::info(got_container).expect("failed to get info of got container");
-        assert_eq!(got_info.name, "container");
-        assert_eq!(got_info.created_at, created_at);
+            let got_info = got_container
+                .info()
+                .expect("failed to get info of got container");
+            assert_eq!(got_info.name, "container");
+            assert_eq!(got_info.created_at, created_at);
+        }
         // NOTE: At this point we should be able to assume that created container and got container are
         // indeed the same container
-        blobstore::container::drop_container(got_container);
 
         assert_eq!(
-            blobstore::container::name(created_container).expect("failed to get container name"),
+            created_container
+                .name()
+                .expect("failed to get container name"),
             "container"
         );
 
-        assert!(
-            !blobstore::container::has_object(created_container, &result_key)
-                .expect("failed to check whether `result` object exists")
-        );
+        assert!(!created_container
+            .has_object(&result_key)
+            .expect("failed to check whether `result` object exists"));
         // TODO: Assert that this succeeds once providers are compatible
-        let _ = blobstore::container::delete_object(created_container, &result_key);
+        let _ = created_container.delete_object(&result_key);
 
-        let result_value = blobstore::types::new_outgoing_value();
-        let mut result_stream = blobstore::types::outgoing_value_write_body(result_value)
+        let result_value = blobstore::types::OutgoingValue::new_outgoing_value();
+        let mut result_stream = result_value
+            .outgoing_value_write_body()
             .expect("failed to get outgoing value output stream");
         let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
         result_stream_writer
@@ -356,7 +370,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         result_stream_writer
             .flush()
             .expect("failed to flush blobstore output stream");
-        blobstore::container::write_data(created_container, &result_key, result_value)
+        created_container
+            .write_data(&result_key, &result_value)
             .expect("failed to write `result`");
 
         // TODO: Expand blobstore testing procedure
