@@ -228,8 +228,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .expect("failed to get `foo` size");
         assert_eq!(foo_value_size, 3);
 
-        let foo_value = foo_value
-            .incoming_value_consume_sync()
+        let foo_value = keyvalue::types::IncomingValue::incoming_value_consume_sync(foo_value)
             .map_err(|e| e.trace())
             .expect("failed to get incoming value buffer");
         assert_eq!(foo_value, b"bar");
@@ -238,10 +237,10 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .map_err(|e| e.trace())
             .expect("failed to get `foo`")
             .expect("`foo` does not exist in bucket");
-        let mut foo_stream = foo_value
-            .incoming_value_consume_async()
-            .map_err(|e| e.trace())
-            .expect("failed to get incoming value stream");
+        let mut foo_stream =
+            keyvalue::types::IncomingValue::incoming_value_consume_async(foo_value)
+                .map_err(|e| e.trace())
+                .expect("failed to get incoming value stream");
         let mut foo_value = vec![];
         let n = InputStreamReader::from(&mut foo_stream)
             .read_to_end(&mut foo_value)
@@ -275,10 +274,10 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .map_err(|e| e.trace())
             .expect("failed to get `result`")
             .expect("`result` does not exist in bucket");
-        let result_value = result_value
-            .incoming_value_consume_sync()
-            .map_err(|e| e.trace())
-            .expect("failed to get incoming value buffer");
+        let result_value =
+            keyvalue::types::IncomingValue::incoming_value_consume_sync(result_value)
+                .map_err(|e| e.trace())
+                .expect("failed to get incoming value buffer");
         assert_eq!(result_value, body);
 
         let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();

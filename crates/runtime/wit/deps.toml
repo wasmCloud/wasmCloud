@@ -1,7 +1,7 @@
 blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 io = "../../../wit/deps/io"
-keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
+keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/cb1663e30553b36e82335552294572afcb122f27.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 messaging = "https://github.com/wasmCloud/messaging/archive/main.tar.gz"
 wasmcloud = "../../../wit"

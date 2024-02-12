@@ -59,10 +59,10 @@ interface types {
 	resource incoming-value {
 		/// Consumes the value synchronously and returns the value as a list of bytes.
 		/// If any other error occurs, it returns an `Err(error)`.
-    	incoming-value-consume-sync: func() -> result<incoming-value-sync-body, error>;
+    	incoming-value-consume-sync: static func(this: incoming-value) -> result<incoming-value-sync-body, error>;
 		/// Consumes the value asynchronously and returns the value as an `input-stream`.
 		/// If any other error occurs, it returns an `Err(error)`.
-	    incoming-value-consume-async: func() -> result<incoming-value-async-body, error>;
+	    incoming-value-consume-async: static func(this: incoming-value) -> result<incoming-value-async-body, error>;
 		/// The size of the value in bytes.
 		/// If the size is unknown or unavailable, this function returns an `Err(error)`.
 	    incoming-value-size: func() -> result<u64, error>;
