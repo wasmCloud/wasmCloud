@@ -18,7 +18,7 @@ function handle(req: IncomingRequest, resp: ResponseOutparam) {
   let outputStream = outgoingBody.write();
   // // Write hello world to the response stream
   outputStream.blockingWriteAndFlush(
-    new Uint8Array(new TextEncoder().encode("hello from Typescript"))
+    new Uint8Array(new TextEncoder().encode("Hello from Typescript!\n"))
   );
 
   // Set the status code for the response

@@ -6,7 +6,7 @@ This component:
 
 - Uses Typescript for it's implementation
 - Uses the [`wasi:http`][wasi-http] standard WIT definitions
-- Relies on the [`httpserver` capability provider][httpserver-provider] (which exposes the [`wasmcloud:httpserver` interface][httpserver-interface]) 
+- Relies on the [`httpserver` capability provider][httpserver-provider] (which exposes the [`wasmcloud:httpserver` interface][httpserver-interface])
 - Return `"hello from Typescript"` to all HTTP requests
 - Can be declaratively provisioned with [`wadm`][wadm]
 
@@ -20,11 +20,11 @@ This component:
 
 This relies on the following installed software:
 
-| Name   | Description                                                                                     |
-|--------|-------------------------------------------------------------------------------------------------|
+| Name   | Description                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------- |
 | `wash` | [Wasmcloud Shell][wash] controls your [wasmcloud][wasmcloud] host instances and enables building actors |
-| `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                  |
-| `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                       |
+| `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                   |
+| `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                     |
 
 [wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
 [node]: https://nodejs.org
@@ -69,19 +69,6 @@ This will build and sign the actor and place a signed [WebAssembly component][wa
 [wasmcloud-actor-component]: https://wasmcloud.com/docs/concepts/webassembly-components
 [wasm-component]: https://component-model.bytecodealliance.org/
 [jco]: https://github.com/bytecodealliance/jco
-
-## Update WADM manifest with the built actor path
-
-Before we can start the actor, we need to edit our declarative configuration to reflect the path to the built WebAssembly component in `typescript-http-hello-world.wadm.yaml`:
-
-```yaml
-      properties:
-        # TODO: you must replace the path below to match your genreated code in build
-        image: file:///the/absolute/path/to/build/index_s.wasm
-```
-
-Replace the `the/absolute/path/...` above with the path to `build/index_s.wasm`.
-
 
 ## Start the actor along with the HTTP server provider
 
