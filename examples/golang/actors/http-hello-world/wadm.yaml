@@ -8,12 +8,10 @@ metadata:
     experimental: true
 spec:
   components:
-    - name: http-echo-tinygo
+    - name: http-hello-world
       type: actor
       properties:
-        # TODO: you must replace the path below to match your genreated code in build
-        # Try using `wash build -o json` and use the `actor_path` field, prepended with `file://`
-        image: file:///the/absolute/path/to/build/http-echo-tinygo-component_s.wasm
+        image: file://./build/http_hello_world_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler
