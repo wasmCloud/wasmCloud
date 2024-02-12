@@ -3172,10 +3172,6 @@ impl Host {
                 traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
                 exporter_otlp_endpoint: self.host_config.otel_config.exporter_otlp_endpoint.clone(),
             };
-            // TODO: set back to Some(self.host_config.log_level.clone()) once all providers can be
-            // assumed to be built using the new SDK. Providers built using wasmbus-rpc <= 0.15
-            // ignore RUST_LOG when log_level is set
-            let log_level: Option<wasmcloud_core::logging::Level> = None;
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice.clone(),
@@ -3191,7 +3187,7 @@ impl Host {
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
-                log_level,
+                log_level: Some(self.host_config.log_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
             };
