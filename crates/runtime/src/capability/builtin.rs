@@ -437,7 +437,7 @@ pub trait KeyValueEventual {
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>>;
 
     /// Handle `wasi:keyvalue/eventual.set`
     async fn set(
@@ -732,7 +732,7 @@ impl KeyValueEventual for Handler {
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>> {
         self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.get")?
             .get(bucket, key)
             .await

@@ -982,7 +982,7 @@ impl KeyValueEventual for Handler {
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>> {
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
@@ -995,13 +995,13 @@ impl KeyValueEventual for Handler {
         let wasmcloud_compat::keyvalue::GetResponse { value, exists } =
             decode_provider_response(res)?;
         if !exists {
-            bail!("key not found")
+            return Ok(None);
         }
         let size = value
             .len()
             .try_into()
             .context("value size does not fit in `u64`")?;
-        Ok((Box::new(Cursor::new(value)), size))
+        Ok(Some((Box::new(Cursor::new(value)), size)))
     }
 
     #[instrument(skip(self, value))]
