@@ -4,9 +4,9 @@ This is a simple Rust Wasm example that responds with a "Hello World" message fo
 
 ## Prerequisites
 
-- `cargo` 1.74
-- `wash` 0.25.0
-- `wasmtime` 16.0.0 (if running with wasmtime)
+- `cargo` 1.75
+- [`wash`](https://wasmcloud.com/docs/installation) 0.26.0
+- `wasmtime` 17.0.0 (if running with wasmtime)
 
 ## Building
 
@@ -16,7 +16,7 @@ wash build
 
 ## Running with wasmtime
 
-You must have wasmtime 16.0.0 for this to work. Make sure to follow the build step above first.
+You must have wasmtime 17.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
 wasmtime serve -Scommon ./build/http_hello_world_s.wasm
@@ -24,10 +24,11 @@ wasmtime serve -Scommon ./build/http_hello_world_s.wasm
 
 ## Running with wasmCloud
 
-Make sure to follow the build steps above, and replace the file path in [the wadm manifest](./wadm.yaml) with the absolute path to your local built component.
+Ensuring you've built your component with `wash build`, you can launch wasmCloud and deploy the full hello world application with the following commands. Once the application reports as **Deployed** in the application list, you can use `curl` to send a request to the running HTTP server.
 
-```
+```shell
 wash up -d
 wash app deploy ./wadm.yaml
-curl http://localhost:8081
+wash app list
+curl http://localhost:8080
 ```
