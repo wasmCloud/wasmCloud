@@ -264,7 +264,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
 #[tokio::test]
 async fn integration_build_rust_actor_in_workspace_unsigned() -> Result<()> {
     let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"]).await?;
-    let project_dir = test_setup.project_dirs.get(0).unwrap();
+    let project_dir = test_setup.project_dirs.first().unwrap();
     std::env::set_current_dir(project_dir)?;
 
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
