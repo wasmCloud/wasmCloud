@@ -199,7 +199,8 @@ impl capability::Bus for Handler {
                     .keyvalue_eventual
                     .get("", key)
                     .await
-                    .expect("failed to call `get`");
+                    .expect("failed to call `get`")
+                    .expect("key missing");
                 let mut value = String::new();
                 reader
                     .read_to_string(&mut value)
