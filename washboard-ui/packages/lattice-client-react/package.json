@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "@wasmcloud/lattice-client-core": "workspace:^",
-    "tsup": "^8.0.1"
+    "tsup": "^8.0.2"
   },
   "peerDependencies": {
     "react": "^18.0.0"
