@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use futures::future::Shared;
 use futures::FutureExt;
 use tracing::instrument;
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
-use wasmtime_wasi::preview2::{self, HostOutputStream, InputStream, OutputStream, Pollable};
+use wasmtime_wasi::preview2::{HostOutputStream, InputStream, OutputStream, Pollable};
 
 impl Instance {
     /// Set [`Bus`] handler for this [Instance].
@@ -33,7 +33,7 @@ trait TableHostExt {
     fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
 }
 
-impl TableHostExt for preview2::Table {
+impl TableHostExt for ResourceTable {
     fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32> {
         let res = self.push(Box::new(res.shared()))?;
         Ok(res.rep())
@@ -184,9 +184,9 @@ impl lattice::HostTargetInterface for Ctx {
             .context("failed to push target interface")
     }
 
-    async fn wasi_keyvalue_readwrite(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+    async fn wasi_keyvalue_eventual(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
         self.table
-            .push(TargetInterface::WasiKeyvalueReadwrite)
+            .push(TargetInterface::WasiKeyvalueEventual)
             .context("failed to push target interface")
     }
 

@@ -2,5 +2,5 @@ package wasmcloud:echo;
 
 world echo {
     import wasi:logging/logging;
-    export wasi:http/incoming-handler@0.2.0-rc-2023-12-05;
+    export wasi:http/incoming-handler@0.2.0;
 }

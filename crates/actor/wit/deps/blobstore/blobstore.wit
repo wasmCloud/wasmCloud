@@ -1,5 +1,3 @@
-package wasi:blobstore;
-
 // wasi-cloud Blobstore service definition
 interface blobstore {
   use container.{container};

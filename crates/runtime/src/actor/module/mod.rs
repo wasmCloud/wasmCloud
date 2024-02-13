@@ -5,7 +5,7 @@ use wasmbus::guest_call;
 use crate::actor::claims;
 use crate::capability::logging::logging;
 use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
     OutgoingHttp,
 };
 use crate::io::AsyncVec;
@@ -342,13 +342,13 @@ impl Instance {
         self
     }
 
-    /// Set [`KeyValueReadWrite`] handler for this [Instance].
-    pub fn keyvalue_readwrite(
+    /// Set [`KeyValueEventual`] handler for this [Instance].
+    pub fn keyvalue_eventual(
         &mut self,
-        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
+        keyvalue_eventual: Arc<dyn KeyValueEventual + Send + Sync>,
     ) -> &mut Self {
         self.handler_mut()
-            .replace_keyvalue_readwrite(keyvalue_readwrite);
+            .replace_keyvalue_eventual(keyvalue_eventual);
         self
     }
 

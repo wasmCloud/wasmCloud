@@ -13,8 +13,8 @@ interface lattice {
         /// `wasi:keyvalue/atomic` interface target
         wasi-keyvalue-atomic: static func() -> target-interface;
 
-        /// `wasi:keyvalue/readwrite` interface target
-        wasi-keyvalue-readwrite: static func() -> target-interface;
+        /// `wasi:keyvalue/eventual` interface target
+        wasi-keyvalue-eventual: static func() -> target-interface;
 
         /// `wasi:logging/logging` interface target
         wasi-logging-logging: static func() -> target-interface;
@@ -63,8 +63,8 @@ interface guest-config {
 }
 
 interface host {
-    use wasi:io/streams@0.2.0-rc-2023-11-10.{input-stream, output-stream};
-    use wasi:io/poll@0.2.0-rc-2023-11-10.{pollable};
+    use wasi:io/streams@0.2.0.{input-stream, output-stream};
+    use wasi:io/poll@0.2.0.{pollable};
 
     use lattice.{target-interface, target-entity};
 

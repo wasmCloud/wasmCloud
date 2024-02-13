@@ -99,6 +99,7 @@ pub enum Action {
 struct Request {
     /// a unique request id. This value is returned in the response
     #[serde(rename = "requestId")]
+    #[allow(clippy::struct_field_names)]
     request_id: String,
     // Use a custom serializer to handle the case where the source is None
     #[serde(serialize_with = "serialize_source")]
