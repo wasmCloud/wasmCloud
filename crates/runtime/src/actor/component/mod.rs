@@ -15,14 +15,14 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
-use wasmtime::component::{Linker, Val};
+use wasmtime::component::{Linker, ResourceTable, ResourceTableError, Val};
 use wasmtime_wasi::preview2::command::{self, Command};
 use wasmtime_wasi::preview2::pipe::{
     AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
 };
 use wasmtime_wasi::preview2::{
     HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
-    Subscribe, Table, TableError, WasiCtx, WasiCtxBuilder, WasiView,
+    Subscribe, WasiCtx, WasiCtxBuilder, WasiView,
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 use wit_parser::{Results, Type, World, WorldId, WorldKey};
@@ -37,16 +37,16 @@ mod messaging;
 pub(crate) use self::http::incoming_http_bindings;
 pub(crate) use self::logging::logging_bindings;
 
-type TableResult<T> = Result<T, TableError>;
+type TableResult<T> = Result<T, ResourceTableError>;
 
 mod guest_bindings {
     wasmtime::component::bindgen!({
         world: "guest",
         async: true,
         with: {
-           "wasi:io/error@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::error,
-           "wasi:io/poll@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::poll,
-           "wasi:io/streams@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::streams,
+           "wasi:io/error": wasmtime_wasi::preview2::bindings::io::error,
+           "wasi:io/poll": wasmtime_wasi::preview2::bindings::io::poll,
+           "wasi:io/streams": wasmtime_wasi::preview2::bindings::io::streams,
         },
     });
 }
@@ -198,7 +198,7 @@ impl StdoutStream for StdioStream<Box<dyn HostOutputStream>> {
 struct Ctx {
     wasi: WasiCtx,
     http: WasiHttpCtx,
-    table: Table,
+    table: ResourceTable,
     handler: builtin::Handler,
     stdin: StdioStream<Box<dyn HostInputStream>>,
     stdout: StdioStream<Box<dyn HostOutputStream>>,
@@ -206,11 +206,11 @@ struct Ctx {
 }
 
 impl WasiView for Ctx {
-    fn table(&self) -> &Table {
+    fn table(&self) -> &ResourceTable {
         &self.table
     }
 
-    fn table_mut(&mut self) -> &mut Table {
+    fn table_mut(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 
@@ -500,7 +500,7 @@ fn instantiate(
     let stdout = StdioStream::default();
     let stderr = StdioStream::default();
 
-    let table = Table::new();
+    let table = ResourceTable::new();
     let wasi = WasiCtxBuilder::new()
         .args(&["main.wasm"]) // TODO: Configure argv[0]
         .stdin(stdin.clone())

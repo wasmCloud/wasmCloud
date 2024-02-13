@@ -25,7 +25,7 @@ pub struct Handler {
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
     keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
-    keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
+    keyvalue_eventual: Option<Arc<dyn KeyValueEventual + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
@@ -37,7 +37,7 @@ impl Debug for Handler {
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
-            .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
+            .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
@@ -72,11 +72,11 @@ impl Handler {
         proxy(&self.keyvalue_atomic, "KeyvalueAtomic", method)
     }
 
-    fn proxy_keyvalue_readwrite(
+    fn proxy_keyvalue_eventual(
         &self,
         method: &str,
-    ) -> anyhow::Result<&Arc<dyn KeyValueReadWrite + Sync + Send>> {
-        proxy(&self.keyvalue_readwrite, "KeyvalueReadWrite", method)
+    ) -> anyhow::Result<&Arc<dyn KeyValueEventual + Sync + Send>> {
+        proxy(&self.keyvalue_eventual, "KeyvalueEventual", method)
     }
 
     fn proxy_messaging(&self, method: &str) -> anyhow::Result<&Arc<dyn Messaging + Sync + Send>> {
@@ -115,12 +115,12 @@ impl Handler {
         self.keyvalue_atomic.replace(keyvalue_atomic)
     }
 
-    /// Replace [`KeyValueReadWrite`] handler returning the old one, if such was set
-    pub fn replace_keyvalue_readwrite(
+    /// Replace [`KeyValueEventual`] handler returning the old one, if such was set
+    pub fn replace_keyvalue_eventual(
         &mut self,
-        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
-    ) -> Option<Arc<dyn KeyValueReadWrite + Send + Sync>> {
-        self.keyvalue_readwrite.replace(keyvalue_readwrite)
+        keyvalue_eventual: Arc<dyn KeyValueEventual + Send + Sync>,
+    ) -> Option<Arc<dyn KeyValueEventual + Send + Sync>> {
+        self.keyvalue_eventual.replace(keyvalue_eventual)
     }
 
     /// Replace [`Logging`] handler returning the old one, if such was set
@@ -232,8 +232,8 @@ pub enum TargetInterface {
     WasiHttpOutgoingHandler,
     /// `wasi:keyvalue/atomic`
     WasiKeyvalueAtomic,
-    /// `wasi:keyvalue/readwrite`
-    WasiKeyvalueReadwrite,
+    /// `wasi:keyvalue/eventual`
+    WasiKeyvalueEventual,
     /// `wasi:logging/logging`
     WasiLoggingLogging,
     /// `wasmcloud:messaging/consumer`
@@ -430,16 +430,16 @@ pub trait KeyValueAtomic {
 }
 
 #[async_trait]
-/// `wasi:keyvalue/readwrite` implementation
-pub trait KeyValueReadWrite {
-    /// Handle `wasi:keyvalue/readwrite.get`
+/// `wasi:keyvalue/eventual` implementation
+pub trait KeyValueEventual {
+    /// Handle `wasi:keyvalue/eventual.get`
     async fn get(
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>>;
 
-    /// Handle `wasi:keyvalue/readwrite.set`
+    /// Handle `wasi:keyvalue/eventual.set`
     async fn set(
         &self,
         bucket: &str,
@@ -447,10 +447,10 @@ pub trait KeyValueReadWrite {
         value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()>;
 
-    /// Handle `wasi:keyvalue/readwrite.delete`
+    /// Handle `wasi:keyvalue/eventual.delete`
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()>;
 
-    /// Handle `wasi:keyvalue/readwrite.exists`
+    /// Handle `wasi:keyvalue/eventual.exists`
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool>;
 }
 
@@ -726,14 +726,14 @@ impl KeyValueAtomic for Handler {
 }
 
 #[async_trait]
-impl KeyValueReadWrite for Handler {
+impl KeyValueEventual for Handler {
     #[instrument]
     async fn get(
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.get")?
+    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>> {
+        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.get")?
             .get(bucket, key)
             .await
     }
@@ -745,21 +745,21 @@ impl KeyValueReadWrite for Handler {
         key: String,
         value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.set")?
+        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.set")?
             .set(bucket, key, value)
             .await
     }
 
     #[instrument]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
-        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.delete")?
+        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.delete")?
             .delete(bucket, key)
             .await
     }
 
     #[instrument]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
-        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.exists")?
+        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.exists")?
             .exists(bucket, key)
             .await
     }
@@ -845,8 +845,8 @@ pub(crate) struct HandlerBuilder {
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     /// [`KeyValueAtomic`] handler
     pub keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
-    /// [`KeyValueReadWrite`] handler
-    pub keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
+    /// [`KeyValueEventual`] handler
+    pub keyvalue_eventual: Option<Arc<dyn KeyValueEventual + Sync + Send>>,
     /// [`Logging`] handler
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
     /// [`Messaging`] handler
@@ -894,13 +894,13 @@ impl HandlerBuilder {
         }
     }
 
-    /// Set [`KeyValueReadWrite`] handler
-    pub fn keyvalue_readwrite(
+    /// Set [`KeyValueEventual`] handler
+    pub fn keyvalue_eventual(
         self,
-        keyvalue_readwrite: Arc<impl KeyValueReadWrite + Sync + Send + 'static>,
+        keyvalue_eventual: Arc<impl KeyValueEventual + Sync + Send + 'static>,
     ) -> Self {
         Self {
-            keyvalue_readwrite: Some(keyvalue_readwrite),
+            keyvalue_eventual: Some(keyvalue_eventual),
             ..self
         }
     }
@@ -940,7 +940,7 @@ impl Debug for HandlerBuilder {
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
-            .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
+            .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
@@ -955,7 +955,7 @@ impl From<Handler> for HandlerBuilder {
             bus,
             incoming_http,
             keyvalue_atomic,
-            keyvalue_readwrite,
+            keyvalue_eventual,
             logging,
             messaging,
             outgoing_http,
@@ -966,7 +966,7 @@ impl From<Handler> for HandlerBuilder {
             bus,
             incoming_http,
             keyvalue_atomic,
-            keyvalue_readwrite,
+            keyvalue_eventual,
             logging,
             messaging,
             outgoing_http,
@@ -981,7 +981,7 @@ impl From<HandlerBuilder> for Handler {
             bus,
             incoming_http,
             keyvalue_atomic,
-            keyvalue_readwrite,
+            keyvalue_eventual,
             logging,
             messaging,
             outgoing_http,
@@ -993,7 +993,7 @@ impl From<HandlerBuilder> for Handler {
             incoming_http,
             outgoing_http,
             keyvalue_atomic,
-            keyvalue_readwrite,
+            keyvalue_eventual,
             logging,
             messaging,
         }

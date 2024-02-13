@@ -264,7 +264,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
 #[tokio::test]
 async fn integration_build_rust_actor_in_workspace_unsigned() -> Result<()> {
     let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"]).await?;
-    let project_dir = test_setup.project_dirs.get(0).unwrap();
+    let project_dir = test_setup.project_dirs.first().unwrap();
     std::env::set_current_dir(project_dir)?;
 
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -350,7 +350,7 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
 
     // Execute wash new to create an actor with the given name
     let mut new_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["new", "actor", "dashed-actor", "-t", "hello"])
+        .args(["new", "actor", "dashed-actor", "-t", "hello-world-rust"])
         .kill_on_drop(true)
         .current_dir(&root_dir)
         .stdout(stdout.try_clone()?)

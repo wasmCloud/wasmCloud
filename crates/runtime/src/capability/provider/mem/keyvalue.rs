@@ -1,4 +1,4 @@
-use crate::capability::{KeyValueAtomic, KeyValueReadWrite};
+use crate::capability::{KeyValueAtomic, KeyValueEventual};
 
 use core::sync::atomic::AtomicU64;
 
@@ -23,7 +23,7 @@ pub enum Entry {
 
 type Bucket = HashMap<String, Entry>;
 
-/// In-memory [`KeyValueReadWrite`] and [`KeyValueAtomic`] implementation
+/// In-memory [`KeyValueEventual`] and [`KeyValueAtomic`] implementation
 #[derive(Debug)]
 pub struct KeyValue(RwLock<HashMap<String, RwLock<Bucket>>>);
 
@@ -131,24 +131,25 @@ impl KeyValueAtomic for KeyValue {
 }
 
 #[async_trait]
-impl KeyValueReadWrite for KeyValue {
+impl KeyValueEventual for KeyValue {
     #[instrument]
     async fn get(
         &self,
         bucket: &str,
         key: String,
-    ) -> anyhow::Result<(Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>, u64)> {
+    ) -> anyhow::Result<Option<(Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>, u64)>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?.read().await;
-        let value = match bucket.get(&key).context("key not found")? {
-            Entry::Atomic(value) => value.load(Ordering::Relaxed).to_string().into_bytes(),
-            Entry::Blob(value) => value.clone(),
+        let value = match bucket.get(&key) {
+            None => return Ok(None),
+            Some(Entry::Atomic(value)) => value.load(Ordering::Relaxed).to_string().into_bytes(),
+            Some(Entry::Blob(value)) => value.clone(),
         };
         let size = value
             .len()
             .try_into()
             .context("size does not fit in `u64`")?;
-        Ok((Box::new(Cursor::new(value)), size))
+        Ok(Some((Box::new(Cursor::new(value)), size)))
     }
 
     #[instrument(skip(value))]

@@ -1,5 +1,5 @@
-package wasi:blobstore;
+package wasi:blobstore@0.1.0;
 
-world blob-store {
+world imports {
 	import blobstore;
 }

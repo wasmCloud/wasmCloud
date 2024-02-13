@@ -1,5 +1,5 @@
 // https://github.com/bytecodealliance/jco/blob/b703b2850d3170d786812a56f40456870c780311/packages/preview2-shim/types/interfaces/wasi-http-types.d.ts
-declare module "wasi:http/types@0.2.0-rc-2023-12-05" {
+declare module "wasi:http/types@0.2.0" {
   /**
    * Attempts to extract a http-related `error` from the wasi:io `error`
    * provided.
