@@ -55,8 +55,10 @@ pub struct ListCommand {
 // This is were I start to dig into the problem for Issue #1444 - MarkusEicher
 pub struct UndeployCommand {
     /// Name of the app specification to undeploy
-    #[clap(name = "name")]
-    model_name: String,
+    // #[clap(name = "name")]
+    // model_name: String,
+    #[clap(name = "application")]
+    application: String,
 
     /// Whether or not to delete resources that are undeployed. Defaults to remove managed resources
     #[clap(long = "non-destructive")]
@@ -195,14 +197,45 @@ pub async fn handle_command(
     Ok(out)
 }
 
+// async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
+//     let connection_opts =
+//         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+//     let lattice = Some(connection_opts.get_lattice());
+
+//     let client = connection_opts.into_nats_client().await?;
+
+//     wash_lib::app::undeploy_model(&client, lattice, &cmd.model_name, cmd.non_destructive).await
+// }
+
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
-    let connection_opts =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let connection_opts = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::undeploy_model(&client, lattice, &cmd.model_name, cmd.non_destructive).await
+    let app_manifest = load_app_manifest(cmd.application.parse()?).await?;
+
+    let model_name = match app_manifest {
+        AppManifest::SerializedModel(manifest) => {
+            // If we have a serialized model, we need to put it first to get the model name
+            let put_res = wash_lib::app::put_model(
+                &client,
+                lattice.clone(),
+                serde_yaml::to_string(&manifest)
+                    .context("failed to convert manifest to string")?
+                    .as_ref(),
+            )
+            .await?;
+
+            match put_res.result {
+                PutResult::Created | PutResult::NewVersion => put_res.name,
+                _ => bail!("Could not put manifest for undeployment {}", put_res.message),
+            }
+        }
+        AppManifest::ModelName(model_name) => model_name,
+    };
+
+    wash_lib::app::undeploy_model(&client, lattice, &model_name, cmd.non_destructive).await
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
