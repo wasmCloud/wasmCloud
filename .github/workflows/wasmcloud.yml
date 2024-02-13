@@ -110,15 +110,12 @@ jobs:
     - uses: ./.github/actions/install-nix
       # need to run condition inside job steps so that job will pass if all steps are skipped
       # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
-      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
-      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         package: wasmcloud-${{ matrix.config.target }}
     - run: ${{ matrix.config.test-bin }}
-      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
     - uses: ./.github/actions/build-nix
       if: ${{ !endsWith(matrix.config.target, 'fhs') && needs.check_for_changes.outputs.rust == 'true' }}
       with:
@@ -222,11 +219,9 @@ jobs:
     - uses: ./.github/actions/install-nix
       # need to run condition inside job steps so that job will pass if all steps are skipped
       # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
-      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
-      if: ${{ needs.check_for_changes.outputs.rust == 'true' }}
 
   build-doc:
     runs-on: ubuntu-22.04-16-cores
