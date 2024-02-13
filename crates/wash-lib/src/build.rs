@@ -268,11 +268,10 @@ fn build_rust_actor(
     // Once out of nightly, we should be able to use std::path::absolute
     // https://github.com/rust-lang/rust/pull/91673
     let metadata = cargo_metadata::MetadataCommand::new().exec()?;
-    let target_path = rust_config
+    let mut wasm_path_buf = rust_config
         .target_path
         .clone()
         .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
-    let mut wasm_path_buf = PathBuf::from(target_path);
     wasm_path_buf.push(build_target);
     wasm_path_buf.push("release");
     wasm_path_buf.push(format!("{}.wasm", wasm_bin_name));
