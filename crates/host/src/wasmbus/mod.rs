@@ -721,6 +721,13 @@ impl Bus for Handler {
         &self,
         target_interface: &TargetInterface,
     ) -> anyhow::Result<Option<TargetEntity>> {
+        // NOTE(brooksmtownsend): this should be removed by @vados-cosmonic when we drop `set_target` in favor of
+        // `set_link_name`
+        let targets = self.wrpc_targets.read().await;
+        if let Some(interface) = targets.get(target_interface) {
+            return Ok(Some(interface.clone()));
+        };
+
         let links = self.interface_links.read().await;
         let link_name = self.interface_link_name.read().await.clone();
         let (namespace, package, interface) = target_interface.as_parts();
@@ -2602,15 +2609,18 @@ impl Host {
             }
             wasmcloud_runtime::Actor::Component(_) => {
                 debug!(actor_ref, "instantiating component");
-                let wrpc = "wrpc";
-                let wrpc_version = "0.0.1";
-                // Components communicate over wRPC
+                // TODO: Components subscribe on wRPC topics
                 // Example incoming topic:
                 //   default.echo.wrpc.0.0.1.wasi:http/incoming-handler.handle
+                // format!(
+                //     "{lattice}.{component_id}.{WRPC}.{WRPC_VERSION}.>",
+                //     lattice = self.host_config.lattice,
+                //     component_id = sanitize_reference(actor_ref),
+                // )
                 format!(
-                    "{lattice}.{component_id}.{wrpc}.{wrpc_version}.>",
+                    "wasmbus.rpc.{lattice}.{subject}",
                     lattice = self.host_config.lattice,
-                    component_id = sanitize_reference(actor_ref),
+                    subject = claims.subject
                 )
             }
         };
