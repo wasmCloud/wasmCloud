@@ -169,7 +169,7 @@ async fn instantiate(
 ) -> anyhow::Result<Instance> {
     // We also need to wrap the instantiation in a task to ensure that the wasm module can spread on all CPU cores
     // Needs more investigation to be sure why this is necessary
-    let (store, guest_call, start) = spawn({
+    spawn({
         let mut wasi = WasiCtxBuilder::new();
         let wasi = wasi
             .arg("main.wasm")
@@ -205,15 +205,13 @@ async fn instantiate(
                 bail!("failed to instantiate either  `_start`, or `__guest_call`: {e}")
             }
         };
-        future::ready((store, guest_call, start))
+        future::ready(Ok(Instance {
+            store,
+            guest_call,
+            start,
+        }))
     })
-    .await?;
-
-    Ok(Instance {
-        store,
-        guest_call,
-        start,
-    })
+    .await?
 }
 
 impl Module {
