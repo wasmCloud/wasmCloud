@@ -2455,7 +2455,7 @@ impl Host {
                     let instance = Arc::clone(&instance);
                     spawn(async move {
                         let instance = Arc::clone(&instance);
-                        instance.handle_rpc_message(msg).await
+                        instance.handle_rpc_message(msg).await;
                     });
                     future::ready(())
                 })
