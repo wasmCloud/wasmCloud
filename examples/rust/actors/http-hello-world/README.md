@@ -32,3 +32,7 @@ wash app deploy ./wadm.yaml
 wash app list
 curl http://localhost:8080
 ```
+
+## Adding Capabilities
+
+To learn how to extend this example with additional capabilities, see the [Adding Capabilities](https://wasmcloud.com/docs/tour/adding-capabilities?lang=rust) section of the wasmCloud documentation.
