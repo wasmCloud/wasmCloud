@@ -48,12 +48,12 @@ use wasmcloud_control_interface::{
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
+    WrpcTarget,
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp,
-    InterfaceTarget, KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp,
-    OutgoingHttpRequest, TargetEntity, TargetInterface,
+    blobstore, guest_config, messaging, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
+    KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -72,6 +72,23 @@ mod event;
 const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
 const WRPC: &str = "wrpc";
 const WRPC_VERSION: &str = "0.0.1";
+
+const DEFAULT_LINK_NAME: &str = "default";
+
+/// Name of an established link
+pub type LinkName = String;
+
+/// A combination of WIT namespace and package (ex. `namespace:package`)
+type WitNsAndPackage = String;
+
+/// The relevant wit interface (ex. `keyvalue`)
+type WitInterface = String;
+
+/// The ID of wRPC-compliant target(s) on the lattice, which can take many forms:
+/// - Signed actor public key
+/// - Opaque string (representing possibly a target group)
+/// - ...
+type LatticeTargetId = String;
 
 #[derive(Debug)]
 struct Queue {
@@ -318,71 +335,33 @@ struct Handler {
     origin: WasmCloudEntity,
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
-    /// The current link name to use for interface targets, overridable in actor code via set_target()
+    /// The current link name to use for interface targets, overridable in actor code via set_link_name()
     interface_link_name: Arc<RwLock<String>>,
-    // link name -> package -> interface -> target
+    /// Map of link names -> WIT ns & package -> WIT interface -> Target
+    ///
+    /// While a target may often be a component ID, it is not guaranteed to be one, and could be
+    /// some other identifier of where to send invocations.
     #[allow(clippy::type_complexity)]
-    interface_links: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>>,
-    // NOTE(brooksmtownsend): needs deduplication of responsibility with interface_links
-    wrpc_targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
-    aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
+    interface_links: Arc<
+        RwLock<HashMap<LinkName, HashMap<WitNsAndPackage, HashMap<WitInterface, LatticeTargetId>>>>,
+    >,
     chunk_endpoint: ChunkEndpoint,
-}
-
-#[instrument(level = "trace")]
-async fn resolve_target(
-    target: Option<&TargetEntity>,
-    links: Option<&HashMap<String, WasmCloudEntity>>,
-    aliases: &HashMap<String, WasmCloudEntity>,
-) -> anyhow::Result<WasmCloudEntity> {
-    const DEFAULT_LINK_NAME: &str = "default";
-
-    trace!("resolve target");
-
-    let target = match target {
-        None => links
-            .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
-            .context("link not found")?
-            .clone(),
-        Some(TargetEntity::Wrpc(target)) => {
-            let (namespace, package, _) = target.interface.as_parts();
-            WasmCloudEntity {
-                public_key: target.id.clone(),
-                contract_id: format!("{namespace}:{package}"),
-                link_name: target.link_name.clone(),
-            }
-        }
-        Some(TargetEntity::Link(link_name)) => links
-            .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
-            .context("link not found")?
-            .clone(),
-        Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
-            public_key: key.public_key(),
-            ..Default::default()
-        },
-        Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => aliases
-            .get(alias)
-            .context("unknown actor call alias")?
-            .clone(),
-    };
-    Ok(target)
 }
 
 impl Handler {
     #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation_with_payload(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: impl Into<String>,
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        let links = self.links.read().await;
-        let aliases = self.aliases.read().await;
         let operation = operation.into();
-        let (package, interface_and_func) = operation
+        let (ns_and_pkg, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
-        let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
+        let target = target.context("missing/invalid target on operation")?;
+        let link_name = target.link_name.clone();
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
@@ -390,7 +369,7 @@ impl Handler {
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
-            inv_target.clone(),
+            target,
             operation.clone(),
             request,
             injector.into(),
@@ -406,26 +385,18 @@ impl Handler {
 
         let payload =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
-        let topic = match target {
-            Some(TargetEntity::Wrpc(target)) => {
-                let (namespace, package, interface) = target.interface.as_parts();
-                let (_, function) = interface_and_func
-                    .split_once('.')
-                    .context("interface and function should be specified")?;
-                format!(
-                    "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
-                    self.lattice, target.id, namespace, package, interface, function
-                )
-            }
-            None | Some(TargetEntity::Link(_)) => format!(
-                "wasmbus.rpc.{}.{}.{}",
-                self.lattice, invocation.target.public_key, invocation.target.link_name,
-            ),
-            Some(TargetEntity::Actor(_)) => format!(
-                "wasmbus.rpc.{}.{}",
-                self.lattice, invocation.target.public_key
-            ),
-        };
+
+        // Build subject from what we know about the operation
+        let (interface, function) = interface_and_func
+            .split_once('.')
+            .context("interface and function should be specified")?;
+        let (wit_ns, wit_pkg) = ns_and_pkg
+            .rsplit_once(':')
+            .context("failed to parse operation for WIT ns/pkg")?;
+        let lattice = &self.lattice;
+        let subject = format!(
+            "{lattice}.{link_name}.{WRPC}.{WRPC_VERSION}.{wit_ns}:{wit_pkg}/{interface}.{function}",
+        );
 
         let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
         let request = async_nats::Request::new()
@@ -434,9 +405,9 @@ impl Handler {
             .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
         let res = self
             .nats
-            .send_request(topic, request)
+            .send_request(subject, request)
             .await
-            .context("failed to publish on NATS topic")?;
+            .context("failed to publish on NATS subject")?;
 
         let InvocationResponse {
             invocation_id,
@@ -469,7 +440,7 @@ impl Handler {
     #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: impl Into<String>,
         request: &impl Serialize,
     ) -> anyhow::Result<Vec<u8>> {
@@ -777,69 +748,38 @@ impl Blobstore for Handler {
 #[async_trait]
 impl Bus for Handler {
     #[instrument(level = "trace", skip(self))]
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity> {
-        let links = self.links.read().await;
-        if links
-            .get(namespace)
-            .map(|bindings| bindings.contains_key(binding))
-            .unwrap_or_default()
-        {
-            Ok(TargetEntity::Link(Some(binding.into())))
-        } else {
-            Ok(TargetEntity::Actor(namespace.into()))
-        }
-    }
-
-    #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
         target_interface: &TargetInterface,
-    ) -> anyhow::Result<Option<TargetEntity>> {
-        // NOTE(brooksmtownsend): this should be removed by @vados-cosmonic when we drop `set_target` in favor of
-        // `set_link_name`
-        let targets = self.wrpc_targets.read().await;
-        if let Some(interface) = targets.get(target_interface) {
-            return Ok(Some(interface.clone()));
-        };
-
+    ) -> anyhow::Result<Option<WrpcTarget>> {
         let links = self.interface_links.read().await;
         let link_name = self.interface_link_name.read().await.clone();
         let (namespace, package, interface) = target_interface.as_parts();
         let target_component_id = links
-            .get(self.interface_link_name.read().await.as_str())
+            .get(&link_name)
             .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
             .and_then(|interfaces| interfaces.get(interface));
-        Ok(target_component_id.map(|id| {
-            TargetEntity::Wrpc(InterfaceTarget {
-                id: id.clone(),
-                interface: target_interface.clone(),
-                link_name,
-            })
+        Ok(target_component_id.map(|id| WrpcTarget {
+            id: id.clone(),
+            interface: target_interface.clone(),
+            link_name,
         }))
     }
 
+    /// Get the current link name
     #[instrument(level = "debug", skip(self))]
-    async fn set_target(
-        &self,
-        target: Option<TargetEntity>,
-        interfaces: Vec<TargetInterface>,
-    ) -> anyhow::Result<()> {
-        // TODO: See note about wrpc_targets and interface_links, need clarification on if I'm duplicating
-        // functionality
-        let mut targets = self.wrpc_targets.write().await;
-        if let Some(target) = target {
-            for interface in interfaces {
-                targets.insert(interface, target.clone());
-            }
-        } else {
-            for interface in interfaces {
-                targets.remove(&interface);
-            }
-        }
+    async fn get_link_name(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(self.interface_link_name.read().await.deref().clone()))
+    }
+
+    /// Set the current link name in use by the handler, which is otherwise "default".
+    ///
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/readwrite.get`)
+    /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
+    #[instrument(level = "debug", skip(self))]
+    async fn set_link_name(&self, link_name: Option<LinkName>) -> anyhow::Result<()> {
+        let mut current_link_name = self.interface_link_name.write().await;
+        *current_link_name = link_name.unwrap_or_else(|| DEFAULT_LINK_NAME.into());
         Ok(())
     }
 
@@ -873,7 +813,7 @@ impl Bus for Handler {
     #[instrument(level = "debug", skip(self))]
     async fn call(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -883,8 +823,6 @@ impl Bus for Handler {
         let (mut req_r, req_w) = socket_pair()?;
         let (res_r, mut res_w) = socket_pair()?;
 
-        let links = Arc::clone(&self.links);
-        let aliases = Arc::clone(&self.aliases);
         let nats = self.nats.clone();
         let chunk_endpoint = self.chunk_endpoint.clone();
         let lattice = self.lattice.clone();
@@ -900,15 +838,13 @@ impl Bus for Handler {
                     .await
                     .context("failed to read request")
                     .map_err(|e| e.to_string())?;
-                let links = links.read().await;
-                let aliases = aliases.read().await;
-                let (package, interface_and_func) = operation
+                let (ns_and_pkg, interface_and_func) = operation
                     .rsplit_once('/')
                     .context("failed to parse operation")
                     .map_err(|e| e.to_string())?;
-                let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases)
-                    .await
+                let target = target.context("not target for call [{operation}]")
                     .map_err(|e| e.to_string())?;
+                let link_name = target.link_name.clone();
                 let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
                 let injector = TraceContextInjector::default_with_span();
                 let headers = injector_to_headers(&injector);
@@ -916,7 +852,7 @@ impl Bus for Handler {
                     &cluster_key,
                     &host_key,
                     origin,
-                    inv_target.clone(),
+                    target,
                     operation.clone(),
                     request,
                     injector.into(),
@@ -935,25 +871,19 @@ impl Bus for Handler {
                 let payload = rmp_serde::to_vec_named(&invocation)
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
-                let topic = match target {
-                    Some(TargetEntity::Wrpc(target)) => {
-                        let (_, function) = interface_and_func
-                            .split_once('.')
-                            .expect("interface and function should be specified");
-                        let (namespace, package, interface) = target.interface.as_parts();
-                        format!(
-                            "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
-                            lattice, target.id, namespace, package, interface, function
-                        )
-                    }
-                    None | Some(TargetEntity::Link(_)) => format!(
-                        "wasmbus.rpc.{lattice}.{}.{}",
-                        invocation.target.public_key, invocation.target.link_name,
-                    ),
-                    Some(TargetEntity::Actor(_)) => {
-                        format!("wasmbus.rpc.{lattice}.{}", invocation.target.public_key)
-                    }
-                };
+
+                // Build subject from what we know about the operation
+                let (interface, function) = interface_and_func
+                    .split_once('.')
+                    .context("interface and function should be specified")
+                    .map_err(|e| e.to_string())?;
+                let (wit_ns, wit_pkg) = ns_and_pkg
+                    .rsplit_once(':')
+                    .context("failed to parse operation for WIT ns/pkg")
+                    .map_err(|e| e.to_string())?;
+                let subject = format!(
+                    "{lattice}.{link_name}.{WRPC}.{WRPC_VERSION}.{wit_ns}:{wit_pkg}/{interface}.{function}",
+                );
 
                 let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
                 let request = async_nats::Request::new()
@@ -961,7 +891,7 @@ impl Bus for Handler {
                     .timeout(timeout)
                     .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
                 let res = nats
-                    .send_request(topic, request)
+                    .send_request(subject, request)
                     .await
                     .context("failed to call provider")
                     .map_err(|e| e.to_string())?;
@@ -1012,7 +942,7 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip(self, request))]
     async fn call_sync(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
         request: Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {
@@ -1389,7 +1319,7 @@ impl ActorInstance {
 
     #[instrument(level = "trace", skip_all)]
     async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
-        trace!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
+        trace!(?invocation.origin, ?invocation.target.link_name, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
 
         let content_length: usize = invocation
@@ -1403,7 +1333,7 @@ impl ActorInstance {
             invocation.msg
         };
 
-        trace!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
+        trace!(?invocation.origin, ?invocation.target.link_name, invocation.operation, "handle actor invocation");
 
         let source_public_key = invocation.origin.public_key;
         // actors don't have a contract_id
@@ -1426,23 +1356,11 @@ impl ActorInstance {
         };
 
         // actors don't have a contract_id
-        let target_public_key = invocation.target.public_key;
-        let target = if invocation.target.contract_id.is_empty() {
-            let actor_claims = self.actor_claims.read().await;
-            let claims = actor_claims
-                .get(&target_public_key)
-                .cloned()
-                .context("failed to look up claims for target")?;
-            PolicyRequestTarget::from(claims)
-        } else {
-            let provider_claims = self.provider_claims.read().await;
-            let claims = provider_claims
-                .get(&target_public_key)
-                .cloned()
-                .context("failed to look up claims for target")?;
-            let mut target = PolicyRequestTarget::from(claims);
-            target.link_name = Some(invocation.target.link_name.clone());
-            target
+        let target = PolicyRequestTarget {
+            public_key: None, // todo(vadossi-cosmonic): get this from somewhere (pubkey of actor/provider)
+            issuer: None, // todo(vadossi-cosmonic): get this from somewhere (target claim issuer)
+            contract_id: None, // todo(vadossi-cosmonic): get this from somewhere (contract ID)
+            link_name: Some(invocation.target.link_name.clone()),
         };
 
         let resp = self
@@ -1522,7 +1440,7 @@ impl ActorInstance {
 
                 let invocation_id = invocation.id.clone();
                 let origin = invocation.origin.clone();
-                let target = invocation.target.clone();
+                let link_name = invocation.target.link_name.clone();
                 let operation = invocation.operation.clone();
 
                 let res = self.handle_call(invocation).await;
@@ -1537,7 +1455,7 @@ impl ActorInstance {
                     Err(e) => {
                         error!(
                             ?origin,
-                            ?target,
+                            ?link_name,
                             ?operation,
                             ?invocation_id,
                             ?e,
@@ -2775,11 +2693,9 @@ impl Host {
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
             claims: claims.clone(),
-            aliases: Arc::clone(&self.aliases),
             links: Arc::new(RwLock::new(links)),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
-            wrpc_targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
             chunk_endpoint: self.chunk_endpoint.clone(),
         };

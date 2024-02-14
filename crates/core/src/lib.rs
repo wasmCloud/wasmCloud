@@ -9,6 +9,7 @@ use logging::Level;
 use core::fmt;
 
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::{KeyPair, KeyPairType};
@@ -24,6 +25,15 @@ use wascap::prelude::Claims;
 pub type ActorLinks = Vec<LinkDefinition>;
 pub type ClusterIssuerKey = String;
 pub type ClusterIssuers = Vec<ClusterIssuerKey>;
+
+/// Name of an established link
+pub type LinkName = String;
+
+/// The ID of a wRPC-compliant component, which can take many forms:
+/// - Signed actor public key
+/// - Opaque string (representing possibly a target group)
+/// - ...
+type ComponentId = String;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HealthCheckRequest {}
@@ -114,7 +124,8 @@ pub fn invocation_hash(
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Invocation {
     pub origin: WasmCloudEntity,
-    pub target: WasmCloudEntity,
+    /// Target to which the invocation should be sent (ex. actor public key, opaque string)
+    pub target: WrpcTarget,
     #[serde(default)]
     pub operation: String,
     #[serde(with = "serde_bytes")]
@@ -157,7 +168,7 @@ impl Invocation {
         cluster_key: &KeyPair,
         host_key: &KeyPair,
         origin: WasmCloudEntity,
-        target: WasmCloudEntity,
+        target: WrpcTarget,
         operation: impl Into<String>,
         msg: Vec<u8>,
         trace_context: TraceContext,
@@ -168,7 +179,10 @@ impl Invocation {
             .context("failed to parse operation")?;
         // TODO: Support per-interface links
         let id = Uuid::from_u128(Ulid::new().into()).to_string();
-        let target_url = format!("{}/{operation}", target.url());
+        // todo(vadossi-cosmonic): WasmCloudEntity had richer information here
+        // for building `target_url`, double check if we are fine with just link name and op
+        // which we expect to be WIT-ified
+        let target_url = target.to_string();
         let claims = jwt::Claims::<jwt::Invocation>::new(
             cluster_key.public_key(),
             id.to_string(),
@@ -203,7 +217,7 @@ impl Invocation {
     /// A fully-qualified URL indicating the target of the invocation
     #[must_use]
     pub fn target_url(&self) -> String {
-        format!("{}/{}", self.target.url(), self.operation)
+        self.target.to_string()
     }
 
     /// The hash of the invocation's target, origin, and raw bytes
@@ -374,6 +388,122 @@ impl fmt::Display for WasmCloudEntity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let url = self.url();
         write!(f, "{url}")
+    }
+}
+
+// todo(vadossi-cosmonic): duplicated from the one in builtins
+/// Call target identifier
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum TargetInterface {
+    /// `wasi:blobstore/blobstore`
+    WasiBlobstoreBlobstore,
+    /// `wasi:http/outgoing-handler`
+    WasiHttpOutgoingHandler,
+    /// `wasi:keyvalue/atomic`
+    WasiKeyvalueAtomic,
+    /// `wasi:keyvalue/eventual`
+    WasiKeyvalueEventual,
+    /// `wasi:logging/logging`
+    WasiLoggingLogging,
+    /// `wasmcloud:messaging/consumer`
+    WasmcloudMessagingConsumer,
+    /// Custom interface
+    Custom {
+        /// Package namespace
+        namespace: String,
+        /// Package name
+        package: String,
+        /// Interface name
+        interface: String,
+    },
+}
+
+// todo(vadossi-cosmonic): this default doesn't make much sense
+impl Default for TargetInterface {
+    fn default() -> Self {
+        Self::Custom {
+            namespace: String::default(),
+            package: String::default(),
+            interface: String::default(),
+        }
+    }
+}
+
+impl TargetInterface {
+    /// Returns the 3-tuple of (namespace, package, interface) for this interface
+    #[must_use]
+    pub fn as_parts(&self) -> (&str, &str, &str) {
+        match self {
+            Self::WasiBlobstoreBlobstore => ("wasi", "blobstore", "blobstore"),
+            Self::WasiHttpOutgoingHandler => ("wasi", "http", "outgoing-handler"),
+            Self::WasiKeyvalueAtomic => ("wasi", "keyvalue", "atomic"),
+            Self::WasiKeyvalueEventual => ("wasi", "keyvalue", "eventual"),
+            Self::WasiLoggingLogging => ("wasi", "logging", "logging"),
+            Self::WasmcloudMessagingConsumer => ("wasmcloud", "messaging", "consumer"),
+            Self::Custom {
+                namespace,
+                package,
+                interface,
+            } => (namespace, package, interface),
+        }
+    }
+
+    /// Build a [`TargetInterface`] from constituent parts
+    #[must_use]
+    pub fn from_parts(parts: (&str, &str, &str)) -> Self {
+        match parts {
+            ("wasi", "blobstore", "blobstore") => Self::WasiBlobstoreBlobstore,
+            ("wasi", "http", "outgoing-handler") => Self::WasiHttpOutgoingHandler,
+            ("wasi", "keyvalue", "atomic") => Self::WasiKeyvalueAtomic,
+            ("wasi", "keyvalue", "eventual") => Self::WasiKeyvalueEventual,
+            ("wasi", "logging", "logging") => Self::WasiLoggingLogging,
+            ("wasmcloud", "messaging", "consumer") => Self::WasmcloudMessagingConsumer,
+            (ns, pkg, iface) => Self::Custom {
+                namespace: ns.into(),
+                package: pkg.into(),
+                interface: iface.into(),
+            },
+        }
+    }
+
+    /// Build a target interface, given a properly formatted operation
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the operation is not of the form "<package>:<ns>/<interface>.<function>"
+    pub fn from_operation(operation: impl AsRef<str>) -> anyhow::Result<Self> {
+        let operation = operation.as_ref();
+        let (ns_and_pkg, interface_and_func) = operation
+            .rsplit_once('/')
+            .context("failed to parse operation")?;
+        let (interface, _) = interface_and_func
+            .split_once('.')
+            .context("interface and function should be specified")?;
+        let (wit_ns, wit_pkg) = ns_and_pkg
+            .rsplit_once(':')
+            .context("failed to parse operation for WIT ns/pkg")?;
+        Ok(TargetInterface::from_parts((wit_ns, wit_pkg, interface)))
+    }
+}
+
+// todo(vadossi-cosmonic): duplicated from the one in builtins
+#[derive(Clone, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Interface target to be invoked over `wRPC`
+pub struct WrpcTarget {
+    /// wRPC component routing identifier
+    pub id: ComponentId,
+    /// wRPC component interface
+    pub interface: TargetInterface,
+    /// Link name used to resolve the target
+    pub link_name: String,
+}
+
+impl Display for WrpcTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (wit_ns, wit_pkg, wit_fn) = self.interface.as_parts();
+        let link_name = &self.link_name;
+        let id = &self.id;
+        write!(f, "{link_name}/{id}/{wit_ns}:{wit_pkg}/{wit_fn}")
     }
 }
 

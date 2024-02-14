@@ -158,11 +158,13 @@ impl Stream for Spier {
                 let body = inv.msg;
                 inv.msg = Vec::new();
 
-                if inv.origin.is_provider() && inv.target.public_key != self.actor_id.as_ref() {
-                    // This is a provider invocation that isn't for us, so we should skip it
+                // If the call is from a provider, and the target ID does not match the
+                // target ID for this spier, the invocation is not for us, and should be skipped
+                if inv.origin.is_provider() && inv.target.id != self.actor_id.as_ref() {
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
+
                 let from = if inv.origin.is_actor() {
                     self.friendly_name
                         .clone()
@@ -174,17 +176,9 @@ impl Stream for Spier {
                         .and_then(|prov| prov.friendly_name.clone())
                         .unwrap_or_else(|| pubkey.clone())
                 };
-                let to = if inv.target.is_actor() {
-                    self.friendly_name
-                        .clone()
-                        .unwrap_or_else(|| inv.target.public_key.clone())
-                } else {
-                    let pubkey = &inv.target.public_key;
-                    self.provider_info
-                        .get(pubkey)
-                        .and_then(|prov| prov.friendly_name.clone())
-                        .unwrap_or_else(|| pubkey.clone())
-                };
+
+                let to = inv.target.id.clone();
+
                 // NOTE(thomastaylor312): Ideally we'd consume `msg.payload` above with a
                 // `Cursor` and `from_reader` and then manually reconstruct the acking using the
                 // message context, but I didn't want to waste time optimizing yet

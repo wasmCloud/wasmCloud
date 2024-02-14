@@ -1,7 +1,7 @@
 package wasmcloud:bus;
 
 interface lattice {
-    /// Interface target. This represents an interface, which can be selected by `set-target`.
+    /// Interface target. This represents an interface, which can be selected by `set-link-name`.
     /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
     resource target-interface {
@@ -26,24 +26,18 @@ interface lattice {
         wasi-http-outgoing-handler: static func() -> target-interface;
     }
 
-    /// Actor identifier
-    variant actor-identifier {
-        /// Actor public key
-        public-key(string),
-        /// Actor call alias
-        alias(string),
+    record wrpc-target {
+      id: string,
+      iface: target-interface,
+      link-name: string
     }
 
-    /// Target entity
-    variant target-entity {
-        /// Link target paired with an optional link name
-        link(option<string>),
-        /// Actor target
-        actor(actor-identifier),
-    }
+    /// Set a link name to target with messages that are sent over the lattice.
+    /// If `target` is `None`, then target is set to 'default'
+    set-link-name: func(name: option<string>);
 
-    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
-    set-target: func(target: option<target-entity>, interfaces: list<target-interface>);
+    /// Get the current link name
+    get-link-name: func() -> option<string>;
 }
 
 /// An interface for getting configuration data for a wasm module
@@ -66,7 +60,7 @@ interface host {
     use wasi:io/streams@0.2.0.{input-stream, output-stream};
     use wasi:io/poll@0.2.0.{pollable};
 
-    use lattice.{target-interface, target-entity};
+    use lattice.{target-interface, wrpc-target};
 
     // The following block defines a special resource type used by the
     // `wasi:bus/host` interface to emulate
@@ -81,10 +75,10 @@ interface host {
     listen-to-future-result: func(f: future-result) -> pollable;
 
     /// Call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call`
-    call: func(target: option<target-entity>, operation: string) -> result<tuple<future-result, input-stream, output-stream>, string>;
+    call: func(link-name: option<wrpc-target>, operation: string) -> result<tuple<future-result, input-stream, output-stream>, string>;
 
     /// Synchronously call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call-sync`
-    call-sync: func(target: option<target-entity>, operation: string, payload: list<u8>) -> result<list<u8>, string>;
+    call-sync: func(link-name: option<wrpc-target>, operation: string, payload: list<u8>) -> result<list<u8>, string>;
 }
 
 interface guest {

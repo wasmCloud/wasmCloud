@@ -1,21 +1,23 @@
-use super::{Ctx, Instance, TableResult};
-
-use crate::capability::bus::{guest_config, host, lattice};
-use crate::capability::{Bus, TargetInterface};
-
 use core::future::Future;
 use core::pin::Pin;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 use futures::future::Shared;
 use futures::FutureExt;
 use tracing::instrument;
+use wasmcloud_core::WrpcTarget;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
 use wasmtime_wasi::preview2::{HostOutputStream, InputStream, OutputStream, Pollable};
+
+use super::{Ctx, Instance, TableResult};
+
+use crate::capability::bus::host::TargetInterface;
+use crate::capability::bus::{guest_config, host, lattice};
+use crate::capability::Bus;
 
 impl Instance {
     /// Set [`Bus`] handler for this [Instance].
@@ -51,7 +53,7 @@ impl host::Host for Ctx {
     #[instrument]
     async fn call(
         &mut self,
-        target: Option<host::TargetEntity>,
+        target: Option<lattice::WrpcTarget>,
         operation: String,
     ) -> anyhow::Result<
         Result<
@@ -63,11 +65,14 @@ impl host::Host for Ctx {
             String,
         >,
     > {
-        let target = target
-            .map(TryInto::try_into)
-            .transpose()
-            .context("failed to parse target")?;
-        match self.handler.call(target, operation).await {
+        let interface = TargetInterface::from_operation(&operation)?;
+        let lattice_target = target.context("no target selected for call")?;
+        let wrpc_target = WrpcTarget {
+            id: lattice_target.id,
+            interface,
+            link_name: lattice_target.link_name,
+        };
+        match self.handler.call(Some(wrpc_target), operation).await {
             Ok((result, stdin, stdout)) => {
                 let result = self
                     .table
@@ -92,15 +97,23 @@ impl host::Host for Ctx {
     #[instrument(skip(self, payload))]
     async fn call_sync(
         &mut self,
-        target: Option<host::TargetEntity>,
+        target: Option<lattice::WrpcTarget>,
         operation: String,
         payload: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        let target = target
-            .map(TryInto::try_into)
-            .transpose()
-            .context("failed to parse target")?;
-        match self.handler.call_sync(target, operation, payload).await {
+        let interface = TargetInterface::from_operation(&operation)?;
+        let lattice_target = target.context("no target selected for call")?;
+        let wrpc_target = WrpcTarget {
+            id: lattice_target.id,
+            interface,
+            link_name: lattice_target.link_name,
+        };
+
+        match self
+            .handler
+            .call_sync(Some(wrpc_target), operation, payload)
+            .await
+        {
             Ok(res) => Ok(Ok(res)),
             Err(err) => Ok(Err(format!("{err:#}"))),
         }
@@ -133,25 +146,19 @@ impl host::Host for Ctx {
 
 #[async_trait]
 impl lattice::Host for Ctx {
-    async fn set_target(
-        &mut self,
-        target: Option<host::TargetEntity>,
-        interfaces: Vec<Resource<TargetInterface>>,
-    ) -> anyhow::Result<()> {
-        let interfaces = interfaces
-            .into_iter()
-            .map(|interface| self.table.get(&interface).cloned())
-            .collect::<TableResult<_>>()
-            .map_err(|e| anyhow!(e).context("failed to get interface"))?;
-        let target = target
-            .map(TryInto::try_into)
-            .transpose()
-            .context("failed to parse target")?;
+    async fn set_link_name(&mut self, link_name: Option<String>) -> anyhow::Result<()> {
         self.handler
-            .set_target(target, interfaces)
+            .set_link_name(link_name)
             .await
             .context("failed to set target")?;
         Ok(())
+    }
+
+    async fn get_link_name(&mut self) -> anyhow::Result<Option<String>> {
+        self.handler
+            .get_link_name()
+            .await
+            .context("failed to get link name")
     }
 }
 

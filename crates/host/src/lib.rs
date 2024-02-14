@@ -26,7 +26,7 @@ pub use policy::{
     Response as PolicyResponse,
 };
 pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
-pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
+pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig, LinkName};
 
 pub use url;
 

@@ -58,31 +58,6 @@ struct Handler {
 
 #[async_trait]
 impl capability::Bus for Handler {
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<capability::TargetEntity> {
-        match (binding, namespace) {
-            ("httpclient", "wasmcloud:httpclient") => {
-                Ok(capability::TargetEntity::Link(Some("httpclient".into())))
-            }
-            ("keyvalue", "wasmcloud:keyvalue") => {
-                Ok(capability::TargetEntity::Link(Some("keyvalue".into())))
-            }
-            ("messaging", "wasmcloud:messaging") => {
-                Ok(capability::TargetEntity::Link(Some("messaging".into())))
-            }
-            ("", "foobar-component-command-preview2") => Ok(capability::TargetEntity::Actor(
-                capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
-            )),
-            ("", "unknown/alias") => Ok(capability::TargetEntity::Actor(
-                capability::ActorIdentifier::Alias("unknown/alias".into()),
-            )),
-            _ => panic!("binding `{binding}` namespace `{namespace}` pair not supported"),
-        }
-    }
-
     async fn identify_interface_target(
         &self,
         interface: &capability::TargetInterface,

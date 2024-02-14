@@ -1,5 +1,5 @@
 use crate::actor::claims;
-use crate::capability::{builtin, Bus, Interfaces, TargetInterface};
+use crate::capability::{builtin, Bus, Interfaces};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
+use wasmcloud_core::TargetInterface;
 use wasmtime::component::{Linker, ResourceTable, ResourceTableError, Val};
 use wasmtime_wasi::preview2::command::{self, Command};
 use wasmtime_wasi::preview2::pipe::{
@@ -415,11 +416,6 @@ fn wasifill(
                         continue;
                     }
                 };
-                let target = Arc::new(TargetInterface::Custom {
-                    namespace: package.name.namespace.clone(),
-                    package: package.name.name.clone(),
-                    interface: interface_name.to_string(),
-                });
                 for (name, function) in interface.functions.iter().filter(|(name, function)| {
                     if function.params.len() > 1
                         || function.results.len() > 1
@@ -452,20 +448,22 @@ fn wasifill(
                         "wasifill component function import"
                     );
                     let operation = format!("{interface_path}.{name}");
-                    let target = Arc::clone(&target);
                     let results_ty = Arc::new(function.results.clone());
                     if let Err(err) =
                         linker.func_new_async(component, name, move |ctx, params, results| {
                             let operation = operation.clone();
-                            let target = Arc::clone(&target);
                             let results_ty = Arc::clone(&results_ty);
                             Box::new(async move {
                                 let buf = encode_custom_parameters(params)?;
                                 let handler = &ctx.data().handler;
                                 let target = handler
-                                    .identify_interface_target(&target)
+                                    .identify_interface_target(
+                                        &TargetInterface::from_operation(&operation).context(
+                                            "failed to build wRPC target from operation",
+                                        )?,
+                                    )
                                     .await
-                                    .context("failed to identify interface target")?;
+                                    .context("failed to derive operation target")?;
                                 let buf = handler
                                     .call_sync(target, operation, buf)
                                     .await

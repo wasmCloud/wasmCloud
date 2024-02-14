@@ -17,7 +17,7 @@ use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
 use wasmcloud_core::{
     chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES},
-    Invocation, InvocationResponse, WasmCloudEntity,
+    Invocation, InvocationResponse, WasmCloudEntity, WrpcTarget,
 };
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -107,8 +107,8 @@ impl RpcClient {
     /// InvocationError::Timeout.
     pub async fn send_timeout(
         &self,
-        origin: WasmCloudEntity,
-        target: WasmCloudEntity,
+        origin: WrpcTarget,
+        target: WrpcTarget,
         method: impl Into<String>,
         data: Vec<u8>,
         timeout: Duration,
@@ -121,17 +121,17 @@ impl RpcClient {
     #[instrument(level = "debug", skip(self, origin, target, method, data), fields( data_len = %data.len(), lattice_id = %self.lattice, method = Empty, subject = Empty, issuer = Empty, sender_key = Empty, contract_id = Empty, link_name = Empty, target_key = Empty, method = Empty, topic = Empty ))]
     async fn inner_rpc(
         &self,
-        origin: WasmCloudEntity,
-        target: WasmCloudEntity,
+        origin: WrpcTarget,
+        target: WrpcTarget,
         method: impl Into<String>,
         data: Vec<u8>,
         timeout: Option<Duration>,
     ) -> InvocationResult<InvocationResponse> {
         let method = method.into();
-        let origin_url = crate::url(&origin, None);
+        let origin_url = crate::url(&origin);
         let subject = make_uuid();
         let issuer = self.key.public_key();
-        let target_url = crate::url(&target, Some(&method));
+        let target_url = crate::url(&target);
         let topic = rpc_topic(&target, &self.lattice);
 
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
@@ -347,10 +347,10 @@ impl RpcClient {
         if vr.cannot_use_yet {
             return Err(ValidationError::NotValidYet);
         }
-        let target_url = crate::url(&inv.target, Some(&inv.operation));
+        let target_url = crate::url(&inv.target);
         let hash = invocation_hash(
             &target_url,
-            &crate::url(&inv.origin, None),
+            &crate::url(&inv.origin),
             &inv.operation,
             &inv.msg,
         );
@@ -373,7 +373,7 @@ impl RpcClient {
                 target_url,
             ));
         }
-        let origin_url = crate::url(&inv.origin, None);
+        let origin_url = crate::url(&inv.origin);
         if inv_claims.origin_url != origin_url {
             return Err(ValidationError::InvalidOriginUrl(
                 inv_claims.origin_url.to_owned(),

@@ -1,3 +1,4 @@
+use core::WrpcTarget;
 use std::{borrow::Cow, collections::HashMap, time::Duration};
 
 use async_nats::{ConnectOptions, Event};
@@ -39,7 +40,8 @@ pub fn serialize<T: Serialize>(data: &T) -> InvocationResult<Vec<u8>> {
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
 /// A provider entity must have the public_key and link_name fields filled in.
 /// An actor entity must have a public_key and an empty link_name.
-pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
+pub fn rpc_topic(entity: &WrpcTarget, lattice: &str) -> String {
+    // todo(vados-cosmonic) we have to take the code from the wasmbus PR into here.
     if !entity.link_name.is_empty() {
         // provider target
         format!(
@@ -52,29 +54,14 @@ pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
     }
 }
 
-/// Generates a fully qualified wasmbus URL for use in wascap claims. The optional method parameter is used for generating URLs for targets being invoked
-pub fn url(entity: &crate::core::WasmCloudEntity, method: Option<&str>) -> String {
-    // Magic char: First char of an actor public key is M
-    let raw_url = if entity.public_key.to_uppercase().starts_with('M') {
-        format!("{}://{}", URL_SCHEME, entity.public_key)
-    } else {
-        format!(
-            "{}://{}/{}/{}",
-            URL_SCHEME,
-            entity
-                .contract_id
-                .replace(':', "/")
-                .replace(' ', "_")
-                .to_lowercase(),
-            entity.link_name.replace(' ', "_").to_lowercase(),
-            entity.public_key
-        )
-    };
-    if let Some(m) = method {
-        format!("{}/{}", raw_url, m)
-    } else {
-        raw_url
-    }
+/// Generates a fully qualified wasmbus URL for use in wascap claims.
+/// The optional method parameter is used for generating URLs for targets being invoked
+pub fn url(target: &crate::core::WrpcTarget) -> String {
+    // todo(vados-cosmonic): we can remove this entire function, as
+    // claim signing will be removed eventually
+    //
+    // see: https://github.com/wasmCloud/wasmCloud/issues/1219
+    format!("wrpc://{}/{}/{}", target.interface.to_string(), target.link_name,  target.id)
 }
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.

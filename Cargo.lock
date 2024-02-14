@@ -5367,7 +5367,6 @@ name = "wasmcloud-actor"
 version = "0.1.0"
 dependencies = [
  "futures",
- "once_cell",
  "rand",
  "rmp-serde",
  "serde",
@@ -5609,6 +5608,7 @@ dependencies = [
  "wasi-common",
  "wasmcloud-actor",
  "wasmcloud-compat",
+ "wasmcloud-core",
  "wasmparser 0.121.2",
  "wasmtime",
  "wasmtime-wasi",

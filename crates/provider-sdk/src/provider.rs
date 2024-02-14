@@ -247,8 +247,7 @@ impl ProviderConnection {
                                     current.record("actor_id", &tracing::field::display(&inv.origin.public_key));
                                     current.record("inv_id", &tracing::field::display(&inv.id));
                                     current.record("host_id", &tracing::field::display(&inv.host_id));
-                                    current.record("provider_id", &tracing::field::display(&inv.target.public_key));
-                                    current.record("contract_id", &tracing::field::display(&inv.target.contract_id));
+                                    current.record("provider_id", &tracing::field::display(&inv.target.id));
                                     current.record("link_name", &tracing::field::display(&inv.target.link_name));
                                     current.record("payload_size", &tracing::field::display(&inv.content_length));
                                     let inv_id = inv.id.clone();
@@ -528,10 +527,10 @@ impl ProviderConnection {
             return Err(ValidationError::InvalidIssuer);
         }
 
-        // verify target public key is my key
-        if inv.target.public_key != self.host_data.provider_key {
+        // Verify target ID is the current provider key
+        if inv.target.id != self.host_data.provider_key {
             return Err(ValidationError::InvalidTarget(
-                inv.target.public_key.clone(),
+                inv.target.id.clone(),
                 self.host_data.provider_key.clone(),
             ));
         }

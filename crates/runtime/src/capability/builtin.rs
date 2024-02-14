@@ -1,11 +1,9 @@
 use super::logging::logging;
-use super::{blobstore, bus, format_opt, messaging};
+use super::{blobstore, format_opt, messaging};
 
-use core::convert::Infallible;
 use core::fmt::Debug;
 use core::future::Future;
 use core::pin::Pin;
-use core::str::FromStr;
 use core::time::Duration;
 
 use std::ops::RangeInclusive;
@@ -14,9 +12,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use futures::{Stream, TryStreamExt};
-use nkeys::{KeyPair, KeyPairType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
+use wasmcloud_core::{LinkName, WrpcTarget};
+
+pub use wasmcloud_core::TargetInterface;
 
 #[derive(Clone, Default)]
 pub struct Handler {
@@ -148,140 +148,6 @@ impl Handler {
     }
 }
 
-#[derive(Clone, Debug)]
-/// Actor identifier
-pub enum ActorIdentifier {
-    /// Actor call alias identifier
-    Alias(String),
-    /// Actor public key identifier
-    Key(Arc<KeyPair>),
-}
-
-impl From<&str> for ActorIdentifier {
-    fn from(s: &str) -> Self {
-        if let Ok(key) = KeyPair::from_public_key(s) {
-            if key.key_pair_type() == KeyPairType::Module {
-                return Self::Key(Arc::new(key));
-            }
-        }
-        Self::Alias(s.into())
-    }
-}
-
-impl FromStr for ActorIdentifier {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(s.into())
-    }
-}
-
-impl PartialEq for ActorIdentifier {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Alias(l), Self::Alias(r)) => l == r,
-            (Self::Key(l), Self::Key(r)) => l.public_key() == r.public_key(),
-            _ => false,
-        }
-    }
-}
-
-impl Eq for ActorIdentifier {}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Interface target to be invoked over `wRPC`
-pub struct InterfaceTarget {
-    /// wRPC component routing identifier
-    pub id: String,
-    /// wRPC component interface
-    pub interface: TargetInterface,
-    /// Link name used to resolve the target
-    pub link_name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Target entity
-pub enum TargetEntity {
-    /// Link target entity
-    Link(Option<String>),
-    /// Actor target entity
-    Actor(ActorIdentifier),
-    /// WRPC component
-    Wrpc(InterfaceTarget),
-}
-
-impl TryFrom<bus::lattice::ActorIdentifier> for ActorIdentifier {
-    type Error = anyhow::Error;
-
-    fn try_from(entity: bus::lattice::ActorIdentifier) -> Result<Self, Self::Error> {
-        match entity {
-            bus::lattice::ActorIdentifier::PublicKey(key) => {
-                let key =
-                    KeyPair::from_public_key(&key).context("failed to parse actor public key")?;
-                Ok(ActorIdentifier::Key(Arc::new(key)))
-            }
-            bus::lattice::ActorIdentifier::Alias(alias) => Ok(ActorIdentifier::Alias(alias)),
-        }
-    }
-}
-
-impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
-    type Error = anyhow::Error;
-
-    fn try_from(entity: bus::lattice::TargetEntity) -> Result<Self, Self::Error> {
-        match entity {
-            bus::lattice::TargetEntity::Link(name) => Ok(Self::Link(name)),
-            bus::lattice::TargetEntity::Actor(actor) => actor.try_into().map(TargetEntity::Actor),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-/// Call target identifier
-pub enum TargetInterface {
-    /// `wasi:blobstore/blobstore`
-    WasiBlobstoreBlobstore,
-    /// `wasi:http/outgoing-handler`
-    WasiHttpOutgoingHandler,
-    /// `wasi:keyvalue/atomic`
-    WasiKeyvalueAtomic,
-    /// `wasi:keyvalue/eventual`
-    WasiKeyvalueEventual,
-    /// `wasi:logging/logging`
-    WasiLoggingLogging,
-    /// `wasmcloud:messaging/consumer`
-    WasmcloudMessagingConsumer,
-    /// Custom interface
-    Custom {
-        /// Package namespace
-        namespace: String,
-        /// Package name
-        package: String,
-        /// Interface name
-        interface: String,
-    },
-}
-
-impl TargetInterface {
-    /// Returns the 3-tuple of (namespace, package, interface) for this interface
-    #[must_use]
-    pub fn as_parts(&self) -> (&str, &str, &str) {
-        match self {
-            Self::WasiBlobstoreBlobstore => ("wasi", "blobstore", "blobstore"),
-            Self::WasiHttpOutgoingHandler => ("wasi", "http", "outgoing-handler"),
-            Self::WasiKeyvalueAtomic => ("wasi", "keyvalue", "atomic"),
-            Self::WasiKeyvalueEventual => ("wasi", "keyvalue", "eventual"),
-            Self::WasiLoggingLogging => ("wasi", "logging", "logging"),
-            Self::WasmcloudMessagingConsumer => ("wasmcloud", "messaging", "consumer"),
-            Self::Custom {
-                namespace,
-                package,
-                interface,
-            } => (namespace, package, interface),
-        }
-    }
-}
-
 /// Outgoing HTTP request
 pub struct OutgoingHttpRequest {
     /// Whether to use TLS
@@ -369,30 +235,22 @@ pub trait Blobstore {
 #[async_trait]
 /// `wasmcloud:bus/host` implementation
 pub trait Bus {
-    /// Identify the target of wasmbus module invocation
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity>;
-
     /// Identify the target of component interface invocation
     async fn identify_interface_target(
         &self,
         interface: &TargetInterface,
-    ) -> anyhow::Result<Option<TargetEntity>>;
+    ) -> anyhow::Result<Option<WrpcTarget>>;
 
-    /// Set interface call target
-    async fn set_target(
-        &self,
-        target: Option<TargetEntity>,
-        interfaces: Vec<TargetInterface>,
-    ) -> anyhow::Result<()>;
+    /// Get the link name on which to perform invocations
+    async fn get_link_name(&self) -> anyhow::Result<Option<LinkName>>;
+
+    /// Set link name on which to perform invocations
+    async fn set_link_name(&self, link_name: Option<LinkName>) -> anyhow::Result<()>;
 
     /// Handle `wasmcloud:bus/host.call`
     async fn call(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -414,7 +272,7 @@ pub trait Bus {
     /// Handle `wasmcloud:bus/host.call` without streaming
     async fn call_sync(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
         mut payload: Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {
@@ -636,24 +494,10 @@ impl Blobstore for Handler {
 #[async_trait]
 impl Bus for Handler {
     #[instrument(level = "trace", skip_all)]
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity> {
-        if let Some(ref bus) = self.bus {
-            trace!("call `Bus` handler");
-            bus.identify_wasmbus_target(binding, namespace).await
-        } else {
-            bail!("host cannot identify the Wasmbus call target")
-        }
-    }
-
-    #[instrument(level = "trace", skip_all)]
     async fn identify_interface_target(
         &self,
         interface: &TargetInterface,
-    ) -> anyhow::Result<Option<TargetEntity>> {
+    ) -> anyhow::Result<Option<WrpcTarget>> {
         if let Some(ref bus) = self.bus {
             trace!("call `Bus` handler");
             bus.identify_interface_target(interface).await
@@ -663,13 +507,16 @@ impl Bus for Handler {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn set_target(
-        &self,
-        target: Option<TargetEntity>,
-        interfaces: Vec<TargetInterface>,
-    ) -> anyhow::Result<()> {
-        self.proxy_bus("wasmcloud:bus/lattice.set-target")?
-            .set_target(target, interfaces)
+    async fn set_link_name(&self, link_name: Option<LinkName>) -> anyhow::Result<()> {
+        self.proxy_bus("wasmcloud:bus/lattice.set-link-name")?
+            .set_link_name(link_name)
+            .await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    async fn get_link_name(&self) -> anyhow::Result<Option<String>> {
+        self.proxy_bus("wasmcloud:bus/lattice.get-link-name")?
+            .get_link_name()
             .await
     }
 
@@ -693,7 +540,7 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn call(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -708,7 +555,7 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn call_sync(
         &self,
-        target: Option<TargetEntity>,
+        target: Option<WrpcTarget>,
         operation: String,
         payload: Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {

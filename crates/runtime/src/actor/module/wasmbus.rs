@@ -6,6 +6,7 @@ use core::fmt::{self, Debug};
 use anyhow::{bail, Context, Result};
 use rand::{thread_rng, Rng, RngCore};
 use tracing::{instrument, trace, trace_span, warn};
+use wasmcloud_core::TargetInterface;
 
 pub mod guest_call {
     use super::wasm;
@@ -265,11 +266,14 @@ async fn handle(
         }
         _ => {
             let target = handler
-                .identify_wasmbus_target(&binding, &namespace)
+                .identify_interface_target(
+                    &TargetInterface::from_operation(&operation)
+                        .context("failed to build wRPC target from operation")?,
+                )
                 .await
-                .context("failed to identify invocation target")?;
+                .context("failed to derive operation target")?;
             handler
-                .call_sync(Some(target), format!("{namespace}/{operation}"), payload)
+                .call_sync(target, format!("{namespace}/{operation}"), payload)
                 .await
                 .context("failed to call `wasmcloud:bus/host.call`")
         }
