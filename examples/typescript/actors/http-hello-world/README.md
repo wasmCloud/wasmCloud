@@ -101,3 +101,7 @@ To quickly reload your application after changing the code in `index.ts`:
 ```console
 npm run reload
 ```
+
+## Adding Capabilities
+
+To learn how to extend this example with additional capabilities, see the [Adding Capabilities](https://wasmcloud.com/docs/tour/adding-capabilities?lang=typescript) section of the wasmCloud documentation.

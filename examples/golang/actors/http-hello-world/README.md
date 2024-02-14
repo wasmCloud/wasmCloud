@@ -32,3 +32,7 @@ wash up -d
 wash app deploy ./wadm.yaml
 curl http://localhost:8080
 ```
+
+## Adding Capabilities
+
+To learn how to extend this example with additional capabilities, see the [Adding Capabilities](https://wasmcloud.com/docs/tour/adding-capabilities?lang=tinygo) section of the wasmCloud documentation.
