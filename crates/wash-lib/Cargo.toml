@@ -17,7 +17,7 @@ maintenance = { status = "actively-developed" }
 [features]
 default = ["start", "parser", "nats"]
 start = ["semver"]
-parser = ["config", "semver", "serde", "serde_json"]
+parser = ["config", "semver"]
 cli = [
     "clap",
     "term-table",
@@ -64,10 +64,10 @@ regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
 semver = { workspace = true, features = ["serde"], optional = true }
-serde = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, features = ["derive"] }
 serde-transcode = { workspace = true }
 serde_cbor = { workspace = true, features = ["std"] }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros"] }
 serde_yaml = { workspace = true }
 tempfile = { workspace = true }

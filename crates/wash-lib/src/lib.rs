@@ -28,14 +28,21 @@ pub mod parser;
 #[cfg(feature = "start")]
 pub mod start;
 
+#[cfg(feature = "nats")]
 pub mod actor;
+#[cfg(feature = "nats")]
 pub mod capture;
 pub mod common;
+#[cfg(feature = "nats")]
 pub mod config;
+#[cfg(feature = "nats")]
 pub mod context;
+#[cfg(feature = "nats")]
 pub mod drain;
 pub mod id;
 pub mod keys;
 pub mod registry;
+#[cfg(feature = "nats")]
 pub mod spier;
+#[cfg(feature = "nats")]
 pub mod wait;
