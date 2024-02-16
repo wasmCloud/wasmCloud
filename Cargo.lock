@@ -5020,7 +5020,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "wasm-encoder 0.41.2",
+ "wasm-encoder 0.200.0",
  "wasm-gen",
  "wasmparser 0.121.2",
 ]
@@ -5140,7 +5140,7 @@ dependencies = [
  "wadm",
  "walkdir",
  "wascap",
- "wasm-encoder 0.41.2",
+ "wasm-encoder 0.200.0",
  "wasmcloud-component-adapters",
  "wasmcloud-control-interface 0.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-core",
