@@ -22,6 +22,7 @@ This log lists the architectural decisions for wasmCloud. When an architectural 
 | Accepted | [0015](0015-actor-autoscaling.md)                           | Actor Autoscaling & Scale to Zero                             |
 | Accepted | [0016](0016-rename-lattice-prefix.md)                       | Rename Lattice Prefix to Lattice                              |
 | Accepted | [0017](0017-define-interfaces-using-WIT.md)                 | Define interfaces using WIT                                   |
+| Accepted | [0018](0018-otel-metrics.md)                                | Add OTEL-compliant metrics to wasmCloud                       |
 
 For new ADRs, please use [template.md](template.md).
 

@@ -1,12 +1,16 @@
 # [short title of solved problem and solution]
 
 | Status | Deciders | Date |
-|--|--|--|
+|--------|----------|------|
 | status | deciders | date |
 
-## Context and Problem Statement
+## Context
 
 [Describe the context and problem statement, e.g., in free form using two to three sentences. You may want to articulate the problem in form of a question.]
+
+## Problem Statement
+
+[Give a concise statement of the problem this ADR solved, or the action that was taken.]
 
 ## Decision Drivers <!-- optional -->
 
