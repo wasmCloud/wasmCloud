@@ -4,6 +4,5 @@ raw = [
   "*.wasm"
 ]
 exclude = [
-  "keys/",
-  "build/"
+  "keys/"
 ]

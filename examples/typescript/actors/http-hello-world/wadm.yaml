@@ -20,18 +20,17 @@ spec:
     - name: typescript-http-hello-world
       type: actor
       properties:
-        # TODO: you must replace the path below to match your genreated code in build
-        image: file:///the/absolute/path/to/build/index_s.wasm
+        image: file://./build/http_hello_world_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler
           properties:
             replicas: 1
 
-        # Link the HTTP server, and inform it to listen on port 8081
+        # Link the HTTP server, and inform it to listen on port 8080
         # on the local machine
         - type: linkdef
           properties:
             target: httpserver
             values:
-              ADDRESS: 127.0.0.1:8081
+              ADDRESS: 127.0.0.1:8080

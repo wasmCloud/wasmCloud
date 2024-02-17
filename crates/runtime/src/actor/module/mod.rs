@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use async_trait::async_trait;
+use futures::future;
 use futures::lock::Mutex;
 use serde_json::json;
 use tokio::io::{sink, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
-use tokio::task;
+use tokio::{spawn, task};
 use tracing::{instrument, trace};
 use wascap::jwt;
 use wasi_common::file::{FdFlags, FileType};
@@ -166,46 +167,51 @@ async fn instantiate(
     config: &Config,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
-    let mut wasi = WasiCtxBuilder::new();
-    let wasi = wasi
-        .arg("main.wasm")
-        .context("failed to set argv[0]")?
-        .build();
-    let ctx = Ctx {
-        wasi,
-        wasmbus: wasmbus::Ctx::new(handler),
-    };
+    // We also need to wrap the instantiation in a task to ensure that the wasm module can spread on all CPU cores
+    // Needs more investigation to be sure why this is necessary
+    spawn({
+        let mut wasi = WasiCtxBuilder::new();
+        let wasi = wasi
+            .arg("main.wasm")
+            .context("failed to set argv[0]")?
+            .build();
+        let ctx = Ctx {
+            wasi,
+            wasmbus: wasmbus::Ctx::new(handler),
+        };
 
-    let mut store = wasmtime::Store::new(module.engine(), ctx);
-    let memory = wasmtime::Memory::new(
-        &mut store,
-        wasmtime::MemoryType::new(config.min_memory_pages, config.max_memory_pages),
-    )
-    .context("failed to initialize memory")?;
-    linker
-        .define_name(&store, "memory", memory)
-        .context("failed to define `memory`")?;
-    let instance = linker
-        .instantiate_async(&mut store, module)
-        .await
-        .context("failed to instantiate module")?;
+        let mut store = wasmtime::Store::new(module.engine(), ctx);
+        let memory = wasmtime::Memory::new(
+            &mut store,
+            wasmtime::MemoryType::new(config.min_memory_pages, config.max_memory_pages),
+        )
+        .context("failed to initialize memory")?;
+        linker
+            .define_name(&store, "memory", memory)
+            .context("failed to define `memory`")?;
+        let instance = linker
+            .instantiate_async(&mut store, module)
+            .await
+            .context("failed to instantiate module")?;
 
-    let start = instance.get_typed_func(&mut store, "_start");
-    let guest_call = instance
-        .get_typed_func::<guest_call::Params, guest_call::Result>(&mut store, "__guest_call");
-    let (start, guest_call) = match (start, guest_call) {
-        (Ok(start), Ok(guest_call)) => (Some(start), Some(guest_call)),
-        (Ok(start), Err(_)) => (Some(start), None),
-        (Err(_), Ok(guest_call)) => (None, Some(guest_call)),
-        (Err(_), Err(e)) => {
-            bail!("failed to instantiate either  `_start`, or `__guest_call`: {e}")
-        }
-    };
-    Ok(Instance {
-        store,
-        guest_call,
-        start,
+        let start = instance.get_typed_func(&mut store, "_start");
+        let guest_call = instance
+            .get_typed_func::<guest_call::Params, guest_call::Result>(&mut store, "__guest_call");
+        let (start, guest_call) = match (start, guest_call) {
+            (Ok(start), Ok(guest_call)) => (Some(start), Some(guest_call)),
+            (Ok(start), Err(_)) => (Some(start), None),
+            (Err(_), Ok(guest_call)) => (None, Some(guest_call)),
+            (Err(_), Err(e)) => {
+                bail!("failed to instantiate either  `_start`, or `__guest_call`: {e}")
+            }
+        };
+        future::ready(Ok(Instance {
+            store,
+            guest_call,
+            start,
+        }))
     })
+    .await?
 }
 
 impl Module {

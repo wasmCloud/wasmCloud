@@ -1,17 +1,12 @@
 name = "typescript-http-hello-world"
-#language = "typescript"
-# TODO: fix language once https://github.com/wasmCloud/wasmCloud/pull/1295 merges
-language = "rust" 
+language = "typescript" 
 type = "actor"
 version = "0.1.0"
 
 [actor]
-claims = [
-  "wasmcloud:httpserver"
-]
 wit_world = "hello"
 wasm_target = "wasm32-wasi-preview2"
 
 build_command = "npm run build"
-build_artifact = "dist/index.wasm"
-destination = "build/index_s.wasm"
+build_artifact = "dist/http-hello-world.wasm"
+destination = "build/http_hello_world_s.wasm"

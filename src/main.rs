@@ -1,5 +1,3 @@
-#![warn(clippy::pedantic)]
-
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
@@ -17,7 +15,7 @@ use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::wasmbus::config::PolicyService as PolicyServiceConfig;
 use wasmcloud_host::WasmbusHostConfig;
-use wasmcloud_tracing::configure_tracing;
+use wasmcloud_tracing::{configure_metrics, configure_tracing};
 
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
@@ -237,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
+
     if let Err(e) = configure_tracing(
         "wasmcloud-host",
         &otel_config,
@@ -244,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
         Some(&log_level),
     ) {
         eprintln!("Failed to configure tracing: {e}");
+    };
+
+    if let Err(e) = configure_metrics("wasmcloud-host", &otel_config) {
+        eprintln!("Failed to configure metrics: {e}");
     };
 
     let ctl_nats_url = Url::parse(&format!(
