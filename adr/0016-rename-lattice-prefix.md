@@ -1,8 +1,8 @@
 # Rename Lattice Prefix to Lattice
 
-| Status   | Deciders                                                                  | Date        |
-| -------- | ------------------------------------------------------------------------- | ----------- |
-| Accepted | Commenters on [#1221](https://github.com/wasmCloud/wasmCloud/issues/1221) | 18 Jan 2024 |
+| Status   | Deciders                                                                                        | Date        |
+|----------|-------------------------------------------------------------------------------------------------|-------------|
+| Accepted | Commenters & tagged contributors in [#1221](https://github.com/wasmCloud/wasmCloud/issues/1221) | 18 Jan 2024 |
 
 ## Context and Problem Statement
 

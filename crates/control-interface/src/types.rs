@@ -354,24 +354,6 @@ pub struct StartProviderCommand {
     pub provider_ref: String,
 }
 
-/// A command sent to a host to request that instances of a given actor
-/// be terminated on that host
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StopActorCommand {
-    /// Reference for this actor. Can be any of the means of uniquely identifying
-    /// an actor
-    #[serde(default)]
-    pub actor_ref: String,
-    /// Optional set of annotations used to describe the nature of this
-    /// stop request. If supplied, the only instances of this actor with these
-    /// annotations will be stopped
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
-    /// The ID of the target host
-    #[serde(default)]
-    pub host_id: String,
-}
-
 /// A command sent to request that the given host purge and stop
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StopHostCommand {

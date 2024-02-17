@@ -5,17 +5,17 @@ import (
 )
 
 // Helper type aliases to make code more readable
-type HttpRequest = http.ExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandlerIncomingRequest
-type HttpResponseWriter = http.ExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandlerResponseOutparam
-type HttpOutgoingResponse = http.WasiHttp0_2_0_rc_2023_12_05_TypesOutgoingResponse
-type HttpError = http.WasiHttp0_2_0_rc_2023_12_05_TypesErrorCode
+type HttpRequest = http.ExportsWasiHttp0_2_0_IncomingHandlerIncomingRequest
+type HttpResponseWriter = http.ExportsWasiHttp0_2_0_IncomingHandlerResponseOutparam
+type HttpOutgoingResponse = http.WasiHttp0_2_0_TypesOutgoingResponse
+type HttpError = http.WasiHttp0_2_0_TypesErrorCode
 
 type HttpServer struct{}
 
 func init() {
 	httpserver := HttpServer{}
 	// Set the incoming handler struct to HttpServer
-	http.SetExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandler(httpserver)
+	http.SetExportsWasiHttp0_2_0_IncomingHandler(httpserver)
 }
 
 func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWriter) {

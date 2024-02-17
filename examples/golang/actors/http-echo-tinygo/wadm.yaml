@@ -1,10 +1,10 @@
-# This is a full example of how to run the kvcounter actor exposed with an HTTP server. 
+# This is a full example of how to run the kvcounter actor exposed with an HTTP server.
 #
 # Using this example requires you to have a Redis server running locally
 #  (though the linkdef can be modified to use a Redis server you have running elsewhere).
 #
 # You also need to have WADM running:
-# https://github.com/wasmCloud/wadm/tree/main/wadm. 
+# https://github.com/wasmCloud/wadm/tree/main/wadm.
 #
 # You can deploy this example with a simple command:
 # `wash app deploy wadm.yaml`
@@ -22,8 +22,7 @@ spec:
     - name: http-echo-tinygo
       type: actor
       properties:
-        # TODO: you must replace the path below to match your genreated code in build
-       image: file:///the/absolute/path/to/build/http-echo-tinygo-component_s.wasm
+        image: file://./build/http-echo-tinygo-component_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler
@@ -37,7 +36,7 @@ spec:
             values:
               ADDRESS: 127.0.0.1:8081
 
-    # Add a capability provider that mediates HTTP access 
+    # Add a capability provider that mediates HTTP access
     - name: httpserver
       type: capability
       properties:

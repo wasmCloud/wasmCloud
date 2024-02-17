@@ -6,16 +6,16 @@ This is a simple Python Wasm example that responds with a "Hello World" message 
 
 - `python` 3.10 or greater
 - `pip`
-- `componentize-py` 0.9.2
-- `wash` 0.25.0
-- `wasmtime` 16.0.0 (if running with wasmtime)
+- `componentize-py` 0.11.0
+- `wash` 0.26.0
+- `wasmtime` 17.0.0 (if running with wasmtime)
 
 ## Installing componentize-py
 
 After installing Python and pip, run the following command to install `componentize-py`:
 
 ```bash
-pip install componentize-py==0.9.2
+pip install componentize-py
 ```
 
 ## Building
@@ -26,7 +26,7 @@ wash build
 
 ## Running with wasmtime
 
-You must have wasmtime 16.0.0 for this to work. Make sure to follow the build step above first.
+You must have wasmtime 17.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
 wasmtime serve -Scommon ./build/http_hello_world_s.wasm
@@ -41,3 +41,7 @@ wash up -d
 wash app deploy ./wadm.yaml
 curl http://localhost:8080
 ```
+
+## Adding Capabilities
+
+To learn how to extend this example with additional capabilities, see the [Adding Capabilities](https://wasmcloud.com/docs/tour/adding-capabilities?lang=python) section of the wasmCloud documentation.

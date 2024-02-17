@@ -2,15 +2,15 @@ use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
-pub(crate) const WASI_BLOBSTORE_BLOBSTORE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) static WASI_BLOBSTORE_BLOBSTORE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
-pub(crate) const WASI_KEYVALUE_ATOMIC_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) static WASI_KEYVALUE_ATOMIC_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
-pub(crate) const WASI_KEYVALUE_EVENTUAL_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) static WASI_KEYVALUE_EVENTUAL_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
-pub(crate) const WASI_LOGGING_LOGGING_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) static WASI_LOGGING_LOGGING_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
-pub(crate) const WASMCLOUD_MESSAGING_CONSUMER_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+pub(crate) static WASMCLOUD_MESSAGING_CONSUMER_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 
 /// Actor identifer

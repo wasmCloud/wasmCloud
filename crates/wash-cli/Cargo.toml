@@ -67,7 +67,7 @@ warp = { workspace = true }
 warp-embed = { workspace = true }
 wascap = { workspace = true }
 wash-lib = { workspace = true, features = ["cli", "parser", "nats", "start"] }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = "0.33"
 wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }

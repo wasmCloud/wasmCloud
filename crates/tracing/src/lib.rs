@@ -1,7 +1,16 @@
-#![warn(clippy::pedantic)]
-
 #[cfg(feature = "otel")]
 pub mod context;
+
+pub mod metrics;
+
+pub use metrics::configure_metrics;
+
+#[cfg(feature = "otel")]
+pub use opentelemetry::{
+    global,
+    metrics::{Histogram, Meter},
+    KeyValue,
+};
 
 use std::env;
 use std::io::{IsTerminal, StderrLock, Write};
