@@ -1,7 +1,6 @@
 package wasmcloud:host;
 
 world interfaces {
-    import wasmcloud:bus/host;
     import wasmcloud:bus/lattice;
     import wasmcloud:bus/guest-config;
 

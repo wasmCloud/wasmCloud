@@ -268,10 +268,30 @@ async fn handle(
                 .identify_wasmbus_target(&binding, &namespace)
                 .await
                 .context("failed to identify invocation target")?;
-            handler
-                .call_sync(Some(target), format!("{namespace}/{operation}"), payload)
+            let val = handler
+                .call(
+                    Some(target),
+                    &namespace,
+                    &operation,
+                    vec![wrpc_transport::Value::List(
+                        payload.into_iter().map(wrpc_transport::Value::U8).collect(),
+                    )],
+                )
                 .await
-                .context("failed to call `wasmcloud:bus/host.call`")
+                .context("failed to call `wasmcloud:bus/host.call`")?;
+            let mut val = val.into_iter();
+            let (Some(wrpc_transport::Value::List(val)), None) = (val.next(), val.next()) else {
+                bail!("modules can only handle single argument functions")
+            };
+            val.into_iter()
+                .map(|val| {
+                    if let wrpc_transport::Value::U8(b) = val {
+                        Ok(b)
+                    } else {
+                        bail!("value is not a byte")
+                    }
+                })
+                .collect()
         }
     }
 }

@@ -2,8 +2,7 @@ mod component;
 mod module;
 
 pub use component::{
-    Component, GuestInstance as ComponentGuestInstance, Instance as ComponentInstance,
-    InterfaceInstance as ComponentInterfaceInstance,
+    Component, Instance as ComponentInstance, InterfaceInstance as ComponentInterfaceInstance,
 };
 pub use module::{
     Config as ModuleConfig, GuestInstance as ModuleGuestInstance, Instance as ModuleInstance,
@@ -15,15 +14,17 @@ use crate::capability::{
     Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
     OutgoingHttp,
 };
+use crate::io::AsyncVec;
 use crate::Runtime;
 
 use core::fmt::Debug;
 
+use std::io::Cursor;
 use std::sync::Arc;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt as _, AsyncWrite};
 use tracing::instrument;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
@@ -164,27 +165,14 @@ impl Actor {
     #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         self.instantiate()
             .await
             .context("failed to instantiate actor")?
-            .call(operation, request, response)
-            .await
-    }
-
-    /// Instantiates and returns a [`GuestInstance`] if exported by the [`Instance`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if either instantiation fails or no guest bindings are exported by the [`Instance`]
-    pub async fn as_guest(&self) -> anyhow::Result<GuestInstance> {
-        self.instantiate()
-            .await
-            .context("failed to instantiate actor")?
-            .into_guest()
+            .call(instance, name, params)
             .await
     }
 
@@ -224,15 +212,6 @@ pub enum Instance {
     Component(ComponentInstance),
 }
 
-/// A pre-loaded, configured guest instance, which is either a module or a component
-#[derive(Clone)]
-pub enum GuestInstance {
-    /// WebAssembly module containing an actor
-    Module(ModuleGuestInstance),
-    /// WebAssembly component containing an actor
-    Component(ComponentGuestInstance),
-}
-
 /// A pre-loaded, configured [Logging] instance, which is either a module or a component
 pub enum LoggingInstance {
     /// WebAssembly module containing an actor
@@ -247,33 +226,6 @@ pub enum IncomingHttpInstance {
     Module(ModuleGuestInstance),
     /// WebAssembly component containing an actor
     Component(ComponentInterfaceInstance<component::incoming_http_bindings::IncomingHttp>),
-}
-
-impl GuestInstance {
-    /// Invoke an operation on a [GuestInstance] producing a response
-    ///
-    /// # Errors
-    ///
-    /// Outermost error represents a failure in calling the actor, innermost - the
-    /// application-layer error originating from within the actor itself
-    #[instrument(level = "debug", skip_all)]
-    pub async fn call(
-        &self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
-        match self {
-            Self::Module(module) => module
-                .call(operation, request, response)
-                .await
-                .context("failed to call module"),
-            Self::Component(component) => component
-                .call(operation, request, response)
-                .await
-                .context("failed to call component"),
-        }
-    }
 }
 
 #[async_trait]
@@ -460,33 +412,54 @@ impl Instance {
     #[instrument(level = "debug", skip_all)]
     pub async fn call(
         &mut self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         match self {
-            Self::Module(module) => module
-                .call(operation, request, response)
-                .await
-                .context("failed to call module"),
+            Self::Module(module) => {
+                let mut params = params.into_iter();
+                match (params.next(), params.next()) {
+                    (Some(wrpc_transport::Value::List(buf)), None) => {
+                        let buf: Vec<_> = buf
+                            .into_iter()
+                            .map(|val| {
+                                if let wrpc_transport::Value::U8(b) = val {
+                                    Ok(b)
+                                } else {
+                                    bail!("value is not a byte")
+                                }
+                            })
+                            .collect::<anyhow::Result<_>>()?;
+                        let mut response = AsyncVec::default();
+                        module
+                            .call(
+                                format!("{instance}.{name}"),
+                                Cursor::new(buf),
+                                response.clone(),
+                            )
+                            .await
+                            .context("failed to call module")?
+                            .map_err(|err| anyhow!(err).context("call failed"))?;
+                        response
+                            .rewind()
+                            .await
+                            .context("failed to rewind response buffer")?;
+                        let mut buf = vec![];
+                        response
+                            .read_to_end(&mut buf)
+                            .await
+                            .context("failed to read response buffer")?;
+                        let response = buf.into_iter().map(wrpc_transport::Value::U8).collect();
+                        Ok(vec![wrpc_transport::Value::List(response)])
+                    }
+                    _ => bail!("modules can only handle single argument functions"),
+                }
+            }
             Self::Component(component) => component
-                .call(operation, request, response)
+                .call(instance, name, params)
                 .await
                 .context("failed to call component"),
-        }
-    }
-
-    /// Instantiates and returns a [`GuestInstance`] if exported by the [`Instance`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if no guest bindings are exported by the [`Instance`]
-    pub async fn into_guest(self) -> anyhow::Result<GuestInstance> {
-        match self {
-            Self::Module(module) => Ok(GuestInstance::Module(ModuleGuestInstance::from(module))),
-            Self::Component(component) => {
-                component.into_guest().await.map(GuestInstance::Component)
-            }
         }
     }
 

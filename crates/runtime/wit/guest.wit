@@ -1,9 +1,5 @@
 package wasmcloud:host;
 
-world guest {
-    export wasmcloud:bus/guest;
-}
-
 world logging {
     export wasi:logging/logging;
 }
