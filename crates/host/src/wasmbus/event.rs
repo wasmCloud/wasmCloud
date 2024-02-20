@@ -233,17 +233,15 @@ pub fn provider_health_check(
     })
 }
 
-pub fn config_set(entity_id: impl AsRef<str>, key: impl AsRef<str>) -> serde_json::Value {
+pub fn config_set(config_name: impl AsRef<str>) -> serde_json::Value {
     json!({
-        "entity_id": entity_id.as_ref(),
-        "key": key.as_ref(),
+        "config_name": config_name.as_ref(),
     })
 }
 
-pub fn config_deleted(entity_id: impl AsRef<str>, key: impl AsRef<str>) -> serde_json::Value {
+pub fn config_deleted(config_name: impl AsRef<str>) -> serde_json::Value {
     json!({
-        "entity_id": entity_id.as_ref(),
-        "key": key.as_ref(),
+        "config_name": config_name.as_ref(),
     })
 }
 
