@@ -132,214 +132,204 @@ impl capability::Bus for Handler {
     async fn call(
         &self,
         _target: Option<capability::TargetEntity>,
-        _operation: String,
-    ) -> anyhow::Result<(
-        Pin<Box<dyn futures::Future<Output = anyhow::Result<(), String>> + Send>>,
-        Box<dyn tokio::io::AsyncWrite + Sync + Send + Unpin>,
-        Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>,
-    )> {
-        panic!("should not have been called")
-    }
+        _instance: &str,
+        _name: &str,
+        _params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        bail!("not supported now")
+        //// TODO: Migrate this translation layer to `runtime` crate once we switch to WIT-enabled providers
+        //match (target, operation.as_str()) {
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:httpclient/HttpClient.Request",
+        //    ) if name == "httpclient" => {
+        //        let request: wasmcloud_compat::HttpClientRequest =
+        //            rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        let request = http::Request::try_from(request)
+        //            .expect("failed to convert HTTP request")
+        //            .map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
+        //                Box::new(Cursor::new(body))
+        //            });
+        //        let res = self.handle(capability::OutgoingHttpRequest {
+        //            use_tls: false,
+        //            authority: "localhost:42424".into(),
+        //            request,
+        //            connect_timeout: DEFAULT_HTTP_TIMEOUT,
+        //            first_byte_timeout: DEFAULT_HTTP_TIMEOUT,
+        //            between_bytes_timeout: DEFAULT_HTTP_TIMEOUT,
+        //        }).await.expect("failed to call `handle`");
+        //        let res = wasmcloud_compat::HttpResponse::from_http(res).await.expect("failed to convert response");
+        //        let buf = rmp_serde::to_vec_named(&res).expect("failed to encode response");
+        //        Ok(buf)
+        //    }
 
-    async fn call_sync(
-        &self,
-        target: Option<capability::TargetEntity>,
-        operation: String,
-        payload: Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
-        // TODO: Migrate this translation layer to `runtime` crate once we switch to WIT-enabled providers
-        match (target, operation.as_str()) {
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:httpclient/HttpClient.Request",
-            ) if name == "httpclient" => {
-                let request: wasmcloud_compat::HttpClientRequest =
-                    rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let request = http::Request::try_from(request)
-                    .expect("failed to convert HTTP request")
-                    .map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
-                        Box::new(Cursor::new(body))
-                    });
-                let res = self.handle(capability::OutgoingHttpRequest {
-                    use_tls: false,
-                    authority: "localhost:42424".into(),
-                    request,
-                    connect_timeout: DEFAULT_HTTP_TIMEOUT,
-                    first_byte_timeout: DEFAULT_HTTP_TIMEOUT,
-                    between_bytes_timeout: DEFAULT_HTTP_TIMEOUT,
-                }).await.expect("failed to call `handle`");
-                let res = wasmcloud_compat::HttpResponse::from_http(res).await.expect("failed to convert response");
-                let buf = rmp_serde::to_vec_named(&res).expect("failed to encode response");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:keyvalue/KeyValue.Set",
+        //    ) if name == "keyvalue" => {
+        //        let wasmcloud_compat::keyvalue::SetRequest {
+        //            key,
+        //            value,
+        //            expires,
+        //        } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        assert_eq!(expires, 0);
+        //        self.keyvalue_eventual
+        //            .set("", key, Box::new(Cursor::new(value)))
+        //            .await
+        //            .expect("failed to call `set`");
+        //        Ok(vec![])
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:keyvalue/KeyValue.Set",
-            ) if name == "keyvalue" => {
-                let wasmcloud_compat::keyvalue::SetRequest {
-                    key,
-                    value,
-                    expires,
-                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                assert_eq!(expires, 0);
-                self.keyvalue_eventual
-                    .set("", key, Box::new(Cursor::new(value)))
-                    .await
-                    .expect("failed to call `set`");
-                Ok(vec![])
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:keyvalue/KeyValue.Get",
+        //    ) if name == "keyvalue" => {
+        //        let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        let (mut reader, _) = self
+        //            .keyvalue_eventual
+        //            .get("", key)
+        //            .await
+        //            .expect("failed to call `get`")
+        //            .expect("key missing");
+        //        let mut value = String::new();
+        //        reader
+        //            .read_to_string(&mut value)
+        //            .await
+        //            .expect("failed to read value");
+        //        let buf = rmp_serde::to_vec_named(&wasmcloud_compat::keyvalue::GetResponse {
+        //            exists: true,
+        //            value,
+        //        })
+        //        .expect("failed to encode reply");
+        //        Ok(buf)
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:keyvalue/KeyValue.Get",
-            ) if name == "keyvalue" => {
-                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let (mut reader, _) = self
-                    .keyvalue_eventual
-                    .get("", key)
-                    .await
-                    .expect("failed to call `get`")
-                    .expect("key missing");
-                let mut value = String::new();
-                reader
-                    .read_to_string(&mut value)
-                    .await
-                    .expect("failed to read value");
-                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::keyvalue::GetResponse {
-                    exists: true,
-                    value,
-                })
-                .expect("failed to encode reply");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:keyvalue/KeyValue.Contains",
+        //    ) if name == "keyvalue" => {
+        //        let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        let ok = self
+        //            .keyvalue_eventual
+        //            .exists("", key)
+        //            .await
+        //            .expect("failed to call `exists`");
+        //        let buf = rmp_serde::to_vec_named(&ok).expect("failed to encode reply");
+        //        Ok(buf)
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:keyvalue/KeyValue.Contains",
-            ) if name == "keyvalue" => {
-                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let ok = self
-                    .keyvalue_eventual
-                    .exists("", key)
-                    .await
-                    .expect("failed to call `exists`");
-                let buf = rmp_serde::to_vec_named(&ok).expect("failed to encode reply");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:keyvalue/KeyValue.Del",
+        //    ) if name == "keyvalue" => {
+        //        let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        self.keyvalue_eventual
+        //            .delete("", key)
+        //            .await
+        //            .expect("failed to call `delete`");
+        //        let buf = rmp_serde::to_vec_named(&true).expect("failed to encode reply");
+        //        Ok(buf)
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:keyvalue/KeyValue.Del",
-            ) if name == "keyvalue" => {
-                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                self.keyvalue_eventual
-                    .delete("", key)
-                    .await
-                    .expect("failed to call `delete`");
-                let buf = rmp_serde::to_vec_named(&true).expect("failed to encode reply");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:keyvalue/KeyValue.Increment",
+        //    ) if name == "keyvalue" => {
+        //        let wasmcloud_compat::keyvalue::IncrementRequest { key, value } =
+        //            rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        let value = value.try_into().expect("value does not fit in `u64`");
+        //        let new = self
+        //            .keyvalue_atomic
+        //            .increment("", key, value)
+        //            .await
+        //            .expect("failed to call `increment`");
+        //        let new: i32 = new.try_into().expect("response does not fit in `u64`");
+        //        let buf = rmp_serde::to_vec_named(&new).expect("failed to encode reply");
+        //        Ok(buf)
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:keyvalue/KeyValue.Increment",
-            ) if name == "keyvalue" => {
-                let wasmcloud_compat::keyvalue::IncrementRequest { key, value } =
-                    rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let value = value.try_into().expect("value does not fit in `u64`");
-                let new = self
-                    .keyvalue_atomic
-                    .increment("", key, value)
-                    .await
-                    .expect("failed to call `increment`");
-                let new: i32 = new.try_into().expect("response does not fit in `u64`");
-                let buf = rmp_serde::to_vec_named(&new).expect("failed to encode reply");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:messaging/Messaging.Publish",
+        //    ) if name == "messaging" => {
+        //        let wasmcloud_compat::messaging::PubMessage {
+        //            subject,
+        //            reply_to,
+        //            body,
+        //        } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        self.publish(messaging::types::BrokerMessage {
+        //            subject,
+        //            reply_to,
+        //            body: Some(body),
+        //        })
+        //        .await
+        //        .expect("failed to publish message");
+        //        Ok(vec![])
+        //    }
+        //    (
+        //        Some(capability::TargetEntity::Link(Some(name))),
+        //        "wasmcloud:messaging/Messaging.Request",
+        //    ) if name == "messaging" => {
+        //        let wasmcloud_compat::messaging::RequestMessage {
+        //            subject,
+        //            body,
+        //            timeout_ms,
+        //        } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+        //        let messaging::types::BrokerMessage {
+        //            subject,
+        //            body,
+        //            reply_to,
+        //        } = match subject.as_str() {
+        //            "test-messaging-request" => self
+        //                .request(
+        //                    subject,
+        //                    Some(body),
+        //                    Duration::from_millis(timeout_ms.into()),
+        //                )
+        //                .await
+        //                .expect("failed to call `request`"),
+        //            "test-messaging-request-multi" => self
+        //                .request_multi(
+        //                    subject,
+        //                    Some(body),
+        //                    Duration::from_millis(timeout_ms.into()),
+        //                    1,
+        //                )
+        //                .await
+        //                .expect("failed to call `request_multi`")
+        //                .pop()
+        //                .expect("first element missing"),
+        //            _ => panic!("invalid subject `{subject}`"),
+        //        };
+        //        let buf = rmp_serde::to_vec_named(&wasmcloud_compat::messaging::ReplyMessage {
+        //            subject,
+        //            reply_to,
+        //            body: body.unwrap_or_default(),
+        //        })
+        //        .expect("failed to encode reply");
+        //        Ok(buf)
+        //    }
 
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:messaging/Messaging.Publish",
-            ) if name == "messaging" => {
-                let wasmcloud_compat::messaging::PubMessage {
-                    subject,
-                    reply_to,
-                    body,
-                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                self.publish(messaging::types::BrokerMessage {
-                    subject,
-                    reply_to,
-                    body: Some(body),
-                })
-                .await
-                .expect("failed to publish message");
-                Ok(vec![])
-            }
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:messaging/Messaging.Request",
-            ) if name == "messaging" => {
-                let wasmcloud_compat::messaging::RequestMessage {
-                    subject,
-                    body,
-                    timeout_ms,
-                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let messaging::types::BrokerMessage {
-                    subject,
-                    body,
-                    reply_to,
-                } = match subject.as_str() {
-                    "test-messaging-request" => self
-                        .request(
-                            subject,
-                            Some(body),
-                            Duration::from_millis(timeout_ms.into()),
-                        )
-                        .await
-                        .expect("failed to call `request`"),
-                    "test-messaging-request-multi" => self
-                        .request_multi(
-                            subject,
-                            Some(body),
-                            Duration::from_millis(timeout_ms.into()),
-                            1,
-                        )
-                        .await
-                        .expect("failed to call `request_multi`")
-                        .pop()
-                        .expect("first element missing"),
-                    _ => panic!("invalid subject `{subject}`"),
-                };
-                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::messaging::ReplyMessage {
-                    subject,
-                    reply_to,
-                    body: body.unwrap_or_default(),
-                })
-                .expect("failed to encode reply");
-                Ok(buf)
-            }
+        //    (
+        //        Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
+        //        "test-actors:foobar/foobar.foobar" // component invocation
+        //        | "foobar-component-command-preview2/foobar.foobar"  // valid module invocation
+        //        | "unknown/alias/foobar.foobar", // invalid module invocation
+        //    ) if name == "foobar-component-command-preview2" || name == "unknown/alias" => {
+        //        let expected = rmp_serde::to_vec("foo").expect("failed to encode `foo`");
+        //        assert_eq!(payload, expected);
+        //        if name == "unknown/alias" {
+        //            bail!("unknown actor call alias")
+        //        } else {
+        //            let res = rmp_serde::to_vec("foobar").expect("failed to encode `foobar`");
+        //            Ok(res)
+        //        }
+        //    }
 
-            (
-                Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
-                "test-actors:foobar/foobar.foobar" // component invocation
-                | "foobar-component-command-preview2/foobar.foobar"  // valid module invocation
-                | "unknown/alias/foobar.foobar", // invalid module invocation
-            ) if name == "foobar-component-command-preview2" || name == "unknown/alias" => {
-                let expected = rmp_serde::to_vec("foo").expect("failed to encode `foo`");
-                assert_eq!(payload, expected);
-                if name == "unknown/alias" {
-                    bail!("unknown actor call alias")
-                } else {
-                    let res = rmp_serde::to_vec("foobar").expect("failed to encode `foobar`");
-                    Ok(res)
-                }
-            }
-
-            (target, operation) => {
-                panic!("`call_sync` with target `{target:?}` and operation `{operation}` should not have been called")
-            }
-        }
+        //    (target, operation) => {
+        //        panic!("`call_sync` with target `{target:?}` and operation `{operation}` should not have been called")
+        //    }
+        //}
     }
 }
 

@@ -42,6 +42,7 @@ wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
 wasmtime-wasi-http = { workspace = true, features = ["sync"] }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
+wrpc-transport = { workspace = true }
 
 [dev-dependencies]
 once_cell = { workspace = true }
