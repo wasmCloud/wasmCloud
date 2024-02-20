@@ -837,12 +837,12 @@ dependencies = [
 
 [[package]]
 name = "command-group"
-version = "1.0.8"
+version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7a8a86f409b4a59df3a3e4bee2de0b83f1755fdd2a25e3a9684c396fc4bed2c"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
 dependencies = [
  "async-trait",
- "nix 0.22.3",
+ "nix",
  "tokio",
  "winapi",
 ]
@@ -2392,15 +2392,6 @@ dependencies = [
 
 [[package]]
 name = "memoffset"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
-name = "memoffset"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a634b1c61a95585bd15607c6ab0c4e5b226e695ff2800ba0cdccddf208c406c"
@@ -2476,19 +2467,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bddcd3bf5144b6392de80e04c347cd7fab2508f6df16a85fc496ecd5cec39bc"
 dependencies = [
  "rand",
-]
-
-[[package]]
-name = "nix"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4916f159ed8e5de0082076562152a76b7a1f64a01fd9d1e0fea002c37624faf"
-dependencies = [
- "bitflags 1.3.2",
- "cc",
- "cfg-if",
- "libc",
- "memoffset 0.6.5",
 ]
 
 [[package]]
@@ -5044,7 +5022,7 @@ dependencies = [
  "dirs",
  "futures",
  "indicatif",
- "nix 0.27.1",
+ "nix",
  "nkeys",
  "notify",
  "oci-distribution",
@@ -5912,7 +5890,7 @@ dependencies = [
  "log",
  "mach",
  "memfd",
- "memoffset 0.9.0",
+ "memoffset",
  "paste",
  "psm",
  "rustix",
