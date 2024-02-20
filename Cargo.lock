@@ -5624,6 +5624,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "wit-component",
  "wit-parser",
+ "wrpc-transport",
 ]
 
 [[package]]
@@ -6511,6 +6512,35 @@ dependencies = [
  "log",
  "thiserror",
  "wast 35.0.2",
+]
+
+[[package]]
+name = "wrpc-transport"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3623106b08545e13dbdcb53e4c0ff0b5a8a0df52d2b8a0c4857436a6c315fc20"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "leb128",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "wrpc-types",
+]
+
+[[package]]
+name = "wrpc-types"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06f921ace46531d6d4c28b44aef0e849691ef790e1b0f1399de936c20771542d"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "wit-parser",
 ]
 
 [[package]]
