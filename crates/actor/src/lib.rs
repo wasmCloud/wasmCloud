@@ -54,23 +54,6 @@ mod test {
             //    }),
             //);
 
-            // TODO: Implement `call` in module world
-            #[cfg(not(feature = "module"))]
-            let (_, _, _): (
-                wasmcloud::bus::host::FutureResult,
-                wasi::io::streams::InputStream,
-                wasi::io::streams::OutputStream,
-            ) = wasmcloud::bus::host::call(None, "mycompany:mypackage/interface.operation")
-                .unwrap();
-
-            let _: Result<Vec<u8>, String> = wasmcloud::bus::host::call_sync(
-                Some(&wasmcloud::bus::lattice::TargetEntity::Link(Some(
-                    "test".into(),
-                ))),
-                "mycompany:mypackage/interface.operation",
-                &[],
-            );
-
             wasmcloud::bus::lattice::set_target(
                 None,
                 vec![

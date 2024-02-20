@@ -1,13 +1,11 @@
-use super::{Ctx, Instance, InterfaceBindings, InterfaceInstance};
+use super::{Ctx, Instance, InterfaceInstance};
 
 use crate::capability::http::types;
 use crate::capability::{IncomingHttp, OutgoingHttp, OutgoingHttpRequest};
-use crate::io::AsyncVec;
 
 use core::pin::Pin;
 use core::task::Poll;
 
-use std::io::Cursor;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
@@ -118,21 +116,12 @@ impl Instance {
     pub async fn into_incoming_http(
         mut self,
     ) -> anyhow::Result<InterfaceInstance<incoming_http_bindings::IncomingHttp>> {
-        let bindings = if let Ok((bindings, _)) =
-            incoming_http_bindings::IncomingHttp::instantiate_async(
-                &mut self.store,
-                &self.component,
-                &self.linker,
-            )
-            .await
-        {
-            InterfaceBindings::Interface(bindings)
-        } else {
-            self.as_guest_bindings()
-                .await
-                .map(InterfaceBindings::Guest)
-                .context("failed to instantiate `wasi:http/incoming-handler` interface")?
-        };
+        let (bindings, _) = incoming_http_bindings::IncomingHttp::instantiate_async(
+            &mut self.store,
+            &self.component,
+            &self.linker,
+        )
+        .await?;
         Ok(InterfaceInstance {
             store: Mutex::new(self.store),
             bindings,
@@ -310,68 +299,26 @@ impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
         let mut store = self.store.lock().await;
-        match &self.bindings {
-            InterfaceBindings::Guest(guest) => {
-                let request = wasmcloud_compat::HttpServerRequest::from_http(request)
-                    .await
-                    .context("failed to convert request")?;
-                let request =
-                    rmp_serde::to_vec_named(&request).context("failed to encode request")?;
-                let mut response = AsyncVec::default();
-                match guest
-                    .call(
-                        &mut store,
-                        "HttpServer.HandleRequest",
-                        Cursor::new(request),
-                        response.clone(),
-                    )
-                    .await
-                    .context("failed to call actor")?
-                {
-                    Ok(()) => {
-                        response
-                            .rewind()
-                            .await
-                            .context("failed to rewind response buffer")?;
-                        let response: wasmcloud_compat::HttpResponse =
-                            rmp_serde::from_read(&mut response)
-                                .context("failed to parse response")?;
-                        let response: http::Response<_> =
-                            response.try_into().context("failed to convert response")?;
-                        Ok(
-                            response.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
-                                Box::new(Cursor::new(body))
-                            }),
-                        )
-                    }
-                    Err(err) => bail!(err),
-                }
-            }
-            InterfaceBindings::Interface(bindings) => {
-                let ctx = store.data_mut();
-                let request = ctx
-                    .new_incoming_request(
-                        request.map(|stream| BoxBody::new(AsyncReadBody::new(stream, 1024))),
-                    )
-                    .context("failed to create incoming request")?;
-                let (response_tx, mut response_rx) = oneshot::channel();
-                let response = ctx
-                    .new_response_outparam(response_tx)
-                    .context("failed to create response")?;
-                bindings
-                    .wasi_http_incoming_handler()
-                    .call_handle(&mut *store, request, response)
-                    .await?;
-                match response_rx.try_recv() {
-                    Ok(Ok(res)) => {
-                        Ok(res.map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
-                            Box::new(BodyAsyncRead::new(body))
-                        }))
-                    }
-                    Ok(Err(err)) => Err(code_to_error(err)),
-                    Err(_) => bail!("a response was not set"),
-                }
-            }
+        let ctx = store.data_mut();
+        let request = ctx
+            .new_incoming_request(
+                request.map(|stream| BoxBody::new(AsyncReadBody::new(stream, 1024))),
+            )
+            .context("failed to create incoming request")?;
+        let (response_tx, mut response_rx) = oneshot::channel();
+        let response = ctx
+            .new_response_outparam(response_tx)
+            .context("failed to create response")?;
+        self.bindings
+            .wasi_http_incoming_handler()
+            .call_handle(&mut *store, request, response)
+            .await?;
+        match response_rx.try_recv() {
+            Ok(Ok(res)) => Ok(res.map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
+                Box::new(BodyAsyncRead::new(body))
+            })),
+            Ok(Err(err)) => Err(code_to_error(err)),
+            Err(_) => bail!("a response was not set"),
         }
     }
 }
