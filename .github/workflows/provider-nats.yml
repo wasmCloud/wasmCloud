@@ -1,20 +1,20 @@
-name: NATS
+name: Messaging NATS Capability Provider Release
 
 on:
   push:
     branches: [main]
-    paths:
-      - "nats/**"
     tags:
-      - "nats-v*"
+      - 'messaging-nats-v*'
   pull_request:
     branches: [main]
+    # TODO: remove once make sure all work good
     paths:
-      - "nats/**"
+      - '.github/workflows/provider-nats.yml'
+      - 'crates/providers/messaging-nats/**'
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./nats
+  working-directory: ./crates/providers/messaging-nats
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_NATS }}
 
@@ -41,34 +41,34 @@ jobs:
           # old versions. But if we build on the old version, it is compatible with the newer
           # versions running in ubuntu 22 and its ilk
           - {
-              os: "ubuntu-20.04",
-              arch: "amd64",
-              extension: "",
-              targetPath: "target/release/",
+              os: 'ubuntu-20.04',
+              arch: 'amd64',
+              extension: '',
+              targetPath: 'target/release/',
             }
           - {
-              os: "ubuntu-20.04",
-              arch: "aarch64",
-              extension: "",
-              targetPath: "target/aarch64-unknown-linux-gnu/release/",
+              os: 'ubuntu-20.04',
+              arch: 'aarch64',
+              extension: '',
+              targetPath: 'target/aarch64-unknown-linux-gnu/release/',
             }
           - {
-              os: "macos-latest",
-              arch: "amd64",
-              extension: "",
-              targetPath: "target/release/",
+              os: 'macos-latest',
+              arch: 'amd64',
+              extension: '',
+              targetPath: 'target/release/',
             }
           - {
-              os: "windows-latest",
-              arch: "amd64",
-              extension: ".exe",
-              targetPath: "target/release/",
+              os: 'windows-latest',
+              arch: 'amd64',
+              extension: '.exe',
+              targetPath: 'target/release/',
             }
           - {
-              os: "macos-latest",
-              arch: "aarch64",
-              extension: "",
-              targetPath: "target/aarch64-apple-darwin/release/",
+              os: 'macos-latest',
+              arch: 'aarch64',
+              extension: '',
+              targetPath: 'target/aarch64-apple-darwin/release/',
             }
     runs-on: ${{ matrix.config.os }}
     steps:
@@ -117,17 +117,17 @@ jobs:
       - name: build release
         working-directory: ${{ env.working-directory }}
         if: matrix.config.arch != 'aarch64'
-        run: "cargo build --release"
+        run: 'cargo build --release'
 
       - name: build release
         working-directory: ${{ env.working-directory }}
         if: matrix.config.arch == 'aarch64' && matrix.config.os == 'macos-latest'
-        run: "cargo build --release --target aarch64-apple-darwin"
+        run: 'cargo build --release --target aarch64-apple-darwin'
 
       - name: build release
         working-directory: ${{ env.working-directory }}
         if: matrix.config.arch == 'aarch64' && matrix.config.os == 'ubuntu-20.04'
-        run: "cargo build --release --target aarch64-unknown-linux-gnu"
+        run: 'cargo build --release --target aarch64-unknown-linux-gnu'
 
       - name: Determine artifact name
         shell: bash
@@ -196,7 +196,7 @@ jobs:
           files: ${{ env.working-directory }}/build/*.par.gz
           token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: true
-          draft: false
+          draft: true
 
   artifact_release:
     needs: [rust_check, assemble_provider_archive]
@@ -217,7 +217,7 @@ jobs:
 
       - name: Push provider archive to AzureCR
         env:
-          oci-repository: "nats_messaging"
+          oci-repository: 'nats_messaging'
         uses: wasmcloud/common-actions/oci-artifact-release@main
         with:
           artifact-path: ${{ env.working-directory }}/build/${{ env.oci-repository }}.par.gz
