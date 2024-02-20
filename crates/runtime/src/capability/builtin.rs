@@ -356,17 +356,6 @@ pub trait Bus {
         interfaces: Vec<TargetInterface>,
     ) -> anyhow::Result<()>;
 
-    /// Handle `wasmcloud:bus/host.call`
-    async fn call(
-        &self,
-        target: Option<TargetEntity>,
-        operation: String,
-    ) -> anyhow::Result<(
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-        Box<dyn AsyncWrite + Sync + Send + Unpin>,
-        Box<dyn AsyncRead + Sync + Send + Unpin>,
-    )>;
-
     /// Handle `wasmcloud:bus/config.get`
     async fn get(
         &self,
@@ -378,29 +367,15 @@ pub trait Bus {
         &self,
     ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>>;
 
+    // TODO: Remove
     /// Handle `wasmcloud:bus/host.call` without streaming
-    async fn call_sync(
+    async fn call(
         &self,
         target: Option<TargetEntity>,
-        operation: String,
-        mut payload: Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
-        let (res, mut input, mut output) = self
-            .call(target, operation)
-            .await
-            .context("failed to process call")?;
-        input
-            .write_all(&payload)
-            .await
-            .context("failed to write request")?;
-        payload.clear();
-        output
-            .read_to_end(&mut payload)
-            .await
-            .context("failed to read output")?;
-        res.await.map_err(|e| anyhow!(e).context("call failed"))?;
-        Ok(payload)
-    }
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>>;
 }
 
 #[async_trait]
@@ -661,26 +636,12 @@ impl Bus for Handler {
     async fn call(
         &self,
         target: Option<TargetEntity>,
-        operation: String,
-    ) -> anyhow::Result<(
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-        Box<dyn AsyncWrite + Sync + Send + Unpin>,
-        Box<dyn AsyncRead + Sync + Send + Unpin>,
-    )> {
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         self.proxy_bus("wasmcloud:bus/host.call")?
-            .call(target, operation)
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn call_sync(
-        &self,
-        target: Option<TargetEntity>,
-        operation: String,
-        payload: Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
-        self.proxy_bus("wasmcloud:bus/host.call-sync")?
-            .call_sync(target, operation, payload)
+            .call(target, instance, name, params)
             .await
     }
 }

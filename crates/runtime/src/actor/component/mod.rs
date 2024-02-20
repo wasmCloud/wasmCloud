@@ -3,6 +3,7 @@ use crate::capability::{builtin, Bus, Interfaces, TargetInterface};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
+use core::iter::zip;
 use core::mem::replace;
 use core::ops::{Deref, DerefMut};
 
@@ -11,11 +12,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
-use wasmtime::component::{Linker, ResourceTable, ResourceTableError, Val};
+use wasmtime::component::{self, Linker, ResourceTable, ResourceTableError, Val};
 use wasmtime_wasi::preview2::command::{self, Command};
 use wasmtime_wasi::preview2::pipe::{
     AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
@@ -38,18 +39,6 @@ pub(crate) use self::http::incoming_http_bindings;
 pub(crate) use self::logging::logging_bindings;
 
 type TableResult<T> = Result<T, ResourceTableError>;
-
-mod guest_bindings {
-    wasmtime::component::bindgen!({
-        world: "guest",
-        async: true,
-        with: {
-           "wasi:io/error": wasmtime_wasi::preview2::bindings::io::error,
-           "wasi:io/poll": wasmtime_wasi::preview2::bindings::io::poll,
-           "wasi:io/streams": wasmtime_wasi::preview2::bindings::io::streams,
-        },
-    });
-}
 
 /// `StdioStream` delegates all stream I/O to inner stream if such is set and
 /// mimics [`ClosedInputStream`] and [`ClosedOutputStream`] otherwise
@@ -249,108 +238,162 @@ impl Debug for Component {
     }
 }
 
-fn encode_custom_parameters(params: &[Val]) -> anyhow::Result<Vec<u8>> {
-    match params {
-        [] => Ok(vec![]),
-        [Val::Bool(val)] => rmp_serde::to_vec(val),
-        [Val::S8(val)] => rmp_serde::to_vec(val),
-        [Val::U8(val)] => rmp_serde::to_vec(val),
-        [Val::S16(val)] => rmp_serde::to_vec(val),
-        [Val::U16(val)] => rmp_serde::to_vec(val),
-        [Val::S32(val)] => rmp_serde::to_vec(val),
-        [Val::U32(val)] => rmp_serde::to_vec(val),
-        [Val::S64(val)] => rmp_serde::to_vec(val),
-        [Val::U64(val)] => rmp_serde::to_vec(val),
-        [Val::Float32(val)] => rmp_serde::to_vec(val),
-        [Val::Float64(val)] => rmp_serde::to_vec(val),
-        [Val::Char(val)] => rmp_serde::to_vec(val),
-        [Val::String(val)] => rmp_serde::to_vec(val),
+fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
+    match val {
+        Val::Bool(val) => Ok(wrpc_transport::Value::Bool(*val)),
+        Val::S8(val) => Ok(wrpc_transport::Value::S8(*val)),
+        Val::U8(val) => Ok(wrpc_transport::Value::U8(*val)),
+        Val::S16(val) => Ok(wrpc_transport::Value::S16(*val)),
+        Val::U16(val) => Ok(wrpc_transport::Value::U16(*val)),
+        Val::S32(val) => Ok(wrpc_transport::Value::S32(*val)),
+        Val::U32(val) => Ok(wrpc_transport::Value::U32(*val)),
+        Val::S64(val) => Ok(wrpc_transport::Value::S64(*val)),
+        Val::U64(val) => Ok(wrpc_transport::Value::U64(*val)),
+        Val::Float32(val) => Ok(wrpc_transport::Value::Float32(*val)),
+        Val::Float64(val) => Ok(wrpc_transport::Value::Float64(*val)),
+        Val::Char(val) => Ok(wrpc_transport::Value::Char(*val)),
+        Val::String(val) => Ok(wrpc_transport::Value::String(val.to_string())),
         _ => bail!("complex types not supported yet"),
     }
-    .context("failed to encode parameters")
 }
 
-fn decode_custom_results(
-    results_ty: &Results,
-    results: &mut [Val],
-    buf: &[u8],
-) -> anyhow::Result<()> {
-    let mut results_ty = results_ty.iter_types();
-    match (results_ty.next(), results_ty.next(), results) {
-        (None, None, []) => {
-            ensure!(
-                buf.is_empty(),
-                "non-empty response returned when none expected"
-            );
-        }
-        (Some(Type::Bool), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::Bool)?;
-        }
-        (Some(Type::U8), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::U8)?;
-        }
-        (Some(Type::U16), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::U16)?;
-        }
-        (Some(Type::U32), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::U32)?;
-        }
-        (Some(Type::U64), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::U64)?;
-        }
-        (Some(Type::S8), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::S8)?;
-        }
-        (Some(Type::S16), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::S16)?;
-        }
-        (Some(Type::S32), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::S32)?;
-        }
-        (Some(Type::S64), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::S64)?;
-        }
-        (Some(Type::Float32), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::Float32)?;
-        }
-        (Some(Type::Float64), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::Float64)?;
-        }
-        (Some(Type::Char), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::Char)?;
-        }
-        (Some(Type::String), None, [val]) => {
-            *val = rmp_serde::from_slice(buf)
-                .context("failed to decode response")
-                .map(Val::String)?;
-        }
+// TODO: Remove this in wasmtime 18
+fn from_wrpc_value_simple(val: wrpc_transport::Value) -> anyhow::Result<Val> {
+    match val {
+        wrpc_transport::Value::Bool(v) => Ok(Val::Bool(v)),
+        wrpc_transport::Value::U8(v) => Ok(Val::U8(v)),
+        wrpc_transport::Value::U16(v) => Ok(Val::U16(v)),
+        wrpc_transport::Value::U32(v) => Ok(Val::U32(v)),
+        wrpc_transport::Value::U64(v) => Ok(Val::U64(v)),
+        wrpc_transport::Value::S8(v) => Ok(Val::S8(v)),
+        wrpc_transport::Value::S16(v) => Ok(Val::S16(v)),
+        wrpc_transport::Value::S32(v) => Ok(Val::S32(v)),
+        wrpc_transport::Value::S64(v) => Ok(Val::S64(v)),
+        wrpc_transport::Value::Float32(v) => Ok(Val::Float32(v)),
+        wrpc_transport::Value::Float64(v) => Ok(Val::Float64(v)),
+        wrpc_transport::Value::Char(v) => Ok(Val::Char(v)),
+        wrpc_transport::Value::String(v) => Ok(Val::String(v.into())),
         _ => bail!("complex types not supported yet"),
     }
-    Ok(())
+}
+
+fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::Result<Val> {
+    use component::Type;
+
+    match (val, ty) {
+        (wrpc_transport::Value::Bool(v), Type::Bool) => Ok(Val::Bool(v)),
+        (wrpc_transport::Value::U8(v), Type::U8) => Ok(Val::U8(v)),
+        (wrpc_transport::Value::U16(v), Type::U16) => Ok(Val::U16(v)),
+        (wrpc_transport::Value::U32(v), Type::U32) => Ok(Val::U32(v)),
+        (wrpc_transport::Value::U64(v), Type::U64) => Ok(Val::U64(v)),
+        (wrpc_transport::Value::S8(v), Type::S8) => Ok(Val::S8(v)),
+        (wrpc_transport::Value::S16(v), Type::S16) => Ok(Val::S16(v)),
+        (wrpc_transport::Value::S32(v), Type::S32) => Ok(Val::S32(v)),
+        (wrpc_transport::Value::S64(v), Type::S64) => Ok(Val::S64(v)),
+        (wrpc_transport::Value::Float32(v), Type::Float32) => Ok(Val::Float32(v)),
+        (wrpc_transport::Value::Float64(v), Type::Float64) => Ok(Val::Float64(v)),
+        (wrpc_transport::Value::Char(v), Type::Char) => Ok(Val::Char(v)),
+        (wrpc_transport::Value::String(v), Type::String) => Ok(Val::String(v.into())),
+        (wrpc_transport::Value::List(vs), Type::List(ty)) => {
+            let mut w_vs = Vec::with_capacity(vs.len());
+            let el_ty = ty.ty();
+            for v in vs {
+                let v = from_wrpc_value(v, &el_ty).context("failed to convert list element")?;
+                w_vs.push(v);
+            }
+            component::List::new(ty, w_vs.into()).map(component::Val::List)
+        }
+        (wrpc_transport::Value::Record(vs), Type::Record(ty)) => {
+            let mut w_vs = Vec::with_capacity(vs.len());
+            for (v, component::types::Field { name, ty }) in zip(vs, ty.fields()) {
+                let v = from_wrpc_value(v, &ty).context("failed to convert record field")?;
+                w_vs.push((name, v));
+            }
+            component::Record::new(ty, w_vs).map(component::Val::Record)
+        }
+        (wrpc_transport::Value::Tuple(vs), Type::Tuple(ty)) => {
+            let mut w_vs = Vec::with_capacity(vs.len());
+            for (v, ty) in zip(vs, ty.types()) {
+                let v = from_wrpc_value(v, &ty).context("failed to convert tuple element")?;
+                w_vs.push(v);
+            }
+            component::Tuple::new(ty, w_vs.into()).map(component::Val::Tuple)
+        }
+        (
+            wrpc_transport::Value::Variant {
+                discriminant,
+                nested,
+            },
+            Type::Variant(ty),
+        ) => {
+            let discriminant = discriminant
+                .try_into()
+                .context("discriminant does not fit in usize")?;
+            let component::types::Case { name, ty: case_ty } = ty
+                .cases()
+                .skip(discriminant)
+                .next()
+                .context("variant discriminant not found")?;
+            let v = if let Some(case_ty) = case_ty {
+                let v = nested.context("nested value missing")?;
+                let v = from_wrpc_value(*v, &case_ty).context("failed to convert variant value")?;
+                Some(v)
+            } else {
+                None
+            };
+            component::Variant::new(ty, name, v).map(component::Val::Variant)
+        }
+        (wrpc_transport::Value::Enum(discriminant), Type::Enum(ty)) => {
+            let discriminant = discriminant
+                .try_into()
+                .context("discriminant does not fit in usize")?;
+            let name = ty
+                .names()
+                .skip(discriminant)
+                .next()
+                .context("enum discriminant not found")?;
+            component::Enum::new(ty, name).map(component::Val::Enum)
+        }
+        (wrpc_transport::Value::Option(v), Type::Option(ty)) => {
+            let v = if let Some(v) = v {
+                let v = from_wrpc_value(*v, &ty.ty()).context("failed to convert option value")?;
+                Some(v)
+            } else {
+                None
+            };
+            component::OptionVal::new(ty, v).map(component::Val::Option)
+        }
+        (wrpc_transport::Value::Result(v), component::Type::Result(ty)) => {
+            let v = match v {
+                Ok(None) => Ok(None),
+                Ok(Some(v)) => {
+                    let ty = ty.ok().context("`result::ok` type missing")?;
+                    let v =
+                        from_wrpc_value(*v, &ty).context("failed to convert `result::ok` value")?;
+                    Ok(Some(v))
+                }
+                Err(None) => Err(None),
+                Err(Some(v)) => {
+                    let ty = ty.err().context("`result::err` type missing")?;
+                    let v = from_wrpc_value(*v, &ty)
+                        .context("failed to convert `result::err` value")?;
+                    Err(Some(v))
+                }
+            };
+            component::ResultVal::new(ty, v).map(component::Val::Result)
+        }
+        (wrpc_transport::Value::Flags(v), Type::Flags(ty)) => {
+            // NOTE: Currently flags are limited to 64
+            let mut names = Vec::with_capacity(64);
+            for (i, name) in zip(0..64, ty.names()) {
+                if v & (1 << i) != 0 {
+                    names.push(name)
+                }
+            }
+            component::Flags::new(ty, &names).map(component::Val::Flags)
+        }
+        _ => bail!("type mismatch"),
+    }
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -369,6 +412,31 @@ fn wasifill(
         return;
     };
     for (key, _) in imports {
+        let instance_name = Arc::new(resolve.name_world_key(key));
+        match instance_name.as_str() {
+            "wasi:cli/environment@0.2.0"
+            | "wasi:cli/exit@0.2.0"
+            | "wasi:cli/stderr@0.2.0"
+            | "wasi:cli/stdin@0.2.0"
+            | "wasi:cli/stdout@0.2.0"
+            | "wasi:cli/terminal-input@0.2.0"
+            | "wasi:cli/terminal-output@0.2.0"
+            | "wasi:cli/terminal-stderr@0.2.0"
+            | "wasi:cli/terminal-stdin@0.2.0"
+            | "wasi:cli/terminal-stdout@0.2.0"
+            | "wasi:clocks/monotonic-clock@0.2.0"
+            | "wasi:clocks/wall-clock@0.2.0"
+            | "wasi:filesystem/preopens@0.2.0"
+            | "wasi:filesystem/types@0.2.0"
+            | "wasi:http/incoming-handler@0.2.0"
+            | "wasi:http/outgoing-handler@0.2.0"
+            | "wasi:http/types@0.2.0"
+            | "wasi:io/error@0.2.0"
+            | "wasi:io/poll@0.2.0"
+            | "wasi:io/streams@0.2.0"
+            | "wasi:sockets/tcp@0.2.0" => continue,
+            _ => {}
+        }
         let WorldKey::Interface(iface) = key else {
             continue;
         };
@@ -395,12 +463,7 @@ fn wasifill(
             continue;
         };
         match (package.name.namespace.as_str(), package.name.name.as_str()) {
-            (
-                "wasi",
-                "blobstore" | "cli" | "clocks" | "filesystem" | "http" | "io" | "keyvalue"
-                | "logging" | "random" | "sockets",
-            )
-            | ("wasmcloud", "bus" | "messaging") => continue,
+            ("wasmcloud", "bus" | "messaging") => continue,
             _ => {
                 let interface_path = format!("{}/{interface_name}", package.name);
                 let mut linker = linker.root();
@@ -420,7 +483,7 @@ fn wasifill(
                     package: package.name.name.clone(),
                     interface: interface_name.to_string(),
                 });
-                for (name, function) in interface.functions.iter().filter(|(name, function)| {
+                for (name, _) in interface.functions.iter().filter(|(name, function)| {
                     if function.params.len() > 1
                         || function.results.len() > 1
                         || function
@@ -451,35 +514,46 @@ fn wasifill(
                         name,
                         "wasifill component function import"
                     );
-                    let operation = format!("{interface_path}.{name}");
+                    let instance_name = Arc::clone(&instance_name);
+                    let name = Arc::new(name.to_string());
                     let target = Arc::clone(&target);
-                    let results_ty = Arc::new(function.results.clone());
-                    if let Err(err) =
-                        linker.func_new_async(component, name, move |ctx, params, results| {
-                            let operation = operation.clone();
+                    if let Err(err) = linker.func_new_async(
+                        component,
+                        Arc::clone(&name).as_str(),
+                        move |ctx, params, results| {
+                            let instance_name = Arc::clone(&instance_name);
+                            let name = Arc::clone(&name);
                             let target = Arc::clone(&target);
-                            let results_ty = Arc::clone(&results_ty);
                             Box::new(async move {
-                                let buf = encode_custom_parameters(params)?;
+                                let params: Vec<_> = params
+                                    .into_iter()
+                                    .map(|param| to_wrpc_value(param))
+                                    .collect::<anyhow::Result<_>>()
+                                    .context("failed to convert wasmtime values to wRPC values")?;
                                 let handler = &ctx.data().handler;
                                 let target = handler
                                     .identify_interface_target(&target)
                                     .await
                                     .context("failed to identify interface target")?;
-                                let buf = handler
-                                    .call_sync(target, operation, buf)
+                                let result_values = handler
+                                    .call(target, &instance_name, &name, params)
                                     .await
                                     .context("failed to call target")?;
-                                decode_custom_results(&results_ty, results, &buf)
+                                for (i, val) in result_values.into_iter().enumerate() {
+                                    let val = from_wrpc_value_simple(val)?;
+                                    let result =
+                                        results.get_mut(i).context("invalid result vector")?;
+                                    *result = val;
+                                }
+                                Ok(())
                             })
-                        })
-                    {
+                        },
+                    ) {
                         error!(
                             ?err,
                             namespace = package.name.namespace,
                             package = package.name.name,
                             interface = interface_name,
-                            name,
                             "failed to wasifill component function import"
                         );
                     }
@@ -603,13 +677,13 @@ impl Component {
     #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         self.instantiate()
             .context("failed to instantiate component")?
-            .call(operation, request, response)
+            .call(instance, name, params)
             .await
     }
 }
@@ -668,153 +742,53 @@ impl Instance {
         Ok(self)
     }
 
-    /// Instantiates and returns [`GuestBindings`] if exported by the [`Instance`].
-    async fn as_guest_bindings(&mut self) -> anyhow::Result<GuestBindings> {
-        // Attempt to instantiate using guest bindings
-        let guest_err = match guest_bindings::Guest::instantiate_async(
-            &mut self.store,
-            &self.component,
-            &self.linker,
-        )
-        .await
-        {
-            Ok((bindings, _)) => return Ok(GuestBindings::Interface(bindings)),
-            Err(e) => e,
-        };
-
-        // Attempt to instantiate using only bindings available in command
-        match Command::instantiate_async(&mut self.store, &self.component, &self.linker).await {
-            Ok((bindings, _)) => Ok(GuestBindings::Command(bindings)),
-            // If neither of the above instantiations worked, the instance cannot be run
-            Err(command_err) => bail!(
-                r#"failed to instantiate instance (no bindings satisfied exports):
-
-`wasmcloud:bus/guest` error: {guest_err:?}
-
-`wasi:command/command` error: {command_err:?}
-"#,
-            ),
-        }
-    }
-
     /// Invoke an operation on an [Instance] producing a result.
     #[instrument(skip_all)]
     pub async fn call(
         &mut self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
-        self.as_guest_bindings()
-            .await?
-            .call(&mut self.store, operation, request, response)
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        let component = self
+            .linker
+            .instantiate_async(&mut self.store, &self.component)
             .await
-    }
-
-    /// Instantiates and returns a [`GuestInstance`] if exported by the [`Instance`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if guest bindings are not exported by the [`Instance`]
-    pub async fn into_guest(mut self) -> anyhow::Result<GuestInstance> {
-        let bindings = self.as_guest_bindings().await?;
-        Ok(GuestInstance {
-            store: Arc::new(Mutex::new(self.store)),
-            bindings: Arc::new(bindings),
-        })
-    }
-}
-
-enum GuestBindings {
-    Command(Command),
-    Interface(guest_bindings::Guest),
-}
-
-impl GuestBindings {
-    /// Invoke an operation on a [GuestBindings] producing a result.
-    #[instrument(skip_all)]
-    pub async fn call(
-        &self,
-        mut store: &mut wasmtime::Store<Ctx>,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
-        let ctx = store.data_mut();
-        ctx.stdin
-            .replace(Box::new(AsyncReadStream::new(request)))
-            .await;
-        ctx.stdout
-            .replace(Box::new(AsyncWriteStream::new(1 << 16, response)))
-            .await;
-        let res = match self {
-            GuestBindings::Command(bindings) => {
-                let operation = operation.as_ref();
-                let wasi = WasiCtxBuilder::new()
-                    .args(&["main.wasm", operation]) // TODO: Configure argv[0]
-                    .stdin(ctx.stdin.clone())
-                    .stdout(ctx.stdout.clone())
-                    .stderr(ctx.stderr.clone())
-                    .build();
-                let wasi = replace(&mut ctx.wasi, wasi);
-                trace!(operation, "call `wasi:command/command.run`");
-                let res = bindings
-                    .wasi_cli_run()
-                    .call_run(&mut store)
-                    .await
-                    .context("failed to call `wasi:command/command.run`")?
-                    .map_err(|()| "`wasi:command/command.run` failed".to_string());
-                store.data_mut().wasi = wasi;
-                Ok(res)
+            .context("failed to instantiate component")?;
+        let func = {
+            let mut exports = component.exports(&mut self.store);
+            if instance.is_empty() {
+                exports.root()
+            } else {
+                exports
+                    .instance(instance)
+                    .with_context(|| format!("instance of `{instance}` not found"))?
             }
-            GuestBindings::Interface(bindings) => {
-                trace!("call `wasmcloud:bus/guest.call`");
-                bindings
-                    .wasmcloud_bus_guest()
-                    .call_call(&mut store, operation.as_ref())
-                    .await
-                    .context("failed to call `wasmcloud:bus/guest.call`")
-            }
+            .func(name)
+            .with_context(|| format!("function `{name}` not found"))?
         };
-        let ctx = store.data();
-        ctx.stdin.take().await.context("stdin missing")?;
-        let mut stdout = ctx.stdout.take().await.context("stdout missing")?;
-        trace!("flush stdout");
-        stdout.flush().context("failed to flush stdout")?;
-        res
-    }
-}
-
-/// Instantiated, clone-able guest instance
-#[derive(Clone)]
-pub struct GuestInstance {
-    store: Arc<Mutex<wasmtime::Store<Ctx>>>,
-    bindings: Arc<GuestBindings>,
-}
-
-impl GuestInstance {
-    /// Invoke an operation on a [GuestInstance] producing a result.
-    #[instrument(level = "trace", skip_all)]
-    pub async fn call(
-        &self,
-        operation: impl AsRef<str>,
-        request: impl AsyncRead + Send + Sync + Unpin + 'static,
-        response: impl AsyncWrite + Send + Sync + Unpin + 'static,
-    ) -> anyhow::Result<Result<(), String>> {
-        let mut store = self.store.lock().await;
-        self.bindings
-            .call(&mut store, operation, request, response)
+        let params: Vec<_> = zip(params, func.params(&self.store).iter())
+            .map(|(val, ty)| from_wrpc_value(val, ty))
+            .collect::<anyhow::Result<_>>()
+            .context("failed to convert wasmtime values to wRPC values")?;
+        let results_ty = func.results(&self.store);
+        let mut results = vec![Val::Bool(false); results_ty.len()];
+        func.call_async(&mut self.store, &params, &mut results)
             .await
+            .context("failed to call function")?;
+        func.post_return_async(&mut self.store)
+            .await
+            .context("failed to perform post-return cleanup")?;
+        results
+            .iter()
+            .map(to_wrpc_value)
+            .collect::<anyhow::Result<_>>()
+            .context("failed to convert wasmtime values to wRPC values")
     }
-}
-
-enum InterfaceBindings<T> {
-    Guest(GuestBindings),
-    Interface(T),
 }
 
 /// Instance of a guest interface `T`
 pub struct InterfaceInstance<T> {
     store: Mutex<wasmtime::Store<Ctx>>,
-    bindings: InterfaceBindings<T>,
+    bindings: T,
 }
