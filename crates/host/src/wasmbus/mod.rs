@@ -4550,24 +4550,6 @@ impl Host {
     }
 }
 
-/// Santize a component reference to create a NATS/storage safe key. This is a placeholder
-/// for what will eventually go into `wash` and `wadm` as a more specific utility.
-fn sanitize_reference(reference: &str) -> String {
-    if reference.starts_with("file://") {
-        // Transforms a possibly complex file reference, e.g. "file:///path/to/http_hello_s.wasm" into a
-        // nicer key, "http_hello"
-        reference
-            .split('/')
-            .last()
-            .unwrap_or(reference)
-            .trim_end_matches(".wasm")
-            .trim_end_matches("_s")
-    } else {
-        reference
-    }
-    .replace([':', '/', '.', '-'], "_")
-}
-
 // TODO: remove StoredClaims in #1093
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
