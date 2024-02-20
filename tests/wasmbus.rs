@@ -673,20 +673,20 @@ expected: {base_labels:?}"#
     )
     .context("failed to advertise links")?;
 
-    try_join!(
-        assert_config_put(
-            &ctl_client,
-            &component_actor_claims,
-            "test-config-data",
-            "test-config-value"
-        ),
-        assert_config_put(
-            &ctl_client,
-            &component_actor_claims,
-            "test-config-data2",
-            "test-config-value2"
-        )
-    )
+    try_join!(assert_config_put(
+        &ctl_client,
+        &component_actor_claims,
+        HashMap::from_iter([
+            (
+                "test-config-data".to_string(),
+                "test-config-value".to_string()
+            ),
+            (
+                "test-config-data2".to_string(),
+                "test-config-value2".to_string()
+            )
+        ])
+    ),)
     .context("failed to put config")?;
 
     try_join!(
