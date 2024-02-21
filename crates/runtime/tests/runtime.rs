@@ -103,9 +103,21 @@ impl capability::Bus for Handler {
         target: Option<capability::TargetEntity>,
         instance: &str,
         name: &str,
-        _params: Vec<wrpc_transport::Value>,
+        params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        panic!("`call_sync` with target `{target:?}`, instance `{instance}` and name `{name}` should not have been called")
+        match (target, instance, name) {
+            (Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))), "test-actors:foobar/foobar", "foobar") if name == "foobar-component-command-preview2" => {
+                let mut params = params.into_iter();
+                match (params.next(), params.next()) {
+                    (Some(wrpc_transport::Value::String(s)), None) => {
+                        assert_eq!(s, "foo");
+                        Ok(vec![wrpc_transport::Value::String("foobar".into())])
+                    },
+                    _ => bail!("invalid parameters received"),
+                }
+            },
+            (target, instance, name) => panic!("`call` with target `{target:?}`, instance `{instance}` and name `{name}` should not have been called")
+        }
     }
 }
 

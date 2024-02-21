@@ -6,16 +6,17 @@ use core::fmt::{self, Debug};
 use core::iter::zip;
 use core::ops::{Deref, DerefMut};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 use wascap::jwt;
-use wasmtime::component::{self, Linker, ResourceTable, ResourceTableError, Val};
+use wasmtime::component::{self, types, Linker, ResourceTable, ResourceTableError, Type, Val};
 use wasmtime_wasi::preview2::command::{self};
 use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
 use wasmtime_wasi::preview2::{
@@ -24,6 +25,7 @@ use wasmtime_wasi::preview2::{
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{from_wrpc_value, to_wrpc_value};
+use wrpc_types::{function_exports, DynamicFunction};
 
 mod blobstore;
 mod bus;
@@ -187,6 +189,7 @@ struct Ctx {
     table: ResourceTable,
     handler: builtin::Handler,
     stderr: StdioStream<Box<dyn HostOutputStream>>,
+    custom_result_types: HashMap<String, HashMap<String, Vec<Type>>>,
 }
 
 impl WasiView for Ctx {
@@ -208,11 +211,13 @@ impl Debug for Ctx {
 /// Pre-compiled actor [Component], which is cheapily-[Cloneable](Clone)
 #[derive(Clone)]
 pub struct Component {
-    component: wasmtime::component::Component,
+    component: component::Component,
     engine: wasmtime::Engine,
     linker: Linker<Ctx>,
     claims: Option<jwt::Claims<jwt::Actor>>,
     handler: builtin::HandlerBuilder,
+    exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
+    ty: types::Component,
 }
 
 impl Debug for Component {
@@ -221,21 +226,21 @@ impl Debug for Component {
             .field("claims", &self.claims)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
+            .field("exports", &self.exports)
             .finish_non_exhaustive()
     }
 }
 
 #[instrument(level = "trace", skip_all)]
-fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>) {
-    let component_ty = match linker.substituted_component_type(component) {
-        Ok(component_ty) => component_ty,
-        Err(err) => {
-            error!(?err, "failed to introspect component type");
-            return;
-        }
-    };
-    for (instance_name, item) in component_ty.imports() {
-        match instance_name {
+fn polyfill<'a>(
+    resolve: &wit_parser::Resolve,
+    imports: impl IntoIterator<Item = (&'a wit_parser::WorldKey, &'a wit_parser::WorldItem)>,
+    component: &component::Component,
+    linker: &mut Linker<Ctx>,
+) {
+    for (wk, item) in imports {
+        let instance_name = resolve.name_world_key(wk);
+        match instance_name.as_ref() {
             "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
@@ -263,29 +268,49 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
             | "wasmcloud:messaging/message-subscriber" => continue,
             _ => {}
         }
-        let item = match item {
-            component::types::ComponentItem::ComponentInstance(item) => item,
-            _ => continue,
+        let wit_parser::WorldItem::Interface(interface) = item else {
+            continue;
         };
-        let Some((namespace, package)) = instance_name.split_once(':') else {
-            error!(
-                ?instance_name,
-                "failed to split namespace from package and interface"
+        let Some(wit_parser::Interface {
+            name: interface_name,
+            functions,
+            package,
+            ..
+        }) = resolve.interfaces.get(*interface)
+        else {
+            warn!("component imports a non-existent interface");
+            continue;
+        };
+        let Some(interface_name) = interface_name else {
+            trace!("component imports an unnamed interface");
+            continue;
+        };
+        let Some(package) = package else {
+            trace!(
+                instance_name,
+                "component interface import is missing a package"
             );
-            return;
+            continue;
         };
-        let Some((package, interface)) = package.split_once('/') else {
-            error!(?instance_name, "failed to split package from interface");
-            return;
+        let Some(wit_parser::Package {
+            name: package_name, ..
+        }) = resolve.packages.get(*package)
+        else {
+            trace!(
+                instance_name,
+                interface_name,
+                "component interface belongs to a non-existent package"
+            );
+            continue;
         };
         // TODO: Rework the specification here
         let target = Arc::new(TargetInterface::Custom {
-            namespace: namespace.to_string(),
-            package: package.to_string(),
-            interface: interface.to_string(),
+            namespace: package_name.namespace.to_string(),
+            package: package_name.name.to_string(),
+            interface: interface_name.to_string(),
         });
         let mut linker = linker.root();
-        let mut linker = match linker.instance(instance_name) {
+        let mut linker = match linker.instance(&instance_name) {
             Ok(linker) => linker,
             Err(err) => {
                 error!(
@@ -296,12 +321,8 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
                 continue;
             }
         };
-        let instance_name = Arc::new(instance_name.to_string());
-        for (func_name, item) in item.exports() {
-            let ty = match item {
-                component::types::ComponentItem::ComponentFunc(ty) => ty,
-                _ => continue,
-            };
+        let instance_name = Arc::new(instance_name);
+        for (func_name, _) in functions {
             trace!(
                 ?instance_name,
                 func_name,
@@ -317,7 +338,6 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
                     let instance_name = Arc::clone(&instance_name);
                     let func_name = Arc::clone(&func_name);
                     let target = Arc::clone(&target);
-                    let ty = ty.clone();
                     Box::new(async move {
                         let params: Vec<_> = params
                             .iter()
@@ -333,10 +353,18 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
                             .call(target, &instance_name, &func_name, params)
                             .await
                             .context("failed to call target")?;
-                        for (i, (val, ty)) in zip(result_values, ty.results()).enumerate() {
-                            let val = from_wrpc_value(val, &ty)?;
-                            let result = results.get_mut(i).context("invalid result vector")?;
-                            *result = val;
+                        if !result_values.is_empty() {
+                            let result_ty = store
+                                .data()
+                                .custom_result_types
+                                .get(instance_name.as_str())
+                                .and_then(|instance| instance.get(func_name.as_str()))
+                                .context("unknown result type")?;
+                            for (i, (val, ty)) in zip(result_values, result_ty).enumerate() {
+                                let val = from_wrpc_value(val, &ty)?;
+                                let result = results.get_mut(i).context("invalid result vector")?;
+                                *result = val;
+                            }
                         }
                         Ok(())
                     })
@@ -354,6 +382,7 @@ fn instantiate(
     engine: &wasmtime::Engine,
     linker: Linker<Ctx>,
     handler: impl Into<builtin::Handler>,
+    ty: types::Component,
 ) -> anyhow::Result<Instance> {
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
@@ -366,6 +395,57 @@ fn instantiate(
         .stdout(stdout.clone())
         .stderr(stderr.clone())
         .build();
+
+    let mut custom_result_types = HashMap::with_capacity(ty.imports().len());
+    {
+        for (instance_name, item) in ty.imports() {
+            match instance_name {
+                "wasi:cli/environment@0.2.0"
+                | "wasi:cli/exit@0.2.0"
+                | "wasi:cli/stderr@0.2.0"
+                | "wasi:cli/stdin@0.2.0"
+                | "wasi:cli/stdout@0.2.0"
+                | "wasi:cli/terminal-input@0.2.0"
+                | "wasi:cli/terminal-output@0.2.0"
+                | "wasi:cli/terminal-stderr@0.2.0"
+                | "wasi:cli/terminal-stdin@0.2.0"
+                | "wasi:cli/terminal-stdout@0.2.0"
+                | "wasi:clocks/monotonic-clock@0.2.0"
+                | "wasi:clocks/wall-clock@0.2.0"
+                | "wasi:filesystem/preopens@0.2.0"
+                | "wasi:filesystem/types@0.2.0"
+                | "wasi:http/incoming-handler@0.2.0"
+                | "wasi:http/outgoing-handler@0.2.0"
+                | "wasi:http/types@0.2.0"
+                | "wasi:io/error@0.2.0"
+                | "wasi:io/poll@0.2.0"
+                | "wasi:io/streams@0.2.0"
+                | "wasi:sockets/tcp@0.2.0"
+                | "wasmcloud:bus/lattice"
+                | "wasmcloud:bus/guest-config"
+                | "wasmcloud:messaging/messaging"
+                | "wasmcloud:messaging/message-subscriber" => continue,
+                _ => {}
+            }
+            let item = match item {
+                component::types::ComponentItem::ComponentInstance(item) => item,
+                _ => continue,
+            };
+            let exports = item.exports();
+            let mut instance = HashMap::with_capacity(exports.len());
+            for (func_name, item) in item.exports() {
+                let ty = match item {
+                    component::types::ComponentItem::ComponentFunc(ty) => ty,
+                    _ => continue,
+                };
+                instance.insert(func_name.to_string(), ty.results().collect());
+            }
+            if !instance.is_empty() {
+                custom_result_types.insert(instance_name.to_string(), instance);
+            }
+        }
+    }
+
     let handler = handler.into();
     let ctx = Ctx {
         wasi,
@@ -373,6 +453,7 @@ fn instantiate(
         table,
         handler,
         stderr,
+        custom_result_types,
     };
     let store = wasmtime::Store::new(engine, ctx);
     Ok(Instance {
@@ -406,14 +487,36 @@ impl Component {
 
         command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
 
-        polyfill(&component, &mut linker);
+        let (resolve, world) =
+            match wit_component::decode(&wasm).context("failed to decode WIT component")? {
+                wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
+                wit_component::DecodedWasm::WitPackage(..) => {
+                    bail!("binary-encoded WIT packages not currently supported")
+                }
+            };
 
+        let wit_parser::World {
+            exports, imports, ..
+        } = resolve
+            .worlds
+            .iter()
+            .find_map(|(id, w)| (id == world).then_some(w))
+            .context("component world missing")?;
+
+        polyfill(&resolve, imports, &component, &mut linker);
+
+        let ty = linker
+            .substituted_component_type(&component)
+            .context("failed to introspect component type")?;
+        // TODO: Record the substituted type exports, not parser exports
         Ok(Self {
             component,
             engine,
             linker,
             claims,
             handler: rt.handler.clone(),
+            exports: Arc::new(function_exports(&resolve, exports)),
+            ty,
         })
     }
 
@@ -434,7 +537,13 @@ impl Component {
     pub fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        let instance = instantiate(self.component, &self.engine, self.linker, self.handler)?;
+        let instance = instantiate(
+            self.component,
+            &self.engine,
+            self.linker,
+            self.handler,
+            self.ty,
+        )?;
         Ok((instance, self.claims))
     }
 
@@ -446,6 +555,7 @@ impl Component {
             &self.engine,
             self.linker.clone(),
             self.handler.clone(),
+            self.ty.clone(),
         )
     }
 
