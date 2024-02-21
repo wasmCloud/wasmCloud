@@ -3,19 +3,17 @@ use super::{blobstore, bus, format_opt, messaging};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
-use core::future::Future;
-use core::pin::Pin;
 use core::str::FromStr;
 use core::time::Duration;
 
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use futures::{Stream, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncRead;
 use tracing::{instrument, trace};
 
 #[derive(Clone, Default)]
