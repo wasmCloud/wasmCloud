@@ -5583,9 +5583,11 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wit-component",
  "wit-parser",
  "wrpc-runtime-wasmtime",
  "wrpc-transport",
+ "wrpc-types",
 ]
 
 [[package]]
