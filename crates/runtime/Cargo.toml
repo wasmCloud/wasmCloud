@@ -34,12 +34,12 @@ tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
-wasi-common = { workspace = true }
+wasi-common = { workspace = true, features = ["sync", "wasmtime"]  }
 wasmcloud-compat = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["addr2line", "async", "cache", "component-model", "coredump", "cranelift", "parallel-compilation", "pooling-allocator" ] }
-wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
-wasmtime-wasi-http = { workspace = true, features = ["sync"] }
+wasmtime-wasi = { workspace = true, features = ["preview2"] }
+wasmtime-wasi-http = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
 wrpc-transport = { workspace = true }
