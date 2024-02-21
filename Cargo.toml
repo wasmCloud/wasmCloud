@@ -209,5 +209,6 @@ wit-bindgen-core = { version = "=0.17.0", default-features = false }
 wit-bindgen-go = { version = "0.17", default-features = false }
 wit-component = { version = "0.20", default-features = false }
 wit-parser = { version = "0.13", default-features = false }
+wrpc-runtime-wasmtime = { version = "0.1", default-features = false }
 wrpc-transport = { version = "0.4", default-features = false }
 wrpc-transport-nats = { version = "0.3", default-features = false }
