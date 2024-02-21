@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace, warn};
 use wascap::jwt;
@@ -33,9 +33,6 @@ mod http;
 mod keyvalue;
 mod logging;
 mod messaging;
-
-pub(crate) use self::http::incoming_http_bindings;
-pub(crate) use self::logging::logging_bindings;
 
 type TableResult<T> = Result<T, ResourceTableError>;
 
@@ -353,18 +350,16 @@ fn polyfill<'a>(
                             .call(target, &instance_name, &func_name, params)
                             .await
                             .context("failed to call target")?;
-                        if !result_values.is_empty() {
-                            let result_ty = store
-                                .data()
-                                .custom_result_types
-                                .get(instance_name.as_str())
-                                .and_then(|instance| instance.get(func_name.as_str()))
-                                .context("unknown result type")?;
-                            for (i, (val, ty)) in zip(result_values, result_ty).enumerate() {
-                                let val = from_wrpc_value(val, &ty)?;
-                                let result = results.get_mut(i).context("invalid result vector")?;
-                                *result = val;
-                            }
+                        let result_ty = store
+                            .data()
+                            .custom_result_types
+                            .get(instance_name.as_str())
+                            .and_then(|instance| instance.get(func_name.as_str()))
+                            .context("unknown result type")?;
+                        for (i, (val, ty)) in zip(result_values, result_ty).enumerate() {
+                            let val = from_wrpc_value(val, ty)?;
+                            let result = results.get_mut(i).context("invalid result vector")?;
+                            *result = val;
                         }
                         Ok(())
                     })
@@ -465,9 +460,17 @@ fn instantiate(
 
 impl Component {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
-    #[instrument(skip(wasm))]
+    #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
+        let wasm = match wasmparser::Parser::new(0).parse_all(wasm).next() {
+            Some(Ok(wasmparser::Payload::Version {
+                encoding: wasmparser::Encoding::Component,
+                ..
+            })) => wasm,
+            _ => bail!("TODO: this module will be converted to a component"),
+        };
+
         let engine = rt.engine.clone();
         let claims = claims(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
@@ -488,7 +491,7 @@ impl Component {
         command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
 
         let (resolve, world) =
-            match wit_component::decode(&wasm).context("failed to decode WIT component")? {
+            match wit_component::decode(wasm).context("failed to decode WIT component")? {
                 wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
                 wit_component::DecodedWasm::WitPackage(..) => {
                     bail!("binary-encoded WIT packages not currently supported")
@@ -518,6 +521,39 @@ impl Component {
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
         })
+    }
+
+    /// Reads the WebAssembly binary asynchronously and calls [Component::new].
+    ///
+    /// # Errors
+    ///
+    /// Fails if either reading `wasm` fails or [Self::new] fails
+    #[instrument(skip(wasm))]
+    pub async fn read(rt: &Runtime, mut wasm: impl AsyncRead + Unpin) -> anyhow::Result<Self> {
+        let mut buf = Vec::new();
+        wasm.read_to_end(&mut buf)
+            .await
+            .context("failed to read Wasm")?;
+        Self::new(rt, buf)
+    }
+
+    /// Reads the WebAssembly binary synchronously and calls [Component::new].
+    ///
+    /// # Errors
+    ///
+    /// Fails if either reading `wasm` fails or [Self::new] fails
+    #[instrument(skip(wasm))]
+    pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
+        let mut buf = Vec::new();
+        wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
+        Self::new(rt, buf)
+    }
+
+    /// Returns a map of dynamic function export types.
+    /// Top level map is keyed by the instance name.
+    /// Inner map is keyed by exported function name.
+    pub fn exports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
+        &self.exports
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
