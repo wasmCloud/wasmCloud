@@ -212,3 +212,4 @@ wit-parser = { version = "0.13", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.1", default-features = false }
 wrpc-transport = { version = "0.4", default-features = false }
 wrpc-transport-nats = { version = "0.3", default-features = false }
+wrpc-types = { version = "0.2", default-features = false }
