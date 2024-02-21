@@ -5486,6 +5486,9 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
+ "wrpc-transport",
+ "wrpc-transport-nats",
+ "wrpc-types",
 ]
 
 [[package]]
@@ -6475,6 +6478,22 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wrpc-types",
+]
+
+[[package]]
+name = "wrpc-transport-nats"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c383e66c649fc032b440ec4a1b0b2356da9f0e82f6fe1a432669e053c5829d0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "tokio",
+ "tracing",
+ "wrpc-transport",
 ]
 
 [[package]]

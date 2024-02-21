@@ -24,7 +24,7 @@ use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{
     future::{self, Either},
-    join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt,
+    join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt,
 };
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
@@ -63,9 +63,10 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
+use wrpc_transport::{Client, Transmitter};
 
 use crate::{
-    fetch_actor, socket_pair, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
+    fetch_actor, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
     PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
     RegistryType,
 };
@@ -176,7 +177,7 @@ impl Queue {
 
 #[derive(Debug)]
 struct ActorInstance {
-    actor: wasmcloud_runtime::Actor,
+    actor: wasmcloud_runtime::Component,
     nats: async_nats::Client,
     id: Ulid,
     calls: AbortHandle,
@@ -196,7 +197,7 @@ struct ActorInstance {
 }
 
 impl Deref for ActorInstance {
-    type Target = wasmcloud_runtime::Actor;
+    type Target = wasmcloud_runtime::Component;
 
     fn deref(&self) -> &Self::Target {
         &self.actor
@@ -204,18 +205,20 @@ impl Deref for ActorInstance {
 }
 
 impl ActorInstance {
-    pub(crate) async fn instantiate(&self) -> anyhow::Result<wasmcloud_runtime::actor::Instance> {
-        self.actor
-            .instantiate()
-            .await
-            .context("failed to instantiate actor")
-    }
-
-    pub(crate) async fn add_handlers<'a>(
+    /// Handle an incoming wRpc request to invoke an export on this actor instance.
+    async fn handle_wrpc_call(
         &self,
-        instance: &'a mut wasmcloud_runtime::actor::Instance,
+        instance: &str,
+        name: &str,
+        inv_params: Vec<wrpc_transport::Value>,
+        response_subject: wrpc_transport_nats::Subject,
+        transmitter: wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
-        instance
+        // Instantiate component with expected handlers
+        let mut component_instance = self
+            .instantiate()
+            .expect("should be able to instantiate actor");
+        component_instance
             .stderr(stderr())
             .await
             .context("failed to set stderr")?
@@ -226,7 +229,31 @@ impl ActorInstance {
             .logging(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()))
             .outgoing_http(Arc::new(self.handler.clone()));
-        Ok(())
+
+        let start_at = Instant::now();
+        let response = component_instance.call(instance, name, inv_params).await;
+        // Record metric on duration of the call
+        let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+        self.metrics
+            .wasmcloud_host_handle_rpc_message_duration_ns
+            .record(
+                elapsed,
+                &[
+                    KeyValue::new("actor.ref", self.image_reference.clone()),
+                    KeyValue::new("operation", format!("{instance}/{name}")),
+                ],
+            );
+        match response {
+            Ok(resp) => {
+                transmitter
+                    .transmit_tuple_dynamic(response_subject, resp)
+                    .await
+            }
+            Err(e) => {
+                error!("failed to handle wrpc request: {e}");
+                Ok(())
+            }
+        }
     }
 }
 
@@ -803,163 +830,28 @@ impl Bus for Handler {
             .unwrap_or_default()))
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self, params))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
-        operation: String,
-    ) -> anyhow::Result<(
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-        Box<dyn AsyncWrite + Sync + Send + Unpin>,
-        Box<dyn AsyncRead + Sync + Send + Unpin>,
-    )> {
-        let (mut req_r, req_w) = socket_pair()?;
-        let (res_r, mut res_w) = socket_pair()?;
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        if let Some(TargetEntity::Wrpc(interface_target)) = target {
+            let prefix = format!("{}.{}", self.lattice, interface_target.id);
+            let wrpc_client =
+                wrpc_transport_nats::Client::new(self.nats.clone(), prefix.to_string());
+            let (result, _tx) = wrpc_client
+                // TODO: get types
+                .invoke_dynamic(instance, name, params, &[])
+                .await?;
 
-        let links = Arc::clone(&self.links);
-        let aliases = Arc::clone(&self.aliases);
-        let nats = self.nats.clone();
-        let chunk_endpoint = self.chunk_endpoint.clone();
-        let lattice = self.lattice.clone();
-        let origin = self.origin.clone();
-        let cluster_key = self.cluster_key.clone();
-        let host_key = self.host_key.clone();
-        Ok((
-            async move {
-                // TODO: Stream data
-                let mut request = vec![];
-                req_r
-                    .read_to_end(&mut request)
-                    .await
-                    .context("failed to read request")
-                    .map_err(|e| e.to_string())?;
-                let links = links.read().await;
-                let aliases = aliases.read().await;
-                let (package, interface_and_func) = operation
-                    .rsplit_once('/')
-                    .context("failed to parse operation")
-                    .map_err(|e| e.to_string())?;
-                let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
-                let injector = TraceContextInjector::default_with_span();
-                let headers = injector_to_headers(&injector);
-                let mut invocation = Invocation::new(
-                    &cluster_key,
-                    &host_key,
-                    origin,
-                    inv_target.clone(),
-                    operation.clone(),
-                    request,
-                    injector.into(),
-                )
-                .map_err(|e| e.to_string())?;
-
-                if needs_chunking {
-                    chunk_endpoint
-                        .chunkify(&invocation.id, Cursor::new(invocation.msg))
-                        .await
-                        .context("failed to chunk invocation")
-                        .map_err(|e| e.to_string())?;
-                    invocation.msg = vec![];
-                }
-
-                let payload = rmp_serde::to_vec_named(&invocation)
-                    .context("failed to encode invocation")
-                    .map_err(|e| e.to_string())?;
-
-                // Build subject from what we know about the operation
-                let subject = match target {
-                    Some(TargetEntity::Wrpc(target)) => {
-                        let (_, function) = interface_and_func
-                            .split_once('.')
-                            .expect("interface and function should be specified");
-                        let (namespace, package, interface) = target.interface.as_parts();
-                        format!(
-                            "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
-                            lattice, target.id, namespace, package, interface, function
-                        )
-                    }
-                    None | Some(TargetEntity::Link(_)) => format!(
-                        "wasmbus.rpc.{lattice}.{}.{}",
-                        invocation.target.public_key, invocation.target.link_name,
-                    ),
-                    Some(TargetEntity::Actor(_)) => {
-                        format!("wasmbus.rpc.{lattice}.{}", invocation.target.public_key)
-                    }
-                };
-
-                // Determine the timeout required for the request
-                let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-
-                // Build and send the NATS request
-                let request = async_nats::Request::new()
-                    .payload(payload.into())
-                    .timeout(timeout)
-                    .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
-                let res = nats
-                    .send_request(subject, request)
-                    .await
-                    .context("failed to call provider")
-                    .map_err(|e| e.to_string())?;
-
-                // Process response
-                let InvocationResponse {
-                    invocation_id,
-                    mut msg,
-                    content_length,
-                    error,
-                    ..
-                } = rmp_serde::from_slice(&res.payload)
-                    .context("failed to decode invocation response")
-                    .map_err(|e| e.to_string())?;
-                if invocation_id != invocation.id {
-                    return Err("invocation ID mismatch".into());
-                }
-
-                let resp_length = usize::try_from(content_length)
-                    .context("content length does not fit in usize")
-                    .map_err(|e| e.to_string())?;
-                if resp_length > CHUNK_THRESHOLD_BYTES {
-                    msg = chunk_endpoint
-                        .get_unchunkified_response(&invocation_id)
-                        .await
-                        .context("failed to dechunk response")
-                        .map_err(|e| e.to_string())?;
-                } else if resp_length != msg.len() {
-                    return Err("message size mismatch".into());
-                }
-
-                // If there was an error then we can
-                if let Some(error) = error {
-                    return Err(error);
-                }
-
-                res_w
-                    .write_all(&msg)
-                    .await
-                    .context("failed to write reply")
-                    .map_err(|e| e.to_string())?;
-                Ok(())
-            }
-            .boxed(),
-            Box::new(req_w),
-            Box::new(res_r),
-        ))
-    }
-
-    #[instrument(level = "trace", skip(self, request))]
-    async fn call_sync(
-        &self,
-        target: Option<TargetEntity>,
-        operation: String,
-        request: Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
-        self.call_operation_with_payload(target, operation, request)
-            .await
-            .context("failed to call linked provider")?
-            .map_err(|e| anyhow!(e).context("provider call failed"))
+            Ok(result)
+        } else {
+            error!("invalid target");
+            Ok(vec![])
+        }
     }
 }
 
@@ -1271,344 +1163,12 @@ impl OutgoingHttp for Handler {
     }
 }
 
-impl ActorInstance {
-    #[instrument(level = "debug", skip(self, msg))]
-    async fn handle_invocation(
-        &self,
-        contract_id: &str,
-        operation: &str,
-        msg: Vec<u8>,
-    ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        let mut instance = self
-            .instantiate()
-            .await
-            .expect("should be able to instantiate actor");
-        self.add_handlers(&mut instance)
-            .await
-            .expect("should be able to setup handlers");
-        #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
-        match (contract_id, operation) {
-            ("wasmcloud:httpserver", "HttpServer.HandleRequest") => {
-                let req: wasmcloud_compat::HttpServerRequest =
-                    rmp_serde::from_slice(&msg).context("failed to decode HTTP request")?;
-                let req = http::Request::try_from(req).context("failed to convert request")?;
-                let res = match instance
-                    .into_incoming_http()
-                    .await
-                    .context("failed to instantiate `wasi:http/incoming-handler`")?
-                    .handle(req.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
-                        Box::new(Cursor::new(body))
-                    }))
-                    .await
-                {
-                    Ok(res) => res,
-                    Err(err) => return Ok(Err(format!("{err:#}"))),
-                };
-                let res = wasmcloud_compat::HttpResponse::from_http(res)
-                    .await
-                    .context("failed to convert response")?;
-                let res = rmp_serde::to_vec_named(&res).context("failed to encode response")?;
-                Ok(Ok(res))
-            }
-            _ => {
-                let res = AsyncBytesMut::default();
-                match instance
-                    .call(operation, Cursor::new(msg), res.clone())
-                    .await
-                    .context("failed to call actor")?
-                {
-                    Ok(()) => {
-                        let res = res.try_into().context("failed to unwrap bytes")?;
-                        Ok(Ok(res))
-                    }
-                    Err(e) => Ok(Err(e)),
-                }
-            }
-        }
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
-        trace!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
-        invocation.validate_antiforgery(&self.valid_issuers)?;
-
-        let content_length: usize = invocation
-            .content_length
-            .try_into()
-            .context("failed to convert content_length to usize")?;
-        let inv_msg = if content_length > CHUNK_THRESHOLD_BYTES {
-            debug!(inv_id = invocation.id, "dechunking invocation");
-            self.chunk_endpoint.get_unchunkified(&invocation.id).await?
-        } else {
-            invocation.msg
-        };
-
-        trace!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
-
-        let source_public_key = invocation.origin.public_key;
-        // actors don't have a contract_id
-        let source = if invocation.origin.contract_id.is_empty() {
-            let actor_claims = self.actor_claims.read().await;
-            let claims = actor_claims
-                .get(&source_public_key)
-                .cloned()
-                .context("failed to look up claims for origin")?;
-            PolicyRequestSource::from(claims)
-        } else {
-            let provider_claims = self.provider_claims.read().await;
-            let claims = provider_claims
-                .get(&source_public_key)
-                .cloned()
-                .context("failed to look up claims for origin")?;
-            let mut source = PolicyRequestSource::from(claims);
-            source.link_name = Some(invocation.origin.link_name.clone());
-            source
-        };
-
-        // actors don't have a contract_id
-        let target_public_key = invocation.target.public_key;
-        let target = if invocation.target.contract_id.is_empty() {
-            let actor_claims = self.actor_claims.read().await;
-            let claims = actor_claims
-                .get(&target_public_key)
-                .cloned()
-                .context("failed to look up claims for target")?;
-            PolicyRequestTarget::from(claims)
-        } else {
-            let provider_claims = self.provider_claims.read().await;
-            let claims = provider_claims
-                .get(&target_public_key)
-                .cloned()
-                .context("failed to look up claims for target")?;
-            let mut target = PolicyRequestTarget::from(claims);
-            target.link_name = Some(invocation.target.link_name.clone());
-            target
-        };
-
-        let resp = self
-            .policy_manager
-            .evaluate_action(Some(source), target, PolicyAction::PerformInvocation)
-            .await?;
-        if !resp.permitted {
-            bail!(
-                "Policy denied request to invoke actor `{}`: `{:?}`",
-                resp.request_id,
-                resp.message
-            );
-        };
-
-        let maybe_resp = self
-            .handle_invocation(
-                &invocation.origin.contract_id,
-                &invocation.operation,
-                inv_msg,
-            )
-            .await
-            .context("failed to handle invocation")?;
-
-        match maybe_resp {
-            Ok(resp_msg) => {
-                let content_length = resp_msg.len();
-                let resp_msg = if content_length > CHUNK_THRESHOLD_BYTES {
-                    debug!(inv_id = invocation.id, "chunking invocation response");
-                    self.chunk_endpoint
-                        .chunkify_response(&invocation.id, Cursor::new(resp_msg))
-                        .await
-                        .context("failed to chunk invocation response")?;
-                    vec![]
-                } else {
-                    resp_msg
-                };
-                Ok((
-                    resp_msg,
-                    content_length
-                        .try_into()
-                        .context("failed to convert content_length to u64")?,
-                ))
-            }
-            Err(e) => Err(anyhow!(e)),
-        }
-    }
-
-    #[instrument(level = "info", skip_all)] // NOTE: level needs to stay at info here to attach the incoming span context
-    async fn handle_rpc_message(&self, message: async_nats::Message) {
-        let async_nats::Message {
-            ref subject,
-            ref reply,
-            ref payload,
-            ..
-        } = message;
-
-        let injector = TraceContextInjector::default_with_span();
-        let headers = injector_to_headers(&injector);
-        let trace_context = injector.into();
-
-        // NOTE(brooksmtownsend): This is some branching code to help us test wRPC handlers. Not
-        // robust but it will help us test.
-        if subject.contains("wrpc") && !subject.contains("wasmbus") && reply.is_some() {
-            self.handle_wrpc_message(message).await;
-            return;
-        }
-
-        let inv_resp = match rmp_serde::from_slice::<Invocation>(payload) {
-            Ok(invocation) => {
-                if !invocation.trace_context.is_empty() {
-                    wasmcloud_tracing::context::attach_span_context(&invocation.trace_context);
-                } else if message.headers.is_some() {
-                    // TODO: remove once all providers are built off the new SDK, which passes the trace context in the invocation
-                    // fall back on message headers
-                    opentelemetry_nats::attach_span_context(&message);
-                }
-
-                let invocation_id = invocation.id.clone();
-                let origin = invocation.origin.clone();
-                let target = invocation.target.clone();
-                let operation = invocation.operation.clone();
-
-                let start_at = Instant::now();
-                let res = self.handle_call(invocation).await;
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-
-                self.metrics
-                    .wasmcloud_host_handle_rpc_message_duration_ns
-                    .record(
-                        elapsed,
-                        &[
-                            KeyValue::new("actor.ref", self.image_reference.clone()),
-                            KeyValue::new("operation", operation.clone()),
-                        ],
-                    );
-
-                match res {
-                    Ok((msg, content_length)) => InvocationResponse {
-                        msg,
-                        invocation_id,
-                        content_length,
-                        trace_context,
-                        ..Default::default()
-                    },
-                    Err(e) => {
-                        error!(
-                            ?origin,
-                            ?target,
-                            ?operation,
-                            ?invocation_id,
-                            ?e,
-                            "failed to handle request"
-                        );
-                        InvocationResponse {
-                            invocation_id,
-                            error: Some(e.to_string()),
-                            trace_context,
-                            ..Default::default()
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                error!(?subject, ?e, "failed to decode invocation"); // Note: this won't be traced
-                InvocationResponse {
-                    invocation_id: "UNKNOWN".to_string(),
-                    error: Some(e.to_string()),
-                    trace_context,
-                    ..Default::default()
-                }
-            }
-        };
-
-        if let Some(reply) = reply {
-            match rmp_serde::to_vec_named(&inv_resp) {
-                Ok(buf) => {
-                    if let Err(e) = self
-                        .nats
-                        .publish_with_headers(reply.clone(), headers, buf.into())
-                        .await
-                    {
-                        error!(?reply, ?e, "failed to publish response to request");
-                    }
-                }
-                Err(e) => {
-                    error!(?e, "failed to encode response");
-                }
-            }
-        }
-    }
-
-    // NOTE(brooksmtownsend): I doubt this is the proper way to split out the wrpc message handling,
-    // but I'm intentionally keeping it in a separate place for now to make it easier to remove.
-    //
-    // There's no notion of an [`Invocation`] here, as wRPC will deal with encoding and transport, so I'm
-    // working solely with the message payload for now. This is basically set up to enable invoking a component
-    // on its wRPC wasi:http/incoming-handler interface easily.
-    async fn handle_wrpc_message(&self, message: async_nats::Message) {
-        let async_nats::Message {
-            ref subject,
-            ref reply,
-            ref payload,
-            ..
-        } = message;
-        // <lattice>.<id>.wrpc.0.0.1.<interface>.<operation>
-        let subject_parts = subject.split('.').collect::<Vec<_>>();
-        let interface = subject_parts.get(6).unwrap_or(&"UNKNOWNINTERFACE");
-        let operation = subject_parts.get(7).unwrap_or(&"UNKNOWNOPERATION");
-
-        let resp = match (*interface, *operation) {
-            ("wasi:http/incoming-handler", "handle") => {
-                let mut instance = self
-                    .instantiate()
-                    .await
-                    .expect("should be able to instantiate actor");
-                self.add_handlers(&mut instance)
-                    .await
-                    .expect("should be able to setup handlers");
-                let http_request = http::Request::new(payload.clone());
-                let res = match instance
-                    .into_incoming_http()
-                    .await
-                    .context("failed to instantiate `wasi:http/incoming-handler`")
-                    .expect("to instantiate `wasi:http/incoming-handler`")
-                    .handle(
-                        http_request.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
-                            Box::new(Cursor::new(body))
-                        }),
-                    )
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
-                        error!(err = err.to_string(), "Failure handling wRPC invocation");
-                        return;
-                    }
-                };
-                let wasmcloud_http_response = wasmcloud_compat::HttpResponse::from_http(res)
-                    .await
-                    .expect("failed to convert response");
-                wasmcloud_http_response.body
-            }
-            _ => format!("Unknown WASI handler {interface} {operation}").into_bytes(),
-        };
-
-        if let Err(e) = self
-            .nats
-            .publish_with_headers(
-                // SAFETY: we know it's safe because we checked for a reply before calling this function
-                reply.clone().expect("reply to exist"),
-                async_nats::HeaderMap::new(),
-                resp.into(),
-            )
-            .await
-        {
-            error!(?reply, ?e, "failed to publish response to request");
-        }
-    }
-}
-
 type Annotations = BTreeMap<String, String>;
 
 #[derive(Debug)]
 struct Actor {
     #[allow(clippy::struct_field_names)]
-    actor: wasmcloud_runtime::Actor,
+    actor: wasmcloud_runtime::Component,
     /// `instances` is a map from a set of Annotations to the instance associated
     /// with those annotations
     instances: RwLock<HashMap<Annotations, Arc<ActorInstance>>>,
@@ -1616,7 +1176,7 @@ struct Actor {
 }
 
 impl Deref for Actor {
-    type Target = wasmcloud_runtime::Actor;
+    type Target = wasmcloud_runtime::Component;
 
     fn deref(&self) -> &Self::Target {
         &self.actor
@@ -2576,7 +2136,7 @@ impl Host {
         annotations: &Annotations,
         actor_ref: impl AsRef<str>,
         max_instances: NonZeroUsize,
-        actor: wasmcloud_runtime::Actor,
+        actor: wasmcloud_runtime::Component,
         handler: Handler,
     ) -> anyhow::Result<Arc<ActorInstance>> {
         trace!(
@@ -2586,48 +2146,19 @@ impl Host {
         );
 
         let actor_ref = actor_ref.as_ref();
-        let topic = match actor {
-            wasmcloud_runtime::Actor::Module(_) => {
-                debug!(actor_ref, "instantiating module");
-                // (DEPRECATED) Modules communicate over wasmbus RPC
-                // Example incoming topic: wasmbus.rpc.default.MBASDMYACTORID
-                format!(
-                    "wasmbus.rpc.{lattice}.{subject}",
-                    lattice = self.host_config.lattice,
-                    subject = claims.subject
-                )
-            }
-            wasmcloud_runtime::Actor::Component(_) => {
-                debug!(actor_ref, "instantiating component");
-                // TODO: Components subscribe on wRPC topics
-                // Example incoming topic:
-                //   default.echo.wrpc.0.0.1.wasi:http/incoming-handler.handle
-                // format!(
-                //     "{lattice}.{component_id}.{WRPC}.{WRPC_VERSION}.>",
-                //     lattice = self.host_config.lattice,
-                //     component_id = sanitize_reference(actor_ref),
-                // )
-                format!(
-                    "wasmbus.rpc.{lattice}.{subject}",
-                    lattice = self.host_config.lattice,
-                    subject = claims.subject
-                )
-            }
-        };
         let actor = actor.clone();
         let handler = handler.clone();
-        let instance = async move {
-            let calls = self
-                .rpc_nats
-                .queue_subscribe(topic.clone(), topic)
-                .await
-                .context("failed to subscribe to actor call queue")?;
 
+        let component_id = &claims.subject;
+        let lattice = &self.host_config.lattice;
+        let prefix = format!("{lattice}.{component_id}");
+        let wrpc_client = wrpc_transport_nats::Client::new(self.rpc_nats.clone(), prefix);
+        let instance = async move {
             let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
             let id = Ulid::new();
-            let instance = Arc::new(ActorInstance {
+            let actor_instance = Arc::new(ActorInstance {
                 nats: self.rpc_nats.clone(),
-                actor,
+                actor: actor.clone(),
                 id,
                 calls: calls_abort,
                 handler: handler.clone(),
@@ -2642,20 +2173,60 @@ impl Host {
                 metrics: Arc::clone(&self.metrics),
             });
 
+            let mut component_export_handlers = Vec::new();
+            let exports = actor.exports();
+            for (instance, name_and_func) in exports.iter() {
+                for (name, function) in name_and_func {
+                    if let wrpc_types::DynamicFunction::Static { params, .. } = function {
+                        let instance = instance.clone();
+                        let name = name.clone();
+                        // TODO(#1220): In order to implement invocation signing and response verification, we can override the
+                        // wrpc_transport::Invocation and wrpc_transport::Client trait in order to wrap the invocation with necessary
+                        // logic to verify the incoming invocations and sign the outgoing responses.
+                        trace!(instance, name, "serving wrpc function export");
+                        let export_handler = wrpc_client
+                            .serve_dynamic(&instance, &name, params.clone())
+                            .await
+                            .expect("should be able to serve function export")
+                            // map the stream to include the instance and name to call for each invocation
+                            .map(move |invocation| (instance.clone(), name.clone(), invocation));
+                        component_export_handlers.push(export_handler);
+                    }
+                }
+            }
+
+            let all_handlers = futures::stream::select_all::select_all(component_export_handlers);
+            let limit = max_instances.get();
+            let actor_instance = Arc::clone(&actor_instance);
             let _calls = spawn({
-                let instance = Arc::clone(&instance);
-                let limit = max_instances.get();
-                // Each Nats request needs to be handled by a different async task, to use all CPU core
-                Abortable::new(calls, calls_abort_reg).for_each_concurrent(limit, move |msg| {
-                    let instance = Arc::clone(&instance);
-                    spawn(async move {
-                        let instance = Arc::clone(&instance);
-                        instance.handle_rpc_message(msg).await;
-                    });
-                    future::ready(())
-                })
+                let actor_instance = Arc::clone(&actor_instance);
+                Abortable::new(all_handlers, calls_abort_reg).for_each_concurrent(
+                    limit,
+                    move |(instance, name, invocation)| {
+                        let actor_instance = Arc::clone(&actor_instance);
+                        let Ok((inv_params, response_subject, tx)) = invocation else {
+                            error!("invocation did not include ok");
+                            return future::ready(());
+                        };
+                        // TODO(#1568): When headers are added to wRPC, ensure we propagate the trace parent
+                        // Linked PR above is when the functionality was removed.
+                        spawn(async move {
+                            let actor_instance = Arc::clone(&actor_instance);
+                            actor_instance
+                                .handle_wrpc_call(
+                                    &instance,
+                                    &name,
+                                    inv_params,
+                                    response_subject,
+                                    tx,
+                                )
+                                .await
+                        });
+                        future::ready(())
+                    },
+                )
             });
-            anyhow::Result::<_>::Ok(instance)
+            anyhow::Result::<_>::Ok(actor_instance)
         }
         .await
         .context("failed to instantiate actor")?;
@@ -2679,7 +2250,7 @@ impl Host {
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
-        actor: wasmcloud_runtime::Actor,
+        actor: wasmcloud_runtime::Component,
         actor_ref: String,
         max_instances: NonZeroUsize,
         host_id: &str,
@@ -2892,7 +2463,7 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
+    async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Component> {
         let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
             actor_ref,
@@ -2901,7 +2472,7 @@ impl Host {
         )
         .await
         .context("failed to fetch actor")?;
-        let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
+        let actor = wasmcloud_runtime::Component::new(&self.runtime, actor)
             .context("failed to initialize actor")?;
         Ok(actor)
     }
