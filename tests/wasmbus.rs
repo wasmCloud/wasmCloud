@@ -228,18 +228,13 @@ async fn wasmbus() -> anyhow::Result<()> {
         (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url, ctl_nats_client),
         (rpc_nats_server, rpc_stop_nats_tx, rpc_nats_url, rpc_nats_client),
         (component_nats_server, component_stop_nats_tx, component_nats_url, component_nats_client),
-        (module_nats_server, module_stop_nats_tx, module_nats_url, module_nats_client),
-    ) = try_join!(start_nats(), start_nats(), start_nats(), start_nats())?;
+    ) = try_join!(start_nats(), start_nats(), start_nats())?;
 
-    let (
-        (component_redis_server, component_stop_redis_tx, component_redis_url),
-        (module_redis_server, module_stop_redis_tx, module_redis_url),
-    ) = try_join!(start_redis(), start_redis())?;
+    let ((component_redis_server, component_stop_redis_tx, component_redis_url),) =
+        try_join!(start_redis())?;
 
     let mut component_redis_client =
         redis::Client::open(component_redis_url.as_str()).context("failed to connect to Redis")?;
-    let mut module_redis_client =
-        redis::Client::open(module_redis_url.as_str()).context("failed to connect to Redis")?;
 
     const TEST_LATTICE: &str = "test-lattice";
 
@@ -370,9 +365,8 @@ expected: {base_labels:?}"#
         _ => bail!("more than two hosts in the lattice"),
     }
 
-    let (component_actor, module_actor, foobar_actor) = try_join!(
+    let (component_actor, foobar_actor) = try_join!(
         fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED),
-        fs::read(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED),
         fs::read(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED),
     )
     .context("failed to read actors")?;
@@ -383,12 +377,6 @@ expected: {base_labels:?}"#
     } = extract_claims(component_actor)
         .context("failed to extract component actor claims")?
         .context("component actor claims missing")?;
-    let jwt::Token {
-        claims: module_actor_claims,
-        ..
-    } = extract_claims(module_actor)
-        .context("failed to extract module actor claims")?
-        .context("module actor claims missing")?;
 
     let jwt::Token {
         claims: foobar_actor_claims,
@@ -400,8 +388,6 @@ expected: {base_labels:?}"#
     let component_actor_url =
         Url::from_file_path(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
             .expect("failed to construct component actor ref");
-    let module_actor_url = Url::from_file_path(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED)
-        .expect("failed to construct module actor ref");
     let foobar_actor_url =
         Url::from_file_path(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED)
             .expect("failed to construct foobar actor ref");
@@ -459,14 +445,6 @@ expected: {base_labels:?}"#
             TEST_LATTICE,
             &host_key,
             &component_actor_url,
-            1,
-        ),
-        assert_start_actor(
-            &ctl_client,
-            &ctl_nats_client,
-            TEST_LATTICE,
-            &host_key,
-            &module_actor_url,
             1,
         ),
         assert_start_actor(
@@ -558,10 +536,9 @@ expected: {base_labels:?}"#
         _ => bail!("more than two provider auction acks received"),
     }
 
-    let (component_http_port, module_http_port) = try_join!(free_port(), free_port())?;
+    let component_http_port = free_port().await?;
 
     let component_blobstore_dir = tempdir()?;
-    let module_blobstore_dir = tempdir()?;
     // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
     // topics
@@ -579,26 +556,7 @@ expected: {base_labels:?}"#
         ),
         assert_advertise_link(
             &ctl_client,
-            &module_actor_claims,
-            &blobstore_fs_provider_key,
-            "wasmcloud:blobstore",
-            "blobstore",
-            HashMap::from([(
-                "ROOT".into(),
-                module_blobstore_dir.path().to_string_lossy().into(),
-            )]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
             &component_actor_claims,
-            &httpclient_provider_key,
-            "wasmcloud:httpclient",
-            "httpclient",
-            HashMap::default(),
-        ),
-        assert_advertise_link(
-            &ctl_client,
-            &module_actor_claims,
             &httpclient_provider_key,
             "wasmcloud:httpclient",
             "httpclient",
@@ -620,33 +578,11 @@ expected: {base_labels:?}"#
         ),
         assert_advertise_link(
             &ctl_client,
-            &module_actor_claims,
-            &httpserver_provider_key,
-            "wasmcloud:httpserver",
-            "httpserver",
-            HashMap::from([(
-                "config_json".into(),
-                format!(
-                    r#"{{"address":"[{}]:{module_http_port}"}}"#,
-                    Ipv6Addr::UNSPECIFIED
-                )
-            )]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
             &component_actor_claims,
             &kvredis_provider_key,
             "wasmcloud:keyvalue",
             "keyvalue",
             HashMap::from([("URL".into(), format!("{component_redis_url}"))]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
-            &module_actor_claims,
-            &kvredis_provider_key,
-            "wasmcloud:keyvalue",
-            "keyvalue",
-            HashMap::from([("URL".into(), format!("{module_redis_url}"))]),
         ),
         assert_advertise_link(
             &ctl_client,
@@ -659,17 +595,6 @@ expected: {base_labels:?}"#
                 format!(r#"{{"cluster_uris":["{component_nats_url}"]}}"#)
             )]),
         ),
-        assert_advertise_link(
-            &ctl_client,
-            &module_actor_claims,
-            &nats_provider_key,
-            "wasmcloud:messaging",
-            "messaging",
-            HashMap::from([(
-                "config_json".into(),
-                format!(r#"{{"cluster_uris":["{module_nats_url}"]}}"#)
-            )]),
-        )
     )
     .context("failed to advertise links")?;
 
@@ -849,12 +774,6 @@ expected: {expected_labels:?}"#
                 name: component_name,
             }),
             Some(ActorDescription {
-                id: module_id,
-                image_ref: module_image_ref,
-                instances: mut module_instances,
-                name: module_name,
-            }),
-            Some(ActorDescription {
                 id: foobar_id,
                 image_ref: foobar_image_ref,
                 instances: mut foobar_instances,
@@ -896,42 +815,6 @@ expected: {expected_name:?}"#
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
             ensure!(image_ref == component_image_ref);
-            ensure!(max_instances == 1);
-
-            // TODO: Validate `constraints`
-            ensure!(module_id == module_actor_claims.subject);
-            let jwt::Actor {
-                name: expected_name,
-                rev: expected_revision,
-                ..
-            } = module_actor_claims
-                .metadata
-                .as_ref()
-                .context("missing module actor metadata")?;
-            ensure!(module_image_ref == Some(module_actor_url.to_string()));
-            ensure!(
-                module_name == *expected_name,
-                r#"invalid module actor name:
-got: {module_name:?}
-expected: {expected_name:?}"#
-            );
-            let ActorInstance {
-                annotations,
-                instance_id,
-                revision,
-                image_ref,
-                max_instances,
-            } = module_instances
-                .pop()
-                .context("no module actor instances found")?;
-            ensure!(
-                module_instances.is_empty(),
-                "more than one module actor instance found"
-            );
-            ensure!(annotations == Some(HashMap::default()));
-            ensure!(Uuid::parse_str(&instance_id).is_ok());
-            ensure!(revision == expected_revision.unwrap_or_default());
-            ensure!(image_ref == module_image_ref);
             ensure!(max_instances == 1);
 
             // TODO: Validate `constraints`
@@ -1090,15 +973,6 @@ expected: {expected_labels_two:?}"#
                 Err(anyhow!("should have returned all config values.\nExpected: {expected:?}\nGot: {all_config:?}"))
             }
         },
-        async {
-            assert_handle_http_request(
-                module_http_port,
-                module_nats_client.clone(),
-                &mut module_redis_client,
-            )
-            .await
-            .context("module actor test failed")
-        },
     )?;
 
     try_join!(
@@ -1110,19 +984,7 @@ expected: {expected_labels_two:?}"#
         ),
         assert_remove_link(
             &ctl_client,
-            &module_actor_claims,
-            "wasmcloud:blobstore",
-            "blobstore"
-        ),
-        assert_remove_link(
-            &ctl_client,
             &component_actor_claims,
-            "wasmcloud:httpserver",
-            "httpserver"
-        ),
-        assert_remove_link(
-            &ctl_client,
-            &module_actor_claims,
             "wasmcloud:httpserver",
             "httpserver"
         ),
@@ -1134,19 +996,7 @@ expected: {expected_labels_two:?}"#
         ),
         assert_remove_link(
             &ctl_client,
-            &module_actor_claims,
-            "wasmcloud:keyvalue",
-            "keyvalue"
-        ),
-        assert_remove_link(
-            &ctl_client,
             &component_actor_claims,
-            "wasmcloud:messaging",
-            "messaging",
-        ),
-        assert_remove_link(
-            &ctl_client,
-            &module_actor_claims,
             "wasmcloud:messaging",
             "messaging",
         ),
@@ -1278,9 +1128,7 @@ expected: {base_labels:?}"#
         stop_server(ctl_nats_server, ctl_stop_nats_tx),
         stop_server(rpc_nats_server, rpc_stop_nats_tx),
         stop_server(component_nats_server, component_stop_nats_tx),
-        stop_server(module_nats_server, module_stop_nats_tx),
         stop_server(component_redis_server, component_stop_redis_tx),
-        stop_server(module_redis_server, module_stop_redis_tx),
     )
     .context("failed to stop servers")?;
 

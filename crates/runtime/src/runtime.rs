@@ -1,4 +1,3 @@
-use crate::actor::ModuleConfig;
 use crate::capability::{
     builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
     OutgoingHttp,
@@ -18,7 +17,6 @@ pub struct RuntimeBuilder {
     engine_config: wasmtime::Config,
     handler: builtin::HandlerBuilder,
     actor_config: ActorConfig,
-    module_config: ModuleConfig,
 }
 
 impl RuntimeBuilder {
@@ -32,7 +30,6 @@ impl RuntimeBuilder {
             engine_config,
             handler: builtin::HandlerBuilder::default(),
             actor_config: ActorConfig::default(),
-            module_config: ModuleConfig::default(),
         }
     }
 
@@ -41,15 +38,6 @@ impl RuntimeBuilder {
     pub fn actor_config(self, actor_config: ActorConfig) -> Self {
         Self {
             actor_config,
-            ..self
-        }
-    }
-
-    /// Set a custom [`ModuleConfig`] to use for all actor module instances
-    #[must_use]
-    pub fn module_config(self, module_config: ModuleConfig) -> Self {
-        Self {
-            module_config,
             ..self
         }
     }
@@ -150,7 +138,6 @@ impl RuntimeBuilder {
             engine,
             handler: self.handler,
             actor_config: self.actor_config,
-            module_config: self.module_config,
         })
     }
 }
@@ -169,7 +156,6 @@ pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) handler: builtin::HandlerBuilder,
     pub(crate) actor_config: ActorConfig,
-    pub(crate) module_config: ModuleConfig,
 }
 
 impl Debug for Runtime {
@@ -177,7 +163,6 @@ impl Debug for Runtime {
         f.debug_struct("Runtime")
             .field("handler", &self.handler)
             .field("actor_config", &self.actor_config)
-            .field("module_config", &self.module_config)
             .field("runtime", &"wasmtime")
             .finish_non_exhaustive()
     }

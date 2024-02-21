@@ -2,11 +2,9 @@
 members = [
     "blobstore-http-smithy",
     "builtins-component-reactor",
-    "builtins-module-reactor",
     "foobar-component-command",
     "kv-http-smithy",
     "lattice-control-http-smithy",
-    "logging-module-command",
     "messaging-receiver-smithy",
     "messaging-sender-http-smithy",
 ]
@@ -21,6 +19,7 @@ rmp-serde = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
+uuid = { version = "1", default-features = false }
 wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
 wasmcloud-compat = { path = "../../../crates/compat" }
