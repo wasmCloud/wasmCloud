@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use http_body::Body;
 use http_body_util::combinators::BoxBody;
-use tokio::io::{AsyncRead, AsyncSeekExt, ReadBuf};
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::preview2::{self};
