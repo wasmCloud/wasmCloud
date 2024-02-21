@@ -128,7 +128,6 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         [
             "--manifest-path=./rust/Cargo.toml",
             "--target=wasm32-unknown-unknown",
-            "-p=builtins-module-reactor",
             "-p=kv-http-smithy",
             "-p=blobstore-http-smithy",
             "-p=lattice-control-http-smithy",
@@ -138,7 +137,6 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         |name, kind| {
             [
                 "blobstore-http-smithy",
-                "builtins-module-reactor",
                 "kv-http-smithy",
                 "lattice-control-http-smithy",
                 "messaging-receiver-smithy",
@@ -149,9 +147,8 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         },
     )
     .await
-    .context("failed to build `builtins-module-reactor` crate")?;
+    .context("failed to build module crates")?;
     match (
-        artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
@@ -162,18 +159,12 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         (
             // NOTE: this list of artifacts must stay sorted
             Some(("blobstore-http-smithy", [blobstore_http_smithy])),
-            Some(("builtins-module-reactor", [builtins_module_reactor])),
             Some(("kv-http-smithy", [kv_http_smithy])),
             Some(("lattice-control-http-smithy", [lattice_controller_http_smithy])),
             Some(("messaging-receiver-smithy", [messaging_receiver_smithy])),
             Some(("messaging-sender-http-smithy", [messaging_sender_http_smithy])),
             None,
         ) => {
-            copy(
-                builtins_module_reactor,
-                out_dir.join("rust-builtins-module-reactor.wasm"),
-            )
-            .await?;
             copy(kv_http_smithy, out_dir.join("rust-kv-http-smithy.wasm")).await?;
             copy(
                 blobstore_http_smithy,
@@ -197,7 +188,7 @@ async fn install_rust_wasm32_unknown_unknown_actors(
             .await?;
             Ok(())
         }
-        _ => bail!("invalid `builtins-module-reactor` build artifacts"),
+        _ => bail!("invalid module build artifacts"),
     }
 }
 
@@ -243,32 +234,6 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                     )
                 }
                 _ => bail!("invalid `builtins-component-reactor` and `foobar-component-command` build artifacts"),
-            }
-        },
-
-        // Build non-component (module) actors
-        async {
-            let mut artifacts = build_artifacts(
-                [
-                    "--manifest-path=./rust/Cargo.toml",
-                    "--target=wasm32-wasi",
-                    "-p=logging-module-command",
-                ],
-                |name, kind| {
-                    ["logging-module-command"].contains(&name) && kind.contains(&CrateType::Bin)
-                },
-            )
-            .await
-            .context("failed to build `logging-module-command` crate")?;
-            match (artifacts.next().deref_artifact(), artifacts.next()) {
-                (Some(("logging-module-command", [logging_module_command])), None) => {
-                    copy(
-                        logging_module_command,
-                        out_dir.join("rust-logging-module-command.wasm"),
-                    )
-                    .await
-                }
-                _ => bail!("invalid `logging-module-command` build artifacts"),
             }
         },
     )
@@ -360,10 +325,8 @@ async fn main() -> anyhow::Result<()> {
             "builtins-component-reactor-preview2",
             Some(builtin_caps.clone()),
         ),
-        ("builtins-module-reactor", Some(builtin_caps.clone())),
         ("foobar-component-command", None),
         ("foobar-component-command-preview2", None),
-        ("logging-module-command", Some(vec![caps::LOGGING.into()])),
         (
             "kv-http-smithy",
             Some(vec![caps::HTTP_SERVER.into(), caps::KEY_VALUE.into()]),

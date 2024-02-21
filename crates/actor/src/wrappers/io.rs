@@ -1,18 +1,15 @@
 use std::io::{Read, Write};
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 pub struct InputStreamReader<'a> {
     stream: &'a mut crate::wasi::io::streams::InputStream,
 }
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 impl<'a> From<&'a mut crate::wasi::io::streams::InputStream> for InputStreamReader<'a> {
     fn from(stream: &'a mut crate::wasi::io::streams::InputStream) -> Self {
         Self { stream }
     }
 }
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 impl std::io::Read for InputStreamReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         use crate::wasi::io::streams::StreamError;
@@ -42,19 +39,16 @@ impl std::io::Read for InputStreamReader<'_> {
     }
 }
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 pub struct OutputStreamWriter<'a> {
     stream: &'a mut crate::wasi::io::streams::OutputStream,
 }
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 impl<'a> From<&'a mut crate::wasi::io::streams::OutputStream> for OutputStreamWriter<'a> {
     fn from(stream: &'a mut crate::wasi::io::streams::OutputStream) -> Self {
         Self { stream }
     }
 }
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 impl std::io::Write for OutputStreamWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         use crate::wasi::io::streams::StreamError;
