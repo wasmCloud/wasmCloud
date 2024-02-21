@@ -16,7 +16,7 @@ pub mod runtime;
 /// wasmCloud I/O functionality
 pub mod io;
 
-pub use actor::{Actor, Config as ActorConfig, Instance as ActorInstance};
+pub use actor::{Component, ComponentInstance, Config as ActorConfig};
 pub use runtime::*;
 
 pub use async_trait::async_trait;
