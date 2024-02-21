@@ -474,14 +474,14 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
             component::types::ComponentItem::ComponentInstance(item) => item,
             _ => continue,
         };
-        let Some((namespace, _package)) = instance_name.split_once(':') else {
+        let Some((namespace, package)) = instance_name.split_once(':') else {
             error!(
                 ?instance_name,
                 "failed to split namespace from package and interface"
             );
             return;
         };
-        let Some((package, interface)) = instance_name.split_once('/') else {
+        let Some((package, interface)) = package.split_once('/') else {
             error!(?instance_name, "failed to split package from interface");
             return;
         };
