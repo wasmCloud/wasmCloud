@@ -11,17 +11,21 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream;
 use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
 use wasmtime::component::types::Case;
-use wasmtime::component::{self, Linker, ResourceTable, ResourceTableError, Val};
+use wasmtime::component::{
+    self, Linker, ResourceTable, ResourceTableError, ResourceType, Val,
+};
+use wasmtime::AsContextMut;
 use wasmtime_wasi::preview2::command::{self};
 use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
 use wasmtime_wasi::preview2::{
-    HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
-    Subscribe, WasiCtx, WasiCtxBuilder, WasiView,
+    HostInputStream, HostOutputStream, InputStream, Pollable, StdinStream, StdoutStream,
+    StreamError, StreamResult, Subscribe, WasiCtx, WasiCtxBuilder, WasiView,
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 
@@ -225,7 +229,11 @@ impl Debug for Component {
     }
 }
 
-fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
+fn to_wrpc_value(
+    mut store: impl AsContextMut<Data = Ctx>,
+    val: &Val,
+) -> anyhow::Result<wrpc_transport::Value> {
+    let mut store = store.as_context_mut();
     match val {
         Val::Bool(val) => Ok(wrpc_transport::Value::Bool(*val)),
         Val::S8(val) => Ok(wrpc_transport::Value::S8(*val)),
@@ -241,27 +249,31 @@ fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
         Val::Char(val) => Ok(wrpc_transport::Value::Char(*val)),
         Val::String(val) => Ok(wrpc_transport::Value::String(val.to_string())),
         Val::List(val) => val
-            .into_iter()
-            .map(to_wrpc_value)
+            .iter()
+            .map(|val| to_wrpc_value(&mut store, val))
             .collect::<anyhow::Result<_>>()
             .map(wrpc_transport::Value::List),
         Val::Record(val) => val
             .fields()
             .map(|(_, val)| val)
-            .map(to_wrpc_value)
+            .map(|val| to_wrpc_value(&mut store, val))
             .collect::<anyhow::Result<_>>()
             .map(wrpc_transport::Value::Record),
         Val::Tuple(val) => val
             .values()
-            .into_iter()
-            .map(to_wrpc_value)
+            .iter()
+            .map(|val| to_wrpc_value(&mut store, val))
             .collect::<anyhow::Result<_>>()
             .map(wrpc_transport::Value::Tuple),
         Val::Variant(val) => {
             let discriminant = zip(0.., val.ty().cases())
                 .find_map(|(i, Case { name, .. })| (name == val.discriminant()).then_some(i))
                 .context("unknown variant discriminant")?;
-            let nested = val.payload().map(to_wrpc_value).transpose()?.map(Box::new);
+            let nested = val
+                .payload()
+                .map(|val| to_wrpc_value(store, val))
+                .transpose()?
+                .map(Box::new);
             Ok(wrpc_transport::Value::Variant {
                 discriminant,
                 nested,
@@ -272,17 +284,27 @@ fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
             .context("unknown enum discriminant")
             .map(wrpc_transport::Value::Enum),
         Val::Option(val) => {
-            let val = val.value().map(to_wrpc_value).transpose()?.map(Box::new);
+            let val = val
+                .value()
+                .map(|val| to_wrpc_value(store, val))
+                .transpose()?
+                .map(Box::new);
             Ok(wrpc_transport::Value::Option(val))
         }
         Val::Result(val) => {
             let val = match val.value() {
                 Ok(val) => {
-                    let val = val.map(to_wrpc_value).transpose()?.map(Box::new);
+                    let val = val
+                        .map(|val| to_wrpc_value(store, val))
+                        .transpose()?
+                        .map(Box::new);
                     Ok(val)
                 }
                 Err(val) => {
-                    let val = val.map(to_wrpc_value).transpose()?.map(Box::new);
+                    let val = val
+                        .map(|val| to_wrpc_value(store, val))
+                        .transpose()?
+                        .map(Box::new);
                     Err(val)
                 }
             };
@@ -302,7 +324,52 @@ fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
             }
             Ok(wrpc_transport::Value::Flags(v))
         }
-        Val::Resource(_) => bail!("resources not supported yet"),
+        Val::Resource(resource) => {
+            let ty = resource.ty();
+            if ty == ResourceType::host::<InputStream>() {
+                let stream = resource
+                    .try_into_resource::<InputStream>(&mut store)
+                    .context("failed to downcast `wasi:io/input-stream`")?;
+                if stream.owned() {
+                    store
+                        .data_mut()
+                        .table()
+                        .delete(stream)
+                        .context("failed to delete input stream")?;
+                } else {
+                    store
+                        .data_mut()
+                        .table()
+                        .get_mut(&stream)
+                        .context("failed to get input stream")?;
+                };
+                Ok(wrpc_transport::Value::Stream(Box::pin(stream::once(
+                    async { bail!("`wasi:io/input-stream` not supported yet") },
+                ))))
+            } else if ty == ResourceType::host::<Pollable>() {
+                let pollable = resource
+                    .try_into_resource::<Pollable>(&mut store)
+                    .context("failed to downcast `wasi:io/pollable")?;
+                if pollable.owned() {
+                    store
+                        .data_mut()
+                        .table()
+                        .delete(pollable)
+                        .context("failed to delete pollable")?;
+                } else {
+                    store
+                        .data_mut()
+                        .table()
+                        .get_mut(&pollable)
+                        .context("failed to get pollable")?;
+                }
+                Ok(wrpc_transport::Value::Future(Box::pin(async {
+                    bail!("`wasi:io/pollable` not supported yet")
+                })))
+            } else {
+                bail!("resources not supported yet")
+            }
+        }
     }
 }
 
@@ -419,13 +486,28 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
             }
             component::Flags::new(ty, &names).map(component::Val::Flags)
         }
-        (wrpc_transport::Value::Future(_), Type::Own(_ty) | Type::Borrow(_ty)) => {
-            bail!("futures not supported yet")
+        (wrpc_transport::Value::Future(_v), Type::Own(ty) | Type::Borrow(ty)) => {
+            if *ty == ResourceType::host::<Pollable>() {
+                // TODO: Implement once https://github.com/bytecodealliance/wasmtime/issues/7714
+                // is addressed
+                bail!("`wasi:io/pollable` not supported yet")
+            } else {
+                // TODO: Implement in preview3 or via a wasmCloud-specific interface
+                bail!("dynamically-typed futures not supported yet")
+            }
         }
-        (wrpc_transport::Value::Stream(_), Type::Own(_ty) | Type::Borrow(_ty)) => {
-            bail!("streams not supported yet")
+        (wrpc_transport::Value::Stream(_v), Type::Own(ty) | Type::Borrow(ty)) => {
+            if *ty == ResourceType::host::<InputStream>() {
+                // TODO: Implement once https://github.com/bytecodealliance/wasmtime/issues/7714
+                // is addressed
+                bail!("`wasi:io/input-stream` not supported yet")
+            } else {
+                // TODO: Implement in preview3 or via a wasmCloud-specific interface
+                bail!("dynamically-typed streams not supported yet")
+            }
         }
-        (wrpc_transport::Value::String(..), Type::Own(_ty) | Type::Borrow(_ty)) => {
+        (wrpc_transport::Value::String(_), Type::Own(_ty) | Type::Borrow(_ty)) => {
+            // TODO: Implement guest resource handling
             bail!("resources not supported yet")
         }
         _ => bail!("type mismatch"),
@@ -520,7 +602,7 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
             if let Err(err) = linker.func_new_async(
                 component,
                 Arc::clone(&func_name).as_str(),
-                move |ctx, params, results| {
+                move |mut store, params, results| {
                     let instance_name = Arc::clone(&instance_name);
                     let func_name = Arc::clone(&func_name);
                     let target = Arc::clone(&target);
@@ -528,10 +610,10 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
                     Box::new(async move {
                         let params: Vec<_> = params
                             .iter()
-                            .map(to_wrpc_value)
+                            .map(|val| to_wrpc_value(&mut store, val))
                             .collect::<anyhow::Result<_>>()
                             .context("failed to convert wasmtime values to wRPC values")?;
-                        let handler = &ctx.data().handler;
+                        let handler = &store.data().handler;
                         let target = handler
                             .identify_interface_target(&target)
                             .await
@@ -764,7 +846,7 @@ impl Instance {
             .context("failed to perform post-return cleanup")?;
         results
             .iter()
-            .map(to_wrpc_value)
+            .map(|val| to_wrpc_value(&mut self.store, val))
             .collect::<anyhow::Result<_>>()
             .context("failed to convert wasmtime values to wRPC values")
     }
