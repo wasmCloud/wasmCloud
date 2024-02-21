@@ -249,26 +249,6 @@ fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
     }
 }
 
-// TODO: Remove this in wasmtime 18
-fn from_wrpc_value_simple(val: wrpc_transport::Value) -> anyhow::Result<Val> {
-    match val {
-        wrpc_transport::Value::Bool(v) => Ok(Val::Bool(v)),
-        wrpc_transport::Value::U8(v) => Ok(Val::U8(v)),
-        wrpc_transport::Value::U16(v) => Ok(Val::U16(v)),
-        wrpc_transport::Value::U32(v) => Ok(Val::U32(v)),
-        wrpc_transport::Value::U64(v) => Ok(Val::U64(v)),
-        wrpc_transport::Value::S8(v) => Ok(Val::S8(v)),
-        wrpc_transport::Value::S16(v) => Ok(Val::S16(v)),
-        wrpc_transport::Value::S32(v) => Ok(Val::S32(v)),
-        wrpc_transport::Value::S64(v) => Ok(Val::S64(v)),
-        wrpc_transport::Value::Float32(v) => Ok(Val::Float32(v)),
-        wrpc_transport::Value::Float64(v) => Ok(Val::Float64(v)),
-        wrpc_transport::Value::Char(v) => Ok(Val::Char(v)),
-        wrpc_transport::Value::String(v) => Ok(Val::String(v.into())),
-        _ => bail!("complex types not supported yet"),
-    }
-}
-
 fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::Result<Val> {
     use component::Type;
 
@@ -389,23 +369,16 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
 }
 
 #[instrument(level = "trace", skip_all)]
-fn wasifill(
-    component: &wasmtime::component::Component,
-    resolve: &wit_parser::Resolve,
-    world: WorldId,
-    linker: &mut Linker<Ctx>,
-) {
-    let Some(World { imports, .. }) = resolve
-        .worlds
-        .iter()
-        .find_map(|(id, w)| (id == world).then_some(w))
-    else {
-        trace!("component world missing");
-        return;
+fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>) {
+    let component_ty = match linker.substituted_component_type(component) {
+        Ok(component_ty) => component_ty,
+        Err(err) => {
+            error!(?err, "failed to introspect component type");
+            return;
+        }
     };
-    for (key, _) in imports {
-        let instance_name = Arc::new(resolve.name_world_key(key));
-        match instance_name.as_str() {
+    for (instance_name, item) in component_ty.imports() {
+        match instance_name {
             "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
@@ -426,130 +399,93 @@ fn wasifill(
             | "wasi:io/error@0.2.0"
             | "wasi:io/poll@0.2.0"
             | "wasi:io/streams@0.2.0"
-            | "wasi:sockets/tcp@0.2.0" => continue,
+            | "wasi:sockets/tcp@0.2.0"
+            | "wasmcloud:bus/lattice"
+            | "wasmcloud:bus/guest-config"
+            | "wasmcloud:messaging/messaging"
+            | "wasmcloud:messaging/message-subscriber" => continue,
             _ => {}
         }
-        let WorldKey::Interface(iface) = key else {
-            continue;
+        let item = match item {
+            component::types::ComponentItem::ComponentInstance(item) => item,
+            _ => continue,
         };
-        let Some(interface) = resolve.interfaces.get(*iface) else {
-            trace!("component imports a non-existent interface");
-            continue;
-        };
-        let Some(ref interface_name) = interface.name else {
-            trace!("component imports an unnamed interface");
-            continue;
-        };
-        let Some(package) = interface.package else {
-            trace!(
-                interface = interface_name,
-                "component interface import is missing a package"
+        let Some((namespace, package)) = instance_name.split_once(':') else {
+            error!(
+                ?instance_name,
+                "failed to split namespace from package and interface"
             );
-            continue;
+            return;
         };
-        let Some(package) = resolve.packages.get(package) else {
+        let Some((package, interface)) = instance_name.split_once('/') else {
+            error!(?instance_name, "failed to split package from interface");
+            return;
+        };
+        // TODO: Rework the specification here
+        let target = Arc::new(TargetInterface::Custom {
+            namespace: namespace.to_string(),
+            package: package.to_string(),
+            interface: interface.to_string(),
+        });
+        let mut linker = linker.root();
+        let mut linker = match linker.instance(&instance_name) {
+            Ok(linker) => linker,
+            Err(err) => {
+                error!(
+                    ?err,
+                    ?instance_name,
+                    "failed to instantiate interface from root"
+                );
+                continue;
+            }
+        };
+        let instance_name = Arc::new(instance_name.to_string());
+        for (func_name, item) in item.exports() {
+            let ty = match item {
+                component::types::ComponentItem::ComponentFunc(ty) => ty,
+                _ => continue,
+            };
             trace!(
-                interface = interface_name,
-                "component interface belongs to a non-existent package"
+                ?instance_name,
+                func_name,
+                "polyfill component function import"
             );
-            continue;
-        };
-        match (package.name.namespace.as_str(), package.name.name.as_str()) {
-            ("wasmcloud", "bus" | "messaging") => continue,
-            _ => {
-                let interface_path = format!("{}/{interface_name}", package.name);
-                let mut linker = linker.root();
-                let mut linker = match linker.instance(&interface_path) {
-                    Ok(linker) => linker,
-                    Err(err) => {
-                        error!(
-                            ?err,
-                            namespace = package.name.namespace,
-                            "failed to instantiate interface from root"
-                        );
-                        continue;
-                    }
-                };
-                let target = Arc::new(TargetInterface::Custom {
-                    namespace: package.name.namespace.clone(),
-                    package: package.name.name.clone(),
-                    interface: interface_name.to_string(),
-                });
-                for (name, _) in interface.functions.iter().filter(|(name, function)| {
-                    if function.params.len() > 1
-                        || function.results.len() > 1
-                        || function
-                            .params
-                            .iter()
-                            .any(|(_, ty)| matches!(ty, Type::Id(_)))
-                        || function
-                            .results
-                            .iter_types()
-                            .any(|ty| matches!(ty, Type::Id(_)))
-                    {
-                        trace!(
-                            namespace = package.name.namespace,
-                            package = package.name.name,
-                            interface = interface_name,
-                            name,
-                            "avoid wasifilling unsupported component function import"
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                }) {
-                    trace!(
-                        namespace = package.name.namespace,
-                        package = package.name.name,
-                        interface = interface_name,
-                        name,
-                        "wasifill component function import"
-                    );
+            let instance_name = Arc::clone(&instance_name);
+            let func_name = Arc::new(func_name.to_string());
+            let target = Arc::clone(&target);
+            if let Err(err) = linker.func_new_async(
+                component,
+                Arc::clone(&func_name).as_str(),
+                move |ctx, params, results| {
                     let instance_name = Arc::clone(&instance_name);
-                    let name = Arc::new(name.to_string());
+                    let func_name = Arc::clone(&func_name);
                     let target = Arc::clone(&target);
-                    if let Err(err) = linker.func_new_async(
-                        component,
-                        Arc::clone(&name).as_str(),
-                        move |ctx, params, results| {
-                            let instance_name = Arc::clone(&instance_name);
-                            let name = Arc::clone(&name);
-                            let target = Arc::clone(&target);
-                            Box::new(async move {
-                                let params: Vec<_> = params
-                                    .into_iter()
-                                    .map(|param| to_wrpc_value(param))
-                                    .collect::<anyhow::Result<_>>()
-                                    .context("failed to convert wasmtime values to wRPC values")?;
-                                let handler = &ctx.data().handler;
-                                let target = handler
-                                    .identify_interface_target(&target)
-                                    .await
-                                    .context("failed to identify interface target")?;
-                                let result_values = handler
-                                    .call(target, &instance_name, &name, params)
-                                    .await
-                                    .context("failed to call target")?;
-                                for (i, val) in result_values.into_iter().enumerate() {
-                                    let val = from_wrpc_value_simple(val)?;
-                                    let result =
-                                        results.get_mut(i).context("invalid result vector")?;
-                                    *result = val;
-                                }
-                                Ok(())
-                            })
-                        },
-                    ) {
-                        error!(
-                            ?err,
-                            namespace = package.name.namespace,
-                            package = package.name.name,
-                            interface = interface_name,
-                            "failed to wasifill component function import"
-                        );
-                    }
-                }
+                    let ty = ty.clone();
+                    Box::new(async move {
+                        let params: Vec<_> = params
+                            .into_iter()
+                            .map(|param| to_wrpc_value(param))
+                            .collect::<anyhow::Result<_>>()
+                            .context("failed to convert wasmtime values to wRPC values")?;
+                        let handler = &ctx.data().handler;
+                        let target = handler
+                            .identify_interface_target(&target)
+                            .await
+                            .context("failed to identify interface target")?;
+                        let result_values = handler
+                            .call(target, &instance_name, &func_name, params)
+                            .await
+                            .context("failed to call target")?;
+                        for (i, (val, ty)) in zip(result_values, ty.results()).enumerate() {
+                            let val = from_wrpc_value(val, &ty)?;
+                            let result = results.get_mut(i).context("invalid result vector")?;
+                            *result = val;
+                        }
+                        Ok(())
+                    })
+                },
+            ) {
+                error!(?err, "failed to polyfill component function import");
             }
         }
     }
@@ -597,13 +533,6 @@ impl Component {
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         let engine = rt.engine.clone();
-        let (resolve, world) =
-            match wit_component::decode(wasm).context("failed to decode WIT component")? {
-                wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
-                wit_component::DecodedWasm::WitPackage(..) => {
-                    bail!("binary-encoded WIT packages not supported")
-                }
-            };
         let claims = claims(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
@@ -622,7 +551,7 @@ impl Component {
 
         command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
 
-        wasifill(&component, &resolve, world, &mut linker);
+        polyfill(&component, &mut linker);
 
         Ok(Self {
             component,
