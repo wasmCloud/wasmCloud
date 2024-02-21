@@ -950,30 +950,28 @@ expected: {expected_labels_two:?}"#
         _ => bail!("invalid provider count"),
     }
 
-    try_join!(
-        async {
-            let (config_value, all_config) = assert_handle_http_request(
-                component_http_port,
-                component_nats_client.clone(),
-                &mut component_redis_client,
-            )
-            .await
-            .context("component actor test failed")?;
-            ensure!(
-                config_value == b"test-config-value",
-                "should have returned the correct config value"
-            );
-            let expected = HashMap::from([
-                ("test-config-data".into(), b"test-config-value".to_vec()),
-                ("test-config-data2".into(), b"test-config-value2".to_vec()),
-            ]);
-            if all_config == expected {
-                Ok(())
-            } else {
-                Err(anyhow!("should have returned all config values.\nExpected: {expected:?}\nGot: {all_config:?}"))
-            }
-        },
-    )?;
+    try_join!(async {
+        let (config_value, all_config) = assert_handle_http_request(
+            component_http_port,
+            component_nats_client.clone(),
+            &mut component_redis_client,
+        )
+        .await
+        .context("component actor test failed")?;
+        ensure!(
+            config_value == b"test-config-value",
+            "should have returned the correct config value"
+        );
+        let expected = HashMap::from([
+            ("test-config-data".into(), b"test-config-value".to_vec()),
+            ("test-config-data2".into(), b"test-config-value2".to_vec()),
+        ]);
+        if all_config == expected {
+            Ok(())
+        } else {
+            Err(anyhow!("should have returned all config values.\nExpected: {expected:?}\nGot: {all_config:?}"))
+        }
+    },)?;
 
     try_join!(
         assert_remove_link(
