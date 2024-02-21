@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::lattice::ClusterIssuerKey;
-use crate::link::ActorLinks;
+use crate::link::InterfaceLinkDefinition;
 use crate::logging::Level;
 use crate::otel::OtelConfig;
 use crate::wit::{deserialize_wit_map, serialize_wit_map, WitMap};
@@ -38,7 +38,7 @@ pub struct HostData {
     #[serde(default)]
     pub instance_id: String,
     /// initial list of links for provider
-    pub link_definitions: ActorLinks,
+    pub link_definitions: Vec<InterfaceLinkDefinition>,
     /// list of cluster issuers
     pub cluster_issuers: Vec<ClusterIssuerKey>,
     /// Optional configuration JSON sent to a given link name of a provider

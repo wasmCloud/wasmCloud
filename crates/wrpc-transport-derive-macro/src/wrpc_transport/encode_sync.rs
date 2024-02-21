@@ -4,6 +4,7 @@ use quote::format_ident;
 use syn::{Fields, FieldsNamed, FieldsUnnamed, Ident, LitInt};
 use tracing::warn;
 
+use crate::config::AttrOptions;
 use crate::rust::{has_option_type, has_vec_type};
 
 /// Derive [`wrpc_transport::EncodeSync`] for a given input stream
@@ -42,6 +43,8 @@ fn derive_encode_sync_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
     let mut members = Vec::<Ident>::new();
     let mut encode_lines = Vec::<TokenStream>::new();
 
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(s.attrs)?;
+
     // For each member of the struct, we must:
     // - generate a line that attempts to encode the member
     // - remember the type so we can require it to be EncodeSync
@@ -53,11 +56,11 @@ fn derive_encode_sync_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
         members.push(member_name.clone());
         if let Ok(Some(_)) = has_option_type(member.ty.clone()) {
             encode_lines.push(quote::quote!(
-                EncodeSync::encode_sync_option(#member_name, &mut payload).context("failed to encode member (option) `#member_name`")?;
+                #crate_path::deps::wrpc_transport::EncodeSync::encode_sync_option(#member_name, &mut payload).context("failed to encode member (option) `#member_name`")?;
             ));
         } else if let Ok(Some(_)) = has_vec_type(member.ty.clone()) {
             encode_lines.push(quote::quote!(
-                EncodeSync::encode_sync_list(#member_name, &mut payload).context("failed to encode member (list) `#member_name`")?;
+                #crate_path::deps::wrpc_transport::EncodeSync::encode_sync_list(#member_name, &mut payload).context("failed to encode member (list) `#member_name`")?;
             ));
         } else {
             encode_lines.push(quote::quote!(
@@ -68,13 +71,14 @@ fn derive_encode_sync_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
 
     // Build the generated impl
     Ok(quote::quote!(
-        impl ::wrpc_transport_derive::deps::wrpc_transport::EncodeSync for #struct_name
+        #[automatically_derived]
+        impl #crate_path::deps::wrpc_transport::EncodeSync for #struct_name
         {
             fn encode_sync(
                 self,
-                mut payload: impl ::wrpc_transport_derive::deps::bytes::buf::BufMut
-            ) -> ::wrpc_transport_derive::deps::anyhow::Result<()> {
-                use ::wrpc_transport_derive::deps::anyhow::Context as _;
+                mut payload: impl #crate_path::deps::bytes::buf::BufMut
+            ) -> #crate_path::deps::anyhow::Result<()> {
+                use #crate_path::deps::anyhow::Context as _;
                 let Self { #( #members ),* } = self;
                 #( #encode_lines );*
                 Ok(())
@@ -91,6 +95,8 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 
     let enum_name = e.ident;
     let mut variant_encode_lines = Vec::<TokenStream>::new();
+
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(e.attrs)?;
 
     // For each variant, we must do two things:
     // - ensure that the type we're about to use is EncodeSync
@@ -130,7 +136,7 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 
                 variant_encode_lines.push(quote::quote!(
                     Self::#name { #( #args ),* } => {
-                        ::wrpc_transport_derive::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
+                        #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
                         #( #named_field_encode_lines );*
                     }
                 ))
@@ -165,25 +171,25 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 
                 variant_encode_lines.push(quote::quote!(
                     Self::#name( #( #args ),* ) => {
-                        ::wrpc_transport_derive::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
+                        #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
                         #( #unnamed_field_encode_lines );*
                     }
                 ))
             }
             // If there are no fields we can just encode the discriminant
             Fields::Unit => variant_encode_lines.push(quote::quote!(
-                Self::#name => ::wrpc_transport_derive::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?
+                Self::#name => #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?
             )),
         }
     }
 
     Ok(quote::quote!(
-        impl ::wrpc_transport_derive::deps::wrpc_transport::EncodeSync for #enum_name
+        impl #crate_path::deps::wrpc_transport::EncodeSync for #enum_name
         {
             fn encode_sync(
                 self,
-                mut payload: impl ::wrpc_transport_derive::deps::bytes::buf::BufMut
-            ) -> ::wrpc_transport_derive::deps::anyhow::Result<()> {
+                mut payload: impl #crate_path::deps::bytes::buf::BufMut
+            ) -> #crate_path::deps::anyhow::Result<()> {
                 match self {
                     #(
                         #variant_encode_lines

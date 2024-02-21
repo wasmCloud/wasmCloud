@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context};
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Punct, Span, TokenStream, TokenTree};
 use quote::{format_ident, ToTokens, TokenStreamExt};
 use syn::parse::Parse;
@@ -394,22 +394,20 @@ impl WitFunctionLatticeTranslationStrategy {
         struct_lookup: &StructLookup,
         type_lookup: &TypeLookup,
     ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
-        let lattice_method_name = LitStr::new(
-            format!(
-                "{}.{}",
-                wit_iface_path
-                    .split('.')
-                    .last()
-                    .map(ToUpperCamelCase::to_upper_camel_case)
-                    .with_context(|| format!(
-                        "failed to retrieve WIT iface name from path [{}]",
-                        wit_iface_path
-                    ))?,
-                trait_method.sig.ident.to_string().to_upper_camel_case()
-            )
-            .as_ref(),
-            trait_method.sig.ident.span(),
-        );
+        // Rebuild the fully-qualified WIT operation name
+        let wit_operation = match wit_iface_path.split('.').collect::<Vec<&str>>()[..] {
+            [wit_ns, wit_pkg, iface] => {
+                format!(
+                    "{}:{}/{}.{}",
+                    wit_ns.to_kebab_case(),
+                    wit_pkg.to_kebab_case(),
+                    iface.to_kebab_case(),
+                    trait_method.sig.ident.to_string().to_kebab_case()
+                )
+            }
+            _ => bail!("unexpected interface path, expected 3 components"),
+        };
+        let lattice_method_name = LitStr::new(&wit_operation, trait_method.sig.ident.span());
 
         // Convert the iface path into an upper camel case representation, for future conversions to use
         let wit_iface_upper_camel = wit_iface_path
@@ -482,7 +480,7 @@ impl WitFunctionLatticeTranslationStrategy {
                     type_name: None,
                     func_name: trait_method.sig.ident.clone(),
                     struct_members: None,
-                    invocation_arg_names: Vec::new(),
+                    invocation_args: Vec::new(),
                     invocation_return: trait_method.sig.output.clone(),
                 },
             ));
@@ -502,10 +500,10 @@ impl WitFunctionLatticeTranslationStrategy {
             wit_iface_upper_camel,
             LatticeMethod {
                 lattice_method_name,
-                type_name: Some(type_name),
+                type_name: Some(type_name.clone()),
                 func_name: trait_method.sig.ident.clone(),
                 struct_members: None,
-                invocation_arg_names: vec![arg_name],
+                invocation_args: vec![(arg_name, type_name)],
                 invocation_return: trait_method.sig.output.clone(),
             },
         ))
@@ -530,8 +528,8 @@ impl WitFunctionLatticeTranslationStrategy {
             trait_method.sig.ident.to_string().to_upper_camel_case()
         );
 
-        // Build a list of invocation arguments similar to the structs
-        let mut invocation_arg_names: Vec<Ident> = Vec::new();
+        // Build a list of invocation arguments & their types
+        let mut invocation_args: Vec<(Ident, TokenStream)> = Vec::new();
 
         // Transform the members and remove any lifetimes by manually converting references to owned data
         // (i.e. doing things like converting a type like &str to String mechanically)
@@ -566,7 +564,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 // Add the invocation argument name to the list,
                 // so that when we convert this LatticeMethod into an exported function
                 // we can re-create the arguments as if they were never bundled into a struct.
-                invocation_arg_names.push(arg_name);
+                invocation_args.push((arg_name, owned_type_tokens.clone()));
 
                 // Add the generated `FnArg` tokens
                 tokens.extend(owned_type_tokens);
@@ -581,7 +579,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 type_name: Some(struct_name.to_token_stream()),
                 struct_members: Some(struct_members),
                 func_name: trait_method.sig.ident.clone(),
-                invocation_arg_names,
+                invocation_args,
                 invocation_return: trait_method.sig.output.clone(),
             },
         ))
@@ -625,12 +623,12 @@ impl WitFunctionLatticeTranslationStrategy {
                                 let response = client
                                     .send(
                                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                                            public_key: self.ld.provider_id.clone(),
-                                            link_name: self.ld.link_name.clone(),
+                                            public_key: connection.provider_key().to_string(),
+                                            link_name: self.ld.name.clone(),
                                             contract_id: #contract_ident.to_string(),
                                         },
                                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                                            public_key: self.ld.actor_id.clone(),
+                                            public_key: self.ld.source_id.clone(),
                                             ..Default::default()
                                         },
                                         #lattice_method,
@@ -754,12 +752,12 @@ impl WitFunctionLatticeTranslationStrategy {
                 let response = client
                     .send(
                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.provider_id.clone(),
-                            link_name: self.ld.link_name.clone(),
+                            public_key: self.ld.target.clone(),
+                            link_name: self.ld.name.clone(),
                             contract_id: #contract_ident.to_string(),
                         },
                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.actor_id.clone(),
+                            public_key: self.ld.source_id.clone(),
                             ..Default::default()
                         },
                         #lattice_method,
@@ -851,12 +849,12 @@ impl WitFunctionLatticeTranslationStrategy {
                 let response = client
                     .send(
                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.provider_id.clone(),
-                            link_name: self.ld.link_name.clone(),
+                            public_key: connection.provider_key().to_string(),
+                            link_name: self.ld.name.clone(),
                             contract_id: #contract_ident.to_string(),
                         },
                         ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.actor_id.clone(),
+                            public_key: self.ld.source_id.clone(),
                             ..Default::default()
                         },
                         #lattice_method,

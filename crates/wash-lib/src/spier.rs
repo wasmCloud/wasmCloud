@@ -158,7 +158,7 @@ impl Stream for Spier {
                 let body = inv.msg;
                 inv.msg = Vec::new();
 
-                // todo(vadossi-cosmonic): In the wRPC future, `target.public_key` (i.e. the target ID)
+                // todo(vados-cosmonic): In the wRPC future, `target.public_key` (i.e. the target ID)
                 // may include the current actor ID, despite note being exactly equal to it
                 // (ex. actor id '1234' may also be addressable under the opaque string 'frontends')
                 if inv.origin.is_provider() && inv.target.public_key != self.actor_id.as_ref() {

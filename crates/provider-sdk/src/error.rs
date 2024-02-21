@@ -34,6 +34,9 @@ pub enum InvocationError {
     // convenience `From` implementations if we do have to indicate other failures other than
     // serialization to our wasmbus RPC messages
     Ser(#[from] rmp_serde::encode::Error),
+    #[error("Error while serializing/deserializing JSON: {0:?}")]
+    /// Serialization/Deserializing errors that occur for JSON
+    SerdeJson(#[from] serde_json::Error),
     /// The invocation or dispatch failed when deserializing data from the wire
     #[error("Error when deserializing invocation: {0:?}")]
     Deser(#[from] rmp_serde::decode::Error),

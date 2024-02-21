@@ -5319,6 +5319,7 @@ dependencies = [
  "uuid 1.7.0",
  "vaultrs",
  "wascap",
+ "wasmcloud-compat",
  "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-host",
@@ -5517,6 +5518,7 @@ dependencies = [
 name = "wasmcloud-provider-sdk"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "async-nats",
  "async-trait",
  "base64 0.21.7",
@@ -5535,23 +5537,31 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.22.0",
+ "ulid",
  "uuid 1.7.0",
  "wascap",
  "wasmcloud-core",
  "wasmcloud-tracing",
+ "wrpc-transport",
+ "wrpc-transport-nats",
+ "wrpc-types",
 ]
 
 [[package]]
 name = "wasmcloud-provider-wit-bindgen"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "bytes",
+ "futures",
  "serde",
  "serde_bytes",
  "serde_json",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-wit-bindgen-macro",
  "wrpc-transport",
+ "wrpc-transport-derive",
  "wrpc-types",
 ]
 
@@ -5599,6 +5609,7 @@ dependencies = [
  "wasi-common",
  "wasmcloud-actor",
  "wasmcloud-compat",
+ "wasmcloud-core",
  "wasmparser",
  "wasmtime",
  "wasmtime-wasi",

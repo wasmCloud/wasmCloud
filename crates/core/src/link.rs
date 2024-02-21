@@ -13,9 +13,6 @@ pub type LinkName = String;
 /// Settings associated with an actor-provider link
 pub type LinkSettings = WitMap<String>;
 
-/// List of linked actors for a provider
-pub type ActorLinks = Vec<LinkDefinition>;
-
 /// Link definition for binding actor to provider
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LinkDefinition {
