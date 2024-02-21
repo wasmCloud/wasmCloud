@@ -20,7 +20,7 @@ use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
 use wasmcloud_runtime::capability::{self, guest_config, messaging, IncomingHttp};
-use wasmcloud_runtime::{Actor, Runtime};
+use wasmcloud_runtime::{Component, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
     tracing_subscriber::registry()
@@ -256,9 +256,9 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             Arc::clone(&sent),
             config.clone(),
         );
-        let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
+        let actor = Component::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");
-        let mut actor = actor.instantiate().await.context("failed to instantiate")?;
+        let mut actor = actor.instantiate().context("failed to instantiate")?;
         actor
             .stderr(stderr())
             .await
