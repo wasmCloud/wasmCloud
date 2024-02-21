@@ -367,13 +367,6 @@ pub trait Blobstore {
 #[async_trait]
 /// `wasmcloud:bus/host` implementation
 pub trait Bus {
-    /// Identify the target of wasmbus module invocation
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity>;
-
     /// Identify the target of component interface invocation
     async fn identify_interface_target(
         &self,
@@ -608,20 +601,6 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument(level = "trace", skip_all)]
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity> {
-        if let Some(ref bus) = self.bus {
-            trace!("call `Bus` handler");
-            bus.identify_wasmbus_target(binding, namespace).await
-        } else {
-            bail!("host cannot identify the Wasmbus call target")
-        }
-    }
-
     #[instrument(level = "trace", skip_all)]
     async fn identify_interface_target(
         &self,

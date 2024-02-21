@@ -5330,24 +5330,13 @@ name = "wasmcloud-actor"
 version = "0.1.0"
 dependencies = [
  "futures",
- "once_cell",
  "rand",
- "rmp-serde",
  "serde",
  "serde_bytes",
  "tokio",
  "uuid 1.7.0",
- "wasmcloud-actor-macros",
  "wasmcloud-compat",
  "wit-bindgen",
-]
-
-[[package]]
-name = "wasmcloud-actor-macros"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn 2.0.50",
 ]
 
 [[package]]
@@ -5363,9 +5352,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-component-adapters"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290f09a86ae98bdc7b8d7af7d8b4e07aa2e7d878825ff3686e6de746f5a514a3"
+checksum = "90702ee5cfb61cba7e9982f5d28d9a56cf17ea75710624a8a615e61c86b4afcd"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -5580,7 +5569,6 @@ dependencies = [
  "nkeys",
  "once_cell",
  "rand",
- "rmp-serde",
  "serde",
  "serde_json",
  "test-actors",
