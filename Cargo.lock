@@ -5595,7 +5595,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
- "wit-component",
  "wit-parser",
  "wrpc-transport",
 ]
