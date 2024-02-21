@@ -8,13 +8,14 @@ use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, bail, ensure, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
+use wasmtime::component::types::Case;
 use wasmtime::component::{self, Linker, ResourceTable, ResourceTableError, Val};
 use wasmtime_wasi::preview2::command::{self};
 use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
@@ -239,7 +240,69 @@ fn to_wrpc_value(val: &Val) -> anyhow::Result<wrpc_transport::Value> {
         Val::Float64(val) => Ok(wrpc_transport::Value::Float64(*val)),
         Val::Char(val) => Ok(wrpc_transport::Value::Char(*val)),
         Val::String(val) => Ok(wrpc_transport::Value::String(val.to_string())),
-        _ => bail!("complex types not supported yet"),
+        Val::List(val) => val
+            .into_iter()
+            .map(to_wrpc_value)
+            .collect::<anyhow::Result<_>>()
+            .map(wrpc_transport::Value::List),
+        Val::Record(val) => val
+            .fields()
+            .map(|(_, val)| val)
+            .map(to_wrpc_value)
+            .collect::<anyhow::Result<_>>()
+            .map(wrpc_transport::Value::Record),
+        Val::Tuple(val) => val
+            .values()
+            .into_iter()
+            .map(to_wrpc_value)
+            .collect::<anyhow::Result<_>>()
+            .map(wrpc_transport::Value::Tuple),
+        Val::Variant(val) => {
+            let discriminant = zip(0.., val.ty().cases())
+                .find_map(|(i, Case { name, .. })| (name == val.discriminant()).then_some(i))
+                .context("unknown variant discriminant")?;
+            let nested = val.payload().map(to_wrpc_value).transpose()?.map(Box::new);
+            Ok(wrpc_transport::Value::Variant {
+                discriminant,
+                nested,
+            })
+        }
+        Val::Enum(val) => zip(0.., val.ty().names())
+            .find_map(|(i, name)| (name == val.discriminant()).then_some(i))
+            .context("unknown enum discriminant")
+            .map(wrpc_transport::Value::Enum),
+        Val::Option(val) => {
+            let val = val.value().map(to_wrpc_value).transpose()?.map(Box::new);
+            Ok(wrpc_transport::Value::Option(val))
+        }
+        Val::Result(val) => {
+            let val = match val.value() {
+                Ok(val) => {
+                    let val = val.map(to_wrpc_value).transpose()?.map(Box::new);
+                    Ok(val)
+                }
+                Err(val) => {
+                    let val = val.map(to_wrpc_value).transpose()?.map(Box::new);
+                    Err(val)
+                }
+            };
+            Ok(wrpc_transport::Value::Result(val))
+        }
+        Val::Flags(val) => {
+            let mut v = 0;
+            for name in val.flags() {
+                let i = zip(0.., val.ty().names())
+                    .find_map(|(i, flag_name)| (name == flag_name).then_some(i))
+                    .context("unknown flag")?;
+                ensure!(
+                    i < 64,
+                    "flags discriminants over 64 currently cannot be represented"
+                );
+                v |= 1 << i
+            }
+            Ok(wrpc_transport::Value::Flags(v))
+        }
+        Val::Resource(_) => bail!("resources not supported yet"),
     }
 }
 
@@ -295,7 +358,7 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
             let discriminant = discriminant
                 .try_into()
                 .context("discriminant does not fit in usize")?;
-            let component::types::Case { name, ty: case_ty } = ty
+            let Case { name, ty: case_ty } = ty
                 .cases()
                 .nth(discriminant)
                 .context("variant discriminant not found")?;
@@ -355,6 +418,15 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
                 }
             }
             component::Flags::new(ty, &names).map(component::Val::Flags)
+        }
+        (wrpc_transport::Value::Future(_), Type::Own(_ty) | Type::Borrow(_ty)) => {
+            bail!("futures not supported yet")
+        }
+        (wrpc_transport::Value::Stream(_), Type::Own(_ty) | Type::Borrow(_ty)) => {
+            bail!("streams not supported yet")
+        }
+        (wrpc_transport::Value::String(..), Type::Own(_ty) | Type::Borrow(_ty)) => {
+            bail!("resources not supported yet")
         }
         _ => bail!("type mismatch"),
     }
