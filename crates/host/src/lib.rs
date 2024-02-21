@@ -42,16 +42,6 @@ use tracing::{debug, instrument, warn};
 use url::Url;
 use wascap::jwt;
 
-#[cfg(unix)]
-fn socket_pair() -> anyhow::Result<(tokio::net::UnixStream, tokio::net::UnixStream)> {
-    tokio::net::UnixStream::pair().context("failed to create an unnamed unix socket pair")
-}
-
-#[cfg(windows)]
-fn socket_pair() -> anyhow::Result<(tokio::io::DuplexStream, tokio::io::DuplexStream)> {
-    Ok(tokio::io::duplex(8196))
-}
-
 #[derive(PartialEq)]
 enum ResourceRef<'a> {
     File(PathBuf),
