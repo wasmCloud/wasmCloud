@@ -6,8 +6,10 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, serde_json, serde_json::Value,
-    wasmcloud_provider_sdk::core::LinkDefinition, wasmcloud_provider_sdk::Context,
+    async_trait::async_trait,
+    serde_json,
+    serde_json::Value,
+    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
 };
 
 pub(crate) mod client;
@@ -35,10 +37,10 @@ pub struct KvVaultProvider {
 }
 
 impl KvVaultProvider {
-    /// Retrieve a client for a given context (determined by actor_id)
+    /// Retrieve a client for a given context (determined by source_id)
     async fn get_client(&self, ctx: &Context) -> Result<Client> {
         // get the actor ID
-        let actor_id = ctx
+        let source_id = ctx
             .actor
             .as_ref()
             .context("invalid parameter: no actor in request")?;
@@ -48,8 +50,8 @@ impl KvVaultProvider {
             .actors
             .read()
             .await
-            .get(actor_id)
-            .with_context(|| format!("invalid parameter: actor [{actor_id}] not linked"))?
+            .get(source_id)
+            .with_context(|| format!("invalid parameter: actor [{source_id}] not linked"))?
             .read()
             .await
             .clone();
@@ -64,26 +66,29 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        let config = match Config::from_values(&HashMap::from_iter(ld.values.clone().into_iter())) {
-            Ok(config) => config,
-            Err(e) => {
-                error!(
-                    actor_id = %ld.actor_id,
-                    link_name = %ld.link_name,
-                    "failed to parse config: {e}",
-                );
-                return false;
-            }
-        };
+    #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
+    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
+        // todo(vados-cosmonic): needs to be adapted to use named config
+        //
+        // // let config = match Config::from_values(&HashMap::from_iter(ld.values.clone().into_iter())) {
+        // //     Ok(config) => config,
+        // //     Err(e) => {
+        // //         error!(
+        // //             source_id = %ld.source_id,
+        // //             link_name = %ld.name,
+        // //             "failed to parse config: {e}",
+        // //         );
+        // //         return false;
+        // //     }
+        // // };
+        let config = Config::default();
 
         let client = match Client::new(config.clone()) {
             Ok(client) => client,
             Err(e) => {
                 error!(
-                    actor_id = %ld.actor_id,
-                    link_name = %ld.link_name,
+                    source_id = %ld.source_id,
+                    link_name = %ld.name,
                     "failed to create new client config: {e}",
                 );
                 return false;
@@ -92,20 +97,20 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
 
         let mut update_map = self.actors.write().await;
         info!(
-            actor_id = %ld.actor_id,
-            link_name = %ld.link_name,
+            source_id = %ld.source_id,
+            link_name = %ld.name,
             "adding link for actor",
         );
-        update_map.insert(ld.actor_id.to_string(), RwLock::new(client));
+        update_map.insert(ld.source_id.to_string(), RwLock::new(client));
         true
     }
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, actor_id: &str) {
+    async fn delete_link(&self, source_id: &str) {
         let mut aw = self.actors.write().await;
-        if let Some(client) = aw.remove(actor_id) {
-            info!("deleting link for actor [{actor_id}]");
+        if let Some(client) = aw.remove(source_id) {
+            info!("deleting link for actor [{source_id}]");
             drop(client)
         }
     }
@@ -128,7 +133,7 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
     /// If it's any other map, the entire map is returned as a serialized json string
     /// If the stored value is a plain string, returns the plain value
     /// All other values are returned as serialized json
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn get(&self, ctx: Context, arg: String) -> GetResponse {
         let client = match self.get_client(&ctx).await {
             Ok(client) => client,
@@ -184,7 +189,7 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
     }
 
     /// Returns true if the store contains the key
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn contains(&self, ctx: Context, arg: String) -> bool {
         matches!(
             self.get(ctx.clone(), arg.to_string()).await,
@@ -193,7 +198,7 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
     }
 
     /// Deletes a key, returning true if the key was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn del(&self, ctx: Context, arg: String) -> bool {
         let client = match self.get_client(&ctx).await {
             Ok(client) => client,
@@ -253,7 +258,7 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
 
     /// Sets the value of a key.
     /// expiration times are not supported by this api and should be 0.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
     async fn set(&self, ctx: Context, arg: SetRequest) -> () {
         let client = match self.get_client(&ctx).await {
             Ok(client) => client,
@@ -305,7 +310,7 @@ impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
     }
 
     /// returns a list of all secrets at the path
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
         let client = match self.get_client(&ctx).await {
             Ok(client) => client,

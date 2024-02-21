@@ -14,8 +14,10 @@ lto = true
 members = [
     "blobstore-fs",
     "blobstore-s3",
-    "http-client",
-# todo(vadossi-cosmonic): re-enable once http-server is working
+# todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+# is implemented for either HashMap or Tuple(T1,T2)
+#    "http-client",
+# todo(vados-cosmonic): re-enable once http-server is working
 #    "http-server",
     "kv-redis",
     "kv-vault",
@@ -40,6 +42,7 @@ flume = { version = "0.11", default-features = false }
 futures = { version = "0.3", default-features = false }
 http = { version = "0.2", default-features = false }
 hyper-rustls = { version = "0.24", default-features = false }
+nkeys = { version = "0.3", default-features = false }
 opentelemetry = { version = "0.21", default-features = false }
 opentelemetry-nats = { path = "../opentelemetry-nats" }
 path-clean = { version = "1", default-features = false }
@@ -49,6 +52,7 @@ rskafka = { version = "0.5.0", default-features = false }
 serde = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }
 serde_json = { version = "1", default-features = false }
+tempfile = { version = "3", default-features = false }
 thiserror = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 toml = { version = "0.8", default-features = false }
@@ -57,12 +61,15 @@ tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.21", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 url = { version = "2.4", default-features = false }
+uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "*", path = "../wascap" }
 wasmcloud-compat = { path = "../compat", default-features = false }
-wasmcloud-core = { path = "../core", default-features = false }
-wasmcloud-interface-httpclient = { version = "0.11" }                                           # TODO: Replace by WIT
 wasmcloud-control-interface = { path = "../control-interface" }
+wasmcloud-core = { path = "../core", default-features = false }
+wasmcloud-interface-httpclient = { version = "0.11" }
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
+wasmcloud-test-util = { path = "../test-util", default-features = false }
+wrpc-transport-nats = { version = "0.11.6", default-features = false }

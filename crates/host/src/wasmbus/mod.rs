@@ -41,7 +41,7 @@ use wasmcloud_control_interface::{
     RegistryCredential, ScaleActorCommand, StartProviderCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand, WitInterface,
 };
-use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTargetId, LinkName, OtelConfig};
+use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, LinkName, OtelConfig};
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
@@ -194,7 +194,7 @@ struct Handler {
     /// - Some other opaque string
     #[allow(clippy::type_complexity)]
     interface_links:
-        Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTargetId>>>>>,
+        Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTarget>>>>>,
     /// Map of interface -> function name -> function result types
     ///
     /// When invoking a function that the component imports, this map is consulted to determine the
@@ -2952,7 +2952,7 @@ impl Host {
                 // Allow the provider 5 seconds to initialize
                 health_check.reset_after(Duration::from_secs(5));
                 let health_topic =
-                    format!("wasmbus.rpc.{health_lattice}.{health_provider_id}.default.health");
+                    format!("wasmbus.rpc.{health_lattice}.{health_provider_id}.health");
                 // TODO: Refactor this logic to simplify nesting
                 loop {
                     select! {
@@ -3331,16 +3331,18 @@ impl Host {
             .or_insert(HashSet::from_iter([interface_link_definition]));
 
         self.publish_event("linkdef_set", set_event).await?;
-        // TODO(#1548): When providers can handle interface links, tell them to set the link.
-        // Alternatively, send them configuration cc @thomastaylor312
-        // self.rpc_nats
-        // .publish_with_headers(
-        //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.set",),
-        //     injector_to_headers(&TraceContextInjector::default_with_span()),
-        //     msgp.into(),
-        // )
-        // .await
-        // .context("failed to publish link definition set")?;
+
+        self.rpc_nats
+            .publish_with_headers(
+                format!(
+                    "wasmbus.rpc.{}.{target}.linkdefs.put",
+                    self.host_config.lattice
+                ),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                Bytes::copy_from_slice(payload),
+            )
+            .await
+            .context("failed to publish link definition put")?;
 
         Ok(CtlResponse::success())
     }

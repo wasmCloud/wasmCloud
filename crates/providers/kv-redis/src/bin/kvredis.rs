@@ -25,8 +25,8 @@ use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde::Deserialize,
     serde_json,
-    wasmcloud_provider_sdk::core::LinkDefinition,
     wasmcloud_provider_sdk::provider_main::start_provider,
+    wasmcloud_provider_sdk::InterfaceLinkDefinition,
     wasmcloud_provider_sdk::{load_host_data, Context},
 };
 
@@ -36,8 +36,11 @@ wasmcloud_provider_wit_bindgen::generate!({
     wit_bindgen_cfg: "provider-kvredis"
 });
 
-const REDIS_URL_KEY: &str = "URL";
+/// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
+
+/// Configuration key that will be used to search for Redis config
+const CONFIG_REDIS_URL_KEY: &str = "URL";
 
 #[derive(Deserialize)]
 #[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
@@ -103,23 +106,25 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        let redis_url = get_redis_url(&ld.values, &self.default_connect_url);
+    #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
+    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
+        let redis_url = ld
+            .try_extract_redis_url()
+            .unwrap_or_else(|| self.default_connect_url.clone());
 
         match redis::Client::open(redis_url.clone()) {
             Ok(client) => match client.get_tokio_connection_manager().await {
                 Ok(conn_manager) => {
                     info!(redis_url, "established link");
                     let mut update_map = self.actors.write().await;
-                    update_map.insert(ld.actor_id.to_string(), RwLock::new(conn_manager));
+                    update_map.insert(ld.source_id.to_string(), RwLock::new(conn_manager));
                 }
                 Err(err) => {
                     warn!(
                         redis_url,
                         ?err,
-                    "Could not create Redis connection manager for actor {}, keyvalue operations will fail",
-                    ld.actor_id
+                    "Could not create Redis connection manager for source [{}], keyvalue operations will fail",
+                    ld.source_id
                 );
                     return false;
                 }
@@ -127,8 +132,8 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
             Err(err) => {
                 warn!(
                     ?err,
-                    "Could not create Redis client for actor {}, keyvalue operations will fail",
-                    ld.actor_id
+                    "Could not create Redis client for source [{}], keyvalue operations will fail",
+                    ld.source_id
                 );
                 return false;
             }
@@ -139,10 +144,10 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, actor_id: &str) {
+    async fn delete_link(&self, source_id: &str) {
         let mut aw = self.actors.write().await;
-        if let Some(conn) = aw.remove(actor_id) {
-            info!("redis closing connection for actor {}", actor_id);
+        if let Some(conn) = aw.remove(source_id) {
+            info!("redis closing connection for actor {}", source_id);
             drop(conn)
         }
     }
@@ -161,21 +166,21 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
 #[async_trait]
 impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Increments a numeric value, returning the new value
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
     async fn increment(&self, ctx: Context, arg: IncrementRequest) -> i32 {
         let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
         self.exec(&ctx, &mut cmd).await
     }
 
     /// Returns true if the store contains the key
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn contains(&self, ctx: Context, arg: String) -> bool {
         let mut cmd = redis::Cmd::exists(arg.to_string());
         self.exec(&ctx, &mut cmd).await
     }
 
     /// Deletes a key, returning true if the key was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn del(&self, ctx: Context, arg: String) -> bool {
         let mut cmd = redis::Cmd::del(arg.to_string());
         let v = self.exec::<i32>(&ctx, &mut cmd).await;
@@ -185,7 +190,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Gets a value for a specified key. If the key exists,
     /// the return structure contains exists: true and the value,
     /// otherwise the return structure contains exists == false.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn get(&self, ctx: Context, arg: String) -> GetResponse {
         let mut cmd = redis::Cmd::get(arg.to_string());
         let value: String = self.exec(&ctx, &mut cmd).await;
@@ -196,7 +201,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     }
 
     /// Append a value onto the end of a list. Returns the new list size
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> u32 {
         let mut cmd = redis::Cmd::rpush(&arg.list_name, &arg.value);
         self.exec(&ctx, &mut cmd).await
@@ -205,13 +210,13 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Deletes a list and its contents
     /// input: list name
     /// returns: true if the list existed and was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn list_clear(&self, ctx: Context, arg: String) -> bool {
         self.del(ctx, arg).await
     }
 
     /// Deletes an item from a list. Returns true if the item was removed.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> bool {
         let mut cmd = redis::Cmd::lrem(&arg.list_name, 1, &arg.value);
         let v = self.exec::<i32>(&ctx, &mut cmd).await;
@@ -222,7 +227,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Start and end values are inclusive, for example, (0,10) returns
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Vec<String> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
         self.exec(&ctx, &mut cmd).await
@@ -231,7 +236,7 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Sets the value of a key.
     /// expires is an optional number of seconds before the value should be automatically deleted,
     /// or 0 for no expiration.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
     async fn set(&self, ctx: Context, arg: SetRequest) -> () {
         let mut cmd = match arg.expires {
             0 => redis::Cmd::set(&arg.key, &arg.value),
@@ -241,14 +246,14 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     }
 
     /// Add an item into a set. Returns number of items added
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.set_name))]
     async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> u32 {
         let mut cmd = redis::Cmd::sadd(&arg.set_name, &arg.value);
         self.exec(&ctx, &mut cmd).await
     }
 
     /// Remove a item from the set. Returns
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.set_name))]
     async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> u32 {
         let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
         self.exec(&ctx, &mut cmd).await
@@ -257,27 +262,48 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Deletes a set and its contents
     /// input: set name
     /// returns: true if the set existed and was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn set_clear(&self, ctx: Context, arg: String) -> bool {
         self.del(ctx, arg).await
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, keys = ?arg))]
     async fn set_intersection(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
         let mut cmd = redis::Cmd::sinter(arg);
         self.exec(&ctx, &mut cmd).await
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
     async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
         let mut cmd = redis::Cmd::smembers(arg.to_string());
         self.exec(&ctx, &mut cmd).await
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, keys = ?arg))]
     async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
         let mut cmd = redis::Cmd::sunion(arg);
         self.exec(&ctx, &mut cmd).await
+    }
+}
+
+trait ExtractRedisUrl {
+    /// Extract a URL for a redis cluster
+    fn try_extract_redis_url(&self) -> Option<String>;
+}
+
+impl ExtractRedisUrl for InterfaceLinkDefinition {
+    fn try_extract_redis_url(&self) -> Option<String> {
+        // NOTE: here we expect that target_config is full of `NAME=VALUE` values
+        // *instead* of names of named configs (for now).
+        //
+        // In the future this method
+        // would be more involved, looking up the relevant named config and attempting to
+        // find the right value in there.
+        self.target_config
+            .iter()
+            .flat_map(|v| v.split_once('='))
+            .find(|(key, _value)| key.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .map(|(_key, url)| url.to_owned())
     }
 }
 
@@ -299,15 +325,15 @@ impl KvRedisProvider {
     /// or removal of actor links may need to wait for in-progress operations to complete.
     /// That should be rare, because most links are passed to the provider at startup.
     async fn exec<T: FromRedisValue + Default>(&self, ctx: &Context, cmd: &mut redis::Cmd) -> T {
-        let Some(actor_id) = ctx.actor.as_ref() else {
+        let Some(source_id) = ctx.actor.as_ref() else {
             error!("missing actor reference in execution context");
             return T::default();
         };
 
-        // get read lock on actor-connections hashmap
+        // Get read lock on actor-connections HashMap
         let rd = self.actors.read().await;
-        let Some(rc) = rd.get(actor_id) else {
-            error!("No Redis connection found for actor {actor_id}. Please ensure the URL supplied in the link definition is a valid Redis URL");
+        let Some(rc) = rd.get(source_id) else {
+            error!("No Redis connection found for actor {source_id}. Please ensure the URL supplied in the link definition is a valid Redis URL");
             return T::default();
         };
 
@@ -323,17 +349,9 @@ impl KvRedisProvider {
     }
 }
 
-fn get_redis_url(link_values: &[(String, String)], default_connect_url: &str) -> String {
-    link_values
-        .iter()
-        .find(|(key, _value)| key.eq_ignore_ascii_case(REDIS_URL_KEY))
-        .map(|(_key, url)| url.to_owned())
-        .unwrap_or_else(|| default_connect_url.to_owned())
-}
-
 #[cfg(test)]
 mod test {
-    use super::{get_redis_url, KvRedisConfig};
+    use super::KvRedisConfig;
     use crate::serde_json;
 
     const PROPER_URL: &str = "redis://127.0.0.1:6379";
@@ -361,29 +379,6 @@ mod test {
             serde_json::from_str::<KvRedisConfig>(&initial_caps_config)
                 .unwrap()
                 .url
-        );
-    }
-
-    #[test]
-    fn can_accept_case_insensitive_url_parameters() {
-        assert_eq!(
-            get_redis_url(&[("url".to_string(), PROPER_URL.to_string())], ""),
-            PROPER_URL
-        );
-
-        assert_eq!(
-            get_redis_url(&[("URL".to_string(), PROPER_URL.to_string())], ""),
-            PROPER_URL
-        );
-
-        assert_eq!(
-            get_redis_url(&[("uRl".to_string(), PROPER_URL.to_string())], ""),
-            PROPER_URL
-        );
-
-        assert_eq!(
-            get_redis_url(&[("UrL".to_string(), PROPER_URL.to_string())], ""),
-            PROPER_URL
         );
     }
 }

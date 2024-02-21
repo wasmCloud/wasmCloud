@@ -870,7 +870,7 @@ impl Invocation {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
+    use super::{Account, Actor, Claims, ErrorKind, KeyPair, Operator};
     use crate::{
         caps::{KEY_VALUE, LOGGING, MESSAGING},
         jwt::{
@@ -966,33 +966,6 @@ mod test {
             assert!(!v.cannot_use_yet);
             assert_eq!(v.expires_human, "8h ago");
         }
-    }
-
-    #[test]
-    fn validate_invocation() {
-        let issuer = KeyPair::new_server();
-        let claims = Claims {
-            id: nuid::next(),
-            metadata: Some(Invocation::new(
-                "wasmbus://M1234/DeliverMessage",
-                "wasmbus://wasmcloud/messaging/default",
-                "abc",
-            )),
-            expires: None,
-            not_before: None,
-            issued_at: 0,
-            issuer: issuer.public_key(),
-            subject: "invocation1".to_string(),
-            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
-        };
-        let encoded = claims.encode(&issuer).unwrap();
-        let vres = validate_token::<Invocation>(&encoded);
-        let decoded = Claims::<Invocation>::decode(&encoded).unwrap();
-        assert_eq!(
-            decoded.metadata.unwrap().target_url,
-            claims.metadata.unwrap().target_url
-        );
-        assert!(vres.is_ok());
     }
 
     #[test]

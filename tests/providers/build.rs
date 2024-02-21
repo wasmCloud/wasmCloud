@@ -155,8 +155,10 @@ async fn main() -> anyhow::Result<()> {
             "--manifest-path=../../crates/providers/Cargo.toml",
             "-p=wasmcloud-provider-blobstore-fs",
             "-p=wasmcloud-provider-blobstore-s3",
-            "-p=wasmcloud-provider-httpclient",
-            // todo(vadossi-cosmonic): re-enable once http-server is working
+            // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+            // is implemented for either HashMap or Tuple(T1,T2)
+            // "-p=wasmcloud-provider-httpclient",
+            // todo(vados-cosmonic): re-enable once http-server is working
             // "-p=wasmcloud-provider-httpserver",
             "-p=wasmcloud-provider-kv-vault",
             "-p=wasmcloud-provider-kvredis",
@@ -167,8 +169,10 @@ async fn main() -> anyhow::Result<()> {
             [
                 "blobstore_fs",
                 "blobstore_s3",
-                "httpclient",
-                // todo(vadossi-cosmonic): re-enable once http-server is working
+                // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+                // is implemented for either HashMap or Tuple(T1,T2)
+                // "httpclient",
+                // todo(vados-cosmonic): re-enable once http-server is working
                 // "httpserver",
                 "kv-vault",
                 "kvredis",
@@ -188,14 +192,15 @@ async fn main() -> anyhow::Result<()> {
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
             Some(("blobstore_fs", [rust_blobstore_fs])),
             Some(("blobstore_s3", [rust_blobstore_s3])),
-            Some(("httpclient", [rust_httpclient])),
-            // todo(vadossi-cosmonic): re-enable once http-server is working
+            // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+            // is implemented for either HashMap or Tuple(T1,T2)
+            // Some(("httpclient", [rust_httpclient])),
+            // todo(vados-cosmonic): re-enable once http-server is working
             // Some(("httpserver", [rust_httpserver])),
             Some(("kv-vault", [rust_kv_vault])),
             Some(("kvredis", [rust_kvredis])),
@@ -206,8 +211,10 @@ async fn main() -> anyhow::Result<()> {
             let (
                 rust_blobstore_fs_seed,
                 rust_blobstore_s3_seed,
-                rust_httpclient_seed,
-                // todo(vadossi-cosmonic): re-enable once http-server is working
+                // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+                // is implemented for either HashMap or Tuple(T1,T2)
+                // rust_httpclient_seed,
+                // todo(vados-cosmonic): re-enable once http-server is working
                 // rust_httpserver_seed,
                 rust_kvredis_seed,
                 rust_kv_vault_seed,
@@ -228,14 +235,16 @@ async fn main() -> anyhow::Result<()> {
                     "wasmcloud-provider-blobstore-s3",
                     rust_blobstore_s3,
                 ),
-                build_par(
-                    &issuer,
-                    out_dir.join("rust-httpclient.par"),
-                    "wasmcloud:httpclient",
-                    "wasmcloud-provider-httpclient",
-                    rust_httpclient,
-                ),
-                // todo(vadossi-cosmonic): re-enable once http-server is working
+                // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
+                // is implemented for either HashMap or Tuple(T1,T2)
+                // build_par(
+                //     &issuer,
+                //     out_dir.join("rust-httpclient.par"),
+                //     "wasmcloud:httpclient",
+                //     "wasmcloud-provider-httpclient",
+                //     rust_httpclient,
+                // ),
+                // todo(vados-cosmonic): re-enable once http-server is working
                 // build_par(
                 //     &issuer,
                 //     out_dir.join("rust-httpserver.par"),
@@ -274,7 +283,7 @@ async fn main() -> anyhow::Result<()> {
             )?;
             println!("cargo:rustc-env=RUST_BLOBSTORE_FS_SUBJECT={rust_blobstore_fs_seed}");
             println!("cargo:rustc-env=RUST_BLOBSTORE_S3_SUBJECT={rust_blobstore_s3_seed}");
-            println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
+            // println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
             // println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");
             println!("cargo:rustc-env=RUST_KV_VAULT_SUBJECT={rust_kv_vault_seed}");

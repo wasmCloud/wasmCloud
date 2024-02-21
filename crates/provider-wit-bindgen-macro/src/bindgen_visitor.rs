@@ -614,10 +614,13 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // Add the attributes we want to be present to the enum
                     e.attrs.append(&mut vec![
                         parse_quote!(
-                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::EncodeSync, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive)]
                         ),
                         parse_quote!(
                             #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde")]
+                        ),
+                        parse_quote!(
+                            #[wrpc_transport_derive(crate = "::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive")]
                         ),
                     ]);
 
@@ -722,10 +725,13 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // Add the attributes we want to be present
                     s.attrs.append(&mut vec![
                         parse_quote!(
-                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::EncodeSync, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive)]
                         ),
                         parse_quote!(
                             #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde", rename_all = "camelCase")]
+                        ),
+                        parse_quote!(
+                            #[wrpc_transport_derive(crate = "::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive")]
                         ),
                     ]);
 

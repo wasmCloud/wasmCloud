@@ -18,6 +18,8 @@ use tracing::{instrument, trace};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::IncomingInputStream;
 
+use wasmcloud_core::{WitFunction, WitInterface, WitNamespace, WitPackage};
+
 #[derive(Clone, Default)]
 pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
@@ -230,6 +232,52 @@ impl TargetEntity {
     }
 }
 
+/// Parse a sufficiently specified WIT operation/method into constituent parts.
+///
+///
+/// # Errors
+///
+/// Returns `Err` if the operation is not of the form "<package>:<ns>/<interface>.<function>"
+///
+/// # Example
+///
+/// ```
+/// let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(("wasmcloud:bus/guest-config"));
+/// #assert_eq!(wit_ns, "wasmcloud")
+/// #assert_eq!(wit_pkg, "bus")
+/// #assert_eq!(wit_iface, "iface")
+/// #assert_eq!(wit_fn, None)
+/// let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(("wasmcloud:bus/guest-config.get"));
+/// #assert_eq!(wit_ns, "wasmcloud")
+/// #assert_eq!(wit_pkg, "bus")
+/// #assert_eq!(wit_iface, "iface")
+/// #assert_eq!(wit_fn, Some("get"))
+/// ```
+pub fn parse_wit_meta_from_operation(
+    operation: impl AsRef<str>,
+) -> anyhow::Result<(WitNamespace, WitPackage, WitInterface, Option<WitFunction>)> {
+    let operation = operation.as_ref();
+    let (ns_and_pkg, interface_and_func) = operation
+        .rsplit_once('/')
+        .context("failed to parse operation")?;
+    let (wit_iface, wit_fn) = interface_and_func
+        .split_once('.')
+        .context("interface and function should be specified")?;
+    let (wit_ns, wit_pkg) = ns_and_pkg
+        .rsplit_once(':')
+        .context("failed to parse operation for WIT ns/pkg")?;
+    Ok((
+        wit_ns.into(),
+        wit_pkg.into(),
+        wit_iface.into(),
+        if wit_fn.is_empty() {
+            None
+        } else {
+            Some(wit_fn.into())
+        },
+    ))
+}
+
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 /// Call target identifier, which is equivalent to a WIT specification, which
 /// can identify an interface being called and optionally a specific function on that interface.
@@ -260,13 +308,25 @@ impl CallTargetInterface {
     /// Build a [`TargetInterface`] from constituent parts
     #[must_use]
     pub fn from_parts(parts: (&str, &str, &str, Option<&str>)) -> Self {
-        let (ns, pkg, iface, func) = parts;
+        let (ns, pkg, iface, function) = parts;
         Self {
             namespace: ns.into(),
             package: pkg.into(),
             interface: iface.into(),
-            function: func.map(String::from),
+            function: function.map(String::from),
         }
+    }
+
+    /// Build a target interface from a given operation
+    pub fn from_operation(operation: impl AsRef<str>) -> anyhow::Result<Self> {
+        let operation = operation.as_ref();
+        let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(operation)?;
+        Ok(CallTargetInterface::from_parts((
+            &wit_ns,
+            &wit_pkg,
+            &wit_iface,
+            wit_fn.as_deref(),
+        )))
     }
 }
 
