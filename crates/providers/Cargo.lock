@@ -3557,9 +3557,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-wit-bindgen"
-version = "17.0.1"
+version = "18.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb3bc92c031cf4961135bffe055a69c1bd67c253dca20631478189bb05ec27b"
+checksum = "ff6e9754e0a526238ea66da9ba21965a54846a2b22d9de89a298fb8998389507"
 dependencies = [
  "anyhow",
  "heck",

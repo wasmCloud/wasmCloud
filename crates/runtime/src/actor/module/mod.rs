@@ -29,8 +29,9 @@ use tracing::{instrument, trace};
 use wascap::jwt;
 use wasi_common::file::{FdFlags, FileType};
 use wasi_common::pipe::WritePipe;
+use wasi_common::sync::WasiCtxBuilder;
+use wasi_common::WasiFile;
 use wasmtime::{Linker, TypedFunc};
-use wasmtime_wasi::{WasiCtxBuilder, WasiFile};
 
 /// Actor module instance configuration
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -121,7 +122,7 @@ impl<T: AsyncWrite + Sync + Send + Unpin + 'static> WasiFile for AsyncWritePipe<
 }
 
 struct Ctx {
-    wasi: wasmtime_wasi::WasiCtx,
+    wasi: wasi_common::WasiCtx,
     wasmbus: wasmbus::Ctx,
 }
 
@@ -224,7 +225,7 @@ impl Module {
 
         let mut linker = Linker::<Ctx>::new(module.engine());
 
-        wasmtime_wasi::add_to_linker(&mut linker, |ctx| &mut ctx.wasi)
+        wasi_common::sync::add_to_linker(&mut linker, |ctx| &mut ctx.wasi)
             .context("failed to link WASI")?;
         wasmbus::add_to_linker(&mut linker).context("failed to link wasmbus")?;
 
