@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::path::Path;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -21,8 +20,7 @@ use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
 use wasmcloud_runtime::capability::{
-    self, guest_config, messaging, IncomingHttp, KeyValueAtomic, KeyValueEventual, Messaging,
-    OutgoingHttp,
+    self, guest_config, messaging, IncomingHttp, KeyValueEventual, OutgoingHttp,
 };
 use wasmcloud_runtime::{Actor, Runtime};
 

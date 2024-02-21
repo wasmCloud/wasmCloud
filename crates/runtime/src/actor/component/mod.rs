@@ -4,12 +4,11 @@ use crate::Runtime;
 
 use core::fmt::{self, Debug};
 use core::iter::zip;
-use core::mem::replace;
 use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context as _};
+use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::AsyncWrite;
@@ -17,16 +16,13 @@ use tokio::sync::Mutex;
 use tracing::{error, instrument, trace};
 use wascap::jwt;
 use wasmtime::component::{self, Linker, ResourceTable, ResourceTableError, Val};
-use wasmtime_wasi::preview2::command::{self, Command};
-use wasmtime_wasi::preview2::pipe::{
-    AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
-};
+use wasmtime_wasi::preview2::command::{self};
+use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
 use wasmtime_wasi::preview2::{
     HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
     Subscribe, WasiCtx, WasiCtxBuilder, WasiView,
 };
 use wasmtime_wasi_http::WasiHttpCtx;
-use wit_parser::{Results, Type, World, WorldId, WorldKey};
 
 mod blobstore;
 mod bus;
@@ -189,8 +185,6 @@ struct Ctx {
     http: WasiHttpCtx,
     table: ResourceTable,
     handler: builtin::Handler,
-    stdin: StdioStream<Box<dyn HostInputStream>>,
-    stdout: StdioStream<Box<dyn HostOutputStream>>,
     stderr: StdioStream<Box<dyn HostOutputStream>>,
 }
 
@@ -303,8 +297,7 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
                 .context("discriminant does not fit in usize")?;
             let component::types::Case { name, ty: case_ty } = ty
                 .cases()
-                .skip(discriminant)
-                .next()
+                .nth(discriminant)
                 .context("variant discriminant not found")?;
             let v = if let Some(case_ty) = case_ty {
                 let v = nested.context("nested value missing")?;
@@ -321,8 +314,7 @@ fn from_wrpc_value(val: wrpc_transport::Value, ty: &component::Type) -> anyhow::
                 .context("discriminant does not fit in usize")?;
             let name = ty
                 .names()
-                .skip(discriminant)
-                .next()
+                .nth(discriminant)
                 .context("enum discriminant not found")?;
             component::Enum::new(ty, name).map(component::Val::Enum)
         }
@@ -410,7 +402,7 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
             component::types::ComponentItem::ComponentInstance(item) => item,
             _ => continue,
         };
-        let Some((namespace, package)) = instance_name.split_once(':') else {
+        let Some((namespace, _package)) = instance_name.split_once(':') else {
             error!(
                 ?instance_name,
                 "failed to split namespace from package and interface"
@@ -428,7 +420,7 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
             interface: interface.to_string(),
         });
         let mut linker = linker.root();
-        let mut linker = match linker.instance(&instance_name) {
+        let mut linker = match linker.instance(instance_name) {
             Ok(linker) => linker,
             Err(err) => {
                 error!(
@@ -463,8 +455,8 @@ fn polyfill(component: &wasmtime::component::Component, linker: &mut Linker<Ctx>
                     let ty = ty.clone();
                     Box::new(async move {
                         let params: Vec<_> = params
-                            .into_iter()
-                            .map(|param| to_wrpc_value(param))
+                            .iter()
+                            .map(to_wrpc_value)
                             .collect::<anyhow::Result<_>>()
                             .context("failed to convert wasmtime values to wRPC values")?;
                         let handler = &ctx.data().handler;
@@ -515,8 +507,6 @@ fn instantiate(
         http: WasiHttpCtx,
         table,
         handler,
-        stdin,
-        stdout,
         stderr,
     };
     let store = wasmtime::Store::new(engine, ctx);
