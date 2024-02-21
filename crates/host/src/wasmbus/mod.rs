@@ -57,9 +57,9 @@ use wasmcloud_core::{
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp,
-    InterfaceTarget, KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp,
-    OutgoingHttpRequest, TargetEntity, TargetInterface,
+    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, InterfaceTarget,
+    KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
+    TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -67,8 +67,7 @@ use wrpc_transport::{Client, Transmitter};
 
 use crate::{
     fetch_actor, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
-    PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
-    RegistryType,
+    PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig, RegistryType,
 };
 
 /// wasmCloud host configuration
@@ -214,6 +213,8 @@ impl ActorInstance {
         response_subject: wrpc_transport_nats::Subject,
         transmitter: wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
+        // TODO(#1548): implement querying policy server
+
         // Instantiate component with expected handlers
         let mut component_instance = self
             .instantiate()
@@ -2898,7 +2899,7 @@ impl Host {
         if let Ok(spec) = self.get_component_spec(&component_id).await {
             if spec.url != provider_ref {
                 bail!(
-                    "componnet specification URL does not match provider reference: {} != {}",
+                    "component specification URL does not match provider reference: {} != {}",
                     spec.url,
                     provider_ref
                 );
