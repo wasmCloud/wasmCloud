@@ -3,13 +3,9 @@ use super::{Ctx, Instance, InterfaceInstance};
 use crate::capability::logging::logging;
 use crate::capability::Logging;
 
-use std::io::Cursor;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
-use serde_json::json;
-use tokio::io::sink;
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 
