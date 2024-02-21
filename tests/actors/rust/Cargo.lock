@@ -307,18 +307,9 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "uuid",
  "wasmcloud-actor",
  "wit-bindgen 0.16.0",
-]
-
-[[package]]
-name = "builtins-module-reactor"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "serde_json",
- "wasmcloud-actor",
 ]
 
 [[package]]
@@ -1108,17 +1099,6 @@ name = "log"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
-
-[[package]]
-name = "logging-module-command"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rmp-serde",
- "serde",
- "serde_json",
- "wasmcloud-actor",
-]
 
 [[package]]
 name = "matchers"
@@ -2711,23 +2691,12 @@ dependencies = [
 name = "wasmcloud-actor"
 version = "0.1.0"
 dependencies = [
- "once_cell",
  "rand",
- "rmp-serde",
  "serde",
  "serde_bytes",
  "uuid",
- "wasmcloud-actor-macros",
  "wasmcloud-compat",
  "wit-bindgen 0.17.0",
-]
-
-[[package]]
-name = "wasmcloud-actor-macros"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn 2.0.48",
 ]
 
 [[package]]

@@ -1,12 +1,7 @@
 mod component;
-mod module;
 
 pub use component::{
     Component, Instance as ComponentInstance, InterfaceInstance as ComponentInterfaceInstance,
-};
-pub use module::{
-    Config as ModuleConfig, GuestInstance as ModuleGuestInstance, Instance as ModuleInstance,
-    Module,
 };
 
 use crate::capability::logging::logging;
@@ -14,17 +9,17 @@ use crate::capability::{
     Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
     OutgoingHttp,
 };
-use crate::io::AsyncVec;
 use crate::Runtime;
+
+use component::{incoming_http_bindings, logging_bindings, InterfaceInstance};
 
 use core::fmt::Debug;
 
-use std::io::Cursor;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt as _, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tracing::instrument;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
@@ -55,12 +50,7 @@ fn claims(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Claims<jwt::Actor>>> {
 
 /// A pre-loaded wasmCloud actor, which is either a module or a component
 #[derive(Clone, Debug)]
-pub enum Actor {
-    /// WebAssembly module containing an actor
-    Module(Module),
-    /// WebAssembly component containing an actor
-    Component(Component),
-}
+pub struct Actor(Component);
 
 impl Actor {
     /// Compiles WebAssembly binary using [Runtime].
@@ -77,9 +67,9 @@ impl Actor {
             Some(Ok(wasmparser::Payload::Version {
                 encoding: wasmparser::Encoding::Component,
                 ..
-            })) => Component::new(rt, wasm).map(Self::Component),
+            })) => Component::new(rt, wasm).map(Actor),
             // fallback to module type
-            _ => Module::new(rt, wasm).map(Self::Module),
+            _ => bail!("TODO: convert"),
         }
     }
 
@@ -112,19 +102,13 @@ impl Actor {
     /// [Claims](jwt::Claims) associated with this [Actor].
     #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
-        match self {
-            Self::Module(module) => module.claims(),
-            Self::Component(component) => component.claims(),
-        }
+        self.0.claims()
     }
 
     /// Like [Self::instantiate], but moves the [Actor].
     #[instrument]
-    pub async fn into_instance(self) -> anyhow::Result<Instance> {
-        match self {
-            Self::Module(module) => module.into_instance().await.map(Instance::Module),
-            Self::Component(component) => component.into_instance().map(Instance::Component),
-        }
+    pub fn into_instance(self) -> anyhow::Result<Instance> {
+        self.0.into_instance().map(Instance)
     }
 
     /// Like [Self::instantiate], but moves the [Actor] and returns associated [jwt::Claims].
@@ -132,16 +116,8 @@ impl Actor {
     pub async fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        match self {
-            Actor::Module(module) => {
-                let (module, claims) = module.into_instance_claims().await?;
-                Ok((Instance::Module(module), claims))
-            }
-            Actor::Component(component) => {
-                let (component, claims) = component.into_instance_claims()?;
-                Ok((Instance::Component(component), claims))
-            }
-        }
+        let (instance, claims) = self.0.into_instance_claims()?;
+        Ok((Instance(instance), claims))
     }
 
     /// Instantiate the actor.
@@ -151,10 +127,7 @@ impl Actor {
     /// Fails if instantiation of the underlying module or component fails
     #[instrument(level = "trace", skip_all)]
     pub async fn instantiate(&self) -> anyhow::Result<Instance> {
-        match self {
-            Self::Module(module) => module.instantiate().await.map(Instance::Module),
-            Self::Component(component) => component.instantiate().map(Instance::Component),
-        }
+        self.0.instantiate().map(Instance)
     }
 
     /// Instantiate the actor and invoke an operation on it.
@@ -181,7 +154,9 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if either instantiation fails or no incoming HTTP bindings are exported by the [`Instance`]
-    pub async fn as_incoming_http(&self) -> anyhow::Result<IncomingHttpInstance> {
+    pub async fn as_incoming_http(
+        &self,
+    ) -> anyhow::Result<InterfaceInstance<incoming_http_bindings::IncomingHttp>> {
         self.instantiate()
             .await
             .context("failed to instantiate actor")?
@@ -194,7 +169,7 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if either instantiation fails or no logging bindings are exported by the [`Instance`]
-    pub async fn as_logging(&self) -> anyhow::Result<LoggingInstance> {
+    pub async fn as_logging(&self) -> anyhow::Result<InterfaceInstance<logging_bindings::Logging>> {
         self.instantiate()
             .await
             .context("failed to instantiate actor")?
@@ -203,30 +178,17 @@ impl Actor {
     }
 }
 
-/// A pre-loaded, configured wasmCloud actor instance, which is either a module or a component
+/// A pre-loaded, configured wasmCloud actor component instance
 #[derive(Debug)]
-pub enum Instance {
-    /// WebAssembly module containing an actor
-    Module(ModuleInstance),
-    /// WebAssembly component containing an actor
-    Component(ComponentInstance),
-}
+pub struct Instance(ComponentInstance);
 
-/// A pre-loaded, configured [Logging] instance, which is either a module or a component
-pub enum LoggingInstance {
-    /// WebAssembly module containing an actor
-    Module(ModuleGuestInstance),
-    /// WebAssembly component containing an actor
-    Component(ComponentInterfaceInstance<component::logging_bindings::Logging>),
-}
+/// A pre-loaded, configured [Logging] actor component instance
+pub struct LoggingInstance(ComponentInterfaceInstance<component::logging_bindings::Logging>);
 
-/// A pre-loaded, configured [`IncomingHttp`] instance, which is either a module or a component
-pub enum IncomingHttpInstance {
-    /// WebAssembly module containing an actor
-    Module(ModuleGuestInstance),
-    /// WebAssembly component containing an actor
-    Component(ComponentInterfaceInstance<component::incoming_http_bindings::IncomingHttp>),
-}
+/// A pre-loaded, configured [`IncomingHttp`] actor component instance
+pub struct IncomingHttpInstance(
+    ComponentInterfaceInstance<component::incoming_http_bindings::IncomingHttp>,
+);
 
 #[async_trait]
 impl Logging for LoggingInstance {
@@ -236,11 +198,7 @@ impl Logging for LoggingInstance {
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        match self {
-            Self::Module(module) => module.log(level, context, message),
-            Self::Component(component) => component.log(level, context, message),
-        }
-        .await
+        self.0.log(level, context, message).await
     }
 }
 
@@ -250,46 +208,25 @@ impl IncomingHttp for IncomingHttpInstance {
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        match self {
-            Self::Module(module) => module.handle(request),
-            Self::Component(component) => component.handle(request),
-        }
-        .await
+        self.0.handle(request).await
     }
 }
 
 impl Instance {
     /// Reset [`Instance`] state to defaults
     pub async fn reset(&mut self, rt: &Runtime) {
-        match self {
-            Self::Module(module) => module.reset(rt),
-            Self::Component(component) => component.reset(rt).await,
-        }
+        self.0.reset(rt).await
     }
 
     /// Set [`Blobstore`] handler for this [Instance].
     pub fn blobstore(&mut self, blobstore: Arc<dyn Blobstore + Send + Sync>) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.blobstore(blobstore);
-            }
-            Self::Component(component) => {
-                component.blobstore(blobstore);
-            }
-        }
+        self.0.blobstore(blobstore);
         self
     }
 
     /// Set [`Bus`] handler for this [Instance].
     pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.bus(bus);
-            }
-            Self::Component(component) => {
-                component.bus(bus);
-            }
-        }
+        self.0.bus(bus);
         self
     }
 
@@ -298,14 +235,7 @@ impl Instance {
         &mut self,
         incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
     ) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.incoming_http(incoming_http);
-            }
-            Self::Component(component) => {
-                component.incoming_http(incoming_http);
-            }
-        }
+        self.0.incoming_http(incoming_http);
         self
     }
 
@@ -314,14 +244,7 @@ impl Instance {
         &mut self,
         keyvalue_atomic: Arc<dyn KeyValueAtomic + Send + Sync>,
     ) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.keyvalue_atomic(keyvalue_atomic);
-            }
-            Self::Component(component) => {
-                component.keyvalue_atomic(keyvalue_atomic);
-            }
-        }
+        self.0.keyvalue_atomic(keyvalue_atomic);
         self
     }
 
@@ -330,40 +253,19 @@ impl Instance {
         &mut self,
         keyvalue_eventual: Arc<dyn KeyValueEventual + Send + Sync>,
     ) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.keyvalue_eventual(keyvalue_eventual);
-            }
-            Self::Component(component) => {
-                component.keyvalue_eventual(keyvalue_eventual);
-            }
-        }
+        self.0.keyvalue_eventual(keyvalue_eventual);
         self
     }
 
     /// Set [`Logging`] handler for this [Instance].
     pub fn logging(&mut self, logging: Arc<dyn Logging + Send + Sync>) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.logging(logging);
-            }
-            Self::Component(component) => {
-                component.logging(logging);
-            }
-        }
+        self.0.logging(logging);
         self
     }
 
     /// Set [`Messaging`] handler for this [Instance].
     pub fn messaging(&mut self, messaging: Arc<dyn Messaging + Send + Sync>) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.messaging(messaging);
-            }
-            Self::Component(component) => {
-                component.messaging(messaging);
-            }
-        }
+        self.0.messaging(messaging);
         self
     }
 
@@ -372,14 +274,7 @@ impl Instance {
         &mut self,
         outgoing_http: Arc<dyn OutgoingHttp + Send + Sync>,
     ) -> &mut Self {
-        match self {
-            Self::Module(module) => {
-                module.outgoing_http(outgoing_http);
-            }
-            Self::Component(component) => {
-                component.outgoing_http(outgoing_http);
-            }
-        }
+        self.0.outgoing_http(outgoing_http);
         self
     }
 
@@ -392,14 +287,7 @@ impl Instance {
         &mut self,
         stderr: impl AsyncWrite + Send + Sync + Unpin + 'static,
     ) -> anyhow::Result<&mut Self> {
-        match self {
-            Self::Module(module) => {
-                module.stderr(stderr);
-            }
-            Self::Component(component) => {
-                component.stderr(stderr).await?;
-            }
-        }
+        self.0.stderr(stderr).await?;
         Ok(self)
     }
 
@@ -416,51 +304,7 @@ impl Instance {
         name: &str,
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        match self {
-            Self::Module(module) => {
-                let mut params = params.into_iter();
-                match (params.next(), params.next()) {
-                    (Some(wrpc_transport::Value::List(buf)), None) => {
-                        let buf: Vec<_> = buf
-                            .into_iter()
-                            .map(|val| {
-                                if let wrpc_transport::Value::U8(b) = val {
-                                    Ok(b)
-                                } else {
-                                    bail!("value is not a byte")
-                                }
-                            })
-                            .collect::<anyhow::Result<_>>()?;
-                        let mut response = AsyncVec::default();
-                        module
-                            .call(
-                                format!("{instance}.{name}"),
-                                Cursor::new(buf),
-                                response.clone(),
-                            )
-                            .await
-                            .context("failed to call module")?
-                            .map_err(|err| anyhow!(err).context("call failed"))?;
-                        response
-                            .rewind()
-                            .await
-                            .context("failed to rewind response buffer")?;
-                        let mut buf = vec![];
-                        response
-                            .read_to_end(&mut buf)
-                            .await
-                            .context("failed to read response buffer")?;
-                        let response = buf.into_iter().map(wrpc_transport::Value::U8).collect();
-                        Ok(vec![wrpc_transport::Value::List(response)])
-                    }
-                    _ => bail!("modules can only handle single argument functions"),
-                }
-            }
-            Self::Component(component) => component
-                .call(instance, name, params)
-                .await
-                .context("failed to call component"),
-        }
+        self.0.call(instance, name, params).await
     }
 
     /// Instantiates and returns a [`IncomingHttpInstance`] if exported by the [`Instance`].
@@ -468,16 +312,10 @@ impl Instance {
     /// # Errors
     ///
     /// Fails if no incoming HTTP bindings are exported by the [`Instance`]
-    pub async fn into_incoming_http(self) -> anyhow::Result<IncomingHttpInstance> {
-        match self {
-            Self::Module(module) => Ok(IncomingHttpInstance::Module(ModuleGuestInstance::from(
-                module,
-            ))),
-            Self::Component(component) => component
-                .into_incoming_http()
-                .await
-                .map(IncomingHttpInstance::Component),
-        }
+    pub async fn into_incoming_http(
+        self,
+    ) -> anyhow::Result<InterfaceInstance<incoming_http_bindings::IncomingHttp>> {
+        self.0.into_incoming_http().await
     }
 
     /// Instantiates and returns a [`LoggingInstance`] if exported by the [`Instance`].
@@ -485,13 +323,9 @@ impl Instance {
     /// # Errors
     ///
     /// Fails if no logging bindings are exported by the [`Instance`]
-    pub async fn into_logging(self) -> anyhow::Result<LoggingInstance> {
-        match self {
-            Self::Module(module) => Ok(LoggingInstance::Module(ModuleGuestInstance::from(module))),
-            Self::Component(component) => component
-                .into_logging()
-                .await
-                .map(LoggingInstance::Component),
-        }
+    pub async fn into_logging(
+        self,
+    ) -> anyhow::Result<InterfaceInstance<logging_bindings::Logging>> {
+        self.0.into_logging().await
     }
 }
