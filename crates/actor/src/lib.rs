@@ -1,21 +1,10 @@
-#[cfg(all(not(feature = "module"), feature = "component",))]
 wit_bindgen::generate!("interfaces");
-
-#[cfg(feature = "module")]
-mod compat;
-
-#[cfg(feature = "module")]
-pub use compat::*;
-
-#[cfg(feature = "module")]
-pub use wasmcloud_actor_macros::*;
 
 mod wrappers;
 pub use wrappers::*;
 
 #[cfg(test)]
 mod test {
-    #[cfg(any(feature = "module", feature = "component"))]
     use super::*;
 
     #[allow(dead_code)]
@@ -23,7 +12,6 @@ mod test {
 
     #[allow(dead_code)]
     impl Actor {
-        #[cfg(any(feature = "module", feature = "component"))]
         fn use_host_exports() {
             wasi::logging::logging::log(wasi::logging::logging::Level::Trace, "context", "message");
             wasi::logging::logging::log(wasi::logging::logging::Level::Debug, "context", "message");

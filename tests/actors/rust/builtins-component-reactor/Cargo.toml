@@ -10,5 +10,6 @@ crate-type = ["cdylib"]
 rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
-wasmcloud-actor = { workspace = true, features = ["component", "rand", "uuid"] }
+uuid = { workspace = true, features = ["serde"] }
+wasmcloud-actor = { workspace = true, features = ["rand", "uuid"] }
 wit-bindgen = { workspace = true, features = ["default"] }

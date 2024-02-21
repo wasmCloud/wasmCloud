@@ -699,24 +699,6 @@ impl Blobstore for Handler {
 #[async_trait]
 impl Bus for Handler {
     #[instrument(level = "trace", skip(self))]
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity> {
-        let links = self.links.read().await;
-        if links
-            .get(namespace)
-            .map(|bindings| bindings.contains_key(binding))
-            .unwrap_or_default()
-        {
-            Ok(TargetEntity::Link(Some(binding.into())))
-        } else {
-            Ok(TargetEntity::Actor(namespace.into()))
-        }
-    }
-
-    #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
         target_interface: &TargetInterface,

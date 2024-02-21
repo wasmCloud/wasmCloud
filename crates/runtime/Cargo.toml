@@ -28,8 +28,6 @@ http-body-util = { workspace = true }
 log = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
-rmp-serde = { workspace = true }
-serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
@@ -47,6 +45,7 @@ wrpc-transport = { workspace = true }
 [dev-dependencies]
 once_cell = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 test-actors = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }

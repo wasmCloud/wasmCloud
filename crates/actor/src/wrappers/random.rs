@@ -6,7 +6,6 @@ pub use uuid::Uuid;
 
 pub struct HostRng;
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
 impl HostRng {
     /// Generate a 32-bit random number
     #[inline]
@@ -27,27 +26,6 @@ impl HostRng {
     #[cfg(feature = "rand")]
     pub fn random_in_range(min: u32, max: u32) -> u32 {
         HostRng.gen_range(min..=max)
-    }
-}
-
-#[cfg(feature = "module")]
-impl HostRng {
-    /// Generate a 32-bit random number
-    #[inline]
-    pub fn random32() -> u32 {
-        crate::wasi::random::random::random32()
-    }
-
-    /// Generate a v4-format guid in the form "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
-    /// where n is a lowercase hex digit and all bits are random.
-    #[cfg(feature = "uuid")]
-    pub fn generate_guid() -> Uuid {
-        crate::wasi::random::random::generate_guid()
-    }
-
-    /// Generate a random integer within an inclusive range. ( min <= n <= max )
-    pub fn random_in_range(min: u32, max: u32) -> u32 {
-        crate::wasi::random::random::random_in_range(min, max)
     }
 }
 
