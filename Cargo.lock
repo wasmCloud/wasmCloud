@@ -5597,6 +5597,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wit-parser",
+ "wrpc-runtime-wasmtime",
  "wrpc-transport",
 ]
 
@@ -6452,6 +6453,20 @@ dependencies = [
  "log",
  "thiserror",
  "wast 35.0.2",
+]
+
+[[package]]
+name = "wrpc-runtime-wasmtime"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f1358e65b09ec370b1eb9438a77a10cbc8feb7f05cb681aa103150aa5cfbfab"
+dependencies = [
+ "anyhow",
+ "futures",
+ "tracing",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wrpc-transport",
 ]
 
 [[package]]
