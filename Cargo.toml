@@ -72,12 +72,13 @@ url = { workspace = true }
 uuid = { workspace = true }
 vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
+wasmcloud-compat = { version = "0.1", path = "./crates/compat", default-features = false }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
-wrpc-transport-nats = { workspace = true }
 wrpc-transport-derive = { workspace = true }
+wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
 
 [workspace]

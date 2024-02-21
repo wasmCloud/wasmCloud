@@ -44,7 +44,7 @@ Chosen option: "Support OTEL-compliant metrics", because integrating properly wi
 
 ### Positive Consequences
 
-* Easier maintenance of wamsCloud hosts
+* Easier maintenance of wasmCloud hosts
 * Build a base on which to add more important metrics
 * Interoperation with other cloud native ecosystem projects
 

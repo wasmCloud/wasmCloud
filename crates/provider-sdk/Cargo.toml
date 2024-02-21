@@ -14,6 +14,7 @@ default = []
 otel = ["opentelemetry", "tracing-opentelemetry"]
 
 [dependencies]
+anyhow = { workspace = true }
 async-nats = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -32,7 +33,11 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
+ulid = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 wascap = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wrpc-transport = { workspace = true }
+wrpc-transport-nats = { workspace = true }
+wrpc-types = { workspace = true }

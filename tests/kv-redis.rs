@@ -1,13 +1,16 @@
 use anyhow::{anyhow, Context, Result};
 use nkeys::KeyPair;
+use serde::{Deserialize, Serialize};
 use tokio::try_join;
 use url::Url;
+use uuid::Uuid;
 
 use wasmcloud_control_interface::ClientBuilder;
-use wasmcloud_test_util::actor::extract_actor_claims;
 use wasmcloud_test_util::host::WasmCloudTestHost;
 use wasmcloud_test_util::lattice::link::assert_advertise_link;
 use wasmcloud_test_util::provider::assert_start_provider;
+use wrpc_transport::Client;
+use wrpc_transport_derive::EncodeSync;
 
 pub mod common;
 
@@ -21,7 +24,7 @@ const LATTICE: &str = "test-kv-redis";
 async fn kv_redis_suite() -> Result<()> {
     // Start a Redis & NATS
     let _redis_token = "test";
-    let ((redis_server, _redis_url), (nats_server, nats_url, nats_client)) =
+    let ((redis_server, redis_url), (nats_server, nats_url, nats_client)) =
         try_join!(start_redis(), start_nats()).context("failed to start backing services")?;
 
     // Get provider key/url for pre-built kv-redis provider (subject of this test)
@@ -30,43 +33,20 @@ async fn kv_redis_suite() -> Result<()> {
     let kv_redis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
         .map_err(|()| anyhow!("failed to construct provider ref"))?;
 
-    // // Get actor key/url for pre-built kv-http-smithy actor
-    // let kv_http_smithy_actor_url = Url::from_file_path(test_actors::RUST_KV_HTTP_SMITHY_SIGNED)
-    //     .map_err(|()| anyhow!("failed to construct actor ref"))?;
-
     // Build client for interacting with the lattice
     let ctl_client = ClientBuilder::new(nats_client.clone())
         .lattice(LATTICE.to_string())
         .build();
+    // Build the client for interacting via wRPC
+    let wrpc_client = wrpc_transport_nats::Client::new(
+        nats_client.clone(),
+        format!("{LATTICE}.{}", &kv_redis_provider_key.public_key()),
+    );
 
     // Build the host
     let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None)
         .await
         .context("failed to start test host")?;
-    let kv_http_smithy_claims =
-        extract_actor_claims(test_actors::RUST_KV_HTTP_SMITHY_SIGNED).await?;
-
-    // Link the actor to both providers
-    //
-    // this must be done *before* the provider is started to avoid a race condition
-    // to ensure the link is advertised before the actor would normally subscribe
-    assert_advertise_link(
-        &ctl_client,
-        &kv_http_smithy_claims.subject,
-        &kv_redis_provider_key.public_key(),
-        "default",
-        "wasi",
-        "keyvalue",
-        vec!["atomic".to_string(), "eventual".to_string()],
-        vec![],
-        vec![],
-        // TODO: put configuration and reference here.
-        // HashMap::from([
-        //     ("ADDR".into(), redis_url.to_string()),
-        //     ("TOKEN".into(), redis_token.to_string()),
-        // ]),
-    )
-    .await?;
 
     // Start the kv-redis provider
     assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
@@ -80,30 +60,71 @@ async fn kv_redis_suite() -> Result<()> {
     })
     .await?;
 
-    // todo(vados-cosmonic): fix? starting actors seems to be broken on feat/wrpc?
-    // // Start the kv-http-smithy actor
-    // assert_start_actor(
-    //     &ctl_client,
-    //     host.host_key(),
-    //     kv_http_smithy_actor_url.clone(),
-    //     1,
-    // )
-    // .await?;
+    // Generate a random value we'll use to set
+    let value = Uuid::new_v4();
 
-    // todo(vados-cosmonic): fix? starting actors seems to be broken on feat/wrpc?
-    // // Scale the kv-http-smithy actor
-    // assert_scale_actor(
-    //     &ctl_client,
-    //     host.host_key(),
-    //     kv_http_smithy_actor_url,
-    //     None,
-    //     3,
-    // )
-    // .await?;
+    // Link fake actor --wasmcloud:keyvalue/key-value--> provider
+    // todo(vados-cosmonic): use the wrapped wasmcloud_nats::Client here, so we can include headers
+    assert_advertise_link(
+        &ctl_client,
+        "<unknown>",
+        &kv_redis_provider_key.public_key(),
+        "default",
+        "wasmcloud",
+        "keyvalue",
+        vec!["key-value".to_string()],
+        vec![],
+        // todo(vados-cosmonic): this is a hack, remove and replace with named config!
+        vec![format!("URL={}", redis_url.to_string())],
+    )
+    .await
+    .context("advertise link (to fake actor) failed")?;
+
+    // Trigger the kv-redis provider with wRPC directly
+    let (_results, tx) = wrpc_client
+        .invoke_static::<()>(
+            "wasmcloud:keyvalue/key-value",
+            "set",
+            SetRequest {
+                key: "test".into(),
+                value: value.into(),
+                expires: 0,
+            },
+        )
+        .await
+        .context("wasmcloud:keyvalue/key-value.set invocation failed")?;
+    // Transmit parameters by awaiting transmit
+    tx.await.context("failed to transmit parameters")?;
+
+    // Use get to retrieve the value from redis
+    let (results, tx) = wrpc_client
+        .invoke_static::<String>("wasmcloud:keyvalue/key-value", "get", "test".to_string())
+        .await
+        .context("wasmcloud:keyvalue/key-value.set invocation failed")?;
+    assert_eq!(
+        results,
+        value.to_string(),
+        "value returned by get matched value saved by set"
+    );
+    // Transmit parameters by awaiting transmit
+    tx.await.context("failed to transmit parameters")?;
 
     // Stop host and backing services
     host.stop().await?;
     try_join!(redis_server.stop(), nats_server.stop()).context("failed to stop servers")?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, EncodeSync)]
+pub struct SetRequest {
+    /// the key name to change (or create)
+    #[serde(default)]
+    pub key: String,
+    /// the new value
+    #[serde(default)]
+    pub value: String,
+    /// expiration time in seconds 0 for no expiration
+    #[serde(default)]
+    pub expires: u32,
 }

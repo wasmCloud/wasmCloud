@@ -18,11 +18,15 @@ status = "actively-developed"
 otel = [ "wasmcloud-provider-sdk/otel" ]
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-provider-wit-bindgen-macro = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-transport-derive = { workspace = true }
 wrpc-types = { workspace = true, features = [ "serde" ] }

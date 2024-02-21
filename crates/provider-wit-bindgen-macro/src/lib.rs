@@ -28,16 +28,16 @@
 
 use std::collections::HashMap;
 
-use anyhow::{bail, Context};
-use proc_macro2::{Ident, Punct, Span, TokenStream, TokenTree};
-use quote::{ToTokens, TokenStreamExt};
+use anyhow::{anyhow, bail, Context, Result};
+use proc_macro2::{Ident, Span, TokenStream, TokenTree};
+use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{
     parse_macro_input, punctuated::Punctuated, visit_mut::VisitMut, FnArg, ImplItemFn, ItemEnum,
     ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token,
 };
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
-use wit_parser::WorldKey;
+use wit_parser::{Resolve, WorldKey};
 
 mod bindgen_visitor;
 use bindgen_visitor::WitBindgenOutputVisitor;
@@ -54,6 +54,8 @@ mod wit;
 use wit::{
     extract_witified_map, WitFunctionName, WitInterfacePath, WitNamespaceName, WitPackageName,
 };
+
+mod wrpc;
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
 const EXPORTS_MODULE_NAME: &str = "exports";
@@ -105,8 +107,8 @@ struct LatticeMethod {
     /// Function name for the method that will be called after a lattice invocation is received
     func_name: Ident,
 
-    /// Invocation arguments, only names without types
-    invocation_arg_names: Vec<Ident>,
+    /// Invocation arguments (type name & type pair)
+    invocation_args: Vec<(Ident, TokenStream)>,
 
     /// Return type of the invocation
     invocation_return: ReturnType,
@@ -214,7 +216,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let impl_struct_name = Ident::new_raw(cfg.impl_struct.as_str(), Span::call_site());
 
     // Build a list of match arms for the invocation dispatch that is required
-    let mut interface_dispatch_match_arms: Vec<TokenStream> = Vec::new();
     let mut interface_dispatch_wrpc_match_arms: Vec<TokenStream> = Vec::new();
     let mut iface_tokens = TokenStream::new();
 
@@ -245,11 +246,12 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         );
 
         // Add generated struct code for the current interface
-        iface_tokens.append_all(quote::quote!(
+        iface_tokens.append_all(quote!(
             // START: *Invocation structs & trait for #wit_iface
             #(
-                #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize)]
+                #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::EncodeSync, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive)]
                 #[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
+                #[wrpc_transport_derive(crate = "::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive")]
                 struct #struct_type_names {
                     #struct_members
                 }
@@ -278,7 +280,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             .clone()
             .into_iter()
             .map(|lm| {
-                match (lm.struct_members, &lm.invocation_arg_names[..]) {
+                match (lm.struct_members, &lm.invocation_args[..]) {
                     // If more than one argument was present, we should be dealing with that as
                     // an invocation struct
                     (Some(members), _) => members,
@@ -287,9 +289,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                         TokenStream::new()
                     },
                     // If there's one argument then we should add the single argument
-                    (None, [first]) => {
+                    (None, [(first, _)]) => {
                         let type_name = lm.type_name;
-                        quote::quote!(#first: #type_name)
+                        quote!(#first: #type_name)
                     },
                     // All other combinations are invalid (ex. forcing first-argument parsing when there are muiltiple args to the fn),
                     _ => panic!("unexpectedly found more than 1 invocation arg in function [{}] name, wit_function_lattice_translation-strategy should likely not be set to 'first-argument'", lm.func_name),
@@ -309,7 +311,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         //
         // Create and append the trait for the iface along with
         // the functions that should be implemented by the provider
-        iface_tokens.append_all(quote::quote!(
+        iface_tokens.append_all(quote!(
             #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
             pub trait #wit_iface {
                 fn contract_id() -> &'static str {
@@ -327,72 +329,120 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             // END: *Invocation structs & trait for #wit_iface
         ));
 
-        // Build match arms that do input parsing and argument expressions, for every method
-        let (input_parsing_statements, post_self_args) =
-            methods
-            .clone()
-            .into_iter()
-            .fold((Vec::new(), Vec::new()), |mut acc, lm| {
-                if let Some(type_name) = lm.type_name {
-                    // type_name tells us the single type that is coming in over the lattice.
-                    //
-                    // This can either be:
-                    //  - a wit-bindgen-generated type (ex. some record type)
-                    //  - a struct we created (a "bundle" generated under [`WitFunctionLatticeTranslationStrategy::BundleArguments`])
-                    //  - a pre-existing type (ex. `String`)
-                    //
-                    // We can use this to generate lines for
-                    acc.0.push(quote::quote!(let input: #type_name = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&body)?;));
+        // Build wRPC-compatible match arms that do input parsing and argument expressions, for every method
+        // we'll need to build two TokenStreams:
+        //
+        // - input parsing token stream (i.e. pulling values off)
+        // - arguments that go after &self for the function (i.e. the actual args that implementers will use)
+        //
+        // The token streams generated here will have the same length as lattice methods, and each will correspond 1:1
+        let (wrpc_input_parsing_statements, post_self_args, result_encode_tokens) = methods.clone().into_iter().fold(
+            (Vec::<TokenStream>::new(), Vec::<TokenStream>::new(), Vec::<TokenStream>::new()),
+            |mut acc, lm| {
+                // In the case of wRPC, we are going to get a Vec<wprc_transport::Value>, which means we'll have to pull values off one by one
+                // and parse them accordingly.
+                //
+                // We should *not* bundle arguments going over the lattice at all, they'll be individually sent as `wrpc_transport::Value`s
+                //
+                // All we need to do is insert ctx at the front, and do the rest of it.
 
-                    let invocation_arg_names = lm.invocation_arg_names;
-                    acc.1.push(if invocation_arg_names.len() == 1 {
-                        // If there is only one invocation argument (and we know the type name)
-                        // then it's the input we read over the wire
-                        quote::quote!(ctx, input)
-                    } else {
-                        // If there is more than one arg name, we have a bundle of arguments that was sent over the wire
-                        // we must pass the *fields* of that struct in
-                        let mut tokens = TokenStream::new();
-                        invocation_arg_names.iter().enumerate().fold(&mut tokens, |ts, (idx, i)| {
-                            // Append input since if we have multiple arguments they'll be coming in as one envelope over the lattice
-                            ts.append_all(quote::quote!(input.#i));
-                            if idx != invocation_arg_names.len() - 1 {
-                                ts.append(TokenTree::Punct(Punct::new(',', proc_macro2::Spacing::Alone)));
-                            }
-                            ts
-                        });
-                        quote::quote!(ctx, #tokens)
-                    });
-                } else {
-                    // If a type name is *not* present, we're dealing with a function that takes *no* input.
-                    //
-                    // This means that there's no input to be parsed, and only ctx as a post-self argument
-                    acc.0.push(TokenStream::new());
-                    acc.1.push(Ident::new("ctx", Span::call_site()).to_token_stream());
+                // TODO: REFACTOR -- for WRPC, we should *never* bundle, the args and type names they
+                // were supposed to be should always be together
+
+                // TODO: Build the code that is going to pull and convert items from the list of params we'll get
+                // params are a `Vec<wrpc_transport::Value>`, so we'll need to decode them one by one
+                let mut input_decoding_lines = Vec::<TokenStream>::new();
+
+                // todo(vados-cosmonic): we need to encode *and then decode* to get back into the right Rust type...
+                // we should be able to improve this and take more straight forward path from Value.
+                // (maybe we need to derive ToValue/FromValue) as well for structs/enums
+                for (arg_name, arg_type) in lm.invocation_args.iter() {
+                    let arg_name_lit = LitStr::new(&arg_name.to_string(), Span::call_site());
+                    let arg_ty = arg_type.to_token_stream();
+                    input_decoding_lines.push(quote::quote!(
+                        let mut #arg_name = ::wasmcloud_provider_wit_bindgen::deps::bytes::BytesMut::new();
+                        params
+                            .pop()
+                            .ok_or_else(|| ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(format!("missing expected parameter [{}]", #arg_name_lit)))?
+                            .encode(&mut #arg_name)
+                            .await
+                            .map_err(|e| ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(format!("failed to encode parameter [{}]: {e}", #arg_name_lit)))?;
+                        let (#arg_name, _): (#arg_ty, _) = ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Receive::receive::<::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::DemuxStream>(#arg_name, &mut ::wasmcloud_provider_wit_bindgen::deps::futures::stream::empty(), None)
+                            .await
+                            .map_err(|e| ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(format!("failed to receive parameter [{}]: {e}", #arg_name_lit)))?;
+                    ));
                 }
-                acc
-            });
+                acc.0.push(quote::quote!(#( #input_decoding_lines );*));
 
-        // After building individual invocation structs and traits for each interface
-        // we must build & hold on to the usage of these inside the match for the MessageDispatch trait
-        interface_dispatch_match_arms.push(quote::quote!(
+                // Build the list of tokens that we'll need for the provider-internal function arguments, after '&self'
+                // ex. fn some_fn(&self, ctx, <arg1>, <arg2> ...)
+                let arg_idents = vec![Ident::new("ctx", Span::call_site())]
+                    .into_iter()
+                    .chain(lm.invocation_args.iter().map(|(name, _)| name.clone()))
+                    .collect::<Vec<Ident>>();
+                acc.1.push(quote!(#( #arg_idents ),*));
+
+                // Build the tokens that we'll need to encode the result. These differ whether we're dealing with a normal type
+                // or a special case (i.e. Vec<T> and Option<T>)
+                acc.2.push(match lm.invocation_return {
+                    // If we successfully parse a complex type out, we need to check whether it's a vec or option
+                    syn::ReturnType::Type(_, ty) => {
+                        if has_vec_type(*ty.clone()).is_ok_and(|v| v.is_some()) {
+                            quote!(::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::EncodeSync::encode_sync_list(result, &mut res)
+                                   .map_err(|e| {
+                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                           format!("failed to encode result (list) of operation [{operation}]: {e}")
+                                       )
+                                   })?)
+                        } else if has_option_type(*ty).is_ok_and(|v| v.is_some()) {
+                            quote!(::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::EncodeSync::encode_sync_option(result, &mut res)
+                                   .map_err(|e| {
+                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                           format!("failed to encode result (option) of operation [{operation}]: {e}")
+                                       )
+                                   })?)
+                        } else {
+                            // If we can't detect a special case type, just encode normally, we *should* be dealing with a
+                            // type that implements EncodeSync already
+                            quote!(result
+                                   .encode_sync(&mut res)
+                                   .map_err(|e| {
+                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                           format!("failed to encode result of operation [{operation}]: {e}")
+                                       )
+                                   })?)
+                        }
+                    }
+
+                    // If we don't parse a complex type we may have gotten a builtin like a `bool` or `u32`, we can pass those through normally
+                    syn::ReturnType::Default => {
+                        quote!(result
+                               .encode_sync(&mut res)
+                               .map_err(|e| {
+                                   ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                       format!("failed to encode result of operation [{operation}]: {e}")
+                                   )
+                               })?)
+                    },
+                });
+
+                acc
+            },
+    );
+
+        interface_dispatch_wrpc_match_arms.push(quote!(
             #(
-                #lattice_method_names => {
-                    #input_parsing_statements
+                operation @ #lattice_method_names => {
+                    #wrpc_input_parsing_statements
                     let result = #wit_iface::#func_names(
                         self,
                         #post_self_args
                     )
                         .await;
-                    Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&result)?)
-                }
-            )*
-        ));
 
-        interface_dispatch_wrpc_match_arms.push(quote::quote!(
-            #(
-                #lattice_method_names => {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected("not implemented".into()))
+                    let mut res = ::wasmcloud_provider_wit_bindgen::deps::bytes::BytesMut::new();
+                    #result_encode_tokens;
+                    Ok(res.to_vec())
                 }
             )*
         ));
@@ -433,8 +483,12 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .map(|(_, (_, s))| s.to_token_stream())
         .collect();
 
+    // Build mapping of of exports (all exports) to use, only if wrpc feature flag is enabled
+    let wrpc_impl_tokens = build_wrpc_impls(&impl_struct_name, &wit_bindgen_cfg.resolve)
+        .expect("failed to build provider-sdk wrpc implementation");
+
     // Build the final chunk of code
-    let tokens = quote::quote!(
+    let tokens = quote!(
         // START: per-interface codegen
         #iface_tokens
         // END: per-interface codegen
@@ -457,31 +511,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         )*
         // END: wit-bindgen generated enums
 
-        /// MessageDispatch ensures that your provider can receive and
-        /// process messages sent to it over the lattice
-        ///
-        /// This implementation is a stub and must be filled out by implementers
-        ///
-        /// It would be preferable to use <T: SomeTrait> here, but the fact that  'd like to use
-        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
-        impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::MessageDispatch for #impl_struct_name {
-            async fn dispatch<'a>(
-                &'a self,
-                ctx: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context,
-                method: String,
-                body: std::borrow::Cow<'a, [u8]>,
-            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<Vec<u8>> {
-                match method.as_str() {
-                    #(
-                        #interface_dispatch_match_arms
-                    )*
-                    _ => Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
-                        "Invalid method name {method}"
-                    )).into())
-                }
-            }
-        }
-
         // START: general provider
 
         /// This trait categorizes all wasmCloud lattice compatible providers.
@@ -490,7 +519,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// at least the following members are is supported.
         #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
         trait WasmcloudCapabilityProvider {
-            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> bool;
+            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::InterfaceLinkDefinition) -> bool;
             async fn delete_link(&self, actor_id: &str);
             async fn shutdown(&self);
         }
@@ -501,7 +530,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// This implementation is a stub and must be filled out by implementers
         #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
         impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
-            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
+            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> bool {
                 WasmcloudCapabilityProvider::put_link(self, ld).await
             }
 
@@ -526,17 +555,40 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         ///
         /// Interfaces imported by the provider can use this to send traffic across the lattice
         pub struct InvocationHandler<'a> {
-            ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition,
+            ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::InterfaceLinkDefinition,
         }
 
         impl<'a> InvocationHandler<'a> {
-            pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
+            pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> Self {
                 Self { ld }
             }
 
             #(
                 #imported_iface_invocation_methods
             )*
+        }
+
+        #wrpc_impl_tokens
+
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
+        impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::WrpcDispatch for #impl_struct_name {
+            async fn dispatch_wrpc_dynamic<'a>(
+                &'a self,
+                ctx: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Context,
+                operation: String,
+                mut params: Vec<::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Value>,
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<Vec<u8>> {
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::{Encode, EncodeSync, Receive};
+                use ::wasmcloud_provider_wit_bindgen::deps::anyhow::Context as _;
+                match operation.as_str() {
+                    #(
+                        #interface_dispatch_wrpc_match_arms
+                    )*
+                    _ => Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
+                        "Invalid operation name [{operation}]"
+                    )).into())
+                }
+            }
         }
     );
 
@@ -614,7 +666,7 @@ pub(crate) fn process_fn_arg(arg: &FnArg) -> anyhow::Result<(Ident, TokenStream)
                 arg_name.to_string().trim_end_matches("_map"),
                 arg_name.span(),
             );
-            quote::quote!(#map_type)
+            quote!(#map_type)
         }
         _ => pat_type.ty.as_ref().to_token_stream(),
     };
@@ -630,12 +682,113 @@ fn is_ignored_invocation_handler_pkg(pkg: &wit_parser::PackageName) -> bool {
     )
 }
 
+/// Build wRPC implementations needed by the provider, primarily `wasmcloud_provider_sdk::WitRpc`
+fn build_wrpc_impls(impl_struct_name: &Ident, resolve: &Resolve) -> anyhow::Result<TokenStream> {
+    let mapping = crate::wrpc::generate_wrpc_nats_subject_to_fn_mapping(resolve)
+        .context("failed to generate wrpc NATS subject mappings")?;
+
+    // Process `WrpcExport` objects into statements that use the incoming lattice_name
+    // and wRPC version for map inserts to build the lookup that should be returned
+    let mut insertion_lines: Vec<TokenStream> = Vec::new();
+    for crate::wrpc::WrpcExport {
+        wit_ns,
+        wit_pkg,
+        wit_iface,
+        wit_iface_fn,
+        types,
+    } in mapping.into_iter()
+    {
+        let wit_ns = LitStr::new(&wit_ns, Span::call_site());
+        let wit_pkg = LitStr::new(&wit_pkg, Span::call_site());
+        let wit_iface = LitStr::new(&wit_iface, Span::call_site());
+        let wit_iface_fn = LitStr::new(&wit_iface_fn, Span::call_site());
+        let world_key_name = LitStr::new(&types.0, Span::call_site());
+        let function_name = LitStr::new(&types.1, Span::call_site());
+        let dynamic_fn = LitStr::new(
+            &serde_json::to_string::<wrpc_types::DynamicFunction>(&types.2).context("failed to deserialize dynamic function with world_key_name [{world_key_name}],  function name [{function_name}]")?,
+            Span::call_site(),
+        );
+
+        insertion_lines.push(quote!(
+            mapping.insert(
+                format!("{lattice_name}.{component_id}.wrpc.{wrpc_version}.{}:{}/{}.{}", #wit_ns, #wit_pkg, #wit_iface, #wit_iface_fn),
+                (#world_key_name.into(), #function_name.into(), ::wasmcloud_provider_wit_bindgen::deps::serde_json::from_slice::<::wasmcloud_provider_wit_bindgen::deps::wrpc_types::DynamicFunction>(#dynamic_fn.as_bytes()).expect("failed to deserialize DynamicFunction")),
+            );
+        ));
+    }
+
+    // Build the trait impl
+    let tokens = quote!(
+        use ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::{WrpcNats, WrpcNatsSubject, WorldKeyName, WitFunction};
+        use ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::ProviderInitResult;
+
+        #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
+        impl WrpcNats for #impl_struct_name {
+            async fn incoming_wrpc_invocations_by_subject(
+                &self,
+                lattice_name: impl AsRef<str> + Send,
+                component_id: impl AsRef<str> + Send,
+                wrpc_version: impl AsRef<str> + Send,
+            ) -> ProviderInitResult<
+                ::std::collections::HashMap<WrpcNatsSubject, (WorldKeyName, WitFunction, ::wasmcloud_provider_wit_bindgen::deps::wrpc_types::DynamicFunction)>
+            > {
+                let lattice_name = lattice_name.as_ref();
+                let wrpc_version = wrpc_version.as_ref();
+                let component_id = component_id.as_ref();
+                // TODO: this is really wasteful
+                let mut mapping = ::std::collections::HashMap::new();
+                #(
+                    #insertion_lines
+                )*
+                Ok(mapping)
+            }
+        }
+    );
+
+    Ok(tokens)
+}
+
+/// Check if a given type has a wrapped type (ex. Option<T>, Vec<T>)
+pub(crate) fn has_wrapped_type(
+    ty: syn::Type,
+    expected: impl AsRef<str>,
+) -> Result<Option<syn::Type>> {
+    let mut tt = ty.to_token_stream().into_iter().collect::<Vec<TokenTree>>();
+    match &mut tt[..] {
+        // If we can see the Wrapper<T> pattern, we can extract the inner type
+        [
+            TokenTree::Ident(w),  // Wrapper (Option)
+            TokenTree::Punct(ref p),  // <
+            ..,  // T
+            TokenTree::Punct(_) // >
+        ] if *w == expected.as_ref() && p.as_char() == '<' => {
+            let inner_ty = syn::parse2::<syn::Type>(TokenStream::from_iter(tt.drain(2..tt.len()-1).collect::<Vec<TokenTree>>()))
+                .map_err(|e| anyhow!(e))
+                .context("failed to parse type out of wrapper")?;
+            Ok(Some(inner_ty))
+        },
+        // If we didn't match, then there's no inner type/this isn't a wrapper
+        _ => Ok(None),
+    }
+}
+
+/// Check if a given [`syn::Type`] is an optional (i.e. Option<T>), returning the inner type
+pub(crate) fn has_option_type(ty: syn::Type) -> Result<Option<syn::Type>> {
+    has_wrapped_type(ty, "Option")
+}
+
+/// Check if a given [`syn::Type`] is an list type (i.e. Vec<T>), returning the inner type
+pub(crate) fn has_vec_type(ty: syn::Type) -> Result<Option<syn::Type>> {
+    has_wrapped_type(ty, "Vec")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use anyhow::Context;
     use proc_macro2::TokenTree;
+    use quote::quote;
     use syn::{parse_quote, ImplItemFn, LitStr};
 
     use crate::{
@@ -646,7 +799,7 @@ mod tests {
     #[test]
     fn parse_witified_map_type() -> anyhow::Result<()> {
         extract_witified_map(
-            &quote::quote!(Vec<(String, String)>)
+            &quote!(Vec<(String, String)>)
                 .into_iter()
                 .collect::<Vec<TokenTree>>(),
         )

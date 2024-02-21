@@ -18,3 +18,15 @@ redis = { workspace = true, features = [
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+nkeys = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = [ "v4", "fast-rng" ] }
+wasmcloud-compat = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-test-util = { workspace = true }
+wrpc-transport-nats = { workspace = true }
