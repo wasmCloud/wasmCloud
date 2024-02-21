@@ -22,8 +22,9 @@ use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, serde::Deserialize, wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::Context,
+    async_trait::async_trait,
+    serde::Deserialize,
+    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
 };
 
 mod fs_utils;
@@ -45,7 +46,7 @@ pub type ChunkOffsetKey = (String, usize);
 #[derive(Default, Debug, Clone, Deserialize)]
 #[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 struct FsProviderConfig {
-    ld: LinkDefinition,
+    ld: InterfaceLinkDefinition,
     root: PathBuf,
 }
 
@@ -104,15 +105,15 @@ impl Default for FsProvider {
 }
 
 impl FsProvider {
-    /// Get actor id string based on context value
-    async fn get_actor_id(&self, ctx: &Context) -> Result<String> {
+    /// Get source ID string based on context value
+    async fn get_source_id(&self, ctx: &Context) -> Result<String> {
         ctx.actor.clone().context("no actor ID found on context")
     }
 
-    async fn get_ld(&self, ctx: &Context) -> Result<LinkDefinition> {
-        let actor_id = self.get_actor_id(ctx).await?;
+    async fn get_ld(&self, ctx: &Context) -> Result<InterfaceLinkDefinition> {
+        let source_id = self.get_source_id(ctx).await?;
         let conf_map = self.config.read().await;
-        let conf = conf_map.get(&actor_id);
+        let conf = conf_map.get(&source_id);
         let ld = match conf {
             Some(config) => config.ld.clone(),
             None => {
@@ -123,15 +124,15 @@ impl FsProvider {
     }
 
     async fn get_root(&self, ctx: &Context) -> Result<PathBuf> {
-        let actor_id = self.get_actor_id(ctx).await?;
+        let source_id = self.get_source_id(ctx).await?;
         let conf_map = self.config.read().await;
-        let mut root = match conf_map.get(&actor_id) {
+        let mut root = match conf_map.get(&source_id) {
             Some(config) => config.root.clone(),
             None => {
                 bail!("No root configuration found")
             }
         };
-        root.push(actor_id.clone());
+        root.push(source_id.clone());
         Ok(root)
     }
 
@@ -232,7 +233,7 @@ impl FsProvider {
 
         let container_id = chunk.container_id.clone();
         let object_id = chunk.object_id.clone();
-        let actor_id = &ld.actor_id;
+        let source_id = &ld.source_id;
         let chunk_len_bytes: u64 = chunk
             .bytes
             .len()
@@ -241,7 +242,7 @@ impl FsProvider {
 
         let cr = receiver.receive_chunk(chunk).await
             .with_context(|| format!(
-                "sending chunk error: Container({container_id}) Object({object_id}) to Actor({actor_id})",
+                "sending chunk error: Container({container_id}) Object({object_id}) to Actor({source_id})",
                 ))?;
 
         Ok(if cr.cancel_download {
@@ -255,16 +256,21 @@ impl FsProvider {
 #[async_trait]
 impl WasmcloudCapabilityProvider for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        for val in ld.values.iter() {
-            info!("ld conf {:?}", val);
-        }
+    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
+        // todo(vados-cosmonic): needs to be adapted to use named config
+        //
+        // for val in ld.values.iter() {
+        //     info!("ld conf {:?}", val);
+        // }
 
-        // Determine the root path value
-        let root_val: PathBuf = match ld.values.iter().find(|(key, _)| key == "ROOT") {
-            None => "/tmp".into(),
-            Some((_, value)) => value.into(),
-        };
+        // todo(vados-cosmonic): needs to be adapted to use named config
+        //
+        // // Determine the root path value
+        // let root_val: PathBuf = match ld.values.iter().find(|(key, _)| key == "ROOT") {
+        //     None => "/tmp".into(),
+        //     Some((_, value)) => value.into(),
+        // };
+        let root_val = PathBuf::from("/tmp");
 
         // Build configuration for FS Provider to use later
         let config = FsProviderConfig {
@@ -282,10 +288,10 @@ impl WasmcloudCapabilityProvider for FsProvider {
         self.config
             .write()
             .await
-            .insert(ld.actor_id.clone(), config.clone());
+            .insert(ld.source_id.clone(), config.clone());
 
         // Resolve the subpath from the root to the actor ID, carefully
-        let actor_dir = match self.resolve_subpath(&config.root, &ld.actor_id).await {
+        let actor_dir = match self.resolve_subpath(&config.root, &ld.source_id).await {
             Ok(path) => path,
             Err(e) => {
                 error!("Failed to resolve subpath to actor directory: {e}");
@@ -303,8 +309,8 @@ impl WasmcloudCapabilityProvider for FsProvider {
         }
     }
 
-    async fn delete_link(&self, actor_id: &str) {
-        self.config.write().await.remove(actor_id);
+    async fn delete_link(&self, source_id: &str) {
+        self.config.write().await.remove(source_id);
     }
 
     async fn shutdown(&self) {
@@ -800,8 +806,8 @@ impl WasmcloudBlobstoreBlobstore for FsProvider {
         let stream_id = if arg.chunk.is_last {
             None
         } else {
-            let actor_id = match self.get_actor_id(&ctx).await {
-                Ok(actor_id) => actor_id,
+            let source_id = match self.get_source_id(&ctx).await {
+                Ok(source_id) => source_id,
                 Err(e) => {
                     error!("failed to get actor ID: {e}");
                     return PutObjectResponse { stream_id: None };
@@ -810,7 +816,7 @@ impl WasmcloudBlobstoreBlobstore for FsProvider {
 
             Some(format!(
                 "{}+{}+{}",
-                actor_id, arg.chunk.container_id, arg.chunk.object_id
+                source_id, arg.chunk.container_id, arg.chunk.object_id
             ))
         };
 

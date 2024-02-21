@@ -15,8 +15,8 @@ use tokio::sync::RwLock;
 use tracing::error;
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::Context,
+    async_trait::async_trait,
+    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
 };
 
 mod config;
@@ -44,14 +44,14 @@ pub struct BlobstoreS3Provider {
 impl BlobstoreS3Provider {
     /// Retrieve the per-actor [`StorageClient`] for a given link context
     async fn client(&self, ctx: &Context) -> Result<StorageClient> {
-        let actor_id = ctx.actor.as_ref().context("no actor in request")?;
+        let source_id = ctx.actor.as_ref().context("no actor in request")?;
 
         let client = self
             .actors
             .read()
             .await
-            .get(actor_id)
-            .with_context(|| format!("actor not linked:{}", actor_id))?
+            .get(source_id)
+            .with_context(|| format!("actor not linked:{}", source_id))?
             .clone();
         Ok(client)
     }
@@ -64,27 +64,30 @@ impl WasmcloudCapabilityProvider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        let config =
-            match StorageConfig::from_values(&HashMap::from_iter(ld.values.iter().cloned())) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!(error = %e, actor_id = %ld.actor_id, "failed to read storage config");
-                    return false;
-                }
-            };
+    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
+        // todo(vados-cosmonic): needs to be adapted to use named config
+        //
+        // let config =
+        //     match StorageConfig::from_values(&HashMap::from_iter(ld.values.iter().cloned())) {
+        //         Ok(v) => v,
+        //         Err(e) => {
+        //             error!(error = %e, source_id = %ld.source_id, "failed to read storage config");
+        //             return false;
+        //         }
+        //     };
+        let config = StorageConfig::default();
         let link = StorageClient::new(config, ld.to_owned()).await;
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(ld.actor_id.to_string(), link);
+        update_map.insert(ld.source_id.to_string(), link);
 
         true
     }
 
     /// Handle notification that a link is dropped: close the connection
-    async fn delete_link(&self, actor_id: &str) {
+    async fn delete_link(&self, source_id: &str) {
         let mut aw = self.actors.write().await;
-        if let Some(link) = aw.remove(actor_id) {
+        if let Some(link) = aw.remove(source_id) {
             let _ = link.close().await;
         }
     }

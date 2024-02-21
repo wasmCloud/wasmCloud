@@ -1,4 +1,4 @@
-// todo(vadossi-cosmonic): re-enable once http-server is working
+// todo(vados-cosmonic): re-enable once http-server is working
 
 // use std::collections::HashMap;
 // use std::net::Ipv6Addr;
@@ -29,7 +29,7 @@
 
 // const LATTICE: &str = "test-blobstore-s3";
 
-// // todo(vadossi-cosmonic): re-enable once http-server is working
+// // todo(vados-cosmonic): re-enable once http-server is working
 
 // /// Test all functionality for the blobstore-s3 provider
 // ///

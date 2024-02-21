@@ -13,6 +13,11 @@ use tracing::warn;
 use url::Url;
 use wasmcloud_control_interface::CtlResponse;
 
+/// Helper method for deserializing content, so that we can easily switch out implementations
+pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
+    serde_json::from_slice(buf).context("failed to deserialize")
+}
+
 /// Arguments to [`assert_start_provider`]
 pub struct StartProviderArgs<'a> {
     pub client: &'a wasmcloud_control_interface::Client,
@@ -70,10 +75,9 @@ pub async fn assert_start_provider(
         .take(30)
         .then(|_| rpc_client.request(
             format!(
-                "wasmbus.rpc.{}.{}.{}.health",
+                "wasmbus.rpc.{}.{}.health",
                 lattice,
                 provider_key.public_key(),
-                "default",
             ),
             "".into(),
         ))
@@ -90,7 +94,7 @@ pub async fn assert_start_provider(
     .await
     .context("failed to perform health check request")?;
 
-    let ProviderHealthCheckResponse { healthy, message } = rmp_serde::from_slice(&res.payload)
+    let ProviderHealthCheckResponse { healthy, message } = deserialize(&res.payload)
         .map_err(|e| anyhow!(e).context("failed to decode health check response"))?;
     ensure!(message == None);
     ensure!(healthy);

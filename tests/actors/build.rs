@@ -266,6 +266,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
         },
     )
     .context("failed to build `wasm32-wasi` actors")?;
+
     Ok(())
 }
 

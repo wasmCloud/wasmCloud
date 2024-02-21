@@ -38,10 +38,12 @@ use tracing_subscriber::EnvFilter;
 use crate::wrpc_transport::encode_sync::derive_encode_sync_inner;
 use crate::wrpc_transport::receive::derive_receive_inner;
 
+mod config;
 mod rust;
 mod wrpc_transport;
 
-#[proc_macro_derive(EncodeSync)]
+/// Derive an [`wrpc_transport::EncodeSync`] implementation
+#[proc_macro_derive(EncodeSync, attributes(wrpc_transport_derive))]
 pub fn derive_encode_sync(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -56,7 +58,8 @@ pub fn derive_encode_sync(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     derived.into()
 }
 
-#[proc_macro_derive(Receive)]
+/// Derive an [`wrpc_transport::Receive`] implementation
+#[proc_macro_derive(Receive, attributes(wrpc_transport_derive))]
 pub fn derive_receive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())

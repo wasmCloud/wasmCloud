@@ -4,6 +4,8 @@ use quote::format_ident;
 use syn::{Fields, FieldsNamed, FieldsUnnamed, Ident, LitInt, LitStr};
 use tracing::warn;
 
+use crate::config::AttrOptions;
+
 /// Derive [`wrpc_transport::Receive`] for a given input stream
 pub fn derive_receive_inner(input: TokenStream) -> Result<TokenStream> {
     let item = syn::parse2::<syn::Item>(input)
@@ -40,6 +42,8 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
     let mut members = Vec::<Ident>::new();
     let mut receive_lines = Vec::<TokenStream>::new();
 
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(s.attrs)?;
+
     // For each member of the struct, we must:
     // - generate a line that attempts to receive the member
     // - remember the type so we can require it to be Receive
@@ -51,7 +55,7 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
         members.push(member_name.clone());
         // Add a line that receives this member
         receive_lines.push(quote::quote!(
-            let (#member_name, payload) = Receive::receive_sync(payload, rx)
+            let (#member_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                 .await
                 .context("failed to receive member `#member_name`")?;
         ));
@@ -59,18 +63,19 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
 
     // Build the generated impl
     Ok(quote::quote!(
-        #[::wrpc_transport_derive::deps::async_trait::async_trait]
-        impl ::wrpc_transport_derive::deps::wrpc_transport::Receive for #struct_name
+        #[automatically_derived]
+        #[#crate_path::deps::async_trait::async_trait]
+        impl #crate_path::deps::wrpc_transport::Receive for #struct_name
         {
             async fn receive<T>(
-                payload: impl ::wrpc_transport_derive::deps::bytes::buf::Buf + Send + 'static,
-                rx: &mut (impl ::wrpc_transport_derive::deps::futures::Stream<Item=::wrpc_transport_derive::deps::anyhow::Result<::wrpc_transport_derive::deps::bytes::Bytes>>  + Send + Sync + Unpin),
-                _sub: Option<::wrpc_transport_derive::deps::wrpc_transport::AsyncSubscription<T>>,
-            ) -> ::wrpc_transport_derive::deps::anyhow::Result<(Self, Box<dyn ::wrpc_transport_derive::deps::bytes::buf::Buf + Send>)>
+                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'static,
+                rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>>  + Send + Sync + Unpin),
+                _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,
+            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send>)>
             where
-                T: ::wrpc_transport_derive::deps::futures::Stream<Item=::wrpc_transport_derive::deps::anyhow::Result<::wrpc_transport_derive::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
+                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
             {
-                use ::wrpc_transport_derive::deps::anyhow::Context as _;
+                use #crate_path::deps::anyhow::Context as _;
                 #( #receive_lines );*
                 Ok((Self { #( #members ),* }, Box::new(payload) ))
             }
@@ -87,6 +92,8 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
     let enum_name = e.ident;
     let enum_name_str = LitStr::new(enum_name.to_string().as_ref(), Span::call_site());
     let mut variant_receive_match_blocks = Vec::<TokenStream>::new();
+
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(e.attrs)?;
 
     // For each variant, we must do two things:
     // - ensure that the type we're about to use is Receive
@@ -122,7 +129,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                         .context("unexpectedly missing named field")?;
                     args.push(named_field_name.clone());
                     named_field_receive_lines.push(quote::quote!(
-                        let (#named_field_name, payload) = Receive::receive_sync(payload, rx)
+                        let (#named_field_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                             .await
                             .context("failed to receive enum discriminant inner value")?;
                     ));
@@ -162,7 +169,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                     let unnamed_field_arg_name = format_ident!("arg{}", unnamed_field_idx);
                     args.push(unnamed_field_arg_name.clone());
                     unnamed_field_receive_lines.push(quote::quote!(
-                        let (#unnamed_field_arg_name, payload) = Receive::receive_sync(payload, rx)
+                        let (#unnamed_field_arg_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                             .await
                             .context("failed to receive enum discriminant inner value")?;
                     ));
@@ -184,16 +191,16 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
     }
 
     Ok(quote::quote!(
-        #[::wrpc_transport_derive::deps::async_trait::async_trait]
-        impl ::wrpc_transport_derive::deps::wrpc_transport::Receive for #enum_name
+        #[#crate_path::deps::async_trait::async_trait]
+        impl #crate_path::deps::wrpc_transport::Receive for #enum_name
         {
             async fn receive<T>(
-                payload: impl ::wrpc_transport_derive::deps::bytes::buf::Buf + Send + 'static,
-                rx: &mut (impl ::wrpc_transport_derive::deps::futures::Stream<Item=::wrpc_transport_derive::deps::anyhow::Result<::wrpc_transport_derive::deps::bytes::Bytes>> + Send + Sync + Unpin),
-                _sub: Option<::wrpc_transport_derive::deps::wrpc_transport::AsyncSubscription<T>>,
-            ) -> ::wrpc_transport_derive::deps::anyhow::Result<(Self, Box<dyn ::wrpc_transport_derive::deps::bytes::buf::Buf + Send>)>
+                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'static,
+                rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin),
+                _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,
+            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send>)>
             where
-                T: ::wrpc_transport_derive::deps::futures::Stream<Item=::wrpc_transport_derive::deps::anyhow::Result<::wrpc_transport_derive::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
+                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
             {
                 let (discriminant, payload) = wrpc_transport_derive::deps::wrpc_transport::receive_discriminant(payload, rx)
                     .await
@@ -202,7 +209,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                     #(
                         #variant_receive_match_blocks
                     ),*,
-                    v => ::wrpc_transport_derive::deps::anyhow::bail!(
+                    v => #crate_path::deps::anyhow::bail!(
                         "unexpected discriminant value on type [{}]: [{v}]", #enum_name_str
                     ),
                 }

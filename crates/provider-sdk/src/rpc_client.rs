@@ -30,9 +30,9 @@ use wasmcloud_tracing::context::TraceContextInjector;
 pub struct RpcClient {
     client: Client,
     key: Arc<wascap::prelude::KeyPair>,
-    /// host id (public key) for invocations
+    /// Host ID (public key) for invocations
     host_id: String,
-    /// timeout for rpc messages
+    /// Timeout for rpc messages
     timeout: Option<Duration>,
     lattice: String,
     chonky: ChunkEndpoint,
@@ -289,46 +289,6 @@ impl RpcClient {
             }
         });
         Ok(())
-    }
-
-    pub(crate) async fn publish_invocation_response(
-        &self,
-        reply_to: Subject,
-        response: InvocationResponse,
-    ) -> InvocationResult<()> {
-        let content_length = response.msg.len() as u64;
-        let response = {
-            if response.msg.len() > CHUNK_THRESHOLD_BYTES {
-                self.chonky
-                    .chunkify_response(&response.invocation_id, std::io::Cursor::new(response.msg))
-                    .await
-                    .map_err(|e| InvocationError::Chunking(e.to_string()))?;
-                InvocationResponse {
-                    msg: Vec::new(),
-                    content_length,
-                    ..response
-                }
-            } else {
-                InvocationResponse {
-                    content_length,
-                    ..response
-                }
-            }
-        };
-
-        let data = crate::serialize(&response)?;
-        self.publish(reply_to, data).await
-    }
-
-    pub async fn dechunk(&self, mut inv: Invocation) -> InvocationResult<Invocation> {
-        if inv.content_length > inv.msg.len() as u64 {
-            inv.msg = self
-                .chonky
-                .get_unchunkified(&inv.id)
-                .await
-                .map_err(|e| InvocationError::Chunking(e.to_string()))?;
-        }
-        Ok(inv)
     }
 
     /// Initial validation of received message. See provider::validate_provider_invocation for second part.

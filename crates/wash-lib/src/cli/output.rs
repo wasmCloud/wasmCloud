@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 use wasmcloud_control_interface::{Host, HostInventory};
-use wasmcloud_core::ActorLinks;
+use wasmcloud_core::{InterfaceLinkDefinition, LinkName};
 
 /// JSON Output of the `wash start` command
 #[derive(Debug, Deserialize)]
@@ -39,7 +39,7 @@ pub struct StopCommandOutput {
 /// JSON output representation of the `wash link query` command
 #[derive(Debug, Deserialize)]
 pub struct LinkQueryCommandOutput {
-    pub links: Vec<HashMap<String, ActorLinks>>,
+    pub links: Vec<HashMap<LinkName, Vec<InterfaceLinkDefinition>>>,
     pub success: bool,
 }
 

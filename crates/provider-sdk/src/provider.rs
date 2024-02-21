@@ -1,6 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Formatter, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Formatter, sync::Arc, time::Duration};
 
-use futures::StreamExt;
+use anyhow::Result;
+use async_nats::HeaderMap;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{Mutex, RwLock},
@@ -8,28 +10,38 @@ use tokio::{
 };
 use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_futures::Instrument;
-use wascap::{
-    jwt,
-    prelude::{Claims, KeyPair},
-};
+use ulid::Ulid;
+use uuid::Uuid;
+use wascap::prelude::KeyPair;
 
-use wasmcloud_core::{
-    HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
-};
+use wasmcloud_core::nats::convert_header_map_to_hashmap;
+use wasmcloud_core::InterfaceLinkDefinition;
+use wasmcloud_core::{HealthCheckRequest, HostData};
+use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
+use wrpc_transport_nats::Client as WrpcNatsClient;
+
+#[cfg(feature = "otel")]
+use wasmcloud_core::TraceContext;
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::attach_span_context;
 
+use wrpc_types::DynamicFunction;
+
 use crate::{
     deserialize,
-    error::{
-        InvocationError, InvocationResult, ProviderInitError, ProviderInitResult, ValidationError,
-    },
+    error::{InvocationResult, ProviderInitError, ProviderInitResult},
     rpc_client::RpcClient,
-    serialize, Context, Provider,
+    serialize, Context, Provider, WrpcInvocationLookup,
 };
 
-// name of nats queue group for rpc subscription
-const RPC_SUBSCRIPTION_QUEUE_GROUP: &str = "rpc";
+/// Name of the header that should be passed for invocations that identifies the source
+const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
+
+/// Name of the header that should be passed for invocations that identifies the host from which invocation was run
+const WRPC_HEADER_NAME_HOST_ID: &str = "host-id";
+
+/// Current version of wRPC supported by this version of the provider-sdk
+pub(crate) const WRPC_VERSION: &str = "0.0.1";
 
 pub type QuitSignal = tokio::sync::broadcast::Receiver<bool>;
 
@@ -69,14 +81,30 @@ macro_rules! process_until_quit {
     };
 }
 
+/// Source ID for a link
+type SourceId = String;
+
 #[derive(Clone)]
 pub struct ProviderConnection {
-    links: Arc<RwLock<HashMap<String, LinkDefinition>>>,
+    /// Links currently active on the provider, by Source ID
+    links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
+
+    /// NATS client used for performing RPCs
     rpc_client: RpcClient,
+
+    /// Lattice name
     lattice: String,
+
+    /// Data received from the host at startup
     host_data: Arc<HostData>,
-    // We keep these around so they can drop
-    _listener_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+
+    /// Handles for every NATS listener that is created and used by the Provider, kept
+    /// around so they can appropriately be `Drop`ed when this `ProviderConnection` is
+    _listener_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<Result<()>>>>>,
+
+    /// Mapping of NATS subjects to dynamic function information for incoming invocations
+    #[allow(unused)]
+    incoming_invocation_fn_map: Arc<WrpcInvocationLookup>,
 }
 
 impl std::fmt::Debug for ProviderConnection {
@@ -94,26 +122,29 @@ impl ProviderConnection {
     pub(crate) fn new(
         nats: async_nats::Client,
         host_data: &HostData,
+        incoming_invocation_fn_map: WrpcInvocationLookup,
     ) -> ProviderInitResult<ProviderConnection> {
         let key = Arc::new(
             KeyPair::from_seed(&host_data.invocation_seed)
                 .map_err(|e| ProviderInitError::Initialization(format!("key failure: {e}")))?,
         );
 
+        let lattice = host_data.lattice_rpc_prefix.to_owned();
         let rpc_client = RpcClient::new(
             nats,
             host_data.host_id.clone(),
             host_data.default_rpc_timeout_ms.map(Duration::from_millis),
             key,
-            &host_data.lattice_rpc_prefix,
+            &lattice,
         );
 
         Ok(ProviderConnection {
             links: Arc::new(RwLock::new(HashMap::new())),
             rpc_client,
-            lattice: host_data.lattice_rpc_prefix.to_owned(),
+            lattice,
             host_data: Arc::new(host_data.to_owned()),
             _listener_handles: Default::default(),
+            incoming_invocation_fn_map: Arc::new(incoming_invocation_fn_map),
         })
     }
 
@@ -122,10 +153,15 @@ impl ProviderConnection {
         self.rpc_client.clone()
     }
 
+    /// Get the provider key that was assigned to this host @ startup
+    pub fn provider_key(&self) -> &str {
+        &self.host_data.provider_key
+    }
+
     /// Stores actor with link definition
-    pub async fn put_link(&self, ld: LinkDefinition) {
+    pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
         let mut update = self.links.write().await;
-        update.insert(ld.actor_id.to_string(), ld);
+        update.insert(ld.source_id.to_string(), ld);
     }
 
     /// Deletes link
@@ -152,9 +188,14 @@ impl ProviderConnection {
     {
         let lattice = lattice.to_string();
         let mut handles = Vec::new();
-        handles.push(
-            self.subscribe_rpc(provider.clone(), shutdown_tx.subscribe(), lattice)
-                .await?,
+        handles.extend(
+            self.subscribe_rpc(
+                provider.clone(),
+                shutdown_tx.subscribe(),
+                lattice,
+                &self.host_data.provider_key,
+            )
+            .await?,
         );
         handles.push(
             self.subscribe_link_put(provider.clone(), shutdown_tx.subscribe())
@@ -182,147 +223,173 @@ impl ProviderConnection {
         self.rpc_client.flush().await
     }
 
-    /// Returns the nats rpc topic for capability providers
-    pub fn provider_rpc_topic(&self) -> String {
-        format!(
-            "wasmbus.rpc.{}.{}.{}",
-            &self.lattice, &self.host_data.provider_key, self.host_data.link_name
-        )
-    }
-
     /// Subscribe to a nats topic for rpc messages.
     /// This method starts a separate async task and returns immediately.
     /// It will exit if the nats client disconnects, or if a signal is received on the quit channel.
     pub async fn subscribe_rpc<P>(
         &self,
         provider: P,
-        mut quit: QuitSignal,
+        quit: QuitSignal,
         lattice: String,
-    ) -> ProviderInitResult<JoinHandle<()>>
+        provider_id: impl AsRef<str>,
+    ) -> ProviderInitResult<Vec<JoinHandle<Result<()>>>>
     where
         P: Provider + Clone,
     {
-        let mut sub = self
-            .rpc_client
-            .client()
-            .queue_subscribe(
-                self.provider_rpc_topic(),
-                RPC_SUBSCRIPTION_QUEUE_GROUP.to_string(),
-            )
-            .await?;
-        let this = self.clone();
-        let handle = tokio::spawn(async move {
-            loop {
+        let mut handles = Vec::new();
+        let provider_id = provider_id.as_ref();
+
+        // Build a wrpc client that we can use to listen for incoming invocations
+        let wrpc_client = WrpcNatsClient::new(
+            self.rpc_client.client(),
+            format!("{lattice}.{}", provider_id),
+        );
+        let link_name = self.host_data.link_name.clone();
+
+        // For every mapping of world key names to dynamic functions to call, spawn a client that will listen
+        // forever and process incoming invocations
+        for (_nats_subject, (world_key_name, wit_fn, dyn_fn)) in
+            self.incoming_invocation_fn_map.iter()
+        {
+            let wrpc_client = wrpc_client.clone();
+            let world_key_name = world_key_name.clone();
+            let wit_fn = wit_fn.clone();
+            let lattice = lattice.clone();
+            let provider = provider.clone();
+            let fn_params = match dyn_fn {
+                DynamicFunction::Method { params, .. } => params.clone(),
+                DynamicFunction::Static { params, .. } => params.clone(),
+            };
+            let mut quit = quit.resubscribe();
+            let this = self.clone();
+            let provider_id = provider_id.to_string();
+            let link_name = link_name.clone();
+
+            trace!(
+                "spawning invocation serving for [{}.{}]",
+                world_key_name.as_str(),
+                wit_fn.as_str()
+            );
+            handles.push(tokio::spawn(async move {
                 tokio::select! {
                     _ = quit.recv() => {
-                        let _ = sub.unsubscribe().await;
-                        break;
-                    },
-                    nats_msg = sub.next() => {
-                        let msg = if let Some(msg) = nats_msg { msg } else { break; };
-                        let this = this.clone();
-                        let provider = provider.clone();
-                        let lattice = lattice.clone();
-                        let span = tracing::debug_span!("rpc",
-                            operation = tracing::field::Empty,
-                            lattice_id = tracing::field::Empty,
-                            actor_id = tracing::field::Empty,
-                            inv_id = tracing::field::Empty,
-                            host_id = tracing::field::Empty,
-                            provider_id = tracing::field::Empty,
-                            contract_id = tracing::field::Empty,
-                            link_name = tracing::field::Empty,
-                            payload_size = tracing::field::Empty
-                        );
-                        tokio::spawn( async move {
-                            match deserialize::<Invocation>(&msg.payload) {
-                                Ok(inv) => {
-                                    #[cfg(feature = "otel")]
-                                    if !inv.trace_context.is_empty() {
-                                        attach_span_context(&inv.trace_context);
-                                    }
-                                    let current = tracing::Span::current();
-                                    current.record("operation", &tracing::field::display(&inv.operation));
-                                    current.record("lattice_id", &tracing::field::display(&lattice));
-                                    current.record("actor_id", &tracing::field::display(&inv.origin.public_key));
-                                    current.record("inv_id", &tracing::field::display(&inv.id));
-                                    current.record("host_id", &tracing::field::display(&inv.host_id));
-                                    current.record("provider_id", &tracing::field::display(&inv.target.public_key));
-                                    current.record("contract_id", &tracing::field::display(&inv.target.contract_id));
-                                    current.record("link_name", &tracing::field::display(&inv.target.link_name));
-                                    current.record("payload_size", &tracing::field::display(&inv.content_length));
-                                    let inv_id = inv.id.clone();
-                                    let inv_operation = inv.operation.clone();
-                                    let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
-                                        Err(err) => {
-                                            error!(%err, operation = %inv_operation, "Invocation failed");
-                                            InvocationResponse{
-                                                invocation_id: inv_id,
-                                                error: Some(format!("Error when handling invocation: {err}")),
-                                                ..Default::default()
-                                            }
-                                        },
-                                        Ok(bytes) => {
-                                            InvocationResponse{
-                                                invocation_id: inv_id,
-                                                content_length: bytes.len() as u64,
-                                                msg: bytes,
-                                                ..Default::default()
-                                            }
-                                        }
-                                    };
-                                    if let Some(reply) = msg.reply {
-                                        // send reply
-                                        if let Err(err) = this.rpc_client
-                                            .publish_invocation_response(reply, resp).in_current_span().await {
-                                            error!(%err, "rpc sending response");
-                                        }
-                                    }
-                                },
-                                Err(err) => {
-                                    error!(%err, "invalid rpc message received (not deserializable)");
-                                    if let Some(reply) = msg.reply {
-                                        if let Err(err) = this.rpc_client.publish_invocation_response(reply,
-                                            InvocationResponse{
-                                                error: Some(format!("Error when attempting to deserialize invocation: {err}")),
-                                                ..Default::default()
-                                            },
-                                        ).in_current_span().await {
-                                            error!(%err, "unable to publish invocation response error");
-                                        }
-                                    }
+                        Ok(())
+                    }
+
+                    invocations = wrpc_client
+                        .serve_dynamic(world_key_name.as_str(), wit_fn.as_str(), fn_params) => {
+
+                            // Get the stream of invocations out
+                            let mut invocations = match invocations {
+                                Ok(inv) => inv,
+                                Err(e) => {
+                                    error!(error = %e, world_key_name, wit_fn, "failed to serve via wrpc");
+                                    return Err(e);
                                 }
                             };
-                        }.instrument(span)); /* spawn */
-                    } /* next */
+
+                            // Handle each invocation (this code is adapted from legacy wasmbus)
+                            //
+                            // Invocations are (value, subject, transmitter) tuples
+                            while let Ok(Some(AcceptedInvocation {
+                                context,
+                                params,
+                                result_subject,
+                                error_subject,
+                                transmitter
+                            })) = invocations.try_next().await {
+
+                                let invocation_id = Uuid::from_u128(Ulid::new().into()).to_string();
+                                let operation = format!("{world_key_name}.{wit_fn}");
+
+                                // Build a trace context from incoming headers
+                                let context = context.unwrap_or_default();
+                                #[cfg(feature = "otel")]
+                                {
+                                    let trace_context: TraceContext = convert_header_map_to_hashmap(&context)
+                                        .into_iter()
+                                        .collect::<Vec<(String, String)>>();
+                                    attach_span_context(&trace_context);
+                                }
+
+                                // Determine source ID for the invocation
+                                let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME).map(ToString::to_string).unwrap_or_else(|| "<unknown>".into());
+
+                                let current = tracing::Span::current();
+                                current.record("operation", &tracing::field::display(&operation));
+                                current.record("lattice_name", &tracing::field::display(&lattice));
+                                current.record("invocation_id", &tracing::field::display(&invocation_id));
+                                current.record("source_id", &tracing::field::display(&source_id));
+                                current.record(
+                                    "host_id", 
+                                    &tracing::field::display(&context.get(WRPC_HEADER_NAME_HOST_ID).map(ToString::to_string).unwrap_or("<unknown>".to_string()))
+                                );
+                                current.record("provider_id", provider_id.clone());
+                                current.record("link_name", &tracing::field::display(&link_name));
+
+                                // Perform RPC
+                                match this.handle_wrpc(provider.clone(), &operation, source_id, params, context).in_current_span().await {
+                                    Ok(bytes) => {
+                                        // Assuming that the provider has processed the request and produced objects
+                                        // that conform to wrpc, transmit the response that were returned by the invocation
+                                        if let Err(err) = transmitter.transmit(result_subject, bytes.into()).await {
+                                            error!(%err, "failed to transmit invocation results");
+                                        }
+                                    },
+                                    Err(err) => {
+                                        error!(%err, %operation, "wRPC invocation failed");
+
+                                        // Send the error forwards on the error subject
+                                        if let Err(err) = transmitter
+                                            .transmit_static(error_subject, format!("{err:#}"))
+                                            .await
+                                        {
+                                            error!(?err, "failed to transmit error to invoker");
+                                        }
+                                    },
+                                };
+                            }
+                            Ok(())
+                        }
                 }
-            } /* loop */
-        });
-        Ok(handle)
+            }));
+        }
+
+        Ok(handles)
     }
 
-    async fn handle_rpc<P>(&self, provider: P, inv: Invocation) -> InvocationResult<Vec<u8>>
+    /// Handle an invocation coming from wRPC
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The Provider
+    /// * `operation` - The operation being performed (of the form `<ns>:<pkg>/<interface>.<function>`)
+    /// * `source_id` - The ID of the origin which might represent one or more components/providers (ex. an actor public key)
+    /// * `wrpc_invocation` - Details of the wRPC invocation
+    async fn handle_wrpc<P>(
+        &self,
+        provider: P,
+        operation: impl AsRef<str>,
+        source_id: impl AsRef<str>,
+        invocation_params: Vec<wrpc_transport::Value>,
+        context: HeaderMap,
+    ) -> InvocationResult<Vec<u8>>
     where
         P: Provider + Clone,
     {
-        let inv = self.rpc_client.dechunk(inv).await?;
-        let (inv, claims) = self
-            .rpc_client
-            .validate_invocation(inv)
-            .await
-            .map_err(InvocationError::from)?;
-        self.validate_provider_invocation(&inv, &claims)
-            .await
-            .map_err(InvocationError::from)?;
-        let span = tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, method = %inv.operation);
+        let operation = operation.as_ref();
+        let source_id = source_id.as_ref();
+
+        // Dispatch the invocation to the provider
+        let span = tracing::debug_span!("dispatch", %source_id, %operation);
         provider
-            .dispatch(
+            .dispatch_wrpc_dynamic(
                 Context {
-                    actor: Some(inv.origin.public_key.clone()),
-                    tracing: inv.trace_context.into_iter().collect(),
+                    actor: Some(source_id.into()),
+                    tracing: convert_header_map_to_hashmap(&context),
                 },
-                inv.operation,
-                Cow::Owned(inv.msg),
+                operation.to_string(),
+                invocation_params,
             )
             .instrument(span)
             .await
@@ -332,7 +399,7 @@ impl ProviderConnection {
         &self,
         provider: P,
         shutdown_tx: tokio::sync::broadcast::Sender<bool>,
-    ) -> ProviderInitResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<Result<()>>>
     where
         P: Provider,
     {
@@ -382,6 +449,7 @@ impl ProviderConnection {
                         }
                     }
                 }
+                Ok(())
             }
             .instrument(tracing::debug_span!("shutdown_subscriber")),
         );
@@ -393,21 +461,25 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<Result<()>>>
     where
         P: Provider + Clone,
     {
-        let ldput_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
-            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
-        );
+        // todo(vados-cosmonic): this is what it *should* be
+        //
+        // let ldput_topic = format!(
+        //     "wasmbus.rpc.{}.{}.linkdefs.put",
+        //     &self.lattice, &self.host_data.provider_key,
+        // );
 
+        let ldput_topic = format!("wasmbus.ctl.{}.link.put", &self.lattice,);
         let mut sub = self.rpc_client.client().subscribe(ldput_topic).await?;
         let (this, provider) = (self.clone(), provider.clone());
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
                 this.handle_link_put(msg, &provider).await
             });
+            Ok(())
         });
         Ok(handle)
     }
@@ -417,22 +489,29 @@ impl ProviderConnection {
     where
         P: Provider,
     {
-        match deserialize::<LinkDefinition>(&msg.payload) {
+        match deserialize::<InterfaceLinkDefinition>(&msg.payload) {
             Ok(ld) => {
                 let span = tracing::Span::current();
-                span.record("actor_id", &tracing::field::display(&ld.actor_id));
-                span.record("provider_id", &tracing::field::display(&ld.provider_id));
-                span.record("contract_id", &tracing::field::display(&ld.contract_id));
-                span.record("link_name", &tracing::field::display(&ld.link_name));
-                if self.is_linked(&ld.actor_id).await {
+                span.record("source_id", &tracing::field::display(&ld.source_id));
+                span.record("target", &tracing::field::display(&ld.target));
+                span.record("wit_namespace", &tracing::field::display(&ld.wit_namespace));
+                span.record("wit_package", &tracing::field::display(&ld.wit_package));
+                span.record(
+                    "wit_interfaces",
+                    &tracing::field::display(&ld.interfaces.join(",")),
+                );
+                span.record("link_name", &tracing::field::display(&ld.name));
+                // If the link has already been put, return early
+                if self.is_linked(&ld.source_id).await {
                     warn!("Ignoring duplicate link put");
+                    return;
+                }
+
+                info!("Linking actor with provider");
+                if provider.put_link(&ld).await {
+                    self.put_link(ld).await;
                 } else {
-                    info!("Linking actor with provider");
-                    if provider.put_link(&ld).await {
-                        self.put_link(ld).await;
-                    } else {
-                        warn!("put_link denied");
-                    }
+                    warn!("put_link failed");
                 }
             }
             Err(err) => {
@@ -445,14 +524,13 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<Result<()>>>
     where
         P: Provider + Clone,
     {
-        // Link Delete
         let link_del_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.linkdefs.del",
-            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
+            "wasmbus.rpc.{}.{}.linkdefs.del",
+            &self.lattice, &self.host_data.provider_key
         );
         debug!(topic = %link_del_topic, "subscribing for link del");
         let mut sub = self
@@ -464,14 +542,15 @@ impl ProviderConnection {
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
                 let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
-                if let Ok(ld) = deserialize::<LinkDefinition>(&msg.payload) {
-                    this.delete_link(&ld.actor_id)
+                if let Ok(ld) = deserialize::<InterfaceLinkDefinition>(&msg.payload) {
+                    this.delete_link(&ld.source_id)
                         .instrument(span.clone())
                         .await;
                     // notify provider that link is deleted
-                    provider.delete_link(&ld.actor_id).instrument(span).await;
+                    provider.delete_link(&ld.source_id).instrument(span).await;
                 }
             });
+            Ok(())
         });
 
         Ok(handle)
@@ -481,13 +560,13 @@ impl ProviderConnection {
         &self,
         provider: P,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<()>>
+    ) -> ProviderInitResult<JoinHandle<Result<()>>>
     where
         P: Provider,
     {
         let topic = format!(
-            "wasmbus.rpc.{}.{}.{}.health",
-            &self.lattice, &self.host_data.provider_key, &self.host_data.link_name
+            "wasmbus.rpc.{}.{}.health",
+            &self.lattice, &self.host_data.provider_key,
         );
 
         let mut sub = self.rpc_client.client().subscribe(topic).await?;
@@ -511,36 +590,11 @@ impl ProviderConnection {
                         }
                     }
                 });
+                Ok(())
             }
             .instrument(tracing::debug_span!("subscribe_health")),
         );
 
         Ok(handle)
-    }
-
-    /// extra validation performed by providers
-    async fn validate_provider_invocation(
-        &self,
-        inv: &Invocation,
-        claims: &Claims<jwt::Invocation>,
-    ) -> Result<(), ValidationError> {
-        if !self.host_data.cluster_issuers.contains(&claims.issuer) {
-            return Err(ValidationError::InvalidIssuer);
-        }
-
-        // Verify target public key matches matches the current provider
-        if inv.target.public_key != self.host_data.provider_key {
-            return Err(ValidationError::InvalidTarget(
-                inv.target.public_key.clone(),
-                self.host_data.provider_key.clone(),
-            ));
-        }
-
-        // Verify that the sending actor is linked with this provider
-        if !self.is_linked(&inv.origin.public_key).await {
-            return Err(ValidationError::InvalidActor(inv.origin.public_key.clone()));
-        }
-
-        Ok(())
     }
 }

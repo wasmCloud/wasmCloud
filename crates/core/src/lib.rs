@@ -2,6 +2,7 @@
 
 pub mod chunking;
 pub mod logging;
+pub mod nats;
 
 pub mod host;
 pub use host::*;
@@ -33,6 +34,9 @@ pub type ComponentId = String;
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
 
+/// Public key (nkey) of a cluster issuer
+pub type ClusterIssuerKey = String;
+
 /// WIT package for a given operation (ex. `keyvalue` in `wasi:keyvalue/readwrite.get`)
 pub type WitPackage = String;
 
@@ -41,6 +45,9 @@ pub type WitNamespace = String;
 
 /// WIT interface for a given operation (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
 pub type WitInterface = String;
+
+/// A WIT function (ex. `get` in `wasi:keyvalue/readwrite.get`)
+pub type WitFunction = String;
 
 /// The name of a known (possibly pre-created) configuration, normally used when creating
 /// new interface links in order to configure one or both source/target
