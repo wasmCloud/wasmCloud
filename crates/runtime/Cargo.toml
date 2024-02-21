@@ -41,6 +41,7 @@ wasmtime = { workspace = true, features = ["addr2line", "async", "cache", "compo
 wasmtime-wasi = { workspace = true, features = ["preview2"] }
 wasmtime-wasi-http = { workspace = true }
 wit-parser = { workspace = true }
+wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }
 
 [dev-dependencies]
