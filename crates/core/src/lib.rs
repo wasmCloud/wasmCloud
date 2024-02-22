@@ -24,6 +24,15 @@ pub type ActorLinks = Vec<LinkDefinition>;
 pub type ClusterIssuerKey = String;
 pub type ClusterIssuers = Vec<ClusterIssuerKey>;
 
+/// Name of a link on the wasmCloud lattice
+pub type LinkName = String;
+
+/// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
+/// - actor public key
+/// - provider public key
+/// - opaque string
+pub type LatticeTargetId = String;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HealthCheckRequest {}
 

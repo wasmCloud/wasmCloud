@@ -4,10 +4,12 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, IncomingHttp, InterfaceTarget, KeyValueAtomic,
-    KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
-    TargetInterface,
+    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging,
+    Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity, 
 };
+
+// NOTE: this import is used below in bindgen
+pub use builtin::CallTargetInterface;
 
 #[allow(clippy::doc_markdown)]
 #[allow(missing_docs)]
@@ -58,7 +60,7 @@ mod bindgen {
            "wasi:keyvalue/types/outgoing-value": keyvalue::OutgoingValue,
            "wasi:keyvalue/wasi-keyvalue-error/error": keyvalue::Error,
            "wasi:random/random": preview2::bindings::random::random,
-           "wasmcloud:bus/lattice/target-interface": super::TargetInterface,
+           "wasmcloud:bus/lattice/call-target-interface": super::CallTargetInterface,
         },
     });
 }

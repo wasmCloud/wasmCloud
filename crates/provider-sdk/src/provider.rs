@@ -528,7 +528,7 @@ impl ProviderConnection {
             return Err(ValidationError::InvalidIssuer);
         }
 
-        // verify target public key is my key
+        // Verify target public key matches matches the current provider
         if inv.target.public_key != self.host_data.provider_key {
             return Err(ValidationError::InvalidTarget(
                 inv.target.public_key.clone(),
@@ -536,7 +536,7 @@ impl ProviderConnection {
             ));
         }
 
-        // verify that the sending actor is linked with this provider
+        // Verify that the sending actor is linked with this provider
         if !self.is_linked(&inv.origin.public_key).await {
             return Err(ValidationError::InvalidActor(inv.origin.public_key.clone()));
         }

@@ -53,28 +53,19 @@ pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
 }
 
 /// Generates a fully qualified wasmbus URL for use in wascap claims. The optional method parameter is used for generating URLs for targets being invoked
+// todo(vados-cosmonic): we can remove this entire function once claim signing is removed
+// see: https://github.com/wasmCloud/wasmCloud/issues/1219
 pub fn url(entity: &crate::core::WasmCloudEntity, method: Option<&str>) -> String {
-    // Magic char: First char of an actor public key is M
-    let raw_url = if entity.public_key.to_uppercase().starts_with('M') {
-        format!("{}://{}", URL_SCHEME, entity.public_key)
-    } else {
-        format!(
-            "{}://{}/{}/{}",
-            URL_SCHEME,
-            entity
-                .contract_id
-                .replace(':', "/")
-                .replace(' ', "_")
-                .to_lowercase(),
-            entity.link_name.replace(' ', "_").to_lowercase(),
-            entity.public_key
-        )
-    };
-    if let Some(m) = method {
-        format!("{}/{}", raw_url, m)
-    } else {
-        raw_url
-    }
+    // NOTE: for wRPC, a couple fields in WasmCloudEntity take on separate meanings:
+    // - public_key -> target_id
+    // - contract_id -> interface
+    format!(
+        "wrpc://{}/{}/{}{}",
+        entity.contract_id,
+        entity.link_name,
+        entity.public_key,
+        method.map(|m| ["/", m].join("")).unwrap_or_default(),
+    )
 }
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
