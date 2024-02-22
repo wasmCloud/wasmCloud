@@ -6,7 +6,7 @@ use core::fmt::{self, Debug};
 use core::iter::zip;
 use core::ops::{Deref, DerefMut};
 
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
@@ -213,6 +213,7 @@ pub struct Component {
     linker: Linker<Ctx>,
     claims: Option<jwt::Claims<jwt::Actor>>,
     handler: builtin::HandlerBuilder,
+    polyfilled_imports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     ty: types::Component,
 }
@@ -223,18 +224,27 @@ impl Debug for Component {
             .field("claims", &self.claims)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
+            .field("polyfilled_imports", &self.polyfilled_imports)
             .field("exports", &self.exports)
+            .field("ty", &self.ty)
             .finish_non_exhaustive()
     }
 }
 
+/// Polyfills all missing imports and returns instance -> function -> type map for each polyfill
 #[instrument(level = "trace", skip_all)]
-fn polyfill<'a>(
+fn polyfill<'a, T>(
     resolve: &wit_parser::Resolve,
-    imports: impl IntoIterator<Item = (&'a wit_parser::WorldKey, &'a wit_parser::WorldItem)>,
+    imports: T,
     component: &component::Component,
     linker: &mut Linker<Ctx>,
-) {
+) -> HashMap<String, HashMap<String, DynamicFunction>>
+where
+    T: IntoIterator<Item = (&'a wit_parser::WorldKey, &'a wit_parser::WorldItem)>,
+    T::IntoIter: ExactSizeIterator,
+{
+    let imports = imports.into_iter();
+    let mut polyfilled_imports = HashMap::with_capacity(imports.len());
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
         match instance_name.as_ref() {
@@ -300,7 +310,6 @@ fn polyfill<'a>(
             );
             continue;
         };
-        // TODO: Rework the specification here
         let target = Arc::new(TargetInterface::Custom {
             namespace: package_name.namespace.to_string(),
             package: package_name.name.to_string(),
@@ -318,13 +327,33 @@ fn polyfill<'a>(
                 continue;
             }
         };
+        let hash_map::Entry::Vacant(instance_import) =
+            polyfilled_imports.entry(instance_name.to_string())
+        else {
+            error!("duplicate instance import");
+            continue;
+        };
+        let mut function_imports = HashMap::with_capacity(functions.len());
         let instance_name = Arc::new(instance_name);
-        for (func_name, _) in functions {
+        for (func_name, ty) in functions {
             trace!(
                 ?instance_name,
                 func_name,
                 "polyfill component function import"
             );
+            let ty = match DynamicFunction::resolve(&resolve, ty) {
+                Ok(ty) => ty,
+                Err(err) => {
+                    error!(?err, "failed to resolve polyfilled function type");
+                    continue;
+                }
+            };
+            let hash_map::Entry::Vacant(func_import) =
+                function_imports.entry(func_name.to_string())
+            else {
+                error!("duplicate function import");
+                continue;
+            };
             let instance_name = Arc::clone(&instance_name);
             let func_name = Arc::new(func_name.to_string());
             let target = Arc::clone(&target);
@@ -367,8 +396,11 @@ fn polyfill<'a>(
             ) {
                 error!(?err, "failed to polyfill component function import");
             }
+            func_import.insert(ty);
         }
+        instance_import.insert(function_imports);
     }
+    polyfilled_imports
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -506,8 +538,7 @@ impl Component {
             .find_map(|(id, w)| (id == world).then_some(w))
             .context("component world missing")?;
 
-        polyfill(&resolve, imports, &component, &mut linker);
-
+        let polyfilled_imports = Arc::new(polyfill(&resolve, imports, &component, &mut linker));
         let ty = linker
             .substituted_component_type(&component)
             .context("failed to introspect component type")?;
@@ -518,6 +549,7 @@ impl Component {
             linker,
             claims,
             handler: rt.handler.clone(),
+            polyfilled_imports,
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
         })
@@ -554,6 +586,13 @@ impl Component {
     /// Inner map is keyed by exported function name.
     pub fn exports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
         &self.exports
+    }
+
+    /// Returns a map of dynamic polyfilled function import types.
+    /// Top level map is keyed by the instance name.
+    /// Inner map is keyed by exported function name.
+    pub fn polyfilled_imports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
+        &self.polyfilled_imports
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
