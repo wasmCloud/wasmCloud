@@ -432,6 +432,31 @@ pub struct LinkDefinition {
     pub values: LinkSettings,
 }
 
+/// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
+/// - actor public key
+/// - provider public key
+/// - opaque string
+pub type LatticeTarget = String;
+
+/// Identifier of a component which sends invocations on the lattice
+pub type ComponentId = String;
+
+/// Name of a link on the wasmCloud lattice
+pub type LinkName = String;
+
+/// WIT package for a given operation (ex. `keyvalue` in `wasi:keyvalue/readwrite.get`)
+pub type WitPackage = String;
+
+/// WIT namespace for a given operation (ex. `wasi` in `wasi:keyvalue/readwrite.get`)
+pub type WitNamespace = String;
+
+/// WIT interface for a given operation (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
+pub type WitInterface = String;
+
+/// The name of a known (possibly pre-created) configuration, normally used when creating
+/// new interface links in order to configure one or both source/target
+pub type KnownConfigName = String;
+
 /// A link definition between a source and target component (actor or provider) on a given
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
@@ -439,22 +464,24 @@ pub struct LinkDefinition {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InterfaceLinkDefinition {
     /// Source identifier for the link
-    pub source_id: String,
+    pub source_id: ComponentId,
     /// Target for the link, which can be a unique identifier or (future) a routing group
-    pub target: String,
+    pub target: LatticeTarget,
     /// Name of the link. Not providing this is equivalent to specifying Some("default")
     #[serde(default)]
-    pub name: Option<String>,
-    /// Package of the link operation, e.g. `wasi:keyvalue`
-    pub package: String,
-    /// Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
-    pub interfaces: Vec<String>,
+    pub name: Option<LinkName>,
+    /// WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
+    pub wit_namespace: WitNamespace,
+    /// WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
+    pub wit_package: WitPackage,
+    /// WIT Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
+    pub interfaces: Vec<WitInterface>,
     /// List of named configurations to provide to the source upon request
     #[serde(default)]
-    pub source_config: Vec<String>,
+    pub source_config: Vec<KnownConfigName>,
     /// List of named configurations to provide to the target upon request
     #[serde(default)]
-    pub target_config: Vec<String>,
+    pub target_config: Vec<KnownConfigName>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
