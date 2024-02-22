@@ -1,29 +1,17 @@
 package wasmcloud:bus;
 
 interface lattice {
-    /// Interface target. This represents an interface, which can be selected by `set-target`.
+    /// Call target interface.
+    /// This represents an interface, which can be selected by `set-link-name`.
     /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
-    resource target-interface {
-        constructor(namespace: string, %package: string, %interface: string);
-
-        /// `wasi:blobstore/blobstore` interface target
-        wasi-blobstore-blobstore: static func() -> target-interface;
-
-        /// `wasi:keyvalue/atomic` interface target
-        wasi-keyvalue-atomic: static func() -> target-interface;
-
-        /// `wasi:keyvalue/eventual` interface target
-        wasi-keyvalue-eventual: static func() -> target-interface;
-
-        /// `wasi:logging/logging` interface target
-        wasi-logging-logging: static func() -> target-interface;
-
-        /// `wasmcloud:messaging/consumer` interface target
-        wasmcloud-messaging-consumer: static func() -> target-interface;
-
-        /// `wasi:http/outgoing-handler` interface target
-        wasi-http-outgoing-handler: static func() -> target-interface;
+    ///
+    /// todo(vadossi-cosmonic): this should be removable completely once signing is removed
+    record call-target-interface {
+        pkg: string,
+        ns: string,
+        iface: string,
+        fn: option<string>,
     }
 
     /// Actor identifier
@@ -34,16 +22,33 @@ interface lattice {
         alias(string),
     }
 
+    /// Interface Target for wRPC invocations
+    record wrpc-interface-target {
+        /// wRPC component routing identifier
+        id: string,
+        /// wRPC component interface
+        iface: call-target-interface,
+        /// Link name used to resolve the target
+        link-name: string,
+    }
+
     /// Target entity
     variant target-entity {
         /// Link target paired with an optional link name
         link(option<string>),
         /// Actor target
         actor(actor-identifier),
+        /// wRPC-compliant interface target
+        wrpc(wrpc-interface-target),
     }
 
     /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
-    set-target: func(target: option<target-entity>, interfaces: list<target-interface>);
+    /// todo(vadossi-cosmonic): the list of interfaces should not be necessary once signing is removed
+    /// see: https://github.com/wasmCloud/wasmCloud/issues/1219
+    set-link-name: func(name: string, interfaces: list<call-target-interface>);
+
+    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
+    get-link-name: func() -> string;
 }
 
 /// An interface for getting configuration data for a wasm module
@@ -58,6 +63,7 @@ interface guest-config {
 
     /// Gets a single opaque config value set at the given key if it exists
     get: func(key: string) -> result<option<list<u8>>, config-error>;
+
     /// Gets a list of all set config data
     get-all: func() -> result<list<tuple<string, list<u8>>>, config-error>;
 }

@@ -1,11 +1,12 @@
 use super::{Ctx, Instance, TableResult};
 
+use crate::capability::builtin::CallTargetInterface;
 use crate::capability::bus::{guest_config, lattice};
-use crate::capability::{Bus, TargetInterface};
+use crate::capability::Bus;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use tracing::instrument;
 use wasmtime::component::Resource;
@@ -18,84 +19,58 @@ impl Instance {
     }
 }
 
+/// Name of a link on the wasmCloud lattice
+pub type LinkName = String;
+
 #[async_trait]
 impl lattice::Host for Ctx {
-    async fn set_target(
+    async fn set_link_name(
         &mut self,
-        target: Option<lattice::TargetEntity>,
-        interfaces: Vec<Resource<TargetInterface>>,
+        link_name: String,
+        interfaces: Vec<Resource<CallTargetInterface>>,
     ) -> anyhow::Result<()> {
         let interfaces = interfaces
             .into_iter()
             .map(|interface| self.table.get(&interface).cloned())
             .collect::<TableResult<_>>()
-            .map_err(|e| anyhow!(e).context("failed to get interface"))?;
-        let target = target
-            .map(TryInto::try_into)
-            .transpose()
-            .context("failed to parse target")?;
+            .context("failed to convert call target interfaces")?;
         self.handler
-            .set_target(target, interfaces)
+            .set_link_name(link_name, interfaces)
             .await
-            .context("failed to set target")?;
+            .context("failed to set link name")?;
         Ok(())
+    }
+
+    async fn get_link_name(&mut self) -> anyhow::Result<LinkName> {
+        let link_name = self
+            .handler
+            .get_link_name()
+            .await
+            .context("failed to get link name")?;
+        Ok(link_name)
     }
 }
 
 #[async_trait]
-impl lattice::HostTargetInterface for Ctx {
+impl lattice::HostCallTargetInterface for Ctx {
     async fn new(
         &mut self,
         namespace: String,
         package: String,
         interface: String,
-    ) -> anyhow::Result<Resource<TargetInterface>> {
+        function: Option<String>,
+    ) -> anyhow::Result<Resource<lattice::CallTargetInterface>> {
         self.table
-            .push(TargetInterface::Custom {
+            .push(CallTargetInterface {
                 namespace,
                 package,
                 interface,
+                function,
             })
             .context("failed to push target interface")
     }
 
-    async fn wasi_blobstore_blobstore(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasiBlobstoreBlobstore)
-            .context("failed to push target interface")
-    }
-
-    async fn wasi_keyvalue_atomic(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasiKeyvalueAtomic)
-            .context("failed to push target interface")
-    }
-
-    async fn wasi_keyvalue_eventual(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasiKeyvalueEventual)
-            .context("failed to push target interface")
-    }
-
-    async fn wasi_logging_logging(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasiLoggingLogging)
-            .context("failed to push target interface")
-    }
-
-    async fn wasi_http_outgoing_handler(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasiHttpOutgoingHandler)
-            .context("failed to push target interface")
-    }
-
-    async fn wasmcloud_messaging_consumer(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
-        self.table
-            .push(TargetInterface::WasmcloudMessagingConsumer)
-            .context("failed to push target interface")
-    }
-
-    fn drop(&mut self, interface: Resource<TargetInterface>) -> anyhow::Result<()> {
+    fn drop(&mut self, interface: Resource<lattice::CallTargetInterface>) -> anyhow::Result<()> {
         self.table.delete(interface)?;
         Ok(())
     }
