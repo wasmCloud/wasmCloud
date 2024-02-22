@@ -52,7 +52,8 @@ use wasmcloud_control_interface::{
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
-    HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
+    HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
+    OtelConfig, WasmCloudEntity,
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
@@ -240,11 +241,24 @@ struct Handler {
     origin: WasmCloudEntity,
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
+
     /// The current link name to use for interface targets, overridable in actor code via set_target()
-    interface_link_name: Arc<RwLock<String>>,
-    // link name -> package -> interface -> target
+    interface_link_name: Arc<RwLock<LinkName>>,
+
+    /// Map of link names -> WIT ns & package -> WIT interface -> Target
+    ///
+    /// While a target may often be a component ID, it is not guaranteed to be one, and could be
+    /// some other identifier of where to send invocations, representing one or more lattice entities.
+    ///
+    /// Lattice entities could be:
+    /// - A (single) Component ID
+    /// - A routing group
+    /// - Some other opaque string
     #[allow(clippy::type_complexity)]
-    interface_links: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>>,
+    interface_links: Arc<
+        RwLock<HashMap<LinkName, HashMap<WitNsAndPackage, HashMap<WitInterface, LatticeTargetId>>>>,
+    >,
+
     // NOTE(brooksmtownsend): needs deduplication of responsibility with interface_links
     wrpc_targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
@@ -298,13 +312,16 @@ impl Handler {
         operation: impl Into<String>,
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        let links = self.links.read().await;
-        let aliases = self.aliases.read().await;
         let operation = operation.into();
+
+        // Determine the target for the operation
         let (package, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
         let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
+        let link_name = inv_target.link_name.clone();
+
+        // Build invocation
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
@@ -318,6 +335,7 @@ impl Handler {
             injector.into(),
         )?;
 
+        // Handle chunking if required
         if needs_chunking {
             self.chunk_endpoint
                 .chunkify(&invocation.id, Cursor::new(invocation.msg))
@@ -326,9 +344,12 @@ impl Handler {
             invocation.msg = vec![];
         }
 
+        // Build the payload
         let payload =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
-        let topic = match target {
+
+        // Determine the subject on which to transmit
+        let subject = match target {
             Some(TargetEntity::Wrpc(target)) => {
                 let (namespace, package, interface) = target.interface.as_parts();
                 let (_, function) = interface_and_func
@@ -349,17 +370,21 @@ impl Handler {
             ),
         };
 
+        // Determine the timeout required
         let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+
+        // Build and send request over NATS
         let request = async_nats::Request::new()
             .payload(payload.into())
             .timeout(timeout)
             .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
         let res = self
             .nats
-            .send_request(topic, request)
+            .send_request(subject, request)
             .await
-            .context("failed to publish on NATS topic")?;
+            .context("failed to publish on NATS subject")?;
 
+        // Process response
         let InvocationResponse {
             invocation_id,
             mut msg,
@@ -381,11 +406,12 @@ impl Handler {
             ensure!(resp_length == msg.len(), "message size mismatch");
         }
 
-        if let Some(error) = error {
-            Ok(Err(error))
-        } else {
-            Ok(Ok(msg))
+        // If an error occurred, then return it wrapped in the invocation OK
+        if let Some(e) = err {
+            return Ok(Err(e));
         }
+
+        Ok(Ok(msg))
     }
 
     #[instrument(level = "debug", skip(self, operation, request))]
@@ -703,47 +729,45 @@ impl Bus for Handler {
         &self,
         target_interface: &TargetInterface,
     ) -> anyhow::Result<Option<TargetEntity>> {
-        // NOTE(brooksmtownsend): this should be removed by @vados-cosmonic when we drop `set_target` in favor of
-        // `set_link_name`
-        let targets = self.wrpc_targets.read().await;
-        if let Some(interface) = targets.get(target_interface) {
-            return Ok(Some(interface.clone()));
-        };
-
         let links = self.interface_links.read().await;
         let link_name = self.interface_link_name.read().await.clone();
-        let (namespace, package, interface) = target_interface.as_parts();
-        let target_component_id = links
+        let (namespace, package, interface, func) = target_interface.as_parts();
+
+        // Determine the lattice target ID we should be sending to
+        let lattice_target_id = links
             .get(self.interface_link_name.read().await.as_str())
             .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
             .and_then(|interfaces| interfaces.get(interface));
-        Ok(target_component_id.map(|id| {
+
+        // If we managed to find a target ID, convert it into an entity
+        let target_entity = lattice_target_id.map(|id| {
             TargetEntity::Wrpc(InterfaceTarget {
                 id: id.clone(),
                 interface: target_interface.clone(),
                 link_name,
             })
-        }))
+        });
+        Ok(target_entity)
     }
 
+    /// Get the current link name
+    #[instrument(level = "debug", skip_all)]
+    async fn get_link_name(&self) -> anyhow::Result<String> {
+        Ok(self.interface_link_name.read().await.deref().clone())
+    }
+
+    /// Set the current link name in use by the handler, which is otherwise "default".
+    ///
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/readwrite.get`)
+    /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
     #[instrument(level = "debug", skip(self))]
-    async fn set_target(
+    async fn set_link_name(
         &self,
-        target: Option<TargetEntity>,
+        link_name: LinkName,
         interfaces: Vec<TargetInterface>,
     ) -> anyhow::Result<()> {
-        // TODO: See note about wrpc_targets and interface_links, need clarification on if I'm duplicating
-        // functionality
-        let mut targets = self.wrpc_targets.write().await;
-        if let Some(target) = target {
-            for interface in interfaces {
-                targets.insert(interface, target.clone());
-            }
-        } else {
-            for interface in interfaces {
-                targets.remove(&interface);
-            }
-        }
+        let mut current_link_name = self.interface_link_name.write().await;
+        *current_link_name = link_name.unwrap_or_else(|| DEFAULT_LINK_NAME.into());
         Ok(())
     }
 
@@ -839,7 +863,9 @@ impl Bus for Handler {
                 let payload = rmp_serde::to_vec_named(&invocation)
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
-                let topic = match target {
+
+                // Build subject from what we know about the operation
+                let subject = match target {
                     Some(TargetEntity::Wrpc(target)) => {
                         let (_, function) = interface_and_func
                             .split_once('.')
@@ -859,17 +885,21 @@ impl Bus for Handler {
                     }
                 };
 
+                // Determine the timeout required for the request
                 let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+
+                // Build and send the NATS request
                 let request = async_nats::Request::new()
                     .payload(payload.into())
                     .timeout(timeout)
                     .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
                 let res = nats
-                    .send_request(topic, request)
+                    .send_request(subject, request)
                     .await
                     .context("failed to call provider")
                     .map_err(|e| e.to_string())?;
 
+                // Process response
                 let InvocationResponse {
                     invocation_id,
                     mut msg,
@@ -896,16 +926,17 @@ impl Bus for Handler {
                     return Err("message size mismatch".into());
                 }
 
+                // If there was an error then we can
                 if let Some(error) = error {
-                    Err(error)
-                } else {
-                    res_w
-                        .write_all(&msg)
-                        .await
-                        .context("failed to write reply")
-                        .map_err(|e| e.to_string())?;
-                    Ok(())
+                    return Err(error);
                 }
+
+                res_w
+                    .write_all(&msg)
+                    .await
+                    .context("failed to write reply")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
             }
             .boxed(),
             Box::new(req_w),
