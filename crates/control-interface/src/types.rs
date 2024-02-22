@@ -180,6 +180,12 @@ pub struct LinkDefinitionList {
     pub links: Vec<LinkDefinition>,
 }
 
+/// A list of interface link definitions
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InterfaceLinkDefinitionList {
+    pub links: Vec<InterfaceLinkDefinition>,
+}
+
 /// One of a potential list of responses to a provider auction
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionAck {
@@ -309,6 +315,22 @@ pub struct RemoveLinkDefinitionRequest {
     /// The provider's link name
     #[serde(default)]
     pub link_name: String,
+}
+
+/// A request to remove a link definition and detach the relevant actor
+/// from the given provider
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoveInterfaceLinkDefinitionRequest {
+    /// The actor's public key. This cannot be an image reference
+    #[serde(default)]
+    pub source_id: String,
+    /// Name of the link. Not providing this is equivalent to specifying Some("default")
+    #[serde(default = "default_link_name")]
+    pub name: LinkName,
+    /// WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
+    pub wit_namespace: WitNamespace,
+    /// WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
+    pub wit_package: WitPackage,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -462,15 +484,15 @@ pub type KnownConfigName = String;
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, Hash)]
 pub struct InterfaceLinkDefinition {
     /// Source identifier for the link
     pub source_id: ComponentId,
     /// Target for the link, which can be a unique identifier or (future) a routing group
     pub target: LatticeTarget,
-    /// Name of the link. Not providing this is equivalent to specifying Some("default")
-    #[serde(default)]
-    pub name: Option<LinkName>,
+    /// Name of the link. Not providing this is equivalent to specifying "default"
+    #[serde(default = "default_link_name")]
+    pub name: LinkName,
     /// WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
     pub wit_namespace: WitNamespace,
     /// WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
@@ -483,6 +505,11 @@ pub struct InterfaceLinkDefinition {
     /// List of named configurations to provide to the target upon request
     #[serde(default)]
     pub target_config: Vec<KnownConfigName>,
+}
+
+/// Helper function to provide a default link name
+fn default_link_name() -> LinkName {
+    "default".to_string()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
