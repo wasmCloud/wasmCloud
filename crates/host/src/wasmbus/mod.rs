@@ -5,7 +5,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 use std::collections::hash_map::{self, Entry};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
@@ -45,9 +45,9 @@ pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
-    HostLabel, InterfaceLinkDefinition, LinkDefinition, LinkDefinitionList, ProviderAuctionAck,
+    HostLabel, InterfaceLinkDefinition, InterfaceLinkDefinitionList, ProviderAuctionAck,
     ProviderAuctionRequest, ProviderDescription, RegistryCredential, RegistryCredentialMap,
-    RemoveLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
+    RemoveInterfaceLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
@@ -56,9 +56,9 @@ use wasmcloud_core::{
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, CallTargetInterface,
-    KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
-    TargetEntity, WrpcInterfaceTarget,
+    blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, KeyValueAtomic,
+    KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
+    WrpcInterfaceTarget,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -276,9 +276,6 @@ struct Handler {
     host_key: Arc<KeyPair>,
     claims: jwt::Claims<jwt::Actor>,
     origin: WasmCloudEntity,
-    // package -> target -> entity
-    links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
-
     /// The current link name to use for interface targets, overridable in actor code via set_target()
     interface_link_name: Arc<RwLock<LinkName>>,
 
@@ -294,26 +291,17 @@ struct Handler {
     #[allow(clippy::type_complexity)]
     interface_links:
         Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTargetId>>>>>,
-    aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     // interface -> function -> result types
     polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
 }
 
 #[instrument(level = "trace")]
-async fn resolve_target(
-    target: Option<&TargetEntity>,
-    links: Option<&HashMap<String, WasmCloudEntity>>,
-    aliases: &HashMap<String, WasmCloudEntity>,
-) -> anyhow::Result<WasmCloudEntity> {
+async fn resolve_target(target: Option<&TargetEntity>) -> anyhow::Result<WasmCloudEntity> {
     const DEFAULT_LINK_NAME: &str = "default";
 
     trace!("resolve target");
 
     let target = match target {
-        None => links
-            .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
-            .context("link not found")?
-            .clone(),
         Some(TargetEntity::Wrpc(target)) => {
             let (namespace, package, _, _) = target.interface.as_parts();
             WasmCloudEntity {
@@ -322,18 +310,7 @@ async fn resolve_target(
                 link_name: target.link_name.clone(),
             }
         }
-        Some(TargetEntity::Link(link_name)) => links
-            .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
-            .context("link not found")?
-            .clone(),
-        Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
-            public_key: key.public_key(),
-            ..Default::default()
-        },
-        Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => aliases
-            .get(alias)
-            .context("unknown actor call alias")?
-            .clone(),
+        _ => bail!("target not found"),
     };
     Ok(target)
 }
@@ -347,14 +324,11 @@ impl Handler {
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         let operation = operation.into();
-        let links = self.links.read().await;
-        let aliases = self.aliases.read().await;
-
         // Determine the target for the operation
-        let (package, interface_and_func) = operation
+        let (_, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
-        let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
+        let inv_target = resolve_target(target.as_ref()).await?;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
         let invocation = Invocation::new(
@@ -382,14 +356,8 @@ impl Handler {
                     self.lattice, target.id, namespace, package, interface, function
                 )
             }
-            None | Some(TargetEntity::Link(_)) => format!(
-                "wasmbus.rpc.{}.{}.{}",
-                self.lattice, invocation.target.public_key, invocation.target.link_name,
-            ),
-            Some(TargetEntity::Actor(_)) => format!(
-                "wasmbus.rpc.{}.{}",
-                self.lattice, invocation.target.public_key
-            ),
+            // TODO: just remove other options entirely
+            _ => bail!("invalid target"),
         };
 
         let request = async_nats::Request::new()
@@ -834,8 +802,7 @@ impl Bus for Handler {
         let data = conf
             .get(&self.claims.subject)
             .and_then(|conf| conf.get(key))
-            .cloned()
-            .map(|val| val.into_bytes());
+            .cloned();
         Ok(Ok(data))
     }
 
@@ -849,11 +816,7 @@ impl Bus for Handler {
             .await
             .get(&self.claims.subject)
             .cloned()
-            .map(|conf| {
-                conf.into_iter()
-                    .map(|(key, val)| (key, val.into_bytes()))
-                    .collect::<Vec<_>>()
-            })
+            .map(|conf| conf.into_iter().collect::<Vec<_>>())
             .unwrap_or_default()))
     }
 
@@ -1293,7 +1256,7 @@ struct Provider {
     image_ref: String,
 }
 
-type ConfigCache = HashMap<String, HashMap<String, String>>;
+type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
 
 /// wasmCloud Host
 pub struct Host {
@@ -1324,8 +1287,8 @@ pub struct Host {
     stop_tx: watch::Sender<Option<Instant>>,
     stop_rx: watch::Receiver<Option<Instant>>,
     queue: AbortHandle,
-    aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
-    links: RwLock<HashMap<String, LinkDefinition>>,
+    // Component ID -> All Links
+    links: RwLock<HashMap<String, HashSet<InterfaceLinkDefinition>>>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
@@ -1834,7 +1797,6 @@ impl Host {
             stop_rx,
             stop_tx,
             queue: queue_abort.clone(),
-            aliases: Arc::default(),
             links: RwLock::default(),
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
@@ -2335,30 +2297,6 @@ impl Host {
             .await
             .context("failed to store claims")?;
 
-        let links = self.links.read().await;
-        let links = links
-            .values()
-            .filter(|ld| ld.actor_id == claims.subject)
-            .fold(
-                HashMap::<_, HashMap<_, _>>::default(),
-                |mut links,
-                 LinkDefinition {
-                     link_name,
-                     contract_id,
-                     provider_id,
-                     ..
-                 }| {
-                    links.entry(contract_id.clone()).or_default().insert(
-                        link_name.clone(),
-                        WasmCloudEntity {
-                            link_name: link_name.clone(),
-                            contract_id: contract_id.clone(),
-                            public_key: provider_id.clone(),
-                        },
-                    );
-                    links
-                },
-            );
         let origin = WasmCloudEntity {
             public_key: claims.subject.clone(),
             ..Default::default()
@@ -2393,8 +2331,6 @@ impl Host {
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
             claims: claims.clone(),
-            aliases: Arc::clone(&self.aliases),
-            links: Arc::new(RwLock::new(links)),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
             host_key: Arc::clone(&self.host_key),
@@ -2555,33 +2491,6 @@ impl Host {
 
     #[instrument(level = "trace", skip_all)]
     async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Actor>) -> anyhow::Result<()> {
-        if let Some(call_alias) = claims
-            .metadata
-            .as_ref()
-            .and_then(|jwt::Actor { call_alias, .. }| call_alias.clone())
-        {
-            let mut aliases = self.aliases.write().await;
-            match aliases.entry(call_alias) {
-                Entry::Occupied(mut entry) => {
-                    warn!(
-                        alias = entry.key(),
-                        existing_public_key = entry.get().public_key,
-                        new_public_key = claims.subject,
-                        "call alias clash. Replacing existing entry"
-                    );
-                    entry.insert(WasmCloudEntity {
-                        public_key: claims.subject.clone(),
-                        ..Default::default()
-                    });
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(WasmCloudEntity {
-                        public_key: claims.subject.clone(),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
         let mut actor_claims = self.actor_claims.write().await;
         actor_claims.insert(claims.subject.clone(), claims);
         Ok(())
@@ -2994,20 +2903,6 @@ impl Host {
                 .cluster_key
                 .seed()
                 .context("cluster key seed missing")?;
-            let links = self.links.read().await;
-            // TODO: update type of links to use wasmcloud_core::LinkDefinition
-            let link_definitions: Vec<_> = links
-                .clone()
-                .into_values()
-                .filter(|ld| ld.provider_id == claims.subject && ld.link_name == link_name)
-                .map(|ld| wasmcloud_core::LinkDefinition {
-                    actor_id: ld.actor_id,
-                    provider_id: ld.provider_id,
-                    link_name: ld.link_name,
-                    contract_id: ld.contract_id,
-                    values: ld.values.into_iter().collect(),
-                })
-                .collect();
             let lattice_rpc_user_seed = self
                 .host_config
                 .rpc_key
@@ -3036,7 +2931,8 @@ impl Host {
                 env_values: vec![],
                 instance_id: Uuid::from_u128(id.into()).to_string(),
                 provider_key: component_id.clone(),
-                link_definitions,
+                // TODO: update type of links to provide wrpc links
+                link_definitions: vec![],
                 config_json: configuration,
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
@@ -3393,34 +3289,54 @@ impl Host {
         Ok(res.into())
     }
 
-    // #[instrument(level = "debug", skip_all)] // FIXME: this is temporarily disabled because wadm (as of v0.8.0) queries links too often
+    #[instrument(level = "debug", skip_all)]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
-        trace!("handling links"); // FIXME: set back to debug when instrumentation is re-enabled
+        debug!("handling links");
 
         let links = self.links.read().await;
-        let links: Vec<LinkDefinition> = links.values().cloned().collect();
-        let res = serde_json::to_vec(&LinkDefinitionList { links })
+        let links: Vec<InterfaceLinkDefinition> = links.values().cloned().flatten().collect();
+        let res = serde_json::to_vec(&InterfaceLinkDefinitionList { links })
             .context("failed to serialize response")?;
         Ok(res.into())
     }
 
+    #[instrument(level = "trace", skip_all)]
+    async fn handle_config_get_one(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
+        trace!(%entity_id, %key, "handling config");
+        let json = match self
+            .config_data_cache
+            .read()
+            .await
+            .get(entity_id)
+            .and_then(|map| map.get(key))
+        {
+            Some(data) => json!({
+                "found": true,
+                "data": data,
+            }),
+            None => {
+                json!({
+                    "found": false,
+                    "data": [],
+                })
+            }
+        };
+        serde_json::to_vec(&json)
+            .map(Bytes::from)
+            .map_err(anyhow::Error::from)
+    }
+
     #[instrument(level = "trace", skip(self))]
     async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Bytes> {
-        trace!(%entity_id, "handling get config");
+        trace!(%entity_id, "handling all config");
         self.config_data_cache
             .read()
             .await
             .get(entity_id)
             .map_or_else(
-                || {
-                    let json = serde_json::json!({ "found": false });
-                    serde_json::to_vec(&json)
-                        .map(Bytes::from)
-                        .map_err(anyhow::Error::from)
-                },
+                || Ok(Bytes::default()),
                 |data| {
-                    let json = serde_json::json!({ "found": true, "data": data });
-                    serde_json::to_vec(&json)
+                    serde_json::to_vec(data)
                         .map(Bytes::from)
                         .map_err(anyhow::Error::from)
                 },
@@ -3461,15 +3377,17 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_interface_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
+        let interface_link_definition: InterfaceLinkDefinition = serde_json::from_slice(payload)
+            .context("failed to deserialize wrpc link definition")?;
         let InterfaceLinkDefinition {
             source_id,
             target,
+            wit_namespace,
             wit_package,
             interfaces,
-            name: link_name,
+            name,
             ..
-        } = serde_json::from_slice(payload)
-            .context("failed to deserialize wrpc link definition")?;
+        } = interface_link_definition.clone();
 
         let actors = self.actors.read().await;
 
@@ -3478,12 +3396,11 @@ impl Host {
             return Ok(r#"{"accepted":false,"error":"no actor found for that ID"}"#.into());
         };
 
-        // NOTE: We can't leave it as an Option<String> as a `None` key cannot be serialized to JSON
-        let name = link_name.clone().unwrap_or("default".to_string());
+        let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
 
-        info!(
+        debug!(
             source_id,
-            target, wit_package, name, "handling put wrpc link definition"
+            target, ns_and_package, name, "handling put wrpc link definition"
         );
 
         // Write link for each interface in the package
@@ -3495,7 +3412,7 @@ impl Host {
             .entry(name)
             .and_modify(|link_for_name| {
                 link_for_name
-                    .entry(wit_package.clone())
+                    .entry(ns_and_package.clone())
                     .and_modify(|package| {
                         for interface in &interfaces {
                             package.insert(interface.clone(), target.clone());
@@ -3513,62 +3430,112 @@ impl Host {
                     .iter()
                     .map(|interface| (interface.clone(), target.clone()))
                     .collect::<HashMap<String, String>>();
-                HashMap::from_iter([(wit_package.clone(), interfaces_map)])
+                HashMap::from_iter([(ns_and_package.clone(), interfaces_map)])
             });
 
         let spec = actor.component_specification().await;
         self.store_component_spec(&source_id, &spec).await?;
 
+        // Insert link into host map
+        self.links
+            .write()
+            .await
+            .entry(source_id.clone())
+            .and_modify(|links| {
+                links.replace(interface_link_definition.clone());
+            })
+            .or_insert(HashSet::from_iter([interface_link_definition]));
+
+        // TODO: Publish event
+        // self.publish_event(
+        //     "linkdef_set",
+        //     event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
+        // )
+        // .await?;
+        // TODO: tell the provider to set the link
+        // self.rpc_nats
+        // .publish_with_headers(
+        //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.set",),
+        //     injector_to_headers(&TraceContextInjector::default_with_span()),
+        //     msgp.into(),
+        // )
+        // .await
+        // .context("failed to publish link definition set")?;
+
         Ok(ACCEPTED.into())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    /// Remove an interface link on a source component for a specific package
+    async fn handle_interface_link_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
-        let Ok(LinkDefinition {
-            actor_id,
-            provider_id,
-            link_name,
-            contract_id,
+        let RemoveInterfaceLinkDefinitionRequest {
+            source_id,
+            wit_namespace,
+            wit_package,
+            name,
             ..
-        }) = serde_json::from_slice(payload).context("failed to deserialize link definition")
-        else {
-            // TODO(#1568): make this the default instead of the fallback
-            return self.handle_interface_link_put(payload).await;
+        } = serde_json::from_slice(payload)
+            .context("failed to deserialize wrpc link definition")?;
+
+        let actors = self.actors.read().await;
+
+        let Ok(actor) = actors.get(&source_id).context("actor not found") else {
+            return Ok(r#"{"accepted":true,"error":""}"#.into());
         };
-        let id = linkdef_hash(&actor_id, &contract_id, &link_name);
 
-        info!(
-            actor_id,
-            provider_id, link_name, contract_id, "handling put link definition"
+        let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
+
+        debug!(
+            source_id,
+            ns_and_package, name, "handling del wrpc link definition"
         );
 
-        self.data
-            .put(format!("LINKDEF_{id}"), Bytes::copy_from_slice(payload))
+        // Remove the interface links for the given link name and package
+        actor
+            .handler
+            .interface_links
+            .write()
             .await
-            .map_err(|e| anyhow!(e).context("failed to store link definition"))?;
-        Ok(ACCEPTED.into())
-    }
+            .entry(name.clone())
+            .and_modify(|link_for_name| {
+                link_for_name.remove(&ns_and_package);
+            });
 
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_linkdef_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        let RemoveLinkDefinitionRequest {
-            actor_id,
-            ref link_name,
-            contract_id,
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize link definition deletion command")?;
-        let id = linkdef_hash(&actor_id, &contract_id, link_name);
+        let spec = actor.component_specification().await;
+        self.store_component_spec(&source_id, &spec).await?;
 
-        info!(
-            actor_id,
-            link_name, contract_id, "handling delete link definition"
-        );
-
-        self.data
-            .delete(format!("LINKDEF_{id}"))
+        // Remove link from host map
+        self.links
+            .write()
             .await
-            .map_err(|e| anyhow!(e).context("failed to delete link definition"))?;
+            .entry(source_id.clone())
+            // TODO: would be more efficient to be able to look up the link by hash and remove instead of iterating
+            .and_modify(|links| {
+                // Retain links that don't match the link we're removing
+                links.retain(|interface_link_definition| {
+                    interface_link_definition.wit_namespace != wit_namespace
+                        || interface_link_definition.wit_package != wit_package
+                        || interface_link_definition.name != name
+                });
+            });
+
+        // TODO: Publish event
+        // self.publish_event(
+        //     "linkdef_deleted",
+        //     event::linkdef_deleted(id, actor_id, link_name, contract_id),
+        // )
+        // .await?;
+        // TODO: tell the provider to delete the link
+        // self.rpc_nats
+        // .publish_with_headers(
+        //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.del",),
+        //     injector_to_headers(&TraceContextInjector::default_with_span()),
+        //     msgp.into(),
+        // )
+        // .await
+        // .context("failed to publish link definition deletion")?;
+
         Ok(ACCEPTED.into())
     }
 
@@ -3599,35 +3566,66 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(level = "debug", skip_all, fields(%config_name))]
-    async fn handle_config_put(&self, config_name: &str, data: Bytes) -> anyhow::Result<Bytes> {
-        debug!("handle config entry put");
-        // Validate that the data is of the proper type by deserialing it
-        serde_json::from_slice::<HashMap<String, String>>(&data)
-            .context("Config data should be a map of string -> string")?;
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_config_put(
+        &self,
+        entity_id: &str,
+        key: &str,
+        data: Bytes,
+    ) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, %key, "handle config entry put");
+        // Simple check for a valid entity key. A valid public nkey is 56 chars and it should start
+        // with the proper character. It isn't worth the overhead of actually parsing the key, but
+        // if that is an issue in the future we can ensure it is a fully parsable nkey.
+        if entity_id.len() != 56 || (!entity_id.starts_with('M') && !entity_id.starts_with('V')) {
+            bail!("Invalid entity ID. The entity ID must be a valid public nkey for an actor or provider");
+        }
         self.config_data
-            .put(config_name, data)
+            .put(format!("{entity_id}_{key}"), data)
             .await
             .context("Unable to store config data")?;
         // We don't write it into the cached data and instead let the caching thread handle it as we
         // won't need it immediately.
-        self.publish_event("config_set", event::config_set(config_name))
+
+        self.publish_event("config_set", event::config_set(entity_id, key))
             .await?;
 
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(level = "debug", skip_all, fields(%config_name))]
-    async fn handle_config_delete(&self, config_name: &str) -> anyhow::Result<Bytes> {
-        debug!("handle config entry deletion");
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_config_delete(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, %key, "handle config entry deletion");
 
         self.config_data
-            .purge(config_name)
+            .purge(format!("{entity_id}_{key}"))
             .await
             .context("Unable to delete config data")?;
 
-        self.publish_event("config_deleted", event::config_deleted(config_name))
+        self.publish_event("config_deleted", event::config_deleted(entity_id, key))
             .await?;
+
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_config_clear(&self, entity_id: &str) -> anyhow::Result<Bytes> {
+        debug!(%entity_id, "handle config clear");
+
+        // NOTE(thomastaylor312): I specifically made the decision not to key the current list of
+        // keys directly from the KV bucket because we'd have to list _all_ keys and then filter
+        // them out. Using the cache lets us get only what we need, at the slight risk of missing a
+        // newly created key
+        let config_cache = self.config_data_cache.read().await;
+        let Some(all_data) = config_cache.get(entity_id) else {
+            return Ok(ACCEPTED.into());
+        };
+        let futs = all_data
+            .keys()
+            .map(|key| self.handle_config_delete(entity_id, key));
+        futures::future::try_join_all(futs)
+            .await
+            .context("Unable to delete all config keys. Some keys may remain")?;
 
         Ok(ACCEPTED.into())
     }
@@ -3712,12 +3710,14 @@ impl Host {
             (Some("claims"), Some("get"), None, None) => self.handle_claims().await.map(Some),
 
             (Some("link"), Some("get"), None, None) => self.handle_links().await.map(Some),
-            (Some("link"), Some("put"), None, None) => {
-                self.handle_linkdef_put(message.payload).await.map(Some)
-            }
-            (Some("link"), Some("del"), None, None) => {
-                self.handle_linkdef_del(message.payload).await.map(Some)
-            }
+            (Some("link"), Some("put"), None, None) => self
+                .handle_interface_link_put(message.payload)
+                .await
+                .map(Some),
+            (Some("link"), Some("del"), None, None) => self
+                .handle_interface_link_del(message.payload)
+                .await
+                .map(Some),
 
             (Some("label"), Some("del"), Some(_host_id), None) => {
                 self.handle_label_del(message.payload).await.map(Some)
@@ -3730,15 +3730,21 @@ impl Host {
                 self.handle_registries_put(message.payload).await.map(Some)
             }
 
-            (Some("config"), Some("get"), Some(config_name), None) => {
-                self.handle_config_get(config_name).await.map(Some)
+            (Some("config"), Some("get"), Some(entity_id), Some(key)) => {
+                self.handle_config_get_one(entity_id, key).await.map(Some)
             }
-            (Some("config"), Some("put"), Some(config_name), None) => self
-                .handle_config_put(config_name, message.payload)
+            (Some("config"), Some("get"), Some(entity_id), None) => {
+                self.handle_config_get(entity_id).await.map(Some)
+            }
+            (Some("config"), Some("put"), Some(entity_id), Some(key)) => self
+                .handle_config_put(entity_id, key, message.payload)
                 .await
                 .map(Some),
-            (Some("config"), Some("del"), Some(config_name), None) => {
-                self.handle_config_delete(config_name).await.map(Some)
+            (Some("config"), Some("del"), Some(entity_id), Some(key)) => {
+                self.handle_config_delete(entity_id, key).await.map(Some)
+            }
+            (Some("config"), Some("clear"), Some(entity_id), None) => {
+                self.handle_config_clear(entity_id).await.map(Some)
             }
             _ => {
                 warn!(%subject, "received control interface request on unsupported subject");
@@ -3878,126 +3884,6 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn process_linkdef_put(
-        &self,
-        id: impl AsRef<str>,
-        value: impl AsRef<[u8]>,
-        publish: bool,
-    ) -> anyhow::Result<()> {
-        let id = id.as_ref();
-        let value = value.as_ref();
-        let ref ld @ LinkDefinition {
-            ref actor_id,
-            ref provider_id,
-            ref link_name,
-            ref contract_id,
-            ref values,
-            ..
-        } = serde_json::from_slice(value).context("failed to deserialize link definition")?;
-        ensure!(
-            id == linkdef_hash(actor_id, contract_id, link_name),
-            "linkdef hash mismatch"
-        );
-
-        info!(
-            actor_id,
-            provider_id, link_name, contract_id, "process link definition entry put"
-        );
-
-        self.links.write().await.insert(id.to_string(), ld.clone()); // NOTE: this is one statement so the write lock is immediately dropped
-        if let Some(actor) = self.actors.read().await.get(actor_id) {
-            let mut links = actor.handler.links.write().await;
-            links.entry(contract_id.clone()).or_default().insert(
-                ld.link_name.clone(),
-                WasmCloudEntity {
-                    link_name: ld.link_name.clone(),
-                    contract_id: ld.contract_id.clone(),
-                    public_key: ld.provider_id.clone(),
-                },
-            );
-        }
-
-        if publish {
-            self.publish_event(
-                "linkdef_set",
-                event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
-            )
-            .await?;
-        }
-
-        let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
-        let lattice = &self.host_config.lattice;
-        self.rpc_nats
-            .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.put",),
-                injector_to_headers(&TraceContextInjector::default_with_span()),
-                msgp.into(),
-            )
-            .await
-            .context("failed to publish link definition")?;
-        Ok(())
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn process_linkdef_delete(
-        &self,
-        id: impl AsRef<str>,
-        _value: impl AsRef<[u8]>,
-        publish: bool,
-    ) -> anyhow::Result<()> {
-        let id = id.as_ref();
-
-        // NOTE: There is a race condition here, which occurs when `linkdefs.del`
-        // is used before `data_watch` task has fully imported the current lattice,
-        // but that command is deprecated, so assume it's fine
-        let ref ld @ LinkDefinition {
-            ref actor_id,
-            ref provider_id,
-            ref link_name,
-            ref contract_id,
-            ref values,
-            ..
-        } = self
-            .links
-            .write() // NOTE: this is one statement so the write lock is immediately dropped
-            .await
-            .remove(id)
-            .context("attempt to remove a non-existent link")?;
-
-        info!(
-            actor_id,
-            provider_id, link_name, contract_id, "process link definition entry deletion"
-        );
-
-        if let Some(actor) = self.actors.read().await.get(actor_id) {
-            let mut links = actor.handler.links.write().await;
-            if let Some(links) = links.get_mut(contract_id) {
-                links.remove(link_name);
-            }
-        }
-
-        if publish {
-            self.publish_event(
-                "linkdef_deleted",
-                event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
-            )
-            .await?;
-        }
-
-        let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
-        let lattice = &self.host_config.lattice;
-        self.rpc_nats
-            .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.del",),
-                injector_to_headers(&TraceContextInjector::default_with_span()),
-                msgp.into(),
-            )
-            .await
-            .context("failed to publish link definition deletion")?;
-        Ok(())
-    }
-
-    #[instrument(level = "debug", skip_all)]
     async fn process_claims_put(
         &self,
         pubkey: impl AsRef<str>,
@@ -4043,14 +3929,9 @@ impl Host {
                 let mut actor_claims = self.actor_claims.write().await;
                 actor_claims.remove(&claims.subject);
 
-                let Some(call_alias) = claims.metadata.and_then(|m| m.call_alias) else {
+                let Some(_call_alias) = claims.metadata.and_then(|m| m.call_alias) else {
                     return Ok(());
                 };
-
-                let mut aliases = self.aliases.write().await;
-                aliases
-                    .remove(&call_alias)
-                    .context("attempt to remove a non-existent call alias")?;
             }
             Claims::Provider(claims) => {
                 let mut provider_claims = self.provider_claims.write().await;
@@ -4080,11 +3961,13 @@ impl Host {
             (Operation::Delete, Some(("COMPONENT", id))) => {
                 self.process_component_spec_delete(id, value, publish).await
             }
-            (Operation::Put, Some(("LINKDEF", id))) => {
-                self.process_linkdef_put(id, value, publish).await
+            (Operation::Put, Some(("LINKDEF", _id))) => {
+                debug!("ignoring deprecated LINKDEF put operation");
+                Ok(())
             }
-            (Operation::Delete, Some(("LINKDEF", id))) => {
-                self.process_linkdef_delete(id, value, publish).await
+            (Operation::Delete, Some(("LINKDEF", _id))) => {
+                debug!("ignoring deprecated LINKDEF delete operation");
+                Ok(())
             }
             (Operation::Put, Some(("CLAIMS", pubkey))) => {
                 self.process_claims_put(pubkey, value).await
@@ -4109,20 +3992,25 @@ impl Host {
 
     #[instrument(level = "trace", skip_all, fields(bucket = %entry.bucket, key = %entry.key, revision = %entry.revision, operation = ?entry.operation))]
     async fn process_config_entry(&self, entry: KvEntry) {
-        match entry.operation {
-            Operation::Put => {
-                let data: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        error!(?error, "failed to decode config data on entry update");
-                        return;
-                    }
-                };
-                let mut lock = self.config_data_cache.write().await;
-                lock.insert(entry.key, data);
+        match (entry.operation, entry.key.split_once('_')) {
+            (Operation::Put, Some((id, key))) => {
+                self.config_data_cache
+                    .write()
+                    .await
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(key.to_owned(), Vec::from(entry.value));
             }
-            Operation::Delete | Operation::Purge => {
-                self.config_data_cache.write().await.remove(&entry.key);
+            (Operation::Delete | Operation::Purge, Some((id, key))) => {
+                self.config_data_cache
+                    .write()
+                    .await
+                    .entry(id.to_owned())
+                    .or_default()
+                    .remove(key);
+            }
+            (_, None) => {
+                error!(key = %entry.key, "Found key that doesn't match config format");
             }
         }
     }
