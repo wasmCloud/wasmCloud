@@ -48,7 +48,7 @@ use wasmcloud_control_interface::{
     HostLabel, InterfaceLinkDefinition, LinkDefinition, LinkDefinitionList, ProviderAuctionAck,
     ProviderAuctionRequest, ProviderDescription, RegistryCredential, RegistryCredentialMap,
     RemoveLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand, WitInterface, WitNamespace, WitPackage,
+    StopProviderCommand, UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
@@ -58,7 +58,7 @@ use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, CallTargetInterface,
     KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
-    TargetEntity,
+    TargetEntity, WrpcInterfaceTarget,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -287,12 +287,8 @@ struct Handler {
     /// - A routing group
     /// - Some other opaque string
     #[allow(clippy::type_complexity)]
-    interface_links: Arc<
-        RwLock<HashMap<LinkName, HashMap<WitNsAndPackage, HashMap<WitInterface, LatticeTargetId>>>>,
-    >,
-
-    // NOTE(brooksmtownsend): needs deduplication of responsibility with interface_links
-    wrpc_targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
+    interface_links:
+        Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTargetId>>>>>,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     // interface -> function -> result types
     polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
@@ -346,13 +342,14 @@ impl Handler {
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         let operation = operation.into();
+        let links = self.links.read().await;
+        let aliases = self.aliases.read().await;
 
         // Determine the target for the operation
         let (package, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
-        let inv_target =
-            resolve_target(target.as_ref(), self.links.get(package), &self.aliases).await?;
+        let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
         let invocation = Invocation::new(
@@ -403,7 +400,6 @@ impl Handler {
         let InvocationResponse {
             invocation_id,
             msg,
-            content_length,
             error,
             ..
         } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
@@ -423,6 +419,8 @@ impl Handler {
         operation: impl Into<String>,
         request: &impl Serialize,
     ) -> anyhow::Result<Vec<u8>> {
+        // TODO(brooksmtownsend): This handler should be sending requests over wRPC, rather than creating
+        // invocations.
         let request = rmp_serde::to_vec_named(request).context("failed to encode request")?;
         self.call_operation_with_payload(target, operation, request)
             .await
@@ -459,7 +457,12 @@ impl Blobstore for Handler {
     #[instrument]
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -473,7 +476,12 @@ impl Blobstore for Handler {
     #[instrument]
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -487,7 +495,12 @@ impl Blobstore for Handler {
     #[instrument]
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -504,7 +517,12 @@ impl Blobstore for Handler {
         name: &str,
     ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -535,7 +553,12 @@ impl Blobstore for Handler {
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -583,7 +606,12 @@ impl Blobstore for Handler {
     #[instrument]
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -610,7 +638,12 @@ impl Blobstore for Handler {
             .await
             .context("failed to read bytes")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -640,7 +673,12 @@ impl Blobstore for Handler {
     #[instrument]
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -672,7 +710,12 @@ impl Blobstore for Handler {
         container: &str,
     ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -704,7 +747,12 @@ impl Blobstore for Handler {
         name: String,
     ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:blobstore/Blobstore.GetObjectInfo", &name)
@@ -729,11 +777,11 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
-        target_interface: &TargetInterface,
+        target_interface: &CallTargetInterface,
     ) -> anyhow::Result<Option<TargetEntity>> {
         let links = self.interface_links.read().await;
         let link_name = self.interface_link_name.read().await.clone();
-        let (namespace, package, interface, func) = target_interface.as_parts();
+        let (namespace, package, interface, _) = target_interface.as_parts();
 
         // Determine the lattice target ID we should be sending to
         let lattice_target_id = links
@@ -743,7 +791,7 @@ impl Bus for Handler {
 
         // If we managed to find a target ID, convert it into an entity
         let target_entity = lattice_target_id.map(|id| {
-            TargetEntity::Wrpc(InterfaceTarget {
+            TargetEntity::Wrpc(WrpcInterfaceTarget {
                 id: id.clone(),
                 interface: target_interface.clone(),
                 link_name,
@@ -766,10 +814,9 @@ impl Bus for Handler {
     async fn set_link_name(
         &self,
         link_name: LinkName,
-        interfaces: Vec<TargetInterface>,
+        _interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()> {
-        let mut current_link_name = self.interface_link_name.write().await;
-        *current_link_name = link_name.unwrap_or_else(|| DEFAULT_LINK_NAME.into());
+        *self.interface_link_name.write().await = link_name;
         Ok(())
     }
 
@@ -846,7 +893,9 @@ impl KeyValueAtomic for Handler {
         }
         let value = delta.try_into().context("delta does not fit in `i32`")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueAtomic)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "atomic", None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -885,7 +934,9 @@ impl KeyValueEventual for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "eventual", None,
+            )))
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:keyvalue/KeyValue.Get", &key)
@@ -918,7 +969,9 @@ impl KeyValueEventual for Handler {
             .await
             .context("failed to read value")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "eventual", None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -939,7 +992,9 @@ impl KeyValueEventual for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "eventual", None,
+            )))
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:keyvalue/KeyValue.Del", &key)
@@ -955,7 +1010,9 @@ impl KeyValueEventual for Handler {
             bail!("buckets not currently supported")
         }
         let target = self
-            .identify_interface_target(&TargetInterface::WasiKeyvalueEventual)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "eventual", None,
+            )))
             .await?;
         self.call_operation(target, "wasmcloud:keyvalue/KeyValue.Contains", &key)
             .await
@@ -1046,7 +1103,12 @@ impl Messaging for Handler {
             .try_into()
             .context("timeout milliseconds do not fit in `u32`")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasmcloudMessagingConsumer)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasmcloud",
+                "messaging",
+                "consumer",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(
@@ -1098,7 +1160,12 @@ impl Messaging for Handler {
         }: messaging::types::BrokerMessage,
     ) -> anyhow::Result<()> {
         let target = self
-            .identify_interface_target(&TargetInterface::WasmcloudMessagingConsumer)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasmcloud",
+                "messaging",
+                "consumer",
+                None,
+            )))
             .await?;
         self.call_operation(
             target,
@@ -1132,7 +1199,12 @@ impl OutgoingHttp for Handler {
             .await
             .context("failed to convert HTTP request")?;
         let target = self
-            .identify_interface_target(&CallTargetInterface::WasiHttpOutgoingHandler)
+            .identify_interface_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "http",
+                "outgoing-handler",
+                None,
+            )))
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:httpclient/HttpClient.Request", &req)
@@ -2320,7 +2392,6 @@ impl Host {
             links: Arc::new(RwLock::new(links)),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
-            wrpc_targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
             polyfilled_imports: imports,
         };
@@ -3407,7 +3478,7 @@ impl Host {
 
         info!(
             source_id,
-            target, package, name, "handling put wrpc link definition"
+            target, wit_package, name, "handling put wrpc link definition"
         );
 
         // Write link for each interface in the package
@@ -3419,7 +3490,7 @@ impl Host {
             .entry(name)
             .and_modify(|link_for_name| {
                 link_for_name
-                    .entry(package.clone())
+                    .entry(wit_package.clone())
                     .and_modify(|package| {
                         for interface in &interfaces {
                             package.insert(interface.clone(), target.clone());
@@ -3437,7 +3508,7 @@ impl Host {
                     .iter()
                     .map(|interface| (interface.clone(), target.clone()))
                     .collect::<HashMap<String, String>>();
-                HashMap::from_iter([(package.clone(), interfaces_map)])
+                HashMap::from_iter([(wit_package.clone(), interfaces_map)])
             });
 
         let spec = actor.component_specification().await;
