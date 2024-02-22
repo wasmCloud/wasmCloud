@@ -1,6 +1,6 @@
 use crate::actor::claims;
-use crate::capability::{builtin, Bus, Interfaces};
 use crate::capability::builtin::CallTargetInterface;
+use crate::capability::{builtin, Bus, Interfaces};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
