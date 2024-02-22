@@ -42,15 +42,7 @@ mod test {
             //    }),
             //);
 
-            wasmcloud::bus::lattice::set_target(
-                None,
-                vec![
-                    wasmcloud::bus::lattice::TargetInterface::wasi_blobstore_blobstore(),
-                    wasmcloud::bus::lattice::TargetInterface::wasi_keyvalue_eventual(),
-                    wasmcloud::bus::lattice::TargetInterface::wasi_logging_logging(),
-                    wasmcloud::bus::lattice::TargetInterface::wasmcloud_messaging_consumer(),
-                ],
-            );
+            wasmcloud::bus::lattice::set_link_name(None);
         }
     }
 }
