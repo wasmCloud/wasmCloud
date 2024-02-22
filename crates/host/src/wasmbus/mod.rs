@@ -48,22 +48,22 @@ use wasmcloud_control_interface::{
     HostLabel, InterfaceLinkDefinition, LinkDefinition, LinkDefinitionList, ProviderAuctionAck,
     ProviderAuctionRequest, ProviderDescription, RegistryCredential, RegistryCredentialMap,
     RemoveLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand,
+    StopProviderCommand, UpdateActorCommand, WitInterface, WitNamespace, WitPackage,
 };
-use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
     OtelConfig, WasmCloudEntity,
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, InterfaceTarget,
+    blobstore, guest_config, messaging, ActorIdentifier, Blobstore, Bus, CallTargetInterface,
     KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest,
-    TargetEntity, TargetInterface,
+    TargetEntity,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::{Client, Transmitter};
+use wrpc_types::DynamicFunction;
 
 use crate::{
     fetch_actor, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
@@ -181,7 +181,6 @@ struct ActorInstance {
     id: Ulid,
     calls: AbortHandle,
     handler: Handler,
-    chunk_endpoint: ChunkEndpoint,
     annotations: Annotations,
     /// Maximum number of instances of this actor that can be running at once
     max_instances: NonZeroUsize,
@@ -290,7 +289,8 @@ struct Handler {
     // NOTE(brooksmtownsend): needs deduplication of responsibility with interface_links
     wrpc_targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
-    chunk_endpoint: ChunkEndpoint,
+    // interface -> function -> result types
+    polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
 }
 
 #[instrument(level = "trace")]
@@ -309,7 +309,7 @@ async fn resolve_target(
             .context("link not found")?
             .clone(),
         Some(TargetEntity::Wrpc(target)) => {
-            let (namespace, package, _) = target.interface.as_parts();
+            let (namespace, package, _, _) = target.interface.as_parts();
             WasmCloudEntity {
                 public_key: target.id.clone(),
                 contract_id: format!("{namespace}:{package}"),
@@ -346,14 +346,11 @@ impl Handler {
         let (package, interface_and_func) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
-        let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
-        let link_name = inv_target.link_name.clone();
-
-        // Build invocation
-        let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
+        let inv_target =
+            resolve_target(target.as_ref(), self.links.get(package), &self.aliases).await?;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
-        let mut invocation = Invocation::new(
+        let invocation = Invocation::new(
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
@@ -363,23 +360,13 @@ impl Handler {
             injector.into(),
         )?;
 
-        // Handle chunking if required
-        if needs_chunking {
-            self.chunk_endpoint
-                .chunkify(&invocation.id, Cursor::new(invocation.msg))
-                .await
-                .context("failed to chunk invocation")?;
-            invocation.msg = vec![];
-        }
-
-        // Build the payload
         let payload =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
 
         // Determine the subject on which to transmit
         let subject = match target {
             Some(TargetEntity::Wrpc(target)) => {
-                let (namespace, package, interface) = target.interface.as_parts();
+                let (namespace, package, interface, _) = target.interface.as_parts();
                 let (_, function) = interface_and_func
                     .split_once('.')
                     .context("interface and function should be specified")?;
@@ -398,13 +385,8 @@ impl Handler {
             ),
         };
 
-        // Determine the timeout required
-        let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-
-        // Build and send request over NATS
         let request = async_nats::Request::new()
             .payload(payload.into())
-            .timeout(timeout)
             .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
         let res = self
             .nats
@@ -415,31 +397,18 @@ impl Handler {
         // Process response
         let InvocationResponse {
             invocation_id,
-            mut msg,
+            msg,
             content_length,
             error,
             ..
         } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
         ensure!(invocation_id == invocation.id, "invocation ID mismatch");
 
-        let resp_length =
-            usize::try_from(content_length).context("content length does not fit in usize")?;
-        if resp_length > CHUNK_THRESHOLD_BYTES {
-            msg = self
-                .chunk_endpoint
-                .get_unchunkified_response(&invocation_id)
-                .await
-                .context("failed to dechunk response")?;
+        if let Some(error) = error {
+            Ok(Err(error))
         } else {
-            ensure!(resp_length == msg.len(), "message size mismatch");
+            Ok(Ok(msg))
         }
-
-        // If an error occurred, then return it wrapped in the invocation OK
-        if let Some(e) = err {
-            return Ok(Err(e));
-        }
-
-        Ok(Ok(msg))
     }
 
     #[instrument(level = "debug", skip(self, operation, request))]
@@ -835,12 +804,19 @@ impl Bus for Handler {
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         if let Some(TargetEntity::Wrpc(interface_target)) = target {
+            let result_types = match self
+                .polyfilled_imports
+                .get(instance)
+                .and_then(|functions| functions.get(name))
+            {
+                Some(results) => results.as_ref(),
+                None => bail!("polyfilled import not found, could not determine result types"),
+            };
             let prefix = format!("{}.{}", self.lattice, interface_target.id);
             let wrpc_client =
                 wrpc_transport_nats::Client::new(self.nats.clone(), prefix.to_string());
             let (result, _tx) = wrpc_client
-                // TODO: get types
-                .invoke_dynamic(instance, name, params, &[])
+                .invoke_dynamic(instance, name, params, result_types)
                 .await?;
 
             Ok(result)
@@ -1146,7 +1122,7 @@ impl OutgoingHttp for Handler {
             .await
             .context("failed to convert HTTP request")?;
         let target = self
-            .identify_interface_target(&TargetInterface::WasiHttpOutgoingHandler)
+            .identify_interface_target(&CallTargetInterface::WasiHttpOutgoingHandler)
             .await?;
         let res = self
             .call_operation(target, "wasmcloud:httpclient/HttpClient.Request", &req)
@@ -1236,7 +1212,6 @@ type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
 pub struct Host {
     // TODO: Clean up actors after stop
     actors: RwLock<HashMap<String, Arc<Actor>>>,
-    chunk_endpoint: ChunkEndpoint,
     cluster_key: Arc<KeyPair>,
     cluster_issuers: Vec<String>,
     event_builder: EventBuilderV10,
@@ -1704,12 +1679,6 @@ impl Host {
         let config_bucket = format!("CONFIGDATA_{}", config.lattice);
         let config_data = create_bucket(&ctl_jetstream, &config_bucket).await?;
 
-        let chunk_endpoint = ChunkEndpoint::with_client(
-            &config.lattice,
-            rpc_nats.clone(),
-            config.js_domain.as_ref(),
-        );
-
         let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
@@ -1751,7 +1720,6 @@ impl Host {
 
         let host = Host {
             actors: RwLock::default(),
-            chunk_endpoint,
             cluster_key,
             cluster_issuers,
             event_builder,
@@ -2158,7 +2126,6 @@ impl Host {
                 id,
                 calls: calls_abort,
                 handler: handler.clone(),
-                chunk_endpoint: self.chunk_endpoint.clone(),
                 annotations: annotations.clone(),
                 max_instances,
                 valid_issuers: self.cluster_issuers.clone(),
@@ -2305,6 +2272,29 @@ impl Host {
             public_key: claims.subject.clone(),
             ..Default::default()
         };
+        let polyfilled_imports = actor.polyfilled_imports().clone();
+        // Map the imports to pull out the result types of the functions for lookup when invoking them
+        let imports = polyfilled_imports
+            .iter()
+            .map(|(instance, funcs)| {
+                (
+                    instance.clone(),
+                    funcs
+                        .iter()
+                        .filter_map(|(name, func)| {
+                            match func {
+                                DynamicFunction::Static { results, .. } => {
+                                    Some((name.clone(), results.clone()))
+                                }
+                                // We do not support method imports at this time.
+                                DynamicFunction::Method { .. } => None,
+                            }
+                        })
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
         let handler = Handler {
             nats: self.rpc_nats.clone(),
             config_data: Arc::clone(&self.config_data_cache),
@@ -2318,7 +2308,7 @@ impl Host {
             interface_links: Arc::new(RwLock::new(component_spec.links)),
             wrpc_targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
-            chunk_endpoint: self.chunk_endpoint.clone(),
+            polyfilled_imports: imports,
         };
 
         let instance = self
@@ -3404,7 +3394,7 @@ impl Host {
         let InterfaceLinkDefinition {
             source_id,
             target,
-            package,
+            wit_package,
             interfaces,
             name: link_name,
             ..
@@ -3414,7 +3404,7 @@ impl Host {
         let actors = self.actors.read().await;
 
         let Ok(actor) = actors.get(&source_id).context("actor not found") else {
-            tracing::error!("no actor found for the unique id so bailing");
+            tracing::error!(source_id, "no actor found for the unique id");
             return Ok(r#"{"accepted":false,"error":"no actor found for that ID"}"#.into());
         };
 
@@ -3465,13 +3455,17 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
-        let LinkDefinition {
+        let Ok(LinkDefinition {
             actor_id,
             provider_id,
             link_name,
             contract_id,
             ..
-        } = serde_json::from_slice(payload).context("failed to deserialize link definition")?;
+        }) = serde_json::from_slice(payload).context("failed to deserialize link definition")
+        else {
+            // TODO(#1568): make this the default instead of the fallback
+            return self.handle_interface_link_put(payload).await;
+        };
         let id = linkdef_hash(&actor_id, &contract_id, &link_name);
 
         info!(
@@ -3713,10 +3707,6 @@ impl Host {
             (Some("config"), Some("clear"), Some(entity_id), None) => {
                 self.handle_config_clear(entity_id).await.map(Some)
             }
-            (Some("linkdefs"), Some("wrpc"), None, None) => self
-                .handle_interface_link_put(message.payload)
-                .await
-                .map(Some),
             _ => {
                 warn!(%subject, "received control interface request on unsupported subject");
                 Ok(Some(
