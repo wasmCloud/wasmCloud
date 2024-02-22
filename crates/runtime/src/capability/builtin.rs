@@ -229,6 +229,7 @@ pub struct CallTargetInterface {
     pub package: String,
     /// WIT interface (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
     pub interface: String,
+    // TODO(brooksmtownsend): I'm almost certain we do not need this.
     /// WIT package name (ex. `get` in `wasi:keyvalue/readwrite.get`)
     pub function: Option<String>,
 }
