@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.18.0"
+version = "0.18.1"
 edition = "2021"
 
 [dependencies]
@@ -43,4 +43,3 @@ path = "src/main.rs"
 strip = true
 opt-level = "z"
 lto = true
-

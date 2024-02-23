@@ -25,6 +25,7 @@ const ENV_NATS_URI: &str = "URI";
 const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 const ENV_NATS_TLS_CA: &str = "TLS_CA";
+const ENV_NATS_TLS_CA_FILE: &str = "TLS_CA_FILE";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -77,6 +78,8 @@ struct ConnectionConfig {
     auth_seed: Option<String>,
     #[serde(default)]
     tls_ca: Option<String>,
+    #[serde(default)]
+    tls_ca_file: Option<String>,
 
     /// ping interval in seconds
     #[serde(default)]
@@ -107,6 +110,9 @@ impl ConnectionConfig {
         if extra.tls_ca.is_some() {
             out.tls_ca = extra.tls_ca.clone()
         }
+        if extra.tls_ca_file.is_some() {
+            out.tls_ca_file = extra.tls_ca_file.clone()
+        }
         out
     }
 }
@@ -120,6 +126,7 @@ impl Default for ConnectionConfig {
             auth_seed: None,
             ping_interval_sec: None,
             tls_ca: None,
+            tls_ca_file: None,
         }
     }
 }
@@ -163,6 +170,9 @@ impl ConnectionConfig {
         }
         if let Some(tls_ca) = values.get(ENV_NATS_TLS_CA) {
             config.tls_ca = Some(tls_ca.clone());
+        }
+        if let Some(tls_ca_file) = values.get(ENV_NATS_TLS_CA_FILE) {
+            config.tls_ca_file = Some(tls_ca_file.clone());
         }
         Ok(config)
     }
@@ -499,6 +509,10 @@ fn build_connect_options(cfg: &ConnectionConfig) -> Result<async_nats::ConnectOp
 
     if let Some(tls_ca) = &cfg.tls_ca {
         return add_tls_ca(tls_ca, opts);
+    } else if let Some(tls_ca_file) = &cfg.tls_ca_file {
+        let ca = std::fs::read_to_string(tls_ca_file)
+            .map_err(|e| RpcError::ProviderInit(format!("tls ca file: {}", e)))?;
+        return add_tls_ca(&ca, opts);
     }
 
     Ok(opts)
