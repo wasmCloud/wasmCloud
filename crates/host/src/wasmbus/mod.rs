@@ -29,7 +29,6 @@ use futures::{
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use tokio::io::{empty, stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
@@ -37,7 +36,6 @@ use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
-use ulid::Ulid;
 use uuid::Uuid;
 use wasmcloud_tracing::{global, KeyValue};
 
@@ -45,8 +43,8 @@ pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
-    HostLabel, InterfaceLinkDefinition, InterfaceLinkDefinitionList, ProviderAuctionAck,
-    ProviderAuctionRequest, ProviderDescription, RegistryCredential, RegistryCredentialMap,
+    HostLabel, InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest,
+    ProviderDescription, RegistryCredential, RegistryCredentialMap,
     RemoveInterfaceLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand, WitInterface,
 };
@@ -174,94 +172,6 @@ impl Queue {
     }
 }
 
-#[derive(Debug)]
-struct ActorInstance {
-    actor: wasmcloud_runtime::Component,
-    #[allow(unused)]
-    nats: async_nats::Client,
-    id: Ulid,
-    calls: AbortHandle,
-    handler: Handler,
-    annotations: Annotations,
-    /// Maximum number of instances of this actor that can be running at once
-    max_instances: NonZeroUsize,
-    /// Cluster issuers that this actor should accept invocations from
-    #[allow(unused)]
-    valid_issuers: Vec<String>,
-    #[allow(unused)]
-    policy_manager: Arc<PolicyManager>,
-    image_reference: String,
-    #[allow(unused)]
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
-    // TODO: use a single map once Claims is an enum
-    #[allow(unused)]
-    provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
-    metrics: Arc<HostMetrics>,
-}
-
-impl Deref for ActorInstance {
-    type Target = wasmcloud_runtime::Component;
-
-    fn deref(&self) -> &Self::Target {
-        &self.actor
-    }
-}
-
-impl ActorInstance {
-    /// Handle an incoming wRpc request to invoke an export on this actor instance.
-    async fn handle_wrpc_call(
-        &self,
-        instance: &str,
-        name: &str,
-        inv_params: Vec<wrpc_transport::Value>,
-        response_subject: wrpc_transport_nats::Subject,
-        transmitter: wrpc_transport_nats::Transmitter,
-    ) -> anyhow::Result<()> {
-        // TODO(#1548): implement querying policy server
-
-        // Instantiate component with expected handlers
-        let mut component_instance = self
-            .instantiate()
-            .expect("should be able to instantiate actor");
-        component_instance
-            .stderr(stderr())
-            .await
-            .context("failed to set stderr")?
-            .blobstore(Arc::new(self.handler.clone()))
-            .bus(Arc::new(self.handler.clone()))
-            .keyvalue_atomic(Arc::new(self.handler.clone()))
-            .keyvalue_eventual(Arc::new(self.handler.clone()))
-            .logging(Arc::new(self.handler.clone()))
-            .messaging(Arc::new(self.handler.clone()))
-            .outgoing_http(Arc::new(self.handler.clone()));
-
-        let start_at = Instant::now();
-        let response = component_instance.call(instance, name, inv_params).await;
-        // Record metric on duration of the call
-        let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-        self.metrics
-            .wasmcloud_host_handle_rpc_message_duration_ns
-            .record(
-                elapsed,
-                &[
-                    KeyValue::new("actor.ref", self.image_reference.clone()),
-                    KeyValue::new("operation", format!("{instance}/{name}")),
-                ],
-            );
-        match response {
-            Ok(resp) => {
-                transmitter
-                    .transmit_tuple_dynamic(response_subject, resp)
-                    .await
-            }
-            Err(e) => {
-                error!("failed to handle wrpc request: {e}");
-                Ok(())
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
@@ -286,14 +196,17 @@ struct Handler {
     #[allow(clippy::type_complexity)]
     interface_links:
         Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTargetId>>>>>,
-    // interface -> function -> result types
+    /// Map of interface -> function name -> function result types
+    ///
+    /// When invoking a function that the component imports, this map is consulted to determine the
+    /// result types of the function, which is required for the wRPC protocol to set up proper
+    /// subscriptions for the return types.
     polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
 }
 
 #[instrument(level = "trace")]
+// TODO(#1548): This function should be removed, we should invoke wRPC targets not WasmCloudEntities
 async fn resolve_target(target: Option<&TargetEntity>) -> anyhow::Result<WasmCloudEntity> {
-    const DEFAULT_LINK_NAME: &str = "default";
-
     trace!("resolve target");
 
     let target = match target {
@@ -305,7 +218,7 @@ async fn resolve_target(target: Option<&TargetEntity>) -> anyhow::Result<WasmClo
                 link_name: target.link_name.clone(),
             }
         }
-        _ => bail!("target not found"),
+        _ => bail!("target entity was not resolvable to a wasmcloud entity target"),
     };
     Ok(target)
 }
@@ -352,7 +265,7 @@ impl Handler {
                 )
             }
             // TODO: just remove other options entirely
-            _ => bail!("invalid target"),
+            _ => bail!("target entity was not resolvable to a WRPC target"),
         };
 
         let request = async_nats::Request::new()
@@ -830,7 +743,11 @@ impl Bus for Handler {
                 .and_then(|functions| functions.get(name))
             {
                 Some(results) => results.as_ref(),
-                None => bail!("polyfilled import not found, could not determine result types"),
+                None => bail!(
+                    "polyfilled import {}/{} not found, could not determine result types",
+                    instance,
+                    name
+                ),
             };
             let prefix = format!("{}.{}", self.lattice, interface_target.id);
             let wrpc_client =
@@ -1184,71 +1101,103 @@ type Annotations = BTreeMap<String, String>;
 
 #[derive(Debug)]
 struct Actor {
-    #[allow(clippy::struct_field_names)]
-    actor: wasmcloud_runtime::Component,
-    /// `instances` is a map from a set of Annotations to the instance associated
-    /// with those annotations
-    instances: RwLock<HashMap<Annotations, Arc<ActorInstance>>>,
+    component: wasmcloud_runtime::Component,
+    /// Unique component identifier for this actor
+    id: String,
+    calls: AbortHandle,
     handler: Handler,
+    annotations: Annotations,
+    /// Maximum number of instances of this actor that can be running at once
+    max_instances: NonZeroUsize,
+    image_reference: String,
+    metrics: Arc<HostMetrics>,
+    // TODO(#1220): implement issuer verification
+    /// Cluster issuers that this actor should accept invocations from
+    valid_issuers: Vec<String>,
+    // TODO(#1548): ensure we are validating actor start and invocations
+    policy_manager: Arc<PolicyManager>,
+    // TODO: use a single map once Claims is an enum
+    // TODO(#1548): make optional
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
 }
 
 impl Deref for Actor {
     type Target = wasmcloud_runtime::Component;
 
     fn deref(&self) -> &Self::Target {
-        &self.actor
+        &self.component
     }
 }
 
 impl Actor {
     /// Returns the component specification for this unique actor
     pub(crate) async fn component_specification(&self) -> ComponentSpecification {
-        let image_ref = self
-            .instances
-            .read()
-            .await
-            // FIXME: Indexing on annotations won't work for wadm instances. We may need to
-            // reapproach the way we allow a single host to run multiple "instances" of a
-            // component based on annotations.
-            .get(&BTreeMap::new())
-            .map_or_else(
-                || {
-                    error!("Found no empty annotations thing so assuming echo for testing");
-                    "wasmcloud.azurecr.io/echo:0.3.4".to_string()
-                },
-                |i| i.image_reference.clone(),
-            );
-        let mut spec = ComponentSpecification::new(&image_ref);
+        let mut spec = ComponentSpecification::new(&self.image_reference);
         spec.links = self.handler.interface_links.read().await.clone();
         spec
     }
-}
 
-// NOTE: this is specifically a function instead of an [Actor] method
-// to avoid deadlocks on the instances field.
-/// Returns the first instance that matches the provided annotations exactly
-fn matching_instance(
-    instances: &HashMap<BTreeMap<String, String>, Arc<ActorInstance>>,
-    annotations: &Annotations,
-) -> Option<Arc<ActorInstance>> {
-    instances
-        .iter()
-        .find(|(instance_annotations, _)| instance_annotations == &annotations)
-        .map(|(_, instance)| instance.clone())
-}
+    /// Handle an incoming wRPC request to invoke an export on this actor instance.
+    async fn handle_wrpc_call(
+        &self,
+        instance: &str,
+        name: &str,
+        inv_params: Vec<wrpc_transport::Value>,
+        response_subject: wrpc_transport_nats::Subject,
+        transmitter: wrpc_transport_nats::Transmitter,
+    ) -> anyhow::Result<()> {
+        // TODO(#1548): implement querying policy server
 
-#[derive(Debug)]
-struct ProviderInstance {
-    child: JoinHandle<()>,
-    id: Ulid,
-    annotations: Annotations,
+        // Instantiate component with expected handlers
+        let mut component_instance = self
+            .instantiate()
+            .expect("should be able to instantiate actor");
+        component_instance
+            .stderr(stderr())
+            .await
+            .context("failed to set stderr")?
+            .blobstore(Arc::new(self.handler.clone()))
+            .bus(Arc::new(self.handler.clone()))
+            .keyvalue_atomic(Arc::new(self.handler.clone()))
+            .keyvalue_eventual(Arc::new(self.handler.clone()))
+            .logging(Arc::new(self.handler.clone()))
+            .messaging(Arc::new(self.handler.clone()))
+            .outgoing_http(Arc::new(self.handler.clone()));
+
+        let start_at = Instant::now();
+        let response = component_instance.call(instance, name, inv_params).await;
+        // Record metric on duration of the call
+        let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+        self.metrics
+            .wasmcloud_host_handle_rpc_message_duration_ns
+            .record(
+                elapsed,
+                &[
+                    KeyValue::new("actor.ref", self.image_reference.clone()),
+                    KeyValue::new("operation", format!("{instance}/{name}")),
+                ],
+            );
+        match response {
+            Ok(resp) => {
+                transmitter
+                    .transmit_tuple_dynamic(response_subject, resp)
+                    .await
+            }
+            Err(e) => {
+                error!("failed to handle wrpc request: {e}");
+                Ok(())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Provider {
-    claims: jwt::Claims<jwt::CapabilityProvider>,
-    instances: HashMap<String, ProviderInstance>,
+    child: JoinHandle<()>,
+    annotations: Annotations,
     image_ref: String,
+    /// TODO(#1548): optional claims
+    claims: jwt::Claims<jwt::CapabilityProvider>,
 }
 
 type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
@@ -1256,6 +1205,7 @@ type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
 /// wasmCloud Host
 pub struct Host {
     // TODO: Clean up actors after stop
+    /// The actor map is a map of actor component ID to actor
     actors: RwLock<HashMap<String, Arc<Actor>>>,
     cluster_key: Arc<KeyPair>,
     cluster_issuers: Vec<String>,
@@ -1275,6 +1225,7 @@ pub struct Host {
     config_data: Store,
     config_data_watch: AbortHandle,
     policy_manager: Arc<PolicyManager>,
+    /// The provider map is a map of provider component ID to provider
     providers: RwLock<HashMap<String, Provider>>,
     registry_config: RwLock<HashMap<String, RegistryConfig>>,
     runtime: Runtime,
@@ -1386,18 +1337,6 @@ impl From<StoredClaims> for Claims {
             }
         }
     }
-}
-
-fn linkdef_hash(
-    actor_id: impl AsRef<str>,
-    contract_id: impl AsRef<str>,
-    link_name: impl AsRef<str>,
-) -> String {
-    let mut hash = Sha256::default();
-    hash.update(actor_id.as_ref());
-    hash.update(contract_id.as_ref());
-    hash.update(link_name.as_ref());
-    hex::encode_upper(hash.finalize())
 }
 
 #[instrument(level = "debug", skip_all)]
@@ -2022,33 +1961,6 @@ impl Host {
         let actors = self.actors.read().await;
         let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
-                let instances = actor.instances.read().await;
-                let instances: Vec<_> = instances
-                    .iter()
-                    .map(|(annotations, instance)| {
-                        let instance_id = Uuid::from_u128(instance.id.into()).to_string();
-                        let revision = actor
-                            .claims()
-                            .and_then(|claims| claims.metadata.as_ref())
-                            .and_then(|jwt::Actor { rev, .. }| *rev)
-                            .unwrap_or_default();
-                        let annotations = Some(annotations.clone().into_iter().collect());
-                        wasmcloud_control_interface::ActorInstance {
-                            annotations,
-                            instance_id,
-                            revision,
-                            image_ref: Some(instance.image_reference.clone()),
-                            max_instances: instance
-                                .max_instances
-                                .get()
-                                .try_into()
-                                .unwrap_or(u32::MAX),
-                        }
-                    })
-                    .collect();
-                let Some(image_ref) = instances.first().map(|i| i.image_ref.clone()) else {
-                    return None;
-                };
                 let name = actor
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
@@ -2056,8 +1968,14 @@ impl Host {
                     .cloned();
                 Some(ActorDescription {
                     id: id.into(),
-                    image_ref,
-                    instances,
+                    image_ref: actor.image_reference.clone(),
+                    annotations: Some(actor.annotations.clone().into_iter().collect()),
+                    max_instances: actor.max_instances.get().try_into().unwrap_or(u32::MAX),
+                    revision: actor
+                        .claims()
+                        .and_then(|claims| claims.metadata.as_ref())
+                        .and_then(|jwt::Actor { rev, .. }| *rev)
+                        .unwrap_or_default(),
                     name,
                 })
             })
@@ -2070,38 +1988,30 @@ impl Host {
             .iter()
             .filter_map(
                 |(
-                    public_key,
+                    provider_id,
                     Provider {
+                        annotations,
                         claims,
-                        instances,
                         image_ref,
                         ..
                     },
                 )| {
                     let jwt::CapabilityProvider {
-                        capid: contract_id,
                         name,
                         rev: revision,
                         ..
                     } = claims.metadata.as_ref()?;
-                    Some(instances.iter().map(
-                        move |(link_name, ProviderInstance { annotations, .. })| {
-                            let annotations = Some(annotations.clone().into_iter().collect());
-                            let revision = revision.unwrap_or_default();
-                            ProviderDescription {
-                                id: public_key.into(),
-                                image_ref: Some(image_ref.clone()),
-                                contract_id: contract_id.clone(),
-                                link_name: link_name.into(),
-                                name: name.clone(),
-                                annotations,
-                                revision,
-                            }
-                        },
-                    ))
+                    let annotations = Some(annotations.clone().into_iter().collect());
+                    let revision = revision.unwrap_or_default();
+                    Some(ProviderDescription {
+                        id: provider_id.into(),
+                        image_ref: Some(image_ref.clone()),
+                        name: name.clone(),
+                        annotations,
+                        revision,
+                    })
                 },
             )
-            .flatten()
             .collect();
         let uptime = self.start_at.elapsed();
         HostInventory {
@@ -2140,13 +2050,13 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn instantiate_actor(
         &self,
-        claims: &jwt::Claims<jwt::Actor>,
         annotations: &Annotations,
         actor_ref: impl AsRef<str>,
+        actor_id: impl AsRef<str>,
         max_instances: NonZeroUsize,
-        actor: wasmcloud_runtime::Component,
+        component: wasmcloud_runtime::Component,
         handler: Handler,
-    ) -> anyhow::Result<Arc<ActorInstance>> {
+    ) -> anyhow::Result<Arc<Actor>> {
         trace!(
             actor_ref = actor_ref.as_ref(),
             max_instances,
@@ -2154,20 +2064,18 @@ impl Host {
         );
 
         let actor_ref = actor_ref.as_ref();
-        let actor = actor.clone();
+        let actor_id = actor_id.as_ref();
+        let component = component.clone();
         let handler = handler.clone();
 
-        let component_id = &claims.subject;
         let lattice = &self.host_config.lattice;
-        let prefix = format!("{lattice}.{component_id}");
+        let prefix = format!("{lattice}.{actor_id}");
         let wrpc_client = wrpc_transport_nats::Client::new(self.rpc_nats.clone(), prefix);
         let instance = async move {
             let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
-            let id = Ulid::new();
-            let actor_instance = Arc::new(ActorInstance {
-                nats: self.rpc_nats.clone(),
-                actor: actor.clone(),
-                id,
+            let actor_instance = Arc::new(Actor {
+                component: component.clone(),
+                id: actor_id.to_string(),
                 calls: calls_abort,
                 handler: handler.clone(),
                 annotations: annotations.clone(),
@@ -2176,12 +2084,11 @@ impl Host {
                 policy_manager: Arc::clone(&self.policy_manager),
                 image_reference: actor_ref.to_string(),
                 actor_claims: Arc::clone(&self.actor_claims),
-                provider_claims: Arc::clone(&self.provider_claims),
                 metrics: Arc::clone(&self.metrics),
             });
 
             let mut component_export_handlers = Vec::new();
-            let exports = actor.exports();
+            let exports = component.exports();
             for (instance, name_and_func) in exports.iter() {
                 for (name, function) in name_and_func {
                     if let wrpc_types::DynamicFunction::Static { params, .. } = function {
@@ -2212,7 +2119,7 @@ impl Host {
                     move |(instance, name, invocation)| {
                         let actor_instance = Arc::clone(&actor_instance);
                         let Ok((inv_params, response_subject, tx)) = invocation else {
-                            error!("invocation did not include ok");
+                            error!("invocation did not include required parameters to invoke, ignoring.");
                             return future::ready(());
                         };
                         // TODO(#1568): When headers are added to wRPC, ensure we propagate the trace parent
@@ -2241,24 +2148,13 @@ impl Host {
         Ok(instance)
     }
 
-    /// Uninstantiate an actor
-    #[instrument(level = "debug", skip_all)]
-    async fn uninstantiate_actor(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        instance: Arc<ActorInstance>,
-    ) {
-        debug!(subject = claims.subject, "uninstantiating actor instance");
-
-        instance.calls.abort();
-    }
-
     #[instrument(level = "debug", skip_all)]
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
-        actor: wasmcloud_runtime::Component,
+        component: wasmcloud_runtime::Component,
         actor_ref: String,
+        actor_id: String,
         max_instances: NonZeroUsize,
         host_id: &str,
         annotations: impl Into<Annotations>,
@@ -2266,11 +2162,8 @@ impl Host {
         debug!(actor_ref, ?max_instances, "starting new actor");
 
         let annotations = annotations.into();
-        let claims = actor.claims().context("claims missing")?;
-        // TODO: Receive component ID from the control interface. Not changing until #1466 merges
-        // let component_id = sanitize_reference(&actor_ref);
-        let component_id = claims.subject.clone();
-        let component_spec = if let Ok(spec) = self.get_component_spec(&component_id).await {
+        let claims = component.claims().context("claims missing")?;
+        let component_spec = if let Ok(spec) = self.get_component_spec(&actor_id).await {
             if spec.url != actor_ref {
                 bail!(
                     "component spec URL does not match actor reference: {} != {}",
@@ -2281,7 +2174,7 @@ impl Host {
             spec
         } else {
             let spec = ComponentSpecification::new(&actor_ref);
-            self.store_component_spec(&component_id, &spec).await?;
+            self.store_component_spec(&actor_id, &spec).await?;
             spec
         };
         self.store_claims(Claims::Actor(claims.clone()))
@@ -2292,7 +2185,7 @@ impl Host {
             public_key: claims.subject.clone(),
             ..Default::default()
         };
-        let polyfilled_imports = actor.polyfilled_imports().clone();
+        let polyfilled_imports = component.polyfilled_imports().clone();
         // Map the imports to pull out the result types of the functions for lookup when invoking them
         let imports = polyfilled_imports
             .iter()
@@ -2306,7 +2199,7 @@ impl Host {
                                 DynamicFunction::Static { results, .. } => {
                                     Some((name.clone(), results.clone()))
                                 }
-                                // We do not support method imports at this time.
+                                // We do not support method imports (on resources) at this time.
                                 DynamicFunction::Method { .. } => None,
                             }
                         })
@@ -2328,13 +2221,13 @@ impl Host {
             polyfilled_imports: imports,
         };
 
-        let instance = self
+        let actor = self
             .instantiate_actor(
-                claims,
                 &annotations,
                 &actor_ref,
+                &actor_id,
                 max_instances,
-                actor.clone(),
+                component.clone(),
                 handler.clone(),
             )
             .await
@@ -2351,77 +2244,67 @@ impl Host {
         )
         .await?;
 
-        let actor = Arc::new(Actor {
-            actor,
-            instances: RwLock::new(HashMap::from([(annotations, instance)])),
-            handler,
-        });
         Ok(entry.insert(actor))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn stop_actor<'a>(
-        &self,
-        entry: hash_map::OccupiedEntry<'a, String, Arc<Actor>>,
-        annotations: &BTreeMap<String, String>,
-        host_id: &str,
-    ) -> anyhow::Result<()> {
-        trace!(actor_id = %entry.key(), "stopping actor");
+    async fn stop_actor(&self, actor: &Actor, host_id: &str) -> anyhow::Result<()> {
+        trace!(actor_id = %actor.id, "stopping actor");
 
-        let actor = entry.remove();
+        actor.calls.abort();
+
         let claims = actor.claims().context("claims missing")?;
-        let mut instances = actor.instances.write().await;
+        self.publish_actor_stopped_events(
+            claims,
+            &actor.annotations,
+            host_id,
+            actor.max_instances,
+            0,
+            &actor.image_reference,
+        )
+        .await?;
 
-        // Find all instances that match the annotations like a filter (#607)
-        let matching_instances = instances
-            .iter()
-            .filter(|(instance_annotations, _)| {
-                annotations.iter().all(|(k, v)| {
-                    instance_annotations
-                        .get(k)
-                        .is_some_and(|instance_value| instance_value == v)
-                })
-            })
-            .map(|(_, instance)| instance.clone())
-            .collect::<Vec<Arc<ActorInstance>>>();
-        ensure!(
-            !matching_instances.is_empty(),
-            "no actors with matching annotations found to stop"
-        );
-
-        for instance in matching_instances {
-            instances.remove(&instance.annotations);
-            self.uninstantiate_actor(claims, instance.clone()).await;
-            self.publish_actor_stopped_events(
-                claims,
-                &instance.annotations,
-                host_id,
-                instance.max_instances,
-                0,
-                &instance.image_reference,
-            )
-            .await?;
-        }
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_auction_actor(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_auction_actor(
+        &self,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<Option<Bytes>> {
         let ActorAuctionRequest {
             actor_ref,
+            actor_id,
             constraints,
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor auction command")?;
 
-        info!(actor_ref, ?constraints, "handling auction for actor");
-
-        let buf = serde_json::to_vec(&ActorAuctionAck {
+        info!(
             actor_ref,
-            constraints,
-            host_id: self.host_key.public_key(),
-        })
-        .context("failed to encode reply")?;
-        Ok(buf.into())
+            actor_id,
+            ?constraints,
+            "handling auction for actor"
+        );
+
+        let host_labels = self.labels.read().await;
+        let constraints_satisfied = constraints
+            .iter()
+            .all(|(k, v)| host_labels.get(k).map(|hv| hv == v).unwrap_or(false));
+        let actor_id_running = self.actors.read().await.contains_key(&actor_id);
+
+        // This host can run the actor if all constraints are satisfied and the actor is not already running
+        if constraints_satisfied && !actor_id_running {
+            let buf = serde_json::to_vec(&ActorAuctionAck {
+                actor_ref,
+                actor_id,
+                constraints,
+                host_id: self.host_key.public_key(),
+            })
+            .context("failed to encode reply")?;
+            Ok(Some(buf.into()))
+        } else {
+            Ok(None)
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2431,38 +2314,36 @@ impl Host {
     ) -> anyhow::Result<Option<Bytes>> {
         let ProviderAuctionRequest {
             provider_ref,
+            provider_id,
             constraints,
-            link_name,
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider auction command")?;
 
         info!(
             provider_ref,
-            link_name,
+            provider_id,
             ?constraints,
             "handling auction for provider"
         );
 
+        let host_labels = self.labels.read().await;
+        let constraints_satisfied = constraints
+            .iter()
+            .all(|(k, v)| host_labels.get(k).map(|hv| hv == v).unwrap_or(false));
         let providers = self.providers.read().await;
-        if providers.values().any(
-            |Provider {
-                 image_ref,
-                 instances,
-                 ..
-             }| { *image_ref == provider_ref && instances.contains_key(&link_name) },
-        ) {
-            // Do not reply if the provider is already running
-            return Ok(None);
+        let provider_running = providers.contains_key(&provider_id);
+        if constraints_satisfied && !provider_running {
+            let buf = serde_json::to_vec(&ProviderAuctionAck {
+                provider_ref,
+                provider_id,
+                constraints,
+                host_id: self.host_key.public_key(),
+            })
+            .context("failed to encode reply")?;
+            Ok(Some(buf.into()))
+        } else {
+            Ok(None)
         }
-
-        let buf = serde_json::to_vec(&ProviderAuctionAck {
-            provider_ref,
-            link_name,
-            constraints,
-            host_id: self.host_key.public_key(),
-        })
-        .context("failed to encode reply")?;
-        Ok(Some(buf.into()))
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -2517,22 +2398,29 @@ impl Host {
     ) -> anyhow::Result<Bytes> {
         let ScaleActorCommand {
             actor_ref,
+            actor_id,
             annotations,
             max_instances,
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
 
-        debug!(actor_ref, max_instances, "handling scale actor");
+        debug!(actor_ref, max_instances, actor_id, "handling scale actor");
 
         let host_id = host_id.to_string();
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         spawn(async move {
             if let Err(e) = self
-                .handle_scale_actor_task(&actor_ref, &host_id, max_instances, annotations)
+                .handle_scale_actor_task(
+                    &actor_ref,
+                    &actor_id,
+                    &host_id,
+                    max_instances,
+                    annotations,
+                )
                 .await
             {
-                error!(%actor_ref, err = ?e, "failed to scale actor");
+                error!(%actor_ref, %actor_id, err = ?e, "failed to scale actor");
             }
         });
         Ok(ACCEPTED.into())
@@ -2544,6 +2432,7 @@ impl Host {
     async fn handle_scale_actor_task(
         &self,
         actor_ref: &str,
+        actor_id: &str,
         host_id: &str,
         max_instances: u32,
         annotations: Annotations,
@@ -2569,175 +2458,144 @@ impl Host {
         };
 
         let actor_ref = actor_ref.to_string();
-        // TODO: Receive component ID from the control interface. Not changing until #1466 merges
-        // let component_id = sanitize_reference(&actor_ref);
-        let component_id = claims.subject.clone();
         match (
-            self.actors.write().await.entry(component_id),
+            self.actors.write().await.entry(actor_id.to_string()),
             NonZeroUsize::new(max_instances as usize),
         ) {
             // No actor is running and we requested to scale to zero, noop
             (hash_map::Entry::Vacant(_), None) => {}
             // No actor is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
-                self.start_actor(entry, actor, actor_ref, max, host_id, annotations)
+                if let Err(e) = self
+                    .start_actor(
+                        entry,
+                        actor.clone(),
+                        actor_ref.clone(),
+                        actor_id.to_string(),
+                        max,
+                        host_id,
+                        annotations.clone(),
+                    )
+                    .await
+                {
+                    self.publish_event(
+                        "actor_scale_failed",
+                        event::actor_scale_failed(
+                            claims,
+                            &annotations,
+                            host_id,
+                            &actor_ref,
+                            max,
+                            &e,
+                        ),
+                    )
                     .await?;
+                    return Err(e);
+                }
             }
             // Actor is running and we requested to scale to zero instances, stop actor
             (hash_map::Entry::Occupied(entry), None) => {
-                let actor = entry.get();
-
-                let mut actor_instances = actor.instances.write().await;
-                if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
-                    actor_instances.remove(&matching_instance.annotations);
-                    self.uninstantiate_actor(claims, matching_instance.clone())
-                        .await;
-                    info!(actor_ref, "actor stopped");
-                    self.publish_actor_stopped_events(
-                        claims,
-                        &matching_instance.annotations,
-                        host_id,
-                        matching_instance.max_instances,
-                        0,
-                        &matching_instance.image_reference,
+                let actor = entry.remove();
+                if let Err(err) = self
+                    .stop_actor(&actor, host_id)
+                    .await
+                    .context("failed to stop actor in response to scale to zero")
+                {
+                    self.publish_event(
+                        "actor_scale_failed",
+                        event::actor_scale_failed(
+                            claims,
+                            &actor.annotations,
+                            host_id,
+                            actor_ref,
+                            actor.max_instances,
+                            &err,
+                        ),
                     )
                     .await?;
-                }
+                    return Err(err);
+                };
 
-                if actor_instances.is_empty() {
-                    drop(actor_instances);
-                    entry.remove();
-                }
+                info!(actor_ref, "actor stopped");
+                self.publish_actor_stopped_events(
+                    claims,
+                    &actor.annotations,
+                    host_id,
+                    actor.max_instances,
+                    0,
+                    &actor.image_reference,
+                )
+                .await?;
             }
             // Actor is running and we requested to scale to some amount or unbounded, scale actor
-            (hash_map::Entry::Occupied(entry), Some(max)) => {
-                let actor = entry.get();
-
-                let mut actor_instances = actor.instances.write().await;
-                if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
-                    // NOTE(brooksmtownsend): We compare to all image references here to prevent running multiple
-                    // instances for different annotations from different image references. Once #363 is resolved
-                    // the check can be removed entirely
-                    if actor_instances
-                        .values()
-                        .any(|instance| instance.image_reference != actor_ref)
-                    {
-                        let err = anyhow!(
-                            "actor is already running with a different image reference `{}`",
-                            matching_instance.image_reference
-                        );
-                        match max.cmp(&matching_instance.max_instances) {
-                            // We don't have an `actor_stop_failed` event
-                            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => (),
-                            std::cmp::Ordering::Greater => {
-                                self.publish_actor_start_failed_events(
-                                    claims,
-                                    &annotations,
-                                    host_id,
-                                    actor_ref,
-                                    max,
-                                    &err,
-                                )
-                                .await?;
-                            }
-                        }
-
-                        bail!(err);
-                    }
-                    // No need to scale if we already have the requested max
-                    if matching_instance.max_instances != max {
-                        let instance = self
-                            .instantiate_actor(
-                                claims,
-                                &annotations,
-                                &actor_ref,
-                                max,
-                                actor.actor.clone(),
-                                actor.handler.clone(),
-                            )
-                            .await
-                            .context("failed to instantiate actor")?;
-                        let publish_result = match matching_instance.max_instances.cmp(&max) {
-                            std::cmp::Ordering::Less => {
-                                // We started the difference between the current max and the requested max
-                                // SAFETY: We know max > matching_instance.max because of the ordering check above
-                                let num_started = max.get() - matching_instance.max_instances.get();
-                                self.publish_actor_started_events(
-                                    num_started,
-                                    max,
-                                    claims,
-                                    &annotations,
-                                    host_id,
-                                    &actor_ref,
-                                )
-                                .await
-                            }
-                            std::cmp::Ordering::Greater => {
-                                // We stopped the difference between the current max and the requested max
-                                let num_stopped =
-                                    // SAFETY: We know matching_instance.max > max because of the ordering check above
-                                    matching_instance.max_instances.get()
-                                        - max.get();
-                                self.publish_actor_stopped_events(
-                                    claims,
-                                    &annotations,
-                                    host_id,
-                                    NonZeroUsize::new(num_stopped)
-                                        // Should not be possible, but defaulting to 1 for safety
-                                        .unwrap_or(NonZeroUsize::MIN),
-                                    matching_instance
-                                        .max_instances
-                                        .get()
-                                        .saturating_sub(num_stopped),
-                                    &matching_instance.image_reference,
-                                )
-                                .await
-                            }
-                            std::cmp::Ordering::Equal => Ok(()),
-                        };
-                        let previous_instance =
-                            actor_instances.remove(&matching_instance.annotations);
-                        actor_instances.insert(annotations, instance);
-
-                        if let Some(i) = previous_instance {
-                            self.uninstantiate_actor(claims, i).await;
-                        }
-
-                        info!(actor_ref, ?max, "actor scaled");
-
-                        // Wait to unwrap the event publish result until after we've processed the instances
-                        publish_result?;
-                    }
-                } else {
-                    let new_instance = self
+            (hash_map::Entry::Occupied(mut entry), Some(max)) => {
+                let actor = entry.get_mut();
+                // Modify scale only if the requested max differs from the current max
+                if actor.max_instances != max {
+                    let instance = self
                         .instantiate_actor(
-                            claims,
                             &annotations,
                             &actor_ref,
+                            &actor.id,
                             max,
-                            actor.actor.clone(),
+                            actor.component.clone(),
                             actor.handler.clone(),
                         )
                         .await
                         .context("failed to instantiate actor")?;
+                    let publish_result = match actor.max_instances.cmp(&max) {
+                        std::cmp::Ordering::Less => {
+                            // We started the difference between the current max and the requested max
+                            // SAFETY: We know max > actor.max because of the ordering check above
+                            let num_started = max.get() - actor.max_instances.get();
+                            self.publish_actor_started_events(
+                                num_started,
+                                max,
+                                claims,
+                                &annotations,
+                                host_id,
+                                &actor_ref,
+                            )
+                            .await
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // We stopped the difference between the current max and the requested max
+                            let num_stopped =
+                                    // SAFETY: We know actor.max > max because of the ordering check above
+                                    actor.max_instances.get()
+                                        - max.get();
+                            self.publish_actor_stopped_events(
+                                claims,
+                                &annotations,
+                                host_id,
+                                NonZeroUsize::new(num_stopped)
+                                    // Should not be possible, but defaulting to 1 for safety
+                                    .unwrap_or(NonZeroUsize::MIN),
+                                actor.max_instances.get().saturating_sub(num_stopped),
+                                &actor.image_reference,
+                            )
+                            .await
+                        }
+                        std::cmp::Ordering::Equal => Ok(()),
+                    };
+                    let actor = entry.insert(instance);
+                    self.stop_actor(&actor, host_id)
+                        .await
+                        .context("failed to stop actor after scaling")?;
 
-                    info!(actor_ref, "actor started");
-                    self.publish_actor_started_events(
-                        max.get(),
-                        max,
-                        claims,
-                        &annotations,
-                        host_id,
-                        actor_ref,
-                    )
-                    .await?;
-                    actor_instances.insert(annotations, new_instance);
-                };
+                    info!(actor_ref, ?max, "actor scaled");
+
+                    // Wait to unwrap the event publish result until after we've processed the instances
+                    publish_result?;
+                }
             }
         }
         Ok(())
     }
 
+    // TODO(#1548): With actor IDs, new actor references, configuration, etc, we're going to need to do some
+    // design thinking around how update actor should work. Should it be limited to a single host or latticewide?
+    // Should it also update configuration, or is that separate? Should scaling be done via an update?
     #[instrument(level = "debug", skip_all)]
     async fn handle_update_actor(
         &self,
@@ -2759,12 +2617,9 @@ impl Host {
             "handling update actor"
         );
 
-        let actors = self.actors.write().await;
+        let actors = self.actors.read().await;
         let actor = actors.get(&actor_id).context("actor not found")?;
-        let annotations = annotations.unwrap_or_default().into_iter().collect(); // convert from HashMap to BTreeMap
-        let mut all_instances = actor.instances.write().await;
-        let matching_instance = matching_instance(&all_instances, &annotations)
-            .context("actor instance with matching annotations not found")?;
+        let annotations = annotations.unwrap_or_default().into_iter().collect();
 
         let new_actor = self.fetch_actor(&new_actor_ref).await?;
         let new_claims = new_actor
@@ -2773,18 +2628,13 @@ impl Host {
         self.store_claims(Claims::Actor(new_claims.clone()))
             .await
             .context("failed to store claims")?;
-        let old_claims = actor
-            .claims()
-            .context("claims missing from running actor")?;
 
-        let annotations = matching_instance.annotations.clone();
-        let max = matching_instance.max_instances;
-
-        let Ok(new_instance) = self
+        let max = actor.max_instances;
+        let Ok(new_actor) = self
             .instantiate_actor(
-                new_claims,
                 &annotations,
                 &new_actor_ref,
+                &actor_id,
                 max,
                 new_actor.clone(),
                 actor.handler.clone(),
@@ -2805,20 +2655,25 @@ impl Host {
         )
         .await?;
 
-        all_instances.remove(&matching_instance.annotations);
-        all_instances.insert(annotations, new_instance);
+        let old_claims = actor
+            .claims()
+            .context("claims missing from running actor")?;
 
-        self.uninstantiate_actor(old_claims, matching_instance.clone())
-            .await;
+        // TODO(#1548): If this errors, we need to rollback
+        self.stop_actor(actor, host_id)
+            .await
+            .context("failed to stop old actor")?;
         self.publish_actor_stopped_events(
             old_claims,
-            &matching_instance.annotations,
+            &actor.annotations,
             host_id,
-            matching_instance.max_instances,
+            actor.max_instances,
             max.get(),
-            &matching_instance.image_reference,
+            &actor.image_reference,
         )
         .await?;
+
+        self.actors.write().await.insert(actor_id, new_actor);
 
         Ok(ACCEPTED.into())
     }
@@ -2827,25 +2682,25 @@ impl Host {
     async fn handle_start_provider_task(
         &self,
         configuration: Option<String>,
-        link_name: &str,
+        provider_id: &str,
         provider_ref: &str,
         annotations: HashMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        trace!(provider_ref, link_name, "start provider task");
+        trace!(provider_ref, provider_id, "start provider task");
 
         let registry_config = self.registry_config.read().await;
         let (path, claims) = crate::fetch_provider(
             provider_ref,
-            link_name,
+            // TODO: we cache based on link name, why
+            provider_id,
             self.host_config.allow_file_load,
             &registry_config,
         )
         .await
         .context("failed to fetch provider")?;
 
-        let mut target = PolicyRequestTarget::from(claims.clone());
-        target.link_name = Some(link_name.to_owned());
+        let target = PolicyRequestTarget::from(claims.clone());
         let PolicyResponse {
             permitted,
             request_id,
@@ -2859,10 +2714,7 @@ impl Host {
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
 
-        //
-        // let component_id = sanitize_reference(provider_ref);
-        let component_id = claims.subject.clone();
-        if let Ok(spec) = self.get_component_spec(&component_id).await {
+        if let Ok(spec) = self.get_component_spec(&provider_id).await {
             if spec.url != provider_ref {
                 bail!(
                     "component specification URL does not match provider reference: {} != {}",
@@ -2873,7 +2725,7 @@ impl Host {
             spec
         } else {
             let spec = ComponentSpecification::new(provider_ref);
-            self.store_component_spec(&component_id, &spec).await?;
+            self.store_component_spec(&provider_id, &spec).await?;
             spec
         };
         self.store_claims(Claims::Provider(claims.clone()))
@@ -2882,14 +2734,7 @@ impl Host {
 
         let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
-        let Provider { instances, .. } =
-            providers.entry(component_id.clone()).or_insert(Provider {
-                claims: claims.clone(),
-                image_ref: provider_ref.into(),
-                instances: HashMap::default(),
-            });
-        if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.into()) {
-            let id = Ulid::new();
+        if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
             let invocation_seed = self
                 .cluster_key
                 .seed()
@@ -2915,14 +2760,14 @@ impl Host {
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice.clone(),
-                link_name: link_name.to_string(),
+                link_name: "default".to_string(),
                 lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
                 lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
                 lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
                 env_values: vec![],
-                instance_id: Uuid::from_u128(id.into()).to_string(),
-                provider_key: component_id.clone(),
-                // TODO: update type of links to provide wrpc links
+                instance_id: Uuid::new_v4().to_string(),
+                provider_key: provider_id.to_string(),
+                // TODO(#1548): Providers should receive [wasmcloud_control_interface::InterfaceLinkDefinition]s
                 link_definitions: vec![],
                 config_json: configuration,
                 default_rpc_timeout_ms,
@@ -2998,7 +2843,6 @@ impl Host {
             // NOTE: health_ prefix here is to allow us to move the variables into the closure
             let health_lattice = self.host_config.lattice.clone();
             let health_provider_id = claims.subject.to_string();
-            let health_link_name = link_name.to_string();
             let health_contract_id = claims.metadata.clone().map(|m| m.capid).unwrap_or_default();
             let child = spawn(async move {
                 // Check the health of the provider every 30 seconds
@@ -3006,9 +2850,8 @@ impl Host {
                 let mut previous_healthy = false;
                 // Allow the provider 5 seconds to initialize
                 health_check.reset_after(Duration::from_secs(5));
-                let health_topic = format!(
-                    "wasmbus.rpc.{health_lattice}.{health_provider_id}.{health_link_name}.health"
-                );
+                let health_topic =
+                    format!("wasmbus.rpc.{health_lattice}.{health_provider_id}.default.health");
                 // TODO: Refactor this logic to simplify nesting
                 loop {
                     select! {
@@ -3032,7 +2875,7 @@ impl Host {
                                                 "health_check_passed",
                                                 event::provider_health_check(
                                                     &health_provider_id,
-                                                    &health_link_name,
+                                                    "default",
                                                     &health_contract_id,
                                                 )
                                             ).await {
@@ -3049,7 +2892,7 @@ impl Host {
                                                 "health_check_failed",
                                                 event::provider_health_check(
                                                     &health_provider_id,
-                                                    &health_link_name,
+                                                    "default",
                                                     &health_contract_id,
                                                 )
                                             ).await {
@@ -3065,7 +2908,7 @@ impl Host {
                                                 "health_check_status",
                                                 event::provider_health_check(
                                                     &health_provider_id,
-                                                    &health_link_name,
+                                                   "default",
                                                     &health_contract_id,
                                                 )
                                             ).await {
@@ -3092,26 +2935,20 @@ impl Host {
                     }
                 }
             });
-            info!(provider_ref, link_name, "provider started");
+            info!(provider_ref, provider_id, "provider started");
             self.publish_event(
                 "provider_started",
-                event::provider_started(
-                    &claims,
-                    &annotations,
-                    Uuid::from_u128(id.into()),
-                    host_id,
-                    provider_ref,
-                    link_name,
-                ),
+                event::provider_started(&claims, &annotations, host_id, provider_ref, provider_id),
             )
             .await?;
-            entry.insert(ProviderInstance {
+            entry.insert(Provider {
                 child,
-                id,
                 annotations,
+                claims: claims,
+                image_ref: provider_ref.to_string(),
             });
         } else {
-            bail!("provider is already running")
+            bail!("provider is already running with that ID")
         }
         Ok(())
     }
@@ -3124,32 +2961,38 @@ impl Host {
     ) -> anyhow::Result<Bytes> {
         let StartProviderCommand {
             configuration,
-            link_name,
+            provider_id,
             provider_ref,
             annotations,
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider start command")?;
 
-        info!(provider_ref, link_name, "handling start provider"); // Log at info since starting providers can take a while
+        if self.providers.read().await.contains_key(&provider_id) {
+            return Ok(
+                r#"{"accepted":false,"error":"provider with that ID is already running"}"#.into(),
+            );
+        }
+
+        info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
 
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
                 .handle_start_provider_task(
                     configuration,
-                    &link_name,
+                    &provider_id,
                     &provider_ref,
                     annotations.unwrap_or_default(),
                     &host_id,
                 )
                 .await
             {
-                error!(provider_ref, link_name, ?err, "failed to start provider");
+                error!(provider_ref, provider_id, ?err, "failed to start provider");
                 if let Err(err) = self
                     .publish_event(
                         "provider_start_failed",
-                        event::provider_start_failed(provider_ref, link_name, &err),
+                        event::provider_start_failed(provider_ref, provider_id, &err),
                     )
                     .await
                 {
@@ -3166,89 +3009,60 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        let StopProviderCommand {
-            annotations,
-            contract_id,
-            link_name,
-            provider_ref,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
+        let StopProviderCommand { provider_id, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider stop command")?;
 
-        debug!(
-            provider_ref,
-            link_name, contract_id, "handling stop provider"
-        );
+        debug!(provider_id, "handling stop provider");
 
-        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         let mut providers = self.providers.write().await;
-        let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
-            return Ok(ACCEPTED.into());
-        };
-        let provider = entry.get_mut();
-        let instances = &mut provider.instances;
-        if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
-            if annotations_match_filter(&entry.get().annotations, &annotations) {
-                let ProviderInstance {
-                    id,
-                    child,
-                    annotations,
-                    ..
-                } = entry.remove();
-
-                // Send a request to the provider, requesting a graceful shutdown
-                let req = serde_json::to_vec(&json!({ "host_id": host_id }))
-                    .context("failed to encode provider stop request")?;
-                let req = async_nats::Request::new()
-                    .payload(req.into())
-                    .timeout(self.host_config.provider_shutdown_delay)
-                    .headers(injector_to_headers(
-                        &TraceContextInjector::default_with_span(),
-                    ));
-                if let Err(e) = self
-                    .rpc_nats
-                    .send_request(
-                        format!(
-                            "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
-                            self.host_config.lattice
-                        ),
-                        req,
-                    )
-                    .await
-                {
-                    warn!(
-                        ?e,
-                        "provider did not gracefully shut down in time, shutting down forcefully"
-                    );
-                }
-                child.abort();
-                info!(provider_ref, link_name, "provider stopped");
-                self.publish_event(
-                    "provider_stopped",
-                    event::provider_stopped(
-                        &provider.claims,
-                        &annotations,
-                        Uuid::from_u128(id.into()),
-                        host_id,
-                        link_name,
-                        "stop",
-                    ),
-                )
-                .await?;
-            }
-        } else {
+        let hash_map::Entry::Occupied(entry) = providers.entry(provider_id.clone()) else {
             warn!(
-                provider_ref,
-                link_name, "received request to stop provider that is not running"
+                provider_id,
+                "received request to stop provider that is not running"
             );
             return Ok(
-                r#"{"accepted":false,"error":"provider with that link name is not running"}"#
-                    .into(),
+                r#"{"accepted":false,"error":"provider with that ID is not running"}"#.into(),
+            );
+        };
+        let Provider {
+            child,
+            annotations,
+            claims,
+            ..
+        } = entry.remove();
+
+        // Send a request to the provider, requesting a graceful shutdown
+        let req = serde_json::to_vec(&json!({ "host_id": host_id }))
+            .context("failed to encode provider stop request")?;
+        let req = async_nats::Request::new()
+            .payload(req.into())
+            .timeout(self.host_config.provider_shutdown_delay)
+            .headers(injector_to_headers(
+                &TraceContextInjector::default_with_span(),
+            ));
+        if let Err(e) = self
+            .rpc_nats
+            .send_request(
+                format!(
+                    "wasmbus.rpc.{}.{provider_id}.default.shutdown",
+                    self.host_config.lattice
+                ),
+                req,
+            )
+            .await
+        {
+            warn!(
+                ?e,
+                "provider did not gracefully shut down in time, shutting down forcefully"
             );
         }
-        if instances.is_empty() {
-            entry.remove();
-        }
+        child.abort();
+        info!(provider_id, "provider stopped");
+        self.publish_event(
+            "provider_stopped",
+            event::provider_stopped(&claims, &annotations, host_id, provider_id, "stop"),
+        )
+        .await?;
         Ok(ACCEPTED.into())
     }
 
@@ -3285,9 +3099,8 @@ impl Host {
         debug!("handling links");
 
         let links = self.links.read().await;
-        let links: Vec<InterfaceLinkDefinition> = links.values().cloned().flatten().collect();
-        let res = serde_json::to_vec(&InterfaceLinkDefinitionList { links })
-            .context("failed to serialize response")?;
+        let links: Vec<&InterfaceLinkDefinition> = links.values().flatten().collect();
+        let res = serde_json::to_vec(&links).context("failed to serialize response")?;
         Ok(res.into())
     }
 
@@ -3377,11 +3190,13 @@ impl Host {
             wit_package,
             interfaces,
             name,
-            ..
+            source_config,
+            target_config,
         } = interface_link_definition.clone();
 
         let actors = self.actors.read().await;
 
+        // TODO(#1548): When providers can handle interface links, don't just assume actors for links.
         let Ok(actor) = actors.get(&source_id).context("actor not found") else {
             tracing::error!(source_id, "no actor found for the unique id");
             return Ok(r#"{"accepted":false,"error":"no actor found for that ID"}"#.into());
@@ -3400,7 +3215,7 @@ impl Host {
             .interface_links
             .write()
             .await
-            .entry(name)
+            .entry(name.clone())
             .and_modify(|link_for_name| {
                 link_for_name
                     .entry(ns_and_package.clone())
@@ -3437,13 +3252,22 @@ impl Host {
             })
             .or_insert(HashSet::from_iter([interface_link_definition]));
 
-        // TODO: Publish event
-        // self.publish_event(
-        //     "linkdef_set",
-        //     event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
-        // )
-        // .await?;
-        // TODO: tell the provider to set the link
+        self.publish_event(
+            "linkdef_set",
+            event::linkdef_set(
+                source_id,
+                target,
+                name,
+                wit_namespace,
+                wit_package,
+                &interfaces,
+                &source_config,
+                &target_config,
+            ),
+        )
+        .await?;
+        // TODO(#1548): When providers can handle interface links, tell them to set the link.
+        // Alternatively, send them configuration cc @thomastaylor312
         // self.rpc_nats
         // .publish_with_headers(
         //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.set",),
@@ -3465,7 +3289,6 @@ impl Host {
             wit_namespace,
             wit_package,
             name,
-            ..
         } = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
 
@@ -3501,7 +3324,6 @@ impl Host {
             .write()
             .await
             .entry(source_id.clone())
-            // TODO: would be more efficient to be able to look up the link by hash and remove instead of iterating
             .and_modify(|links| {
                 // Retain links that don't match the link we're removing
                 links.retain(|interface_link_definition| {
@@ -3511,13 +3333,13 @@ impl Host {
                 });
             });
 
-        // TODO: Publish event
-        // self.publish_event(
-        //     "linkdef_deleted",
-        //     event::linkdef_deleted(id, actor_id, link_name, contract_id),
-        // )
-        // .await?;
-        // TODO: tell the provider to delete the link
+        self.publish_event(
+            "linkdef_deleted",
+            event::linkdef_deleted(source_id, name, wit_namespace, wit_package),
+        )
+        .await?;
+        // TODO(#1548): When providers can handle interface links, tell them to set the link.
+        // Alternatively, send them configuration cc @thomastaylor312
         // self.rpc_nats
         // .publish_with_headers(
         //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.del",),
@@ -3665,7 +3487,7 @@ impl Host {
 
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("actor"), Some("auction"), None, None) => {
-                self.handle_auction_actor(message.payload).await.map(Some)
+                self.handle_auction_actor(message.payload).await
             }
             (Some("actor"), Some("scale"), Some(host_id), None) => Arc::clone(&self)
                 .handle_scale_actor(message.payload, host_id)
@@ -3919,10 +3741,6 @@ impl Host {
             Claims::Actor(claims) => {
                 let mut actor_claims = self.actor_claims.write().await;
                 actor_claims.remove(&claims.subject);
-
-                let Some(_call_alias) = claims.metadata.and_then(|m| m.call_alias) else {
-                    return Ok(());
-                };
             }
             Claims::Provider(claims) => {
                 let mut provider_claims = self.provider_claims.write().await;
@@ -4355,18 +4173,6 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             Some((name, value))
         })
         .collect()
-}
-
-/// Helper function to ensure an individual instance's annotations contain all the
-/// filter annotations, determining if an instance matches a filter.
-///
-/// See #607 for more details.
-fn annotations_match_filter(annotations: &Annotations, filter: &Annotations) -> bool {
-    filter.iter().all(|(k, v)| {
-        annotations
-            .get(k)
-            .is_some_and(|instance_value| instance_value == v)
-    })
 }
 
 #[cfg(test)]
