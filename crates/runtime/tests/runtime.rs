@@ -13,6 +13,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::io::{stderr, AsyncRead, AsyncReadExt};
+use tokio::sync::RwLock;
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
@@ -48,19 +49,22 @@ struct Handler {
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     outgoing_http: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
     config: HashMap<String, Vec<u8>>,
+
+    link_name: Arc<RwLock<String>>,
 }
 
 #[async_trait]
 impl capability::Bus for Handler {
     async fn identify_interface_target(
         &self,
-        interface: &capability::TargetInterface,
+        interface: &capability::CallTargetInterface,
     ) -> anyhow::Result<Option<capability::TargetEntity>> {
         match interface {
-            capability::TargetInterface::Custom {
+            capability::CallTargetInterface {
                 namespace,
                 package,
                 interface,
+                ..
             } if namespace == "test-actors" && package == "foobar" && interface == "foobar" => {
                 Ok(Some(capability::TargetEntity::Actor(
                     capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
@@ -70,19 +74,30 @@ impl capability::Bus for Handler {
         }
     }
 
-    async fn set_target(
+    async fn set_link_name(
         &self,
-        target: Option<capability::TargetEntity>,
-        interfaces: Vec<capability::TargetInterface>,
+        link_name: String,
+        interfaces: Vec<capability::CallTargetInterface>,
     ) -> anyhow::Result<()> {
-        match (target, interfaces.as_slice()) {
-            (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
-                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueEventual]) if name == "keyvalue" => Ok(()),
-                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiBlobstoreBlobstore]) if name == "blobstore" => Ok(()),
-                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiHttpOutgoingHandler]) if name == "httpclient" => Ok(()),
-(Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))), [capability::TargetInterface::Custom{ namespace, package, interface }]) if (name == "foobar-component-command-preview2" || name == "unknown/alias") && namespace == "test-actors" && package == "foobar" && interface == "foobar" => Ok(()),
-            (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
+        match (link_name.as_ref(), interfaces.as_slice()) {
+            ("messaging", [cti]) if cti.namespace == "wasmcloud" && cti.package == "messaging" && cti.interface == "consumer" => {},
+            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "atomic" => {},
+            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "eventual" => {},
+            ("blobstore", [cti]) if cti.namespace == "wasi" && cti.package == "blobstore" && cti.interface == "blobstore" => {},
+            ("httpclient", [cti]) if cti.namespace == "wasi" && cti.package == "http" && cti.interface == "outgoing-handler" => {},
+            ("unknown/alias" | "foobar-component-command-preview2", [cti]) if cti.namespace == "test-actors" && cti.package == "foobar" && cti.interface ==
+ "foobar" => {},
+            (link_name, interfaces) => panic!("`set_link_name` with link name `{link_name:?}` and interfaces `{interfaces:?}` should not have been called")
         }
+
+        let mut current_link_name = self.link_name.write().await;
+        *current_link_name = link_name;
+
+        Ok(())
+    }
+
+    async fn get_link_name(&self) -> anyhow::Result<String> {
+        Ok(self.link_name.read().await.clone())
     }
 
     async fn get(
@@ -207,6 +222,7 @@ fn new_runtime(
         messaging: published,
         outgoing_http: sent,
         config,
+        link_name: Arc::new(RwLock::new("default".into())),
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))
