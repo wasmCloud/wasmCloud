@@ -207,11 +207,13 @@ impl Client {
     pub async fn perform_actor_auction(
         &self,
         actor_ref: &str,
+        actor_id: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ActorAuctionAck>> {
         let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
+            actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
             constraints,
         })?;
         debug!("actor_auction:publish {}", &subject);
@@ -227,13 +229,13 @@ impl Client {
     pub async fn perform_provider_auction(
         &self,
         provider_ref: &str,
-        link_name: &str,
+        provider_id: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ProviderAuctionAck>> {
         let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
-            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
+            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
             constraints,
         })?;
         debug!("provider_auction:publish {}", &subject);
@@ -258,6 +260,7 @@ impl Client {
         &self,
         host_id: &str,
         actor_ref: &str,
+        actor_id: &str,
         max_instances: u32,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
@@ -268,6 +271,7 @@ impl Client {
         let bytes = json_serialize(ScaleActorCommand {
             max_instances,
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
+            actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
             host_id,
             annotations,
         })?;
@@ -305,18 +309,24 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn advertise_link(
         &self,
-        actor_id: &str,
-        provider_id: &str,
-        contract_id: &str,
+        source_id: &str,
+        target: &str,
         link_name: &str,
-        values: HashMap<String, String>,
+        wit_namespace: &str,
+        wit_package: &str,
+        interfaces: Vec<String>,
+        source_config: Vec<String>,
+        target_config: Vec<String>,
     ) -> Result<CtlOperationAck> {
-        let ld = LinkDefinition {
-            actor_id: parse_identifier(&IdentifierKind::ActorId, actor_id)?,
-            provider_id: parse_identifier(&IdentifierKind::ProviderId, provider_id)?,
-            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
-            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
-            values,
+        let ld = InterfaceLinkDefinition {
+            source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
+            target: parse_identifier(&IdentifierKind::ComponentId, target)?,
+            name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
+            wit_namespace: wit_namespace.to_string(),
+            wit_package: wit_package.to_string(),
+            interfaces,
+            source_config,
+            target_config,
         };
 
         let subject = broker::advertise_link(&self.topic_prefix, &self.lattice);
@@ -334,17 +344,17 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn remove_link(
         &self,
-        actor_id: &str,
-        contract_id: &str,
+        source_id: &str,
         link_name: &str,
+        wit_namespace: &str,
+        wit_package: &str,
     ) -> Result<CtlOperationAck> {
         let subject = broker::remove_link(&self.topic_prefix, &self.lattice);
-        debug!("remove_link:request {}", &subject);
-        let ld = LinkDefinition {
-            actor_id: parse_identifier(&IdentifierKind::ActorId, actor_id)?,
-            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
-            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
-            ..Default::default()
+        let ld = RemoveInterfaceLinkDefinitionRequest {
+            source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
+            name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
+            wit_namespace: wit_namespace.to_string(),
+            wit_package: wit_package.to_string(),
         };
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -357,13 +367,13 @@ impl Client {
     /// the client was created with caching, this will return the cached list of links. Otherwise,
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
-    pub async fn query_links(&self) -> Result<Vec<LinkDefinition>> {
+    pub async fn query_links(&self) -> Result<Vec<InterfaceLinkDefinition>> {
         let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("query_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
-                let list: LinkDefinitionList = json_deserialize(&msg.payload)?;
-                Ok(list.links)
+                let links: Vec<InterfaceLinkDefinition> = json_deserialize(&msg.payload)?;
+                Ok(links)
             }
             Err(e) => Err(format!("Did not receive a response to links query: {e}").into()),
         }
@@ -484,7 +494,7 @@ impl Client {
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id,
-            actor_id: parse_identifier(&IdentifierKind::ActorId, existing_actor_id)?,
+            actor_id: parse_identifier(&IdentifierKind::ComponentId, existing_actor_id)?,
             new_actor_ref: parse_identifier(&IdentifierKind::ActorRef, new_actor_ref)?,
             annotations,
         })?;
@@ -505,7 +515,7 @@ impl Client {
         &self,
         host_id: &str,
         provider_ref: &str,
-        link_name: Option<String>,
+        provider_id: &str,
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
@@ -516,10 +526,7 @@ impl Client {
         let bytes = json_serialize(StartProviderCommand {
             host_id,
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
-            link_name: parse_identifier(
-                &IdentifierKind::LinkName,
-                link_name.unwrap_or_else(|| "default".to_string()).as_str(),
-            )?,
+            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
             annotations,
             configuration: provider_configuration,
         })?;
@@ -538,9 +545,7 @@ impl Client {
     pub async fn stop_provider(
         &self,
         host_id: &str,
-        provider_ref: &str,
-        link_name: &str,
-        contract_id: &str,
+        provider_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
@@ -550,9 +555,7 @@ impl Client {
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id,
-            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
-            link_name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
-            contract_id: parse_identifier(&IdentifierKind::ContractId, contract_id)?,
+            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
             annotations,
         })?;
 
@@ -709,11 +712,9 @@ pub async fn collect_sub_timeout<T: DeserializeOwned>(
 
 enum IdentifierKind {
     HostId,
-    ActorId,
+    ComponentId,
     ActorRef,
-    ProviderId,
     ProviderRef,
-    ContractId,
     LinkName,
 }
 
@@ -731,15 +732,15 @@ fn parse_identifier<T: AsRef<str>>(kind: &IdentifierKind, value: T) -> Result<St
     let value = value.as_ref();
     match kind {
         IdentifierKind::HostId => assert_non_empty_string(value, "Host ID cannot be empty"),
-        IdentifierKind::ActorId => assert_non_empty_string(value, "Actor ID cannot be empty"),
+        IdentifierKind::ComponentId => {
+            assert_non_empty_string(value, "Component ID cannot be empty")
+        }
         IdentifierKind::ActorRef => {
             assert_non_empty_string(value, "Actor OCI reference cannot be empty")
         }
-        IdentifierKind::ProviderId => assert_non_empty_string(value, "Provider ID cannot be empty"),
         IdentifierKind::ProviderRef => {
             assert_non_empty_string(value, "Provider OCI reference cannot be empty")
         }
-        IdentifierKind::ContractId => assert_non_empty_string(value, "Contract ID cannot be empty"),
         IdentifierKind::LinkName => assert_non_empty_string(value, "Link Name cannot be empty"),
     }
 }
@@ -792,7 +793,7 @@ mod tests {
             .to_string()
             .contains("Provider OCI reference cannot be empty"));
         assert!(parse_identifier(&IdentifierKind::HostId, "host_id").is_ok());
-        let actor_id = parse_identifier(&IdentifierKind::ActorId, "            iambatman  ")?;
+        let actor_id = parse_identifier(&IdentifierKind::ComponentId, "            iambatman  ")?;
         assert_eq!(actor_id, "iambatman");
 
         Ok(())
