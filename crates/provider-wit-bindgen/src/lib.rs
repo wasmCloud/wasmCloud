@@ -4,6 +4,8 @@ pub mod deps {
     pub use serde_bytes;
     pub use serde_json;
     pub use wasmcloud_provider_sdk;
+    pub use wrpc_transport;
+    pub use wrpc_types;
 }
 
 // Backwards compatibility

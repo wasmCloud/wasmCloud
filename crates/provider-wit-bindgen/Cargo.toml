@@ -22,5 +22,7 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
-wasmcloud-provider-wit-bindgen-macro = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-wit-bindgen-macro = { workspace = true }
+wrpc-transport = { workspace = true }
+wrpc-types = { workspace = true, features = [ "serde" ] }

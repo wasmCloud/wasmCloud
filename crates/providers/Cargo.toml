@@ -15,7 +15,8 @@ members = [
     "blobstore-fs",
     "blobstore-s3",
     "http-client",
-    "http-server",
+# todo(vadossi-cosmonic): re-enable once http-server is working
+#    "http-server",
     "kv-redis",
     "kv-vault",
     "lattice-controller",
