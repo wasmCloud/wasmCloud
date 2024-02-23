@@ -266,7 +266,7 @@ impl Parse for ProviderBindgenConfigOption {
         } else {
             Err(syn::Error::new(
                 Span::call_site(),
-                "unrecognized keyword provided to wamscloud_provider_wit_bindgen",
+                "unrecognized keyword provided to wasmcloud_provider_wit_bindgen",
             ))
         }
     }
