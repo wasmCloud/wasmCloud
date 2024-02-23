@@ -16,6 +16,9 @@ pub struct ActorAuctionAck {
     /// The original actor reference used for the auction
     #[serde(default)]
     pub actor_ref: String,
+    /// The unique component identifier that the auctioner can use for this actor
+    #[serde(default)]
+    pub actor_id: String,
     /// The host ID of the "bidder" for this auction.
     #[serde(default)]
     pub host_id: String,
@@ -32,7 +35,6 @@ pub struct ActorAuctionRequest {
     pub actor_ref: String,
     /// The unique identifier to be used for this actor. The host will ensure
     /// that no other actor with the same ID is running on the host
-    #[serde(default)]
     pub actor_id: ComponentId,
     /// The set of constraints that must match the labels of a suitable target host
     pub constraints: ConstraintMap,
@@ -42,17 +44,24 @@ pub struct ActorAuctionRequest {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActorDescription {
     /// The unique component identifier for this actor
-    #[serde(default, alias = "public_key")]
+    #[serde(default)]
     pub id: ComponentId,
     /// Image reference for this actor
     #[serde(default)]
     pub image_ref: String,
-    /// The individual instances of this actor that are running
-    // TODO(brooks): what this now
-    pub instances: Vec<ActorInstance>,
     /// Name of this actor, if one exists
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The annotations that were used in the start request that produced
+    /// this actor instance
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<AnnotationMap>,
+    /// The revision number for this actor instance
+    #[serde(default)]
+    pub revision: i32,
+    /// The maximum number of concurrent requests this instance can handle
+    #[serde(default)]
+    pub max_instances: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -61,9 +70,9 @@ pub struct ActorInstance {
     /// this actor instance
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
-    /// Image reference for this actor, if applicable
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_ref: Option<String>,
+    /// Image reference for this actor
+    #[serde(default)]
+    pub image_ref: String,
     /// This instance's unique ID (guid)
     #[serde(default)]
     pub instance_id: String,
@@ -104,7 +113,6 @@ pub struct Host {
     /// Comma-delimited list of valid cluster issuer public keys as known
     /// to this host
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    // TODO: remove?
     pub cluster_issuers: Option<String>,
     /// NATS server host used for regular RPC
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,7 +158,6 @@ pub struct HostInventory {
     #[serde(default)]
     pub host_id: String,
     /// The host's cluster issuer public key
-    // TODO: remove?
     #[serde(default)]
     pub issuer: String,
     /// The host's human-readable friendly name
@@ -170,12 +177,6 @@ pub struct HostInventory {
     pub uptime_seconds: u64,
 }
 
-/// A list of interface link definitions
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InterfaceLinkDefinitionList {
-    pub links: Vec<InterfaceLinkDefinition>,
-}
-
 /// A host response to a request to start a provider, confirming the host
 /// has enough capacity to start the provider and that the provider is
 /// not already running on the host
@@ -187,13 +188,16 @@ pub struct ProviderAuctionAck {
     /// The original provider reference provided for the auction
     #[serde(default)]
     pub provider_ref: String,
+    /// The unique component identifier that the auctioner can use for this provider
+    #[serde(default)]
+    pub provider_id: String,
     /// The constraints provided for the auction
     #[serde(default)]
     pub constraints: HashMap<String, String>,
 }
 
 /// A request to locate a suitable host for a capability provider. The
-/// provider's unique identity is used to rule out sites on which the
+/// provider's unique identity is used to rule out hosts on which the
 /// provider is already running.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionRequest {
@@ -204,7 +208,6 @@ pub struct ProviderAuctionRequest {
     pub provider_ref: String,
     /// The unique identifier to be used for this provider. The host will ensure
     /// that no other provider with the same ID is running on the host
-    #[serde(default)]
     pub provider_id: ComponentId,
 }
 
@@ -216,7 +219,7 @@ pub struct ProviderDescription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
     /// Provider's unique identifier
-    #[serde(default, alias = "public_key")]
+    #[serde(default)]
     pub id: ComponentId,
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,7 +291,6 @@ pub type RegistryCredentialMap = std::collections::HashMap<String, RegistryCrede
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RemoveInterfaceLinkDefinitionRequest {
     /// The source component's identifier.
-    #[serde(default)]
     pub source_id: ComponentId,
     /// Name of the link. Not providing this is equivalent to specifying Some("default")
     #[serde(default = "default_link_name")]
@@ -305,7 +307,6 @@ pub struct ScaleActorCommand {
     #[serde(default)]
     pub actor_ref: String,
     /// Unique identifier of the actor to scale.
-    #[serde(default)]
     pub actor_id: ComponentId,
     /// Optional set of annotations used to describe the nature of this actor scale command. For
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
@@ -330,7 +331,6 @@ pub struct StartProviderCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
     /// Unique identifier of the provider to start.
-    #[serde(default)]
     pub provider_id: ComponentId,
     /// Optional provider configuration in the form of an opaque string. Many
     /// providers prefer base64-encoded JSON here, though that data should never
@@ -359,9 +359,6 @@ pub struct StopHostCommand {
 /// A request to stop the given provider on the indicated host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StopProviderCommand {
-    /// Optional set of annotations used to filter providers to stop
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
     /// Host ID on which to stop the provider
     #[serde(default)]
     pub host_id: String,
@@ -374,7 +371,6 @@ pub struct StopProviderCommand {
 /// on the indicated actor by supplying a new image reference. Note that
 /// live updates are only possible through image references
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-// TODO: rethink usability of update
 pub struct UpdateActorCommand {
     /// The actor's 56-character unique ID
     #[serde(default)]
