@@ -300,6 +300,7 @@ async fn wrpc() -> anyhow::Result<()> {
         PINGER_COMPONENT_ID,
         None,
         5,
+        Vec::new(),
     )
     .await
     .expect("should've scaled pinger actor");
@@ -312,6 +313,7 @@ async fn wrpc() -> anyhow::Result<()> {
         PONGER_COMPONENT_ID,
         None,
         5,
+        Vec::new(),
     )
     .await
     .expect("should've scaled actor");
