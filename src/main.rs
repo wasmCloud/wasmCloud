@@ -13,7 +13,7 @@ use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
-use wasmcloud_host::wasmbus::config::PolicyService as PolicyServiceConfig;
+use wasmcloud_host::wasmbus::host_config::PolicyService as PolicyServiceConfig;
 use wasmcloud_host::WasmbusHostConfig;
 use wasmcloud_tracing::{configure_metrics, configure_tracing};
 

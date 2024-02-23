@@ -1,16 +1,16 @@
-use core::future::Future;
-use core::num::NonZeroUsize;
-use core::ops::{Deref, RangeInclusive};
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use core::time::Duration;
 use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
+use std::future::Future;
+use std::num::NonZeroUsize;
+use std::ops::{Deref, RangeInclusive};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
@@ -63,12 +63,15 @@ use crate::{
     PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig, RegistryType,
 };
 
-/// wasmCloud host configuration
-pub mod config;
 /// wasmCloud [wrpc_transport] implementations
 pub mod wasmcloud_transport;
 
-pub use config::Host as HostConfig;
+/// wasmCloud host configuration
+pub mod host_config;
+pub use host_config::Host as HostConfig;
+
+pub mod config;
+use config::{BundleGenerator, ConfigBundle};
 
 mod event;
 
@@ -170,7 +173,10 @@ impl Queue {
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
-    config_data: Arc<RwLock<ConfigCache>>,
+    // ConfigBundle is perfectly safe to pass around, but in order to update it on the fly, we need
+    // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
+    // placed into is also inside of an Arc
+    config_data: Arc<RwLock<ConfigBundle>>,
     lattice: String,
     claims: jwt::Claims<jwt::Actor>,
     /// The identifier of the component that this handler is associated with
@@ -587,12 +593,9 @@ impl Bus for Handler {
         &self,
         key: &str,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
-        let conf = self.config_data.read().await;
-        let data = conf
-            .get(&self.claims.subject)
-            .and_then(|conf| conf.get(key))
-            .cloned()
-            .map(|val| val.into_bytes());
+        let lock = self.config_data.read().await;
+        let conf = lock.get_config().await;
+        let data = conf.get(key).cloned().map(|val| val.into_bytes());
         Ok(Ok(data))
     }
 
@@ -604,14 +607,12 @@ impl Bus for Handler {
             .config_data
             .read()
             .await
-            .get(&self.claims.subject)
-            .cloned()
-            .map(|conf| {
-                conf.into_iter()
-                    .map(|(key, val)| (key, val.into_bytes()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()))
+            .get_config()
+            .await
+            .clone()
+            .into_iter()
+            .map(|(key, val)| (key, val.into_bytes()))
+            .collect::<Vec<_>>()))
     }
 
     #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
@@ -1292,7 +1293,7 @@ pub struct Host {
     data: Store,
     data_watch: AbortHandle,
     config_data: Store,
-    config_data_watch: AbortHandle,
+    config_generator: BundleGenerator,
     policy_manager: Arc<PolicyManager>,
     /// The provider map is a map of provider component ID to provider
     providers: RwLock<HashMap<String, Provider>>,
@@ -1735,7 +1736,6 @@ impl Host {
         let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
-        let (config_data_watch_abort, config_data_watch_abort_reg) = AbortHandle::new_pair();
 
         let supplemental_config = if config.config_service_enabled {
             load_supplemental_config(&ctl_nats, &config.lattice, &labels).await?
@@ -1775,6 +1775,8 @@ impl Host {
             config.lattice.clone(),
         );
 
+        let config_generator = BundleGenerator::new(config_data.clone());
+
         let host = Host {
             actors: RwLock::default(),
             cluster_key,
@@ -1791,7 +1793,7 @@ impl Host {
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
             config_data: config_data.clone(),
-            config_data_watch: config_data_watch_abort.clone(),
+            config_generator,
             policy_manager,
             providers: RwLock::default(),
             registry_config,
@@ -1869,42 +1871,6 @@ impl Host {
             }
         });
 
-        let config_data_watch: JoinHandle<anyhow::Result<_>> = spawn({
-            let data = config_data.clone();
-            let host = Arc::clone(&host);
-            async move {
-                let data_watch = data
-                    .watch_all()
-                    .await
-                    .context("failed to watch config data bucket")?;
-                let mut data_watch = Abortable::new(data_watch, config_data_watch_abort_reg);
-                data_watch
-                    .by_ref()
-                    .for_each({
-                        let host = Arc::clone(&host);
-                        move |entry| {
-                            let host = Arc::clone(&host);
-                            async move {
-                                match entry {
-                                    Err(error) => {
-                                        error!("failed to watch lattice data bucket: {error}");
-                                    }
-                                    Ok(entry) => host.process_config_entry(entry).await,
-                                }
-                            }
-                        }
-                    })
-                    .await;
-                let deadline = { *host.stop_rx.borrow() };
-                host.stop_tx.send_replace(deadline);
-                if data_watch.is_aborted() {
-                    info!("config data watch task gracefully stopped");
-                } else {
-                    error!("config data watch task unexpectedly stopped");
-                }
-                Ok(())
-            }
-        });
         let heartbeat = spawn({
             let host = Arc::clone(&host);
             async move {
@@ -1992,10 +1958,8 @@ impl Host {
             heartbeat_abort.abort();
             queue_abort.abort();
             data_watch_abort.abort();
-            config_data_watch_abort.abort();
             host.policy_manager.policy_changes.abort();
-            let _ = try_join!(queue, data_watch, config_data_watch, heartbeat)
-                .context("failed to await tasks")?;
+            let _ = try_join!(queue, data_watch, heartbeat).context("failed to await tasks")?;
             host.publish_event(
                 "host_stopped",
                 json!({
@@ -2263,6 +2227,7 @@ impl Host {
         Ok(actor)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument(level = "debug", skip_all)]
     async fn start_actor<'a>(
         &self,
@@ -2272,6 +2237,7 @@ impl Host {
         actor_id: String,
         max_instances: NonZeroUsize,
         annotations: impl Into<Annotations>,
+        config: ConfigBundle,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
         debug!(actor_ref, ?max_instances, "starting new actor");
 
@@ -2320,7 +2286,7 @@ impl Host {
 
         let handler = Handler {
             nats: self.rpc_nats.clone(),
-            config_data: Arc::clone(&self.config_data_cache),
+            config_data: Arc::new(RwLock::new(config)),
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
             claims: claims.clone(),
@@ -2489,7 +2455,6 @@ impl Host {
 
         self.heartbeat.abort();
         self.data_watch.abort();
-        self.config_data_watch.abort();
         self.queue.abort();
         self.policy_manager.policy_changes.abort();
         let deadline =
@@ -2509,6 +2474,7 @@ impl Host {
             actor_id,
             annotations,
             max_instances,
+            config,
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
@@ -2525,6 +2491,7 @@ impl Host {
                     &host_id,
                     max_instances,
                     annotations,
+                    config,
                 )
                 .await
             {
@@ -2544,6 +2511,7 @@ impl Host {
         host_id: &str,
         max_instances: u32,
         annotations: Annotations,
+        config: Vec<String>,
     ) -> anyhow::Result<()> {
         trace!(actor_ref, max_instances, "scale actor task");
 
@@ -2574,6 +2542,11 @@ impl Host {
             (hash_map::Entry::Vacant(_), None) => {}
             // No actor is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
+                let config = self
+                    .config_generator
+                    .generate(config)
+                    .await
+                    .context("Unable to fetch requested config")?;
                 if let Err(e) = self
                     .start_actor(
                         entry,
@@ -2582,6 +2555,7 @@ impl Host {
                         actor_id.to_string(),
                         max,
                         annotations.clone(),
+                        config,
                     )
                     .await
                 {
@@ -2639,8 +2613,15 @@ impl Host {
             // Actor is running and we requested to scale to some amount or unbounded, scale actor
             (hash_map::Entry::Occupied(mut entry), Some(max)) => {
                 let actor = entry.get_mut();
-                // Modify scale only if the requested max differs from the current max
-                if actor.max_instances != max {
+                let config_changed =
+                    &config != actor.handler.config_data.read().await.config_names();
+                // Modify scale only if the requested max differs from the current max or if the configuration has changed
+                if actor.max_instances != max || config_changed {
+                    let handler = actor.handler.clone();
+                    if config_changed {
+                        let mut conf = handler.config_data.write().await;
+                        *conf = self.config_generator.generate(config).await?;
+                    }
                     let instance = self
                         .instantiate_actor(
                             &annotations,
@@ -2648,7 +2629,7 @@ impl Host {
                             actor.id.to_string(),
                             max,
                             actor.component.clone(),
-                            actor.handler.clone(),
+                            handler,
                         )
                         .await
                         .context("failed to instantiate actor")?;

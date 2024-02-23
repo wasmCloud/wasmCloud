@@ -340,6 +340,13 @@ pub struct ScaleActorCommand {
     /// Host ID on which to scale this actor
     #[serde(default)]
     pub host_id: String,
+    /// A list of named configs to use for this actor. It is not required to specify a config.
+    /// Configs are merged together before being given to the actor, with values from the right-most
+    /// config in the list taking precedence. For example, given ordered configs foo {a: 1, b: 2},
+    /// bar {b: 3, c: 4}, and baz {c: 5, d: 6}, the resulting config will be: {a: 1, b: 3, c: 5, d:
+    /// 6}
+    #[serde(default)]
+    pub config: Vec<String>,
 }
 
 /// A command sent to a host requesting a capability provider be started with the

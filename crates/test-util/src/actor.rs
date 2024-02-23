@@ -39,6 +39,7 @@ pub async fn assert_start_actor(
     url: impl AsRef<str>,
     actor_id: impl AsRef<str>,
     count: u32,
+    config: Vec<String>,
 ) -> Result<()> {
     let ctl_client = ctl_client.into();
 
@@ -58,6 +59,7 @@ pub async fn assert_start_actor(
             actor_id.as_ref(),
             count,
             None,
+            config,
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
@@ -75,6 +77,7 @@ pub async fn assert_start_actor(
 }
 
 /// Scale an actor, ensuring that the scale up/down was successful
+#[allow(clippy::too_many_arguments)]
 pub async fn assert_scale_actor(
     ctl_client: impl Into<&WasmCloudCtlClient>,
     host_key: impl AsRef<KeyPair>,
@@ -82,6 +85,7 @@ pub async fn assert_scale_actor(
     actor_id: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
     count: u32,
+    config: Vec<String>,
 ) -> anyhow::Result<()> {
     let host_key = host_key.as_ref();
     let ctl_client = ctl_client.into();
@@ -103,6 +107,7 @@ pub async fn assert_scale_actor(
             actor_id.as_ref(),
             count,
             annotations,
+            config,
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
