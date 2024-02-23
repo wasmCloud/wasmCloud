@@ -542,12 +542,7 @@ impl Client {
     /// _will not_ supply a discrete confirmation that a provider has terminated. For that kind of
     /// information, the client must also monitor the control event stream
     #[instrument(level = "debug", skip_all)]
-    pub async fn stop_provider(
-        &self,
-        host_id: &str,
-        provider_id: &str,
-        annotations: Option<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
+    pub async fn stop_provider(&self, host_id: &str, provider_id: &str) -> Result<CtlOperationAck> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
 
         let subject =
@@ -556,7 +551,6 @@ impl Client {
         let bytes = json_serialize(StopProviderCommand {
             host_id,
             provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
-            annotations,
         })?;
 
         match self.request_timeout(subject, bytes, self.timeout).await {
