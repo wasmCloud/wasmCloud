@@ -247,11 +247,12 @@ impl CallTargetInterface {
     /// Build a [`TargetInterface`] from constituent parts
     #[must_use]
     pub fn from_parts(parts: (&str, &str, &str, Option<&str>)) -> Self {
+        let (ns, pkg, iface, func) = parts;
         Self {
-            namespace: parts.0.into(),
-            package: parts.1.into(),
-            interface: parts.2.into(),
-            function: parts.3.map(String::from),
+            namespace: ns.into(),
+            package: pkg.into(),
+            interface: iface.into(),
+            function: func.map(String::from),
         }
     }
 }
