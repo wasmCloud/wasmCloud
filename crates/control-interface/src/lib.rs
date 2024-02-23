@@ -266,6 +266,7 @@ impl Client {
         actor_id: &str,
         max_instances: u32,
         annotations: Option<HashMap<String, String>>,
+        config: Vec<String>,
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
@@ -277,6 +278,7 @@ impl Client {
             actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
             host_id,
             annotations,
+            config,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -827,7 +829,14 @@ mod tests {
         let (actor_ref, actor_id) = (&auction_ack.actor_ref, &auction_ack.actor_id);
         // Actor Scale
         let scale_response = client
-            .scale_actor(&host.id, actor_ref, actor_id, 1, None)
+            .scale_actor(
+                &host.id,
+                actor_ref,
+                actor_id,
+                1,
+                None,
+                Vec::with_capacity(0),
+            )
             .await
             .expect("should be able to scale actor");
         assert!(scale_response.success);
