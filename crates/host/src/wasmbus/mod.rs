@@ -177,6 +177,7 @@ impl Queue {
 #[derive(Debug)]
 struct ActorInstance {
     actor: wasmcloud_runtime::Component,
+    #[allow(unused)]
     nats: async_nats::Client,
     id: Ulid,
     calls: AbortHandle,
@@ -185,11 +186,15 @@ struct ActorInstance {
     /// Maximum number of instances of this actor that can be running at once
     max_instances: NonZeroUsize,
     /// Cluster issuers that this actor should accept invocations from
+    #[allow(unused)]
     valid_issuers: Vec<String>,
+    #[allow(unused)]
     policy_manager: Arc<PolicyManager>,
     image_reference: String,
+    #[allow(unused)]
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
     // TODO: use a single map once Claims is an enum
+    #[allow(unused)]
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
 }

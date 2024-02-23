@@ -343,7 +343,7 @@ where
                 func_name,
                 "polyfill component function import"
             );
-            let ty = match DynamicFunction::resolve(&resolve, ty) {
+            let ty = match DynamicFunction::resolve(resolve, ty) {
                 Ok(ty) => ty,
                 Err(err) => {
                     error!(?err, "failed to resolve polyfilled function type");
