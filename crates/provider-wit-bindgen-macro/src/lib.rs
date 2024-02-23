@@ -190,9 +190,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let bindgen_tokens: TokenStream =
         expand_wasmtime_component(wit_bindgen_cfg).unwrap_or_else(syn::Error::into_compile_error);
 
-    // // TODO: REMOVE
-    // eprintln!("BINDGEN TOKENS:\n========{bindgen_tokens}\n==========");
-
     // Parse the bindgen-generated tokens into an AST
     // that will be used in the output (combined with other wasmcloud-specific generated code)
     let mut bindgen_ast: syn::File =
@@ -218,6 +215,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Build a list of match arms for the invocation dispatch that is required
     let mut interface_dispatch_match_arms: Vec<TokenStream> = Vec::new();
+    let mut interface_dispatch_wrpc_match_arms: Vec<TokenStream> = Vec::new();
     let mut iface_tokens = TokenStream::new();
 
     // Go through every method metadata object (`LatticeMethod`) extracted from the
@@ -390,6 +388,14 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
             )*
         ));
+
+        interface_dispatch_wrpc_match_arms.push(quote::quote!(
+            #(
+                #lattice_method_names => {
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected("not implemented".into()))
+                }
+            )*
+        ));
     }
 
     // Build a list of types that should be included in the output code
@@ -529,7 +535,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 #imported_iface_invocation_methods
             )*
         }
-
     );
 
     tokens.into()
@@ -626,7 +631,7 @@ fn is_ignored_invocation_handler_pkg(pkg: &wit_parser::PackageName) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use anyhow::{Context, Result};
+    use anyhow::Context;
     use proc_macro2::TokenTree;
     use syn::{parse_quote, ImplItemFn, LitStr};
 
@@ -636,7 +641,7 @@ mod tests {
 
     /// Token trees that we expect to parse into WIT-ified maps should parse
     #[test]
-    fn parse_witified_map_type() -> Result<()> {
+    fn parse_witified_map_type() -> anyhow::Result<()> {
         extract_witified_map(
             &quote::quote!(Vec<(String, String)>)
                 .into_iter()
@@ -648,7 +653,7 @@ mod tests {
 
     /// Ensure WIT-ified maps parse correctly in functions
     #[test]
-    fn parse_witified_map_in_fn() -> Result<()> {
+    fn parse_witified_map_in_fn() -> anyhow::Result<()> {
         let trait_fn: ImplItemFn = parse_quote!(
             fn baz(test_map: Vec<(String, String)>) {}
         );

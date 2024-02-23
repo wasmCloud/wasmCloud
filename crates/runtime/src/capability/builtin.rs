@@ -210,10 +210,8 @@ impl std::fmt::Display for WrpcInterfaceTarget {
 /// Target entity
 pub enum TargetEntity {
     /// Link target entity
-    #[deprecated(note = "use the wrpc variant instead")]
     Link(Option<String>),
     /// Actor target entity
-    #[deprecated(note = "use the wrpc variant instead")]
     Actor(ActorIdentifier),
     /// WRPC component
     Wrpc(WrpcInterfaceTarget),
@@ -249,13 +247,11 @@ impl CallTargetInterface {
     /// Build a [`TargetInterface`] from constituent parts
     #[must_use]
     pub fn from_parts(parts: (&str, &str, &str, Option<&str>)) -> Self {
-        match parts {
-            (ns, pkg, iface, func) => Self {
-                namespace: ns.into(),
-                package: pkg.into(),
-                interface: iface.into(),
-                function: func.map(String::from),
-            },
+        Self {
+            namespace: parts.0.into(),
+            package: parts.1.into(),
+            interface: parts.2.into(),
+            function: parts.3.map(String::from),
         }
     }
 }
