@@ -36,65 +36,11 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
     }
 }
 
-// TODO(#1092): Remove this event in favor of `actor_scaled`
-pub fn actors_started(
-    claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
-    host_id: impl AsRef<str>,
-    count: impl Into<usize>,
-    image_ref: impl AsRef<str>,
-) -> serde_json::Value {
-    json!({
-        "public_key": claims.subject,
-        "image_ref": image_ref.as_ref(),
-        "annotations": annotations,
-        "host_id": host_id.as_ref(),
-        "claims": format_actor_claims(claims),
-        "count": count.into(),
-    })
-}
-
-// TODO(#1092): Remove this event in favor of `actor_scaled`
-pub fn actors_start_failed(
-    claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
-    host_id: impl AsRef<str>,
-    image_ref: impl AsRef<str>,
-    error: &anyhow::Error,
-) -> serde_json::Value {
-    json!({
-        "public_key": claims.subject,
-        "image_ref": image_ref.as_ref(),
-        "annotations": annotations,
-        "host_id": host_id.as_ref(),
-        "error": format!("{error:#}"),
-    })
-}
-
-// TODO(#1092): Remove this event in favor of `actor_scaled`
-pub fn actors_stopped(
-    claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
-    host_id: impl AsRef<str>,
-    count: NonZeroUsize,
-    remaining: usize,
-    image_ref: impl AsRef<str>,
-) -> serde_json::Value {
-    json!({
-        "public_key": claims.subject,
-        "annotations": annotations,
-        "host_id": host_id.as_ref(),
-        "count": count,
-        "remaining": remaining,
-        "image_ref": image_ref.as_ref(),
-    })
-}
-
 pub fn actor_scaled(
     claims: &jwt::Claims<jwt::Actor>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
-    max_instances: NonZeroUsize,
+    max_instances: impl Into<usize>,
     image_ref: impl AsRef<str>,
 ) -> serde_json::Value {
     json!({
@@ -103,7 +49,7 @@ pub fn actor_scaled(
         "annotations": annotations,
         "host_id": host_id.as_ref(),
         "image_ref": image_ref.as_ref(),
-        "max_instances": max_instances,
+        "max_instances": max_instances.into(),
     })
 }
 

@@ -2234,13 +2234,9 @@ impl Host {
             .context("failed to instantiate actor")?;
 
         info!(actor_ref, "actor started");
-        self.publish_actor_started_events(
-            max_instances.get(),
-            max_instances,
-            claims,
-            &annotations,
-            host_id,
-            actor_ref,
+        self.publish_event(
+            "actor_scaled",
+            event::actor_scaled(claims, &annotations, host_id, max_instances, &actor_ref),
         )
         .await?;
 
@@ -2254,13 +2250,15 @@ impl Host {
         actor.calls.abort();
 
         let claims = actor.claims().context("claims missing")?;
-        self.publish_actor_stopped_events(
-            claims,
-            &actor.annotations,
-            host_id,
-            actor.max_instances,
-            0,
-            &actor.image_reference,
+        self.publish_event(
+            "actor_scaled",
+            event::actor_scaled(
+                claims,
+                &actor.annotations,
+                host_id,
+                0_usize,
+                &actor.image_reference,
+            ),
         )
         .await?;
 
@@ -2517,13 +2515,15 @@ impl Host {
                 };
 
                 info!(actor_ref, "actor stopped");
-                self.publish_actor_stopped_events(
-                    claims,
-                    &actor.annotations,
-                    host_id,
-                    actor.max_instances,
-                    0,
-                    &actor.image_reference,
+                self.publish_event(
+                    "actor_scaled",
+                    event::actor_scaled(
+                        claims,
+                        &actor.annotations,
+                        host_id,
+                        0_usize,
+                        &actor.image_reference,
+                    ),
                 )
                 .await?;
             }
@@ -2544,35 +2544,16 @@ impl Host {
                         .await
                         .context("failed to instantiate actor")?;
                     let publish_result = match actor.max_instances.cmp(&max) {
-                        std::cmp::Ordering::Less => {
-                            // We started the difference between the current max and the requested max
-                            // SAFETY: We know max > actor.max because of the ordering check above
-                            let num_started = max.get() - actor.max_instances.get();
-                            self.publish_actor_started_events(
-                                num_started,
-                                max,
-                                claims,
-                                &annotations,
-                                host_id,
-                                &actor_ref,
-                            )
-                            .await
-                        }
-                        std::cmp::Ordering::Greater => {
-                            // We stopped the difference between the current max and the requested max
-                            let num_stopped =
-                                    // SAFETY: We know actor.max > max because of the ordering check above
-                                    actor.max_instances.get()
-                                        - max.get();
-                            self.publish_actor_stopped_events(
-                                claims,
-                                &annotations,
-                                host_id,
-                                NonZeroUsize::new(num_stopped)
-                                    // Should not be possible, but defaulting to 1 for safety
-                                    .unwrap_or(NonZeroUsize::MIN),
-                                actor.max_instances.get().saturating_sub(num_stopped),
-                                &actor.image_reference,
+                        std::cmp::Ordering::Less | std::cmp::Ordering::Greater => {
+                            self.publish_event(
+                                "actor_scaled",
+                                event::actor_scaled(
+                                    claims,
+                                    &actor.annotations,
+                                    host_id,
+                                    max,
+                                    &actor.image_reference,
+                                ),
                             )
                             .await
                         }
@@ -2645,13 +2626,9 @@ impl Host {
         };
 
         info!(%new_actor_ref, "actor updated");
-        self.publish_actor_started_events(
-            max.get(),
-            max,
-            new_claims,
-            &annotations,
-            host_id,
-            new_actor_ref,
+        self.publish_event(
+            "actor_scaled",
+            event::actor_scaled(new_claims, &actor.annotations, host_id, max, &new_actor_ref),
         )
         .await?;
 
@@ -2663,13 +2640,15 @@ impl Host {
         self.stop_actor(actor, host_id)
             .await
             .context("failed to stop old actor")?;
-        self.publish_actor_stopped_events(
-            old_claims,
-            &actor.annotations,
-            host_id,
-            actor.max_instances,
-            max.get(),
-            &actor.image_reference,
+        self.publish_event(
+            "actor_scaled",
+            event::actor_scaled(
+                old_claims,
+                &actor.annotations,
+                host_id,
+                0_usize,
+                &actor.image_reference,
+            ),
         )
         .await?;
 
@@ -2714,7 +2693,7 @@ impl Host {
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
 
-        if let Ok(spec) = self.get_component_spec(&provider_id).await {
+        if let Ok(spec) = self.get_component_spec(provider_id).await {
             if spec.url != provider_ref {
                 bail!(
                     "component specification URL does not match provider reference: {} != {}",
@@ -2944,7 +2923,7 @@ impl Host {
             entry.insert(Provider {
                 child,
                 annotations,
-                claims: claims,
+                claims,
                 image_ref: provider_ref.to_string(),
             });
         } else {
@@ -3822,88 +3801,6 @@ impl Host {
                 error!(key = %entry.key, "Found key that doesn't match config format");
             }
         }
-    }
-
-    // TODO(#1092): only publish actor_scale_failed event after wasmCloud releases 0.82
-    /// Publishes an `actors_start_failed` and `actor_scale_failed` event
-    async fn publish_actor_start_failed_events(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        annotations: &BTreeMap<String, String>,
-        host_id: impl AsRef<str>,
-        actor_ref: impl AsRef<str>,
-        max: NonZeroUsize,
-        err: &anyhow::Error,
-    ) -> anyhow::Result<()> {
-        let (start, scale) = tokio::join!(
-            self.publish_event(
-                "actors_start_failed",
-                event::actors_start_failed(claims, annotations, &host_id, &actor_ref, err)
-            ),
-            self.publish_event(
-                "actor_scale_failed",
-                event::actor_scale_failed(claims, annotations, host_id, actor_ref, max, err)
-            )
-        );
-        start?;
-        scale
-    }
-
-    // TODO(#1092): only publish actor_scaled event after wasmCloud releases 0.82
-    /// Publishes an `actor_started` and `actors_scaled` event with the supplied max
-    async fn publish_actor_started_events(
-        &self,
-        num_started: usize,
-        max: NonZeroUsize,
-        claims: &jwt::Claims<jwt::Actor>,
-        annotations: &BTreeMap<String, String>,
-        host_id: impl AsRef<str>,
-        image_ref: impl AsRef<str>,
-    ) -> anyhow::Result<()> {
-        let (started, scaled) = tokio::join!(
-            self.publish_event(
-                "actors_started",
-                event::actors_started(claims, annotations, &host_id, num_started, &image_ref),
-            ),
-            self.publish_event(
-                "actor_scaled",
-                event::actor_scaled(claims, annotations, host_id, max, image_ref),
-            )
-        );
-        started?;
-        scaled
-    }
-
-    // TODO(#1092): only publish actor_scaled event after wasmCloud releases 0.82
-    /// Publishes an `actors_stopped` and `actor_scaled` event with the supplied max and remaining
-    async fn publish_actor_stopped_events(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        annotations: &BTreeMap<String, String>,
-        host_id: impl AsRef<str>,
-        max_instances: NonZeroUsize,
-        remaining: usize,
-        image_ref: impl AsRef<str>,
-    ) -> anyhow::Result<()> {
-        let (stopped, scaled) = tokio::join!(
-            self.publish_event(
-                "actors_stopped",
-                event::actors_stopped(
-                    claims,
-                    annotations,
-                    &host_id,
-                    max_instances,
-                    remaining,
-                    &image_ref
-                )
-            ),
-            self.publish_event(
-                "actor_scaled",
-                event::actor_scaled(claims, annotations, host_id, max_instances, image_ref),
-            ),
-        );
-        stopped?;
-        scaled
     }
 }
 
