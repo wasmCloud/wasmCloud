@@ -1,31 +1,20 @@
-use std::process::ExitStatus;
-
 use anyhow::{Context, Result};
 use tokio::process::Command;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration};
 use url::Url;
 use vaultrs::client::{Client, VaultClient, VaultClientSettingsBuilder};
 use vaultrs::sys::ServerStatus;
 
-use super::{free_port, spawn_server};
+use super::{free_port, BackgroundServer};
 
 /// Start Hashicorp Vault as a subprocess on a random port
-pub async fn start_vault(
-    token: impl AsRef<str>,
-) -> Result<(
-    JoinHandle<Result<ExitStatus>>,
-    oneshot::Sender<()>,
-    Url,
-    VaultClient,
-)> {
+pub async fn start_vault(token: impl AsRef<str>) -> Result<(BackgroundServer, Url, VaultClient)> {
     let bin_path = std::env::var("TEST_VAULT_BIN").unwrap_or("vault".to_string());
     let port = free_port()
         .await
         .context("failed to find open port for NATS")?;
     let host = "127.0.0.1";
-    let (server, stop_tx) = spawn_server(Command::new(bin_path).args([
+    let server = BackgroundServer::spawn(Command::new(bin_path).args([
         "server",
         "-dev",
         "-dev-listen-address",
@@ -63,7 +52,6 @@ pub async fn start_vault(
 
     Ok((
         server,
-        stop_tx,
         url.parse().context("failed to create URL from vault URL")?,
         vault_client,
     ))

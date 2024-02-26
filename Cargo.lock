@@ -5321,6 +5321,7 @@ dependencies = [
  "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-host",
+ "wasmcloud-test-util",
  "wasmcloud-tracing",
 ]
 
@@ -5595,6 +5596,26 @@ dependencies = [
  "wrpc-runtime-wasmtime",
  "wrpc-transport",
  "wrpc-types",
+]
+
+[[package]]
+name = "wasmcloud-test-util"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "cloudevents-sdk",
+ "nkeys",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+ "wascap",
+ "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-host",
 ]
 
 [[package]]
