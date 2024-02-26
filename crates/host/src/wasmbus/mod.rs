@@ -44,9 +44,9 @@ use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
     HostLabel, InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest,
-    ProviderDescription, RegistryCredential, RegistryCredentialMap,
-    RemoveInterfaceLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand, WitInterface,
+    ProviderDescription, RegistryCredential, RemoveInterfaceLinkDefinitionRequest,
+    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
@@ -3342,8 +3342,9 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_registries_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        let registry_creds: RegistryCredentialMap = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize registries put command")?;
+        let registry_creds: HashMap<String, RegistryCredential> =
+            serde_json::from_slice(payload.as_ref())
+                .context("failed to deserialize registries put command")?;
 
         info!(
             registries = ?registry_creds.keys(),
