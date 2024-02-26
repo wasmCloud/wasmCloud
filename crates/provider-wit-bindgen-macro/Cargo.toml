@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-wit-bindgen-macro"
-version = "0.1.0"
+version = "0.1.1"
 description = """
 Internal-use bindgen macro for binary-based wasmCloud capability providers written in Rust
 """
