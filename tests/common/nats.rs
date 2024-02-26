@@ -1,28 +1,20 @@
 use std::env;
-use std::process::ExitStatus;
 
 use anyhow::{Context, Result};
 use async_nats::connection::State;
 use async_nats::Client as NatsClient;
 use tokio::process::Command;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration};
 use url::Url;
 
-use super::{free_port, spawn_server, tempdir};
+use super::{free_port, tempdir, BackgroundServer};
 
-pub async fn start_nats() -> Result<(
-    JoinHandle<Result<ExitStatus>>,
-    oneshot::Sender<()>,
-    Url,
-    NatsClient,
-)> {
+pub async fn start_nats() -> Result<(BackgroundServer, Url, NatsClient)> {
     let port = free_port().await?;
     let url =
         Url::parse(&format!("nats://localhost:{port}")).context("failed to parse NATS URL")?;
     let jetstream_dir = tempdir()?;
-    let (server, stop_tx) = spawn_server(
+    let server = BackgroundServer::spawn(
         Command::new(
             env::var("TEST_NATS_BIN")
                 .as_deref()
@@ -59,5 +51,5 @@ pub async fn start_nats() -> Result<(
     .await
     .context("failed to ensure connection to NATS server")?;
 
-    Ok((server, stop_tx, url, nats_client))
+    Ok((server, url, nats_client))
 }

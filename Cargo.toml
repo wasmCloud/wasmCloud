@@ -73,6 +73,7 @@ uuid = { workspace = true }
 vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
+wasmcloud-test-util = { workspace = true }
 
 [workspace]
 members = ["crates/*"]
@@ -195,6 +196,7 @@ wasmcloud-provider-sdk = { version = "0.2", path = "./crates/provider-sdk", defa
 wasmcloud-provider-wit-bindgen = { version = "0.1", path = "./crates/provider-wit-bindgen", default-features = false }
 wasmcloud-provider-wit-bindgen-macro = { version = "0.1", path = "./crates/provider-wit-bindgen-macro", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
+wasmcloud-test-util = { version = "0.0.1", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "0.1", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.121", default-features = false }
 wasmtime = { version = "18", default-features = false }
