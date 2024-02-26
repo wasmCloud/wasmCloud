@@ -497,10 +497,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@eslint/js@npm:8.56.0":
-  version: 8.56.0
-  resolution: "@eslint/js@npm:8.56.0"
-  checksum: 97a4b5ccf7e24f4d205a1fb0f21cdcd610348ecf685f6798a48dd41ba443f2c1eedd3050ff5a0b8f30b8cf6501ab512aa9b76e531db15e59c9ebaa41f3162e37
+"@eslint/js@npm:8.57.0":
+  version: 8.57.0
+  resolution: "@eslint/js@npm:8.57.0"
+  checksum: 3c501ce8a997cf6cbbaf4ed358af5492875e3550c19b9621413b82caa9ae5382c584b0efa79835639e6e0ddaa568caf3499318e5bdab68643ef4199dce5eb0a0
   languageName: node
   linkType: hard
 
@@ -551,7 +551,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@humanwhocodes/config-array@npm:^0.11.13":
+"@humanwhocodes/config-array@npm:^0.11.14":
   version: 0.11.14
   resolution: "@humanwhocodes/config-array@npm:0.11.14"
   dependencies:
@@ -2153,13 +2153,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/eslint@npm:~8.56.2":
-  version: 8.56.2
-  resolution: "@types/eslint@npm:8.56.2"
+"@types/eslint@npm:~8.56.3":
+  version: 8.56.3
+  resolution: "@types/eslint@npm:8.56.3"
   dependencies:
     "@types/estree": "npm:*"
     "@types/json-schema": "npm:*"
-  checksum: 9e4805e770ea90a561e1f69e5edce28b8f66e92e290705100e853c7c252cf87bef654168d0d47fc60c0effbe4517dd7a8d2fa6d3f04c7f831367d568009fd368
+  checksum: b5a006c24b5d3a2dba5acc12f21f96c960836beb08544cfedbbbd5b7770b6c951b41204d676b73d7d9065bef3435e5b4cb3796c57f66df21c12fd86018993a16
   languageName: node
   linkType: hard
 
@@ -2184,12 +2184,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^20.11.19":
-  version: 20.11.19
-  resolution: "@types/node@npm:20.11.19"
+"@types/node@npm:^20.11.20":
+  version: 20.11.20
+  resolution: "@types/node@npm:20.11.20"
   dependencies:
     undici-types: "npm:~5.26.4"
-  checksum: c7f4705d6c84aa21679ad180c33c13ca9567f650e66e14bcee77c7c43d14619c7cd3b4d7b2458947143030b7b1930180efa6d12d999b45366abff9fed7a17472
+  checksum: ff449bdc94810dadb54e0f77dd587c6505ef79ffa5a208c16eb29b223365b188f4c935a3abaf0906a01d05257c3da1f72465594a841d35bcf7b6deac7a6938fb
   languageName: node
   linkType: hard
 
@@ -2227,14 +2227,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^18.2.57":
-  version: 18.2.57
-  resolution: "@types/react@npm:18.2.57"
+"@types/react@npm:^18.2.58":
+  version: 18.2.58
+  resolution: "@types/react@npm:18.2.58"
   dependencies:
     "@types/prop-types": "npm:*"
     "@types/scheduler": "npm:*"
     csstype: "npm:^3.0.2"
-  checksum: beee45a8ee48862fb5101f6ebdd89ccc20c5a6df29dcd2315560bc3b57ea3af8d09a8e9bb1c58063a70f9010e0d2c7bd300819438e2ca62810285c3d7275ab5a
+  checksum: ec5e1a7d8acc55551efec7a3d63441d24c7e94b66bf8039944541a8408048668e51b7b4b0b6e8303cdea271b7c6da242cdc7bb8ca501eedf822956edbdbfc67e
   languageName: node
   linkType: hard
 
@@ -2412,7 +2412,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@wasmcloud/lattice-client-core@workspace:packages/lattice-client-core"
   dependencies:
-    "@types/eslint": "npm:~8.56.2"
+    "@types/eslint": "npm:~8.56.3"
     "@wasmcloud/tsconfig": "workspace:^"
     immer: "npm:^10.0.3"
     nats.ws: "npm:^1.20.0"
@@ -2425,8 +2425,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@wasmcloud/lattice-client-react@workspace:packages/lattice-client-react"
   dependencies:
-    "@types/eslint": "npm:~8.56.2"
-    "@types/react": "npm:^18.2.57"
+    "@types/eslint": "npm:~8.56.3"
+    "@types/react": "npm:^18.2.58"
     "@types/react-dom": "npm:^18.2.19"
     "@wasmcloud/lattice-client-core": "workspace:^"
     "@wasmcloud/tsconfig": "workspace:^"
@@ -2440,9 +2440,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@wasmcloud/monorepo@workspace:."
   dependencies:
-    "@types/node": "npm:^20.11.19"
+    "@types/node": "npm:^20.11.20"
     "@wasmcloud/prettier-config": "workspace:*"
-    eslint: "npm:^8.56.0"
+    eslint: "npm:^8.57.0"
     eslint-config-turbo: "npm:^1.12.4"
     prettier: "npm:^3.2.5"
     turbo: "npm:^1.12.4"
@@ -2486,8 +2486,8 @@ __metadata:
     "@radix-ui/react-toggle": "npm:^1.0.3"
     "@radix-ui/react-tooltip": "npm:^1.0.7"
     "@tanstack/react-table": "npm:^8.12.0"
-    "@types/node": "npm:^20.11.19"
-    "@types/react": "npm:^18.2.57"
+    "@types/node": "npm:^20.11.20"
+    "@types/react": "npm:^18.2.58"
     "@types/react-dom": "npm:^18.2.19"
     "@typescript-eslint/eslint-plugin": "npm:^7.0.2"
     "@typescript-eslint/parser": "npm:^7.0.2"
@@ -2499,7 +2499,7 @@ __metadata:
     class-variance-authority: "npm:^0.7.0"
     clsx: "npm:^2.1.0"
     date-fns: "npm:^3.3.1"
-    eslint: "npm:^8.56.0"
+    eslint: "npm:^8.57.0"
     eslint-config-prettier: "npm:^9.1.0"
     eslint-import-resolver-typescript: "npm:^3.6.1"
     eslint-plugin-absolute-imports-only: "npm:^1.0.1"
@@ -3856,15 +3856,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint@npm:^8.56.0":
-  version: 8.56.0
-  resolution: "eslint@npm:8.56.0"
+"eslint@npm:^8.57.0":
+  version: 8.57.0
+  resolution: "eslint@npm:8.57.0"
   dependencies:
     "@eslint-community/eslint-utils": "npm:^4.2.0"
     "@eslint-community/regexpp": "npm:^4.6.1"
     "@eslint/eslintrc": "npm:^2.1.4"
-    "@eslint/js": "npm:8.56.0"
-    "@humanwhocodes/config-array": "npm:^0.11.13"
+    "@eslint/js": "npm:8.57.0"
+    "@humanwhocodes/config-array": "npm:^0.11.14"
     "@humanwhocodes/module-importer": "npm:^1.0.1"
     "@nodelib/fs.walk": "npm:^1.2.8"
     "@ungap/structured-clone": "npm:^1.2.0"
@@ -3900,7 +3900,7 @@ __metadata:
     text-table: "npm:^0.2.0"
   bin:
     eslint: bin/eslint.js
-  checksum: ef6193c6e4cef20774b985a5cc2fd4bf6d3c4decd423117cbc4a0196617861745db291217ad3c537bc3a160650cca965bc818f55e1f3e446af1fcb293f9940a5
+  checksum: 00496e218b23747a7a9817bf58b522276d0dc1f2e546dceb4eea49f9871574088f72f1f069a6b560ef537efa3a75261b8ef70e51ef19033da1cc4c86a755ef15
   languageName: node
   linkType: hard
 
