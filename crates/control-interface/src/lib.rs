@@ -47,6 +47,14 @@ impl Debug for Client {
     }
 }
 
+impl Client {
+    /// Get a copy of the NATS client in use by this control client
+    #[allow(unused)]
+    pub fn nats_client(&self) -> async_nats::Client {
+        self.nc.clone()
+    }
+}
+
 /// A client builder that can be used to fluently provide configuration settings used to construct
 /// the control interface client
 pub struct ClientBuilder {
