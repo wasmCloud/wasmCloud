@@ -285,8 +285,14 @@ impl Client {
     /// be listening and all will overwrite their registry credential map with the new information.
     /// It is highly recommended you use TLS connections with NATS and isolate the control interface
     /// credentials when using this function in production as the data contains secrets
+    ///
+    /// # Arguments
+    /// - `registries`: A map of registry names to their credentials to be used for fetching from specific registries
     #[instrument(level = "debug", skip_all)]
-    pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
+    pub async fn put_registries(
+        &self,
+        registries: HashMap<String, RegistryCredential>,
+    ) -> Result<()> {
         let subject = broker::publish_registries(&self.topic_prefix, &self.lattice);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;

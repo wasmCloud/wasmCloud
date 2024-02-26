@@ -3,12 +3,6 @@ use std::collections::HashMap;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
-pub type ConstraintMap = std::collections::HashMap<String, String>;
-pub type AnnotationMap = std::collections::HashMap<String, String>;
-pub type KeyValueMap = std::collections::HashMap<String, String>;
-pub type LabelsMap = std::collections::HashMap<String, String>;
-pub type ProviderDescriptions = Vec<ProviderDescription>;
-
 /// A host response to a request to start an actor, confirming the host
 /// has enough capacity to start the actor
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,7 +31,7 @@ pub struct ActorAuctionRequest {
     /// that no other actor with the same ID is running on the host
     pub actor_id: ComponentId,
     /// The set of constraints that must match the labels of a suitable target host
-    pub constraints: ConstraintMap,
+    pub constraints: HashMap<String, String>,
 }
 
 /// A summary description of an actor within a host inventory
@@ -55,7 +49,7 @@ pub struct ActorDescription {
     /// The annotations that were used in the start request that produced
     /// this actor instance
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// The revision number for this actor instance
     #[serde(default)]
     pub revision: i32,
@@ -69,7 +63,7 @@ pub struct ActorInstance {
     /// The annotations that were used in the start request that produced
     /// this actor instance
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// Image reference for this actor
     #[serde(default)]
     pub image_ref: String,
@@ -131,7 +125,7 @@ pub struct Host {
     pub js_domain: Option<String>,
     /// Hash map of label-value pairs for this host
     #[serde(default)]
-    pub labels: KeyValueMap,
+    pub labels: HashMap<String, String>,
     /// The lattice that this host is a member of
     #[serde(default)]
     pub lattice: String,
@@ -153,7 +147,7 @@ pub struct HostInventory {
     /// Actors running on this host.
     pub actors: Vec<ActorDescription>,
     /// Providers running on this host
-    pub providers: ProviderDescriptions,
+    pub providers: Vec<ProviderDescription>,
     /// The host's unique ID
     #[serde(default)]
     pub host_id: String,
@@ -165,7 +159,7 @@ pub struct HostInventory {
     pub friendly_name: String,
     /// The host's labels
     #[serde(default)]
-    pub labels: LabelsMap,
+    pub labels: HashMap<String, String>,
     /// The host version
     #[serde(default)]
     pub version: String,
@@ -202,7 +196,7 @@ pub struct ProviderAuctionAck {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionRequest {
     /// The set of constraints that must match the labels of a suitable target host
-    pub constraints: ConstraintMap,
+    pub constraints: HashMap<String, String>,
     /// The image reference, file or OCI, for this provider.
     #[serde(default)]
     pub provider_ref: String,
@@ -217,7 +211,7 @@ pub struct ProviderDescription {
     /// The annotations that were used in the start request that produced
     /// this provider instance
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// Provider's unique identifier
     #[serde(default)]
     pub id: ComponentId,
@@ -283,9 +277,6 @@ impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
     }
 }
 
-/// A set of credentials to be used for fetching from specific registries
-pub type RegistryCredentialMap = std::collections::HashMap<String, RegistryCredential>;
-
 /// A request to remove a link definition and detach the relevant actor
 /// from the given provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -311,7 +302,7 @@ pub struct ScaleActorCommand {
     /// Optional set of annotations used to describe the nature of this actor scale command. For
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// The maximum number of concurrent executing instances of this actor. Setting this to `0` will
     /// stop the actor.
     // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
@@ -329,7 +320,7 @@ pub struct StartProviderCommand {
     /// Optional set of annotations used to describe the nature of this provider start command. For
     /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// Unique identifier of the provider to start.
     pub provider_id: ComponentId,
     /// Optional provider configuration in the form of an opaque string. Many
@@ -379,7 +370,7 @@ pub struct UpdateActorCommand {
     /// update request. Only actor instances that have matching annotations
     /// will be upgraded, allowing for instance isolation by
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<AnnotationMap>,
+    pub annotations: Option<HashMap<String, String>>,
     /// The host ID of the host to perform the live update
     #[serde(default)]
     pub host_id: String,
