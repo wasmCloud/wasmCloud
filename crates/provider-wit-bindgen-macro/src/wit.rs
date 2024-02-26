@@ -520,7 +520,7 @@ impl WitFunctionLatticeTranslationStrategy {
         // (ex. MessagingConsumerRequestMultiInvocation)
         let struct_name = format_ident!(
             "{}{}Invocation",
-            wit_iface_name.to_upper_camel_case(),
+            wit_iface_name.replace(".", "").to_upper_camel_case(),
             trait_method.sig.ident.to_string().to_upper_camel_case()
         );
 
