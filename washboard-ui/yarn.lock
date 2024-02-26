@@ -2512,7 +2512,7 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.14.3"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.3"
-    lucide-react: "npm:^0.335.0"
+    lucide-react: "npm:^0.341.0"
     nats.ws: "npm:^1.20.0"
     postcss: "npm:^8.4.35"
     prettier: "npm:^3.2.5"
@@ -2526,7 +2526,7 @@ __metadata:
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.3.3"
-    usehooks-ts: "npm:^2.14.0"
+    usehooks-ts: "npm:^2.15.1"
     vite: "npm:^5.1.4"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.1"
@@ -5129,12 +5129,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.335.0":
-  version: 0.335.0
-  resolution: "lucide-react@npm:0.335.0"
+"lucide-react@npm:^0.341.0":
+  version: 0.341.0
+  resolution: "lucide-react@npm:0.341.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 2faf384b47baf245e802087301e6c880604849edf8ba7daab6649634b03e3844f1cd18cb2c3e6c3750706c65619cc9ca8f6fd6770a8c9fd07aea05c3a66a8382
+  checksum: d540ddda86b66ecb5f8e87ee3f7bd271c9260cf35ffe4a83fdb512eb3daf16d7a0ed097990bcf33324bb6a607dabbdf14ddd0cf83aa0dbf5789e84a409b99277
   languageName: node
   linkType: hard
 
@@ -7293,14 +7293,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"usehooks-ts@npm:^2.14.0":
-  version: 2.14.0
-  resolution: "usehooks-ts@npm:2.14.0"
+"usehooks-ts@npm:^2.15.1":
+  version: 2.15.1
+  resolution: "usehooks-ts@npm:2.15.1"
   dependencies:
     lodash.debounce: "npm:^4.0.8"
   peerDependencies:
     react: ^16.8.0  || ^17 || ^18
-  checksum: 5ceaafbed357b08553ce3b97c4286b2f514a642a30a350b7715f672834654b385ea3c7d24d0a9dd82af51c7de86c003944d13b4b22542a814a2f733745cbe530
+  checksum: aa7f68e809779834a3a65b8b4848bb9fa899dfcef908fb9d8c3d28bf0b5a73c6599945a62dbc7af8cf733bbeeb0b4a6ba910b9a1572bda88abd9907effba7940
   languageName: node
   linkType: hard
 
