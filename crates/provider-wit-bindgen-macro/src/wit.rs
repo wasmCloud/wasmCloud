@@ -411,10 +411,16 @@ impl WitFunctionLatticeTranslationStrategy {
             trait_method.sig.ident.span(),
         );
 
+        // Convert the iface path into an upper camel case representation, for future conversions to use
+        let wit_iface_upper_camel = wit_iface_path
+            .split('.')
+            .map(|v| v.to_upper_camel_case())
+            .collect::<String>();
+
         match self {
             WitFunctionLatticeTranslationStrategy::Auto => match trait_method.sig.inputs.len() {
                 0 | 1 => Self::translate_export_fn_via_first_arg(
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -422,7 +428,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 ),
                 _ => Self::translate_export_fn_via_bundled_args(
                     bindgen_cfg,
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -431,7 +437,7 @@ impl WitFunctionLatticeTranslationStrategy {
             },
             WitFunctionLatticeTranslationStrategy::FirstArgument => {
                 Self::translate_export_fn_via_first_arg(
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -441,7 +447,7 @@ impl WitFunctionLatticeTranslationStrategy {
             WitFunctionLatticeTranslationStrategy::BundleArguments => {
                 Self::translate_export_fn_via_bundled_args(
                     bindgen_cfg,
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -454,7 +460,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Translate a function for use on the lattice via the first argument.
     /// Functions that cannot be translated properly via this method will fail.
     pub(crate) fn translate_export_fn_via_first_arg(
-        wit_iface_path: WitInterfacePath,
+        wit_iface_upper_camel: String,
         lattice_method_name: LitStr,
         trait_method: &ImplItemFn,
         _struct_lookup: &StructLookup,
@@ -470,7 +476,7 @@ impl WitFunctionLatticeTranslationStrategy {
         // If there are no arguments, then we can add a lattice method with nothing:
         if trait_method.sig.inputs.is_empty() {
             return Ok((
-                wit_iface_path.to_string().to_upper_camel_case(),
+                wit_iface_upper_camel,
                 LatticeMethod {
                     lattice_method_name,
                     type_name: None,
@@ -493,7 +499,7 @@ impl WitFunctionLatticeTranslationStrategy {
         let (arg_name, type_name) = process_fn_arg(first_arg)?;
 
         Ok((
-            wit_iface_path.to_string().to_upper_camel_case(),
+            wit_iface_upper_camel,
             LatticeMethod {
                 lattice_method_name,
                 type_name: Some(type_name),
@@ -509,7 +515,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Functions that cannot be translated properly via this method will fail.
     pub(crate) fn translate_export_fn_via_bundled_args(
         bindgen_cfg: &ProviderBindgenConfig,
-        wit_iface_name: WitInterfacePath,
+        wit_iface_upper_camel: String,
         lattice_method_name: LitStr,
         trait_method: &ImplItemFn,
         struct_lookup: &StructLookup,
@@ -520,7 +526,7 @@ impl WitFunctionLatticeTranslationStrategy {
         // (ex. MessagingConsumerRequestMultiInvocation)
         let struct_name = format_ident!(
             "{}{}Invocation",
-            wit_iface_name.to_upper_camel_case(),
+            wit_iface_upper_camel,
             trait_method.sig.ident.to_string().to_upper_camel_case()
         );
 
@@ -567,7 +573,7 @@ impl WitFunctionLatticeTranslationStrategy {
             });
 
         Ok((
-            wit_iface_name.to_string().to_upper_camel_case(),
+            wit_iface_upper_camel,
             LatticeMethod {
                 lattice_method_name,
                 type_name: Some(struct_name.to_token_stream()),
