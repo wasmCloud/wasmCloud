@@ -559,7 +559,7 @@
 //         };
 
 //         client
-//             .advertise_link(
+//             .put_link(
 //                 &req.link.actor_id,
 //                 &req.link.provider_id,
 //                 &req.link.contract_id,
