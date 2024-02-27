@@ -20,7 +20,7 @@ pub struct StartProviderArgs<'a> {
     pub lattice: &'a str,
     pub host_key: &'a KeyPair,
     pub provider_key: &'a KeyPair,
-    pub link_name: &'a str,
+    pub provider_id: &'a str,
     pub url: &'a Url,
     pub configuration: Option<String>,
 }
@@ -46,7 +46,7 @@ pub async fn assert_start_provider(
         lattice,
         host_key,
         provider_key,
-        link_name,
+        provider_id,
         url,
         configuration,
     }: StartProviderArgs<'_>,
@@ -56,7 +56,7 @@ pub async fn assert_start_provider(
         .start_provider(
             &host_key.public_key(),
             url.as_ref(),
-            Some(link_name.to_string()),
+            provider_id,
             None,
             configuration,
         )
@@ -72,7 +72,7 @@ pub async fn assert_start_provider(
                 "wasmbus.rpc.{}.{}.{}.health",
                 lattice,
                 provider_key.public_key(),
-                link_name,
+                "default",
             ),
             "".into(),
         ))

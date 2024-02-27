@@ -37,6 +37,7 @@ pub async fn assert_start_actor(
     ctl_client: impl Into<&WasmCloudCtlClient>,
     host_key: impl AsRef<KeyPair>,
     url: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
     count: u32,
 ) -> Result<()> {
     let ctl_client = ctl_client.into();
@@ -49,7 +50,13 @@ pub async fn assert_start_actor(
     let host_key = host_key.as_ref();
 
     let CtlOperationAck { accepted, error } = ctl_client
-        .scale_actor(&host_key.public_key(), url.as_ref(), count, None)
+        .scale_actor(
+            &host_key.public_key(),
+            url.as_ref(),
+            actor_id.as_ref(),
+            count,
+            None,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");
@@ -70,6 +77,7 @@ pub async fn assert_scale_actor(
     ctl_client: impl Into<&WasmCloudCtlClient>,
     host_key: impl AsRef<KeyPair>,
     url: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
     count: u32,
 ) -> anyhow::Result<()> {
@@ -85,7 +93,13 @@ pub async fn assert_scale_actor(
         NonZeroUsize::try_from(NonZeroU32::new(count).context("failed to create nonzero u32")?)
             .context("failed to convert nonzero u32 to nonzero usize")?;
     let CtlOperationAck { accepted, error } = ctl_client
-        .scale_actor(&host_key.public_key(), url.as_ref(), count, annotations)
+        .scale_actor(
+            &host_key.public_key(),
+            url.as_ref(),
+            actor_id.as_ref(),
+            count,
+            annotations,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");

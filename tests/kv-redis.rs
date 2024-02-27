@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::{anyhow, Context, Result};
 use nkeys::KeyPair;
 use tokio::try_join;
@@ -22,8 +20,8 @@ const LATTICE: &str = "test-kv-redis";
 #[tokio::test(flavor = "multi_thread")]
 async fn kv_redis_suite() -> Result<()> {
     // Start a Redis & NATS
-    let redis_token = "test";
-    let ((redis_server, redis_url), (nats_server, nats_url, nats_client)) =
+    let _redis_token = "test";
+    let ((redis_server, _redis_url), (nats_server, nats_url, nats_client)) =
         try_join!(start_redis(), start_nats()).context("failed to start backing services")?;
 
     // Get provider key/url for pre-built kv-redis provider (subject of this test)
@@ -54,14 +52,19 @@ async fn kv_redis_suite() -> Result<()> {
     // to ensure the link is advertised before the actor would normally subscribe
     assert_advertise_link(
         &ctl_client,
-        &kv_http_smithy_claims,
-        &kv_redis_provider_key,
-        "wasmcloud:keyvalue",
+        &kv_http_smithy_claims.subject,
+        &kv_redis_provider_key.public_key(),
         "default",
-        HashMap::from([
-            ("ADDR".into(), redis_url.to_string()),
-            ("TOKEN".into(), redis_token.to_string()),
-        ]),
+        "wasi",
+        "keyvalue",
+        vec!["atomic".to_string(), "eventual".to_string()],
+        vec![],
+        vec![],
+        // TODO: put configuration and reference here.
+        // HashMap::from([
+        //     ("ADDR".into(), redis_url.to_string()),
+        //     ("TOKEN".into(), redis_token.to_string()),
+        // ]),
     )
     .await?;
 
@@ -71,7 +74,7 @@ async fn kv_redis_suite() -> Result<()> {
         lattice: LATTICE,
         host_key: &host.host_key(),
         provider_key: &kv_redis_provider_key,
-        link_name: "default",
+        provider_id: &kv_redis_provider_key.public_key(),
         url: &kv_redis_provider_url,
         configuration: None,
     })
