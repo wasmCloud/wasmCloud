@@ -201,18 +201,7 @@ pub(crate) fn convert_to_owned_type_arg(
                 panic!("unexpectedly missing the first token in FnArg");
             }
 
-            // With a completely unknown type, we should attempt to replace it with a qualified type name
-            match &ts[2] {
-                // If the third token (after the arg name and ':') has a type we know, fill in the qualified name
-                TokenTree::Ident(name) if type_lookup.contains_key(&name.to_string()) => {
-                    let qualified_type = type_lookup.get(&name.to_string()).unwrap().0.to_token_stream();
-                    tokens.append_all(&ts[0..2]);
-                    tokens.append_all(qualified_type);
-                    tokens.append_all(&ts[3..]);
-                }
-                // Ignore types that aren't in some lookup
-                _ => tokens.append_all(ts)
-            }
+            tokens.append_all(ts);
         }
     }
 
