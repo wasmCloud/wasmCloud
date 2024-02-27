@@ -72,24 +72,17 @@ pub fn actor_scale_failed(
 }
 
 pub fn linkdef_set(
-    source_id: impl AsRef<str>,
-    target: impl AsRef<str>,
-    name: impl AsRef<str>,
-    wit_namespace: impl AsRef<str>,
-    wit_package: impl AsRef<str>,
-    interfaces: &Vec<String>,
-    source_config: &Vec<String>,
-    target_config: &Vec<String>,
+    link: &wasmcloud_control_interface::InterfaceLinkDefinition,
 ) -> serde_json::Value {
     json!({
-        "source_id": source_id.as_ref(),
-        "target": target.as_ref(),
-        "name": name.as_ref(),
-        "wit_namespace": wit_namespace.as_ref(),
-        "wit_package": wit_package.as_ref(),
-        "interfaces": interfaces,
-        "source_config": source_config,
-        "target_config": target_config,
+        "source_id": link.source_id,
+        "target": link.target,
+        "name": link.name,
+        "wit_namespace": link.wit_namespace,
+        "wit_package": link.wit_package,
+        "interfaces": link.interfaces,
+        "source_config": link.source_config,
+        "target_config": link.target_config,
     })
 }
 
