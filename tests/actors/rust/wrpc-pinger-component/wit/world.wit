@@ -1,0 +1,7 @@
+package wasmcloud:testing;
+
+world test {
+  import wrpc:testing/pingpong;
+
+  export wrpc:testing/invoke;
+}
