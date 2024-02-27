@@ -710,7 +710,8 @@ impl Bus for Handler {
         let data = conf
             .get(&self.claims.subject)
             .and_then(|conf| conf.get(key))
-            .cloned();
+            .cloned()
+            .map(|val| val.into_bytes());
         Ok(Ok(data))
     }
 
@@ -724,7 +725,11 @@ impl Bus for Handler {
             .await
             .get(&self.claims.subject)
             .cloned()
-            .map(|conf| conf.into_iter().collect::<Vec<_>>())
+            .map(|conf| {
+                conf.into_iter()
+                    .map(|(key, val)| (key, val.into_bytes()))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()))
     }
 
@@ -1113,11 +1118,14 @@ struct Actor {
     metrics: Arc<HostMetrics>,
     // TODO(#1220): implement issuer verification
     /// Cluster issuers that this actor should accept invocations from
+    #[allow(unused)]
     valid_issuers: Vec<String>,
     // TODO(#1548): ensure we are validating actor start and invocations
+    #[allow(unused)]
     policy_manager: Arc<PolicyManager>,
     // TODO: use a single map once Claims is an enum
     // TODO(#1548): make optional
+    #[allow(unused)]
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
 }
 
@@ -1205,7 +1213,7 @@ struct Provider {
     claims: jwt::Claims<jwt::CapabilityProvider>,
 }
 
-type ConfigCache = HashMap<String, HashMap<String, Vec<u8>>>;
+type ConfigCache = HashMap<String, HashMap<String, String>>;
 
 /// wasmCloud Host
 pub struct Host {
@@ -3092,32 +3100,6 @@ impl Host {
         Ok(res.into())
     }
 
-    #[instrument(level = "trace", skip_all)]
-    async fn handle_config_get_one(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
-        trace!(%entity_id, %key, "handling config");
-        let json = match self
-            .config_data_cache
-            .read()
-            .await
-            .get(entity_id)
-            .and_then(|map| map.get(key))
-        {
-            Some(data) => json!({
-                "found": true,
-                "data": data,
-            }),
-            None => {
-                json!({
-                    "found": false,
-                    "data": [],
-                })
-            }
-        };
-        serde_json::to_vec(&json)
-            .map(Bytes::from)
-            .map_err(anyhow::Error::from)
-    }
-
     #[instrument(level = "trace", skip(self))]
     async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Bytes> {
         trace!(%entity_id, "handling all config");
@@ -3368,66 +3350,35 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_config_put(
-        &self,
-        entity_id: &str,
-        key: &str,
-        data: Bytes,
-    ) -> anyhow::Result<Bytes> {
-        debug!(%entity_id, %key, "handle config entry put");
-        // Simple check for a valid entity key. A valid public nkey is 56 chars and it should start
-        // with the proper character. It isn't worth the overhead of actually parsing the key, but
-        // if that is an issue in the future we can ensure it is a fully parsable nkey.
-        if entity_id.len() != 56 || (!entity_id.starts_with('M') && !entity_id.starts_with('V')) {
-            bail!("Invalid entity ID. The entity ID must be a valid public nkey for an actor or provider");
-        }
+    #[instrument(level = "debug", skip_all, fields(%config_name))]
+    async fn handle_config_put(&self, config_name: &str, data: Bytes) -> anyhow::Result<Bytes> {
+        debug!("handle config entry put");
+        // Validate that the data is of the proper type by deserialing it
+        serde_json::from_slice::<HashMap<String, String>>(&data)
+            .context("Config data should be a map of string -> string")?;
         self.config_data
-            .put(format!("{entity_id}_{key}"), data)
+            .put(config_name, data)
             .await
             .context("Unable to store config data")?;
         // We don't write it into the cached data and instead let the caching thread handle it as we
         // won't need it immediately.
-
-        self.publish_event("config_set", event::config_set(entity_id, key))
+        self.publish_event("config_set", event::config_set(config_name))
             .await?;
 
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_config_delete(&self, entity_id: &str, key: &str) -> anyhow::Result<Bytes> {
-        debug!(%entity_id, %key, "handle config entry deletion");
+    #[instrument(level = "debug", skip_all, fields(%config_name))]
+    async fn handle_config_delete(&self, config_name: &str) -> anyhow::Result<Bytes> {
+        debug!("handle config entry deletion");
 
         self.config_data
-            .purge(format!("{entity_id}_{key}"))
+            .purge(config_name)
             .await
             .context("Unable to delete config data")?;
 
-        self.publish_event("config_deleted", event::config_deleted(entity_id, key))
+        self.publish_event("config_deleted", event::config_deleted(config_name))
             .await?;
-
-        Ok(ACCEPTED.into())
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_config_clear(&self, entity_id: &str) -> anyhow::Result<Bytes> {
-        debug!(%entity_id, "handle config clear");
-
-        // NOTE(thomastaylor312): I specifically made the decision not to key the current list of
-        // keys directly from the KV bucket because we'd have to list _all_ keys and then filter
-        // them out. Using the cache lets us get only what we need, at the slight risk of missing a
-        // newly created key
-        let config_cache = self.config_data_cache.read().await;
-        let Some(all_data) = config_cache.get(entity_id) else {
-            return Ok(ACCEPTED.into());
-        };
-        let futs = all_data
-            .keys()
-            .map(|key| self.handle_config_delete(entity_id, key));
-        futures::future::try_join_all(futs)
-            .await
-            .context("Unable to delete all config keys. Some keys may remain")?;
 
         Ok(ACCEPTED.into())
     }
@@ -3532,21 +3483,15 @@ impl Host {
                 self.handle_registries_put(message.payload).await.map(Some)
             }
 
-            (Some("config"), Some("get"), Some(entity_id), Some(key)) => {
-                self.handle_config_get_one(entity_id, key).await.map(Some)
+            (Some("config"), Some("get"), Some(config_name), None) => {
+                self.handle_config_get(config_name).await.map(Some)
             }
-            (Some("config"), Some("get"), Some(entity_id), None) => {
-                self.handle_config_get(entity_id).await.map(Some)
-            }
-            (Some("config"), Some("put"), Some(entity_id), Some(key)) => self
-                .handle_config_put(entity_id, key, message.payload)
+            (Some("config"), Some("put"), Some(config_name), None) => self
+                .handle_config_put(config_name, message.payload)
                 .await
                 .map(Some),
-            (Some("config"), Some("del"), Some(entity_id), Some(key)) => {
-                self.handle_config_delete(entity_id, key).await.map(Some)
-            }
-            (Some("config"), Some("clear"), Some(entity_id), None) => {
-                self.handle_config_clear(entity_id).await.map(Some)
+            (Some("config"), Some("del"), Some(config_name), None) => {
+                self.handle_config_delete(config_name).await.map(Some)
             }
             _ => {
                 warn!(%subject, "received control interface request on unsupported subject");
@@ -3790,25 +3735,20 @@ impl Host {
 
     #[instrument(level = "trace", skip_all, fields(bucket = %entry.bucket, key = %entry.key, revision = %entry.revision, operation = ?entry.operation))]
     async fn process_config_entry(&self, entry: KvEntry) {
-        match (entry.operation, entry.key.split_once('_')) {
-            (Operation::Put, Some((id, key))) => {
-                self.config_data_cache
-                    .write()
-                    .await
-                    .entry(id.to_owned())
-                    .or_default()
-                    .insert(key.to_owned(), Vec::from(entry.value));
+        match entry.operation {
+            Operation::Put => {
+                let data: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
+                    Ok(data) => data,
+                    Err(error) => {
+                        error!(?error, "failed to decode config data on entry update");
+                        return;
+                    }
+                };
+                let mut lock = self.config_data_cache.write().await;
+                lock.insert(entry.key, data);
             }
-            (Operation::Delete | Operation::Purge, Some((id, key))) => {
-                self.config_data_cache
-                    .write()
-                    .await
-                    .entry(id.to_owned())
-                    .or_default()
-                    .remove(key);
-            }
-            (_, None) => {
-                error!(key = %entry.key, "Found key that doesn't match config format");
+            Operation::Delete | Operation::Purge => {
+                self.config_data_cache.write().await.remove(&entry.key);
             }
         }
     }
