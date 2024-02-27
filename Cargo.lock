@@ -5324,6 +5324,9 @@ dependencies = [
  "wasmcloud-host",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
+ "wrpc-transport",
+ "wrpc-transport-nats",
+ "wrpc-types",
 ]
 
 [[package]]

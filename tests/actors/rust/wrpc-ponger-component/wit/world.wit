@@ -1,0 +1,5 @@
+package wasmcloud:testing;
+
+world test {
+  export wrpc:testing/pingpong;
+}
