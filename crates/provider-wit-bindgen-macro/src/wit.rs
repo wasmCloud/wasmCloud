@@ -550,8 +550,12 @@ impl WitFunctionLatticeTranslationStrategy {
                     ))]);
                 }
 
-                // Match on a single input argument in the function signature,
-                // converting known types to ones that can be used as invocation struct members.
+                // For the current input argument in the function signature,
+                // convert known types to ones that can be used as invocation struct members.
+                //
+                // i.e. given some `record type {...}` defined in WIT, a Rust `struct Type {...}` will be produced.
+                // if we see some::path::to::Type, we should replace it with Type, because all of those types have been
+                // extracted, raised and put at the top level by our bindgen
                 let (arg_name, owned_type_tokens) = convert_to_owned_type_arg(
                     struct_lookup,
                     type_lookup,
@@ -559,12 +563,10 @@ impl WitFunctionLatticeTranslationStrategy {
                     bindgen_cfg.replace_witified_maps,
                 );
 
-                // Raw arg_names are produced
-                //
-                // TODO: is this a bug???
-                if arg_name.to_string().ends_with("_map") {
-                    invocation_arg_names.push(arg_name);
-                }
+                // Add the invocation argument name to the list,
+                // so that when we convert this LatticeMethod into an exported function
+                // we can re-create the arguments as if they were never bundled into a struct.
+                invocation_arg_names.push(arg_name);
 
                 // Add the generated `FnArg` tokens
                 tokens.extend(owned_type_tokens);
