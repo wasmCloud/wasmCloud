@@ -94,7 +94,9 @@ pub async fn assert_scale_actor(
     let expected_count =
         NonZeroUsize::try_from(NonZeroU32::new(count).context("failed to create nonzero u32")?)
             .context("failed to convert nonzero u32 to nonzero usize")?;
-    let CtlResponse { success, message, ..} = ctl_client
+    let CtlResponse {
+        success, message, ..
+    } = ctl_client
         .scale_actor(
             &host_key.public_key(),
             url.as_ref(),
