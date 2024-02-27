@@ -61,3 +61,12 @@ pub const RUST_MESSAGING_RECEIVER_SMITHY_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-messaging-receiver-smithy.signed.wasm"
 );
+
+pub const RUST_WRPC_PINGER_COMPONENT: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-wrpc-pinger-component-preview2.signed.wasm"
+);
+pub const RUST_WRPC_PONGER_COMPONENT: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-wrpc-ponger-component-preview2.signed.wasm"
+);
