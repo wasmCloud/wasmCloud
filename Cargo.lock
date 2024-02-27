@@ -5326,6 +5326,7 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-interface-http",
  "wrpc-transport",
+ "wrpc-transport-derive",
  "wrpc-transport-nats",
  "wrpc-types",
 ]
@@ -6559,6 +6560,34 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wrpc-types",
+]
+
+[[package]]
+name = "wrpc-transport-derive"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.50",
+ "tokio",
+ "wrpc-transport",
+ "wrpc-transport-derive-macro",
+]
+
+[[package]]
+name = "wrpc-transport-derive-macro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.50",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
