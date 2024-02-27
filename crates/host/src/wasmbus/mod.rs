@@ -42,11 +42,10 @@ use wasmcloud_tracing::{global, KeyValue};
 pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorAuctionRequest, ActorDescription, GetClaimsResponse, HostInventory,
-    HostLabel, InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest,
-    ProviderDescription, RegistryCredential, RemoveInterfaceLinkDefinitionRequest,
-    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand, WitInterface,
+    ActorAuctionAck, ActorAuctionRequest, ActorDescription, DeleteInterfaceLinkDefinitionRequest,
+    GetClaimsResponse, HostInventory, HostLabel, InterfaceLinkDefinition, ProviderAuctionAck,
+    ProviderAuctionRequest, ProviderDescription, RegistryCredential, ScaleActorCommand,
+    StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
@@ -2173,7 +2172,6 @@ impl Host {
         actor_ref: String,
         actor_id: String,
         max_instances: NonZeroUsize,
-        host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
         debug!(actor_ref, ?max_instances, "starting new actor");
@@ -2253,7 +2251,13 @@ impl Host {
         info!(actor_ref, "actor started");
         self.publish_event(
             "actor_scaled",
-            event::actor_scaled(claims, &annotations, host_id, max_instances, &actor_ref),
+            event::actor_scaled(
+                claims,
+                &annotations,
+                &self.host_key.public_key(),
+                max_instances,
+                &actor_ref,
+            ),
         )
         .await?;
 
@@ -2488,7 +2492,6 @@ impl Host {
                         actor_ref.clone(),
                         actor_id.to_string(),
                         max,
-                        host_id,
                         annotations.clone(),
                     )
                     .await
@@ -3160,8 +3163,8 @@ impl Host {
             wit_package,
             interfaces,
             name,
-            source_config,
-            target_config,
+            source_config: _,
+            target_config: _,
         } = interface_link_definition.clone();
 
         let actors = self.actors.read().await;
@@ -3212,6 +3215,8 @@ impl Host {
         let spec = actor.component_specification().await;
         self.store_component_spec(&source_id, &spec).await?;
 
+        let set_event = event::linkdef_set(&interface_link_definition);
+
         // Insert link into host map
         self.links
             .write()
@@ -3222,20 +3227,7 @@ impl Host {
             })
             .or_insert(HashSet::from_iter([interface_link_definition]));
 
-        self.publish_event(
-            "linkdef_set",
-            event::linkdef_set(
-                source_id,
-                target,
-                name,
-                wit_namespace,
-                wit_package,
-                &interfaces,
-                &source_config,
-                &target_config,
-            ),
-        )
-        .await?;
+        self.publish_event("linkdef_set", set_event).await?;
         // TODO(#1548): When providers can handle interface links, tell them to set the link.
         // Alternatively, send them configuration cc @thomastaylor312
         // self.rpc_nats
@@ -3254,7 +3246,7 @@ impl Host {
     /// Remove an interface link on a source component for a specific package
     async fn handle_interface_link_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
-        let RemoveInterfaceLinkDefinitionRequest {
+        let DeleteInterfaceLinkDefinitionRequest {
             source_id,
             wit_namespace,
             wit_package,
