@@ -42,10 +42,11 @@ use wasmcloud_tracing::{global, KeyValue};
 pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorAuctionRequest, ActorDescription, DeleteInterfaceLinkDefinitionRequest,
-    GetClaimsResponse, HostInventory, HostLabel, InterfaceLinkDefinition, ProviderAuctionAck,
-    ProviderAuctionRequest, ProviderDescription, RegistryCredential, ScaleActorCommand,
-    StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateActorCommand, WitInterface,
+    ActorAuctionAck, ActorAuctionRequest, ActorDescription, CtlResponse,
+    DeleteInterfaceLinkDefinitionRequest, GetClaimsResponse, HostInventory, HostLabel,
+    InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription,
+    RegistryCredential, ScaleActorCommand, StartProviderCommand, StopHostCommand,
+    StopProviderCommand, UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
@@ -72,7 +73,6 @@ pub mod config;
 
 mod event;
 
-const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
 const WRPC: &str = "wrpc";
 const WRPC_VERSION: &str = "0.0.1";
 
@@ -2290,7 +2290,7 @@ impl Host {
     async fn handle_auction_actor(
         &self,
         payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<Option<Bytes>> {
+    ) -> anyhow::Result<Option<CtlResponse<ActorAuctionAck>>> {
         let ActorAuctionRequest {
             actor_ref,
             actor_id,
@@ -2313,14 +2313,12 @@ impl Host {
 
         // This host can run the actor if all constraints are satisfied and the actor is not already running
         if constraints_satisfied && !actor_id_running {
-            let buf = serde_json::to_vec(&ActorAuctionAck {
+            Ok(Some(CtlResponse::ok(ActorAuctionAck {
                 actor_ref,
                 actor_id,
                 constraints,
                 host_id: self.host_key.public_key(),
-            })
-            .context("failed to encode reply")?;
-            Ok(Some(buf.into()))
+            })))
         } else {
             Ok(None)
         }
@@ -2330,7 +2328,7 @@ impl Host {
     async fn handle_auction_provider(
         &self,
         payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<Option<Bytes>> {
+    ) -> anyhow::Result<Option<CtlResponse<ProviderAuctionAck>>> {
         let ProviderAuctionRequest {
             provider_ref,
             provider_id,
@@ -2352,14 +2350,12 @@ impl Host {
         let providers = self.providers.read().await;
         let provider_running = providers.contains_key(&provider_id);
         if constraints_satisfied && !provider_running {
-            let buf = serde_json::to_vec(&ProviderAuctionAck {
+            Ok(Some(CtlResponse::ok(ProviderAuctionAck {
                 provider_ref,
                 provider_id,
                 constraints,
                 host_id: self.host_key.public_key(),
-            })
-            .context("failed to encode reply")?;
-            Ok(Some(buf.into()))
+            })))
         } else {
             Ok(None)
         }
@@ -2392,11 +2388,11 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
         _host_id: &str,
-    ) -> anyhow::Result<Bytes> {
+    ) -> anyhow::Result<CtlResponse<()>> {
         let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize stop command")?;
 
-        debug!(?timeout, "handling stop host");
+        info!(?timeout, "handling stop host");
 
         self.heartbeat.abort();
         self.data_watch.abort();
@@ -2406,7 +2402,7 @@ impl Host {
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2414,7 +2410,7 @@ impl Host {
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
+    ) -> anyhow::Result<CtlResponse<()>> {
         let ScaleActorCommand {
             actor_ref,
             actor_id,
@@ -2442,7 +2438,7 @@ impl Host {
                 error!(%actor_ref, %actor_id, err = ?e, "failed to scale actor");
             }
         });
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2602,7 +2598,7 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
+    ) -> anyhow::Result<CtlResponse<()>> {
         let UpdateActorCommand {
             actor_id,
             annotations,
@@ -2674,7 +2670,7 @@ impl Host {
 
         self.actors.write().await.insert(actor_id, new_actor);
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2957,7 +2953,7 @@ impl Host {
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
+    ) -> anyhow::Result<CtlResponse<()>> {
         let StartProviderCommand {
             configuration,
             provider_id,
@@ -2968,9 +2964,9 @@ impl Host {
             .context("failed to deserialize provider start command")?;
 
         if self.providers.read().await.contains_key(&provider_id) {
-            return Ok(
-                r#"{"accepted":false,"error":"provider with that ID is already running"}"#.into(),
-            );
+            return Ok(CtlResponse::error(
+                "provider with that ID is already running",
+            ));
         }
 
         info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
@@ -2999,7 +2995,7 @@ impl Host {
                 }
             }
         });
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3007,7 +3003,7 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
+    ) -> anyhow::Result<CtlResponse<()>> {
         let StopProviderCommand { provider_id, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider stop command")?;
 
@@ -3019,9 +3015,7 @@ impl Host {
                 provider_id,
                 "received request to stop provider that is not running"
             );
-            return Ok(
-                r#"{"accepted":false,"error":"provider with that ID is not running"}"#.into(),
-            );
+            return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
             child,
@@ -3062,19 +3056,18 @@ impl Host {
             event::provider_stopped(&claims, &annotations, host_id, provider_id, "stop"),
         )
         .await?;
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_inventory(&self) -> anyhow::Result<Bytes> {
+    async fn handle_inventory(&self) -> anyhow::Result<CtlResponse<HostInventory>> {
         trace!("handling inventory");
         let inventory = self.inventory().await;
-        let buf = serde_json::to_vec(&inventory).context("failed to encode inventory")?;
-        Ok(buf.into())
+        Ok(CtlResponse::ok(inventory))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_claims(&self) -> anyhow::Result<Bytes> {
+    async fn handle_claims(&self) -> anyhow::Result<CtlResponse<GetClaimsResponse>> {
         trace!("handling claims");
 
         let (actor_claims, provider_claims) =
@@ -3086,42 +3079,40 @@ impl Host {
             .flat_map(TryFrom::try_from)
             .collect();
 
-        let res = serde_json::to_vec(&GetClaimsResponse {
+        Ok(CtlResponse::ok(GetClaimsResponse {
             claims: claims.into_iter().map(std::convert::Into::into).collect(),
-        })
-        .context("failed to serialize response")?;
-        Ok(res.into())
+        }))
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_links(&self) -> anyhow::Result<Bytes> {
+    async fn handle_links(&self) -> anyhow::Result<Vec<u8>> {
         debug!("handling links");
 
         let links = self.links.read().await;
         let links: Vec<&InterfaceLinkDefinition> = links.values().flatten().collect();
-        let res = serde_json::to_vec(&links).context("failed to serialize response")?;
-        Ok(res.into())
+        let res =
+            serde_json::to_vec(&CtlResponse::ok(links)).context("failed to serialize response")?;
+        Ok(res)
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Bytes> {
+    async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Vec<u8>> {
         trace!(%entity_id, "handling all config");
         self.config_data_cache
             .read()
             .await
             .get(entity_id)
             .map_or_else(
-                || Ok(Bytes::default()),
-                |data| {
-                    serde_json::to_vec(data)
-                        .map(Bytes::from)
+                || {
+                    serde_json::to_vec(&CtlResponse::error("config not found"))
                         .map_err(anyhow::Error::from)
                 },
+                |data| serde_json::to_vec(&CtlResponse::ok(data)).map_err(anyhow::Error::from),
             )
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_label_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_label_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let HostLabel { key, value } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize put label request")?;
         let mut labels = self.labels.write().await;
@@ -3135,11 +3126,11 @@ impl Host {
                 entry.insert(value);
             }
         }
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_label_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_label_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let HostLabel { key, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize delete label request")?;
         let mut labels = self.labels.write().await;
@@ -3148,11 +3139,14 @@ impl Host {
         } else {
             warn!(key, "could not remove unset label");
         }
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_interface_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_interface_link_put(
+        &self,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
         let interface_link_definition: InterfaceLinkDefinition = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
@@ -3172,7 +3166,7 @@ impl Host {
         // TODO(#1548): When providers can handle interface links, don't just assume actors for links.
         let Ok(actor) = actors.get(&source_id).context("actor not found") else {
             tracing::error!(source_id, "no actor found for the unique id");
-            return Ok(r#"{"accepted":false,"error":"no actor found for that ID"}"#.into());
+            return Ok(CtlResponse::error("no actor found for that ID"));
         };
 
         let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
@@ -3239,12 +3233,15 @@ impl Host {
         // .await
         // .context("failed to publish link definition set")?;
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
     /// Remove an interface link on a source component for a specific package
-    async fn handle_interface_link_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_interface_link_del(
+        &self,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
         let DeleteInterfaceLinkDefinitionRequest {
             source_id,
@@ -3257,7 +3254,7 @@ impl Host {
         let actors = self.actors.read().await;
 
         let Ok(actor) = actors.get(&source_id).context("actor not found") else {
-            return Ok(r#"{"accepted":true,"error":""}"#.into());
+            return Ok(CtlResponse::success());
         };
 
         let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
@@ -3311,11 +3308,14 @@ impl Host {
         // .await
         // .context("failed to publish link definition deletion")?;
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_registries_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_registries_put(
+        &self,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<()>> {
         let registry_creds: HashMap<String, RegistryCredential> =
             serde_json::from_slice(payload.as_ref())
                 .context("failed to deserialize registries put command")?;
@@ -3339,11 +3339,15 @@ impl Host {
             }
         }
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all, fields(%config_name))]
-    async fn handle_config_put(&self, config_name: &str, data: Bytes) -> anyhow::Result<Bytes> {
+    async fn handle_config_put(
+        &self,
+        config_name: &str,
+        data: Bytes,
+    ) -> anyhow::Result<CtlResponse<()>> {
         debug!("handle config entry put");
         // Validate that the data is of the proper type by deserialing it
         serde_json::from_slice::<HashMap<String, String>>(&data)
@@ -3357,11 +3361,11 @@ impl Host {
         self.publish_event("config_set", event::config_set(config_name))
             .await?;
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all, fields(%config_name))]
-    async fn handle_config_delete(&self, config_name: &str) -> anyhow::Result<Bytes> {
+    async fn handle_config_delete(&self, config_name: &str) -> anyhow::Result<CtlResponse<()>> {
         debug!("handle config entry deletion");
 
         self.config_data
@@ -3372,32 +3376,31 @@ impl Host {
         self.publish_event("config_deleted", event::config_deleted(config_name))
             .await?;
 
-        Ok(ACCEPTED.into())
+        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    async fn handle_ping_hosts(
+        &self,
+        _payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<wasmcloud_control_interface::Host>> {
         trace!("replying to ping");
         let uptime = self.start_at.elapsed();
         let cluster_issuers = self.cluster_issuers.clone().join(",");
 
-        let buf = serde_json::to_vec(&json!({
-          "id": self.host_key.public_key(),
-          "issuer": self.cluster_key.public_key(),
-          "labels": *self.labels.read().await,
-          "friendly_name": self.friendly_name,
-          "uptime_seconds": uptime.as_secs(),
-          "uptime_human": human_friendly_uptime(uptime),
-          "version": env!("CARGO_PKG_VERSION"),
-          "cluster_issuers": cluster_issuers,
-          "js_domain": self.host_config.js_domain,
-          "ctl_host": self.host_config.ctl_nats_url.to_string(),
-          "rpc_host": self.host_config.rpc_nats_url.to_string(),
-          "lattice_prefix": self.host_config.lattice, // TODO(pre-1.0): remove me once all clients are updated to control interface v0.33
-          "lattice": self.host_config.lattice,
+        Ok(CtlResponse::ok(wasmcloud_control_interface::Host {
+            id: self.host_key.public_key(),
+            labels: self.labels.read().await.clone(),
+            friendly_name: self.friendly_name.clone(),
+            uptime_seconds: uptime.as_secs(),
+            uptime_human: Some(human_friendly_uptime(uptime)),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            cluster_issuers: Some(cluster_issuers),
+            js_domain: self.host_config.js_domain.clone(),
+            ctl_host: Some(self.host_config.ctl_nats_url.to_string()),
+            rpc_host: Some(self.host_config.rpc_nats_url.to_string()),
+            lattice: self.host_config.lattice.clone(),
         }))
-        .context("failed to encode reply")?;
-        Ok(buf.into())
     }
 
     #[instrument(level = "trace", skip_all, fields(subject = %message.subject))]
@@ -3417,83 +3420,124 @@ impl Host {
             .skip(1);
         trace!(%subject, "handling control interface request");
 
-        let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
-            (Some("actor"), Some("auction"), None, None) => {
-                self.handle_auction_actor(message.payload).await
-            }
+        // This response is a wrapped Result<Option<Result<Vec<u8>>>> for a good reason.
+        // The outer Result is for reporting protocol errors in handling the request, e.g. failing to
+        //    deserialize the request payload.
+        // The Option is for the case where the request is handled successfully, but the handler
+        //    doesn't want to send a response back to the client, like with an auction.
+        // The inner Result is purely for the success or failure of serializing the [CtlResponse], which
+        //    should never fail but it's a result we must handle.
+        // And finally, the Vec<u8> is the serialized [CtlResponse] that we'll send back to the client
+        let ctl_response = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            // Actor commands
+            (Some("actor"), Some("auction"), None, None) => self
+                .handle_auction_actor(message.payload)
+                .await
+                .map(serialize_ctl_response),
             (Some("actor"), Some("scale"), Some(host_id), None) => Arc::clone(&self)
                 .handle_scale_actor(message.payload, host_id)
                 .await
-                .map(Some),
+                .map(Some)
+                .map(serialize_ctl_response),
             (Some("actor"), Some("update"), Some(host_id), None) => self
                 .handle_update_actor(message.payload, host_id)
                 .await
-                .map(Some),
-            (Some("provider"), Some("stop"), Some(host_id), None) => self
-                .handle_stop_provider(message.payload, host_id)
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Provider commands
+            (Some("provider"), Some("auction"), None, None) => self
+                .handle_auction_provider(message.payload)
                 .await
-                .map(Some),
-            (Some("provider"), Some("auction"), None, None) => {
-                self.handle_auction_provider(message.payload).await
-            }
+                .map(serialize_ctl_response),
             (Some("provider"), Some("start"), Some(host_id), None) => Arc::clone(&self)
                 .handle_start_provider(message.payload, host_id)
                 .await
-                .map(Some),
-
+                .map(Some)
+                .map(serialize_ctl_response),
+            (Some("provider"), Some("stop"), Some(host_id), None) => self
+                .handle_stop_provider(message.payload, host_id)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Host commands
+            (Some("host"), Some("get"), Some(_host_id), None) => self
+                .handle_inventory()
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            (Some("host"), Some("ping"), None, None) => self
+                .handle_ping_hosts(message.payload)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
             (Some("host"), Some("stop"), Some(host_id), None) => self
                 .handle_stop_host(message.payload, host_id)
                 .await
-                .map(Some),
-            (Some("host"), Some("get"), Some(_host_id), None) => {
-                self.handle_inventory().await.map(Some)
-            }
-            (Some("host"), Some("ping"), None, None) => {
-                self.handle_ping_hosts(message.payload).await.map(Some)
-            }
-
-            (Some("claims"), Some("get"), None, None) => self.handle_claims().await.map(Some),
-
-            (Some("link"), Some("get"), None, None) => self.handle_links().await.map(Some),
-            (Some("link"), Some("put"), None, None) => self
-                .handle_interface_link_put(message.payload)
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Claims commands
+            (Some("claims"), Some("get"), None, None) => self
+                .handle_claims()
                 .await
-                .map(Some),
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Link commands
             (Some("link"), Some("del"), None, None) => self
                 .handle_interface_link_del(message.payload)
                 .await
-                .map(Some),
-
-            (Some("label"), Some("del"), Some(_host_id), None) => {
-                self.handle_label_del(message.payload).await.map(Some)
+                .map(Some)
+                .map(serialize_ctl_response),
+            (Some("link"), Some("get"), None, None) => {
+                // Explicitly returning a Vec<u8> for non-cloning efficiency within handle_links
+                self.handle_links().await.map(|bytes| Some(Ok(bytes)))
             }
-            (Some("label"), Some("put"), Some(_host_id), None) => {
-                self.handle_label_put(message.payload).await.map(Some)
-            }
-
-            (Some("registry"), Some("put"), None, None) => {
-                self.handle_registries_put(message.payload).await.map(Some)
-            }
-
-            (Some("config"), Some("get"), Some(config_name), None) => {
-                self.handle_config_get(config_name).await.map(Some)
-            }
+            (Some("link"), Some("put"), None, None) => self
+                .handle_interface_link_put(message.payload)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Label commands
+            (Some("label"), Some("del"), Some(_host_id), None) => self
+                .handle_label_del(message.payload)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            (Some("label"), Some("put"), Some(_host_id), None) => self
+                .handle_label_put(message.payload)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Registry commands
+            (Some("registry"), Some("put"), None, None) => self
+                .handle_registries_put(message.payload)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Config commands
+            (Some("config"), Some("get"), Some(config_name), None) => self
+                .handle_config_get(config_name)
+                .await
+                .map(|bytes| Some(Ok(bytes))),
             (Some("config"), Some("put"), Some(config_name), None) => self
                 .handle_config_put(config_name, message.payload)
                 .await
-                .map(Some),
-            (Some("config"), Some("del"), Some(config_name), None) => {
-                self.handle_config_delete(config_name).await.map(Some)
-            }
+                .map(Some)
+                .map(serialize_ctl_response),
+            (Some("config"), Some("del"), Some(config_name), None) => self
+                .handle_config_delete(config_name)
+                .await
+                .map(Some)
+                .map(serialize_ctl_response),
+            // Topic fallback
             _ => {
                 warn!(%subject, "received control interface request on unsupported subject");
-                Ok(Some(
-                    r#"{"accepted":false,"error":"unsupported subject"}"#.to_string().into(),
-                ))
+                Ok(serialize_ctl_response(Some(CtlResponse::error(
+                    "unsupported subject",
+                ))))
             }
         };
 
-        if let Err(err) = &res {
+        if let Err(err) = &ctl_response {
             error!(%subject, ?err, "failed to handle control interface request");
         } else {
             trace!(%subject, "handled control interface request");
@@ -3502,13 +3546,26 @@ impl Host {
         if let Some(reply) = message.reply {
             let headers = injector_to_headers(&TraceContextInjector::default_with_span());
 
-            let payload = match res {
-                Ok(Some(payload)) => Some(payload),
-                Ok(None) => {
-                    // No response from the host (e.g. auctioning provider)
-                    None
-                }
-                Err(e) => Some(format!(r#"{{"accepted":false,"error":"{e}"}}"#).into()),
+            let payload = match ctl_response {
+                Ok(Some(Ok(payload))) => Some(payload.into()),
+                // No response from the host (e.g. auctioning provider)
+                Ok(None) => None,
+                Err(e) => Some(
+                    serde_json::to_vec(&CtlResponse::error(&e.to_string()))
+                        .context("failed to encode control interface response")
+                        // This should never fail to serialize, but the fallback ensures that we send
+                        // something back to the client even if we somehow fail.
+                        .unwrap_or_else(|_| format!(r#"{{"success":false,"error":"{e}"}}"#).into())
+                        .into(),
+                ),
+                // This would only occur if we failed to serialize a valid CtlResponse. This is
+                // programmer error.
+                Ok(Some(Err(e))) => Some(
+                    serde_json::to_vec(&CtlResponse::error(&e.to_string()))
+                        .context("failed to encode control interface response")
+                        .unwrap_or_else(|_| format!(r#"{{"success":false,"error":"{e}"}}"#).into())
+                        .into(),
+                ),
             };
 
             if let Some(payload) = payload {
@@ -3744,6 +3801,13 @@ impl Host {
             }
         }
     }
+}
+
+/// Helper function to serialize CtlResponse<T> into a Vec<u8> if the response is Some
+fn serialize_ctl_response<T: Serialize>(
+    ctl_response: Option<CtlResponse<T>>,
+) -> Option<anyhow::Result<Vec<u8>>> {
+    ctl_response.map(|resp| serde_json::to_vec(&resp).map_err(anyhow::Error::from))
 }
 
 // TODO: remove StoredClaims in #1093
