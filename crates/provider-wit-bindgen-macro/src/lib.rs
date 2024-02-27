@@ -115,9 +115,9 @@ struct LatticeMethod {
 /// This macro generates functionality necessary to use a WIT-enabled Rust providers (binaries that are managed by the host)
 #[proc_macro]
 pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .init();
+        .try_init();
 
     // Parse the provider bindgen macro configuration
     let cfg = parse_macro_input!(input as ProviderBindgenConfig);
