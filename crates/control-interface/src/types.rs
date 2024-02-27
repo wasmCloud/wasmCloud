@@ -280,7 +280,7 @@ impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
 /// A request to remove a link definition and detach the relevant actor
 /// from the given provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveInterfaceLinkDefinitionRequest {
+pub struct DeleteInterfaceLinkDefinitionRequest {
     /// The source component's identifier.
     pub source_id: ComponentId,
     /// Name of the link. Not providing this is equivalent to specifying Some("default")
