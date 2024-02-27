@@ -74,6 +74,9 @@ vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
+wrpc-transport = { workspace = true }
+wrpc-transport-nats = { workspace = true }
+wrpc-types = { workspace = true }
 
 [workspace]
 members = ["crates/*"]

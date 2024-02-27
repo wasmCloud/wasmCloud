@@ -110,7 +110,7 @@ pub async fn assert_scale_actor(
                 let (_,_, Some(event_data)) = event.context("failed to get event")?.take_data() else {
                     bail!("failed to take data");
                 };
-                let ase: ActorScaledEvent  = serde_json::from_value(TryInto::<serde_json::Value>::try_into(event_data).context("failed to parse event into JSON value")?).context("failed to convert value to")?;
+                let ase: ActorScaledEvent = serde_json::from_value(TryInto::<serde_json::Value>::try_into(event_data).context("failed to parse event into JSON value")?).context("failed to convert value to")?;
                 assert_eq!(ase.max_instances, expected_count);
         }
         _ = tokio::time::sleep(Duration::from_secs(10)) => {

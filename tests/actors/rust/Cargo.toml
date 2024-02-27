@@ -7,6 +7,8 @@ members = [
     "lattice-control-http-smithy",
     "messaging-receiver-smithy",
     "messaging-sender-http-smithy",
+    "wrpc-pinger-component",
+    "wrpc-ponger-component",
 ]
 resolver = "2"
 
