@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::fs;
 
 use wascap::{jwt, wasm::extract_claims};
-use wasmcloud_control_interface::{Client as WasmCloudCtlClient, CtlOperationAck};
+use wasmcloud_control_interface::{Client as WasmCloudCtlClient, CtlResponse};
 
 /// This is a *partial* struct for the ActorScaled event, which normally consists of more fields
 #[derive(Deserialize)]
@@ -49,7 +49,9 @@ pub async fn assert_start_actor(
 
     let host_key = host_key.as_ref();
 
-    let CtlOperationAck { accepted, error } = ctl_client
+    let CtlResponse {
+        success, message, ..
+    } = ctl_client
         .scale_actor(
             &host_key.public_key(),
             url.as_ref(),
@@ -59,8 +61,8 @@ pub async fn assert_start_actor(
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    ensure!(message == "");
+    ensure!(success);
 
     tokio::select! {
         _ = receiver.recv() => {},
@@ -92,7 +94,7 @@ pub async fn assert_scale_actor(
     let expected_count =
         NonZeroUsize::try_from(NonZeroU32::new(count).context("failed to create nonzero u32")?)
             .context("failed to convert nonzero u32 to nonzero usize")?;
-    let CtlOperationAck { accepted, error } = ctl_client
+    let CtlResponse { success, message, ..} = ctl_client
         .scale_actor(
             &host_key.public_key(),
             url.as_ref(),
@@ -102,8 +104,8 @@ pub async fn assert_scale_actor(
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    ensure!(message == "");
+    ensure!(success);
 
     tokio::select! {
         event = receiver.recv() => {
