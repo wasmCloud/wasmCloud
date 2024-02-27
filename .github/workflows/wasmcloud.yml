@@ -2,8 +2,6 @@ name: wasmCloud
 
 on:
   pull_request:
-    paths-ignore:
-      - washboard-ui/**
   merge_group:
   workflow_dispatch:
   push:

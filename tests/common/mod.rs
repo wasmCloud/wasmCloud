@@ -210,11 +210,10 @@ pub async fn assert_remove_link(
 pub async fn assert_config_put(
     client: &wasmcloud_control_interface::Client,
     actor_claims: &jwt::Claims<jwt::Actor>,
-    key: &str,
-    value: impl Into<Vec<u8>>,
+    data: impl Into<HashMap<String, String>>,
 ) -> Result<()> {
     client
-        .put_config(&actor_claims.subject, key, value)
+        .put_config(&actor_claims.subject, data)
         .await
         .map(|_| ())
         .map_err(|e| anyhow!(e).context("failed to put config"))

@@ -455,6 +455,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                     ty: ref mut item_ty,
                     ..
                 } = cloned_t;
+
                 // If the type that we're about to process has `super::`s attached, we need to translate those
                 // to the actual types they *should* be, which are likely hanging off the crate or some other
                 // dep like `wasmtime` (ex. `wasmtime::component::Resource`)
@@ -697,9 +698,12 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // this is used later to generate interfaces, when generating interfaces, as a import path lookup
                     // so that types can be resolved (i.e. T -> path::to::T)
                     let mut struct_import_path = Punctuated::<syn::PathSegment, Token![::]>::new();
+
+                    // Add all parents until this point to the internal struct's name
                     for p in self.parents.iter() {
                         struct_import_path.push(syn::PathSegment::from(p.clone()));
                     }
+                    // Add the struct name itself
                     struct_import_path.push(syn::PathSegment::from(s.ident.clone()));
 
                     // Disallow the case where two identically named structs exist under different paths

@@ -96,7 +96,7 @@ claims = { version = "0.7", default-features = false }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
 cloudevents-sdk = { version = "0.7", default-features = false }
-command-group = { version = "1", default-features = false }
+command-group = { version = "5", default-features = false }
 config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
 data-encoding = { version = "2", default-features = false }
@@ -118,7 +118,7 @@ names = { version = "0.14", default-features = false }
 nix = { version = "0.27", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 notify = { version = "6", default-features = false }
-normpath = { version = "1.1" , default-features = false }
+normpath = { version = "1.2" , default-features = false }
 nuid = { version = "0.4", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }

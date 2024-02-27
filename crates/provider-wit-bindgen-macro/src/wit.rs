@@ -411,10 +411,16 @@ impl WitFunctionLatticeTranslationStrategy {
             trait_method.sig.ident.span(),
         );
 
+        // Convert the iface path into an upper camel case representation, for future conversions to use
+        let wit_iface_upper_camel = wit_iface_path
+            .split('.')
+            .map(|v| v.to_upper_camel_case())
+            .collect::<String>();
+
         match self {
             WitFunctionLatticeTranslationStrategy::Auto => match trait_method.sig.inputs.len() {
                 0 | 1 => Self::translate_export_fn_via_first_arg(
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -422,7 +428,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 ),
                 _ => Self::translate_export_fn_via_bundled_args(
                     bindgen_cfg,
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -431,7 +437,7 @@ impl WitFunctionLatticeTranslationStrategy {
             },
             WitFunctionLatticeTranslationStrategy::FirstArgument => {
                 Self::translate_export_fn_via_first_arg(
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -441,7 +447,7 @@ impl WitFunctionLatticeTranslationStrategy {
             WitFunctionLatticeTranslationStrategy::BundleArguments => {
                 Self::translate_export_fn_via_bundled_args(
                     bindgen_cfg,
-                    wit_iface_path,
+                    wit_iface_upper_camel,
                     lattice_method_name,
                     trait_method,
                     struct_lookup,
@@ -454,7 +460,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Translate a function for use on the lattice via the first argument.
     /// Functions that cannot be translated properly via this method will fail.
     pub(crate) fn translate_export_fn_via_first_arg(
-        wit_iface_path: WitInterfacePath,
+        wit_iface_upper_camel: String,
         lattice_method_name: LitStr,
         trait_method: &ImplItemFn,
         _struct_lookup: &StructLookup,
@@ -470,7 +476,7 @@ impl WitFunctionLatticeTranslationStrategy {
         // If there are no arguments, then we can add a lattice method with nothing:
         if trait_method.sig.inputs.is_empty() {
             return Ok((
-                wit_iface_path.to_string().to_upper_camel_case(),
+                wit_iface_upper_camel,
                 LatticeMethod {
                     lattice_method_name,
                     type_name: None,
@@ -493,7 +499,7 @@ impl WitFunctionLatticeTranslationStrategy {
         let (arg_name, type_name) = process_fn_arg(first_arg)?;
 
         Ok((
-            wit_iface_path.to_string().to_upper_camel_case(),
+            wit_iface_upper_camel,
             LatticeMethod {
                 lattice_method_name,
                 type_name: Some(type_name),
@@ -509,7 +515,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Functions that cannot be translated properly via this method will fail.
     pub(crate) fn translate_export_fn_via_bundled_args(
         bindgen_cfg: &ProviderBindgenConfig,
-        wit_iface_name: WitInterfacePath,
+        wit_iface_upper_camel: String,
         lattice_method_name: LitStr,
         trait_method: &ImplItemFn,
         struct_lookup: &StructLookup,
@@ -520,7 +526,7 @@ impl WitFunctionLatticeTranslationStrategy {
         // (ex. MessagingConsumerRequestMultiInvocation)
         let struct_name = format_ident!(
             "{}{}Invocation",
-            wit_iface_name.to_upper_camel_case(),
+            wit_iface_upper_camel,
             trait_method.sig.ident.to_string().to_upper_camel_case()
         );
 
@@ -544,8 +550,12 @@ impl WitFunctionLatticeTranslationStrategy {
                     ))]);
                 }
 
-                // Match on a single input argument in the function signature,
-                // converting known types to ones that can be used as invocation struct members.
+                // For the current input argument in the function signature,
+                // convert known types to ones that can be used as invocation struct members.
+                //
+                // i.e. given some `record type {...}` defined in WIT, a Rust `struct Type {...}` will be produced.
+                // if we see some::path::to::Type, we should replace it with Type, because all of those types have been
+                // extracted, raised and put at the top level by our bindgen
                 let (arg_name, owned_type_tokens) = convert_to_owned_type_arg(
                     struct_lookup,
                     type_lookup,
@@ -553,12 +563,10 @@ impl WitFunctionLatticeTranslationStrategy {
                     bindgen_cfg.replace_witified_maps,
                 );
 
-                // Raw arg_names are produced
-                //
-                // TODO: is this a bug???
-                if arg_name.to_string().ends_with("_map") {
-                    invocation_arg_names.push(arg_name);
-                }
+                // Add the invocation argument name to the list,
+                // so that when we convert this LatticeMethod into an exported function
+                // we can re-create the arguments as if they were never bundled into a struct.
+                invocation_arg_names.push(arg_name);
 
                 // Add the generated `FnArg` tokens
                 tokens.extend(owned_type_tokens);
@@ -567,7 +575,7 @@ impl WitFunctionLatticeTranslationStrategy {
             });
 
         Ok((
-            wit_iface_name.to_string().to_upper_camel_case(),
+            wit_iface_upper_camel,
             LatticeMethod {
                 lattice_method_name,
                 type_name: Some(struct_name.to_token_stream()),

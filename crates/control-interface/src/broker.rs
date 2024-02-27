@@ -30,32 +30,12 @@ pub fn publish_registries(topic_prefix: &Option<String>, lattice: &str) -> Strin
     format!("{}.registry.put", prefix(topic_prefix, lattice))
 }
 
-pub fn put_config(
-    topic_prefix: &Option<String>,
-    lattice: &str,
-    entity_id: &str,
-    key: &str,
-) -> String {
-    format!(
-        "{}.config.put.{entity_id}.{key}",
-        prefix(topic_prefix, lattice)
-    )
+pub fn put_config(topic_prefix: &Option<String>, lattice: &str, config_name: &str) -> String {
+    format!("{}.config.put.{config_name}", prefix(topic_prefix, lattice))
 }
 
-pub fn delete_config(
-    topic_prefix: &Option<String>,
-    lattice: &str,
-    entity_id: &str,
-    key: &str,
-) -> String {
-    format!(
-        "{}.config.del.{entity_id}.{key}",
-        prefix(topic_prefix, lattice)
-    )
-}
-
-pub fn clear_config(topic_prefix: &Option<String>, lattice: &str, entity_id: &str) -> String {
-    format!("{}.config.del.{entity_id}", prefix(topic_prefix, lattice))
+pub fn delete_config(topic_prefix: &Option<String>, lattice: &str, config_name: &str) -> String {
+    format!("{}.config.del.{config_name}", prefix(topic_prefix, lattice))
 }
 
 pub fn put_label(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
@@ -109,19 +89,7 @@ pub mod queries {
         format!("{}.host.ping", prefix(topic_prefix, lattice))
     }
 
-    pub fn config(
-        topic_prefix: &Option<String>,
-        lattice: &str,
-        entity_id: &str,
-        key: &str,
-    ) -> String {
-        format!(
-            "{}.config.get.{entity_id}.{key}",
-            prefix(topic_prefix, lattice),
-        )
-    }
-
-    pub fn all_config(topic_prefix: &Option<String>, lattice: &str, entity_id: &str) -> String {
-        format!("{}.config.get.{entity_id}", prefix(topic_prefix, lattice),)
+    pub fn config(topic_prefix: &Option<String>, lattice: &str, config_name: &str) -> String {
+        format!("{}.config.get.{config_name}", prefix(topic_prefix, lattice),)
     }
 }
