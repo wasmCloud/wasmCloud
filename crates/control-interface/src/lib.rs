@@ -313,50 +313,34 @@ impl Client {
 
     /// Puts a link into the lattice. Returns an error if it was unable to put the link
     #[instrument(level = "debug", skip_all)]
-    pub async fn advertise_link(
-        &self,
-        source_id: &str,
-        target: &str,
-        link_name: &str,
-        wit_namespace: &str,
-        wit_package: &str,
-        interfaces: Vec<String>,
-        source_config: Vec<String>,
-        target_config: Vec<String>,
-    ) -> Result<CtlOperationAck> {
-        let ld = InterfaceLinkDefinition {
-            source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
-            target: parse_identifier(&IdentifierKind::ComponentId, target)?,
-            name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
-            wit_namespace: wit_namespace.to_string(),
-            wit_package: wit_package.to_string(),
-            interfaces,
-            source_config,
-            target_config,
-        };
+    pub async fn put_link(&self, link: InterfaceLinkDefinition) -> Result<CtlOperationAck> {
+        // Validate link parameters
+        parse_identifier(&IdentifierKind::ComponentId, &link.source_id)?;
+        parse_identifier(&IdentifierKind::ComponentId, &link.target)?;
+        parse_identifier(&IdentifierKind::LinkName, &link.name)?;
 
-        let subject = broker::advertise_link(&self.topic_prefix, &self.lattice);
-        debug!("advertise_link:request {}", &subject);
+        let subject = broker::put_link(&self.topic_prefix, &self.lattice);
+        debug!("put_link:request {}", &subject);
 
-        let bytes = crate::json_serialize(&ld)?;
+        let bytes = crate::json_serialize(&link)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {e}").into()),
+            Err(e) => Err(format!("Did not receive put link acknowledgement: {e}").into()),
         }
     }
 
-    /// Removes a link from the lattice metadata keyvalue bucket. Returns an error if it was unable
+    /// Deletes a link from the lattice metadata keyvalue bucket. Returns an error if it was unable
     /// to delete. This is an idempotent operation.
     #[instrument(level = "debug", skip_all)]
-    pub async fn remove_link(
+    pub async fn delete_link(
         &self,
         source_id: &str,
         link_name: &str,
         wit_namespace: &str,
         wit_package: &str,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::remove_link(&self.topic_prefix, &self.lattice);
-        let ld = RemoveInterfaceLinkDefinitionRequest {
+        let subject = broker::delete_link(&self.topic_prefix, &self.lattice);
+        let ld = DeleteInterfaceLinkDefinitionRequest {
             source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
             name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
             wit_namespace: wit_namespace.to_string(),
@@ -365,7 +349,7 @@ impl Client {
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive remove link acknowledgement: {e}").into()),
+            Err(e) => Err(format!("Did not receive delete link acknowledgement: {e}").into()),
         }
     }
 
@@ -373,15 +357,15 @@ impl Client {
     /// the client was created with caching, this will return the cached list of links. Otherwise,
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
-    pub async fn query_links(&self) -> Result<Vec<InterfaceLinkDefinition>> {
+    pub async fn get_links(&self) -> Result<Vec<InterfaceLinkDefinition>> {
         let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice);
-        debug!("query_links:request {}", &subject);
+        debug!("get_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
                 let links: Vec<InterfaceLinkDefinition> = json_deserialize(&msg.payload)?;
                 Ok(links)
             }
-            Err(e) => Err(format!("Did not receive a response to links query: {e}").into()),
+            Err(e) => Err(format!("Did not receive a response to get links: {e}").into()),
         }
     }
 

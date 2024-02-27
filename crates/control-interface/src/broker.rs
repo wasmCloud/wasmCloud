@@ -18,11 +18,11 @@ pub fn actor_auction_subject(topic_prefix: &Option<String>, lattice: &str) -> St
     format!("{}.actor.auction", prefix(topic_prefix, lattice))
 }
 
-pub fn advertise_link(topic_prefix: &Option<String>, lattice: &str) -> String {
+pub fn put_link(topic_prefix: &Option<String>, lattice: &str) -> String {
     format!("{}.link.put", prefix(topic_prefix, lattice))
 }
 
-pub fn remove_link(topic_prefix: &Option<String>, lattice: &str) -> String {
+pub fn delete_link(topic_prefix: &Option<String>, lattice: &str) -> String {
     format!("{}.link.del", prefix(topic_prefix, lattice))
 }
 
