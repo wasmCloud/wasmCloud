@@ -3,6 +3,52 @@ use std::collections::HashMap;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+/// A control interface response that wraps a response payload, a success flag, and a message
+/// with additional context if necessary.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CtlResponse<T> {
+    /// Whether the request succeeded
+    pub success: bool,
+    /// A message with additional context about the response
+    pub message: String,
+    /// The response data, if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<T>,
+}
+
+impl<T> CtlResponse<T> {
+    pub fn ok(response: T) -> Self {
+        CtlResponse {
+            success: true,
+            message: "".to_string(),
+            response: Some(response),
+        }
+    }
+}
+
+impl CtlResponse<()> {
+    /// Helper function to return a successful response without
+    /// a message or a payload.
+    pub fn success() -> Self {
+        CtlResponse {
+            success: true,
+            message: "".to_string(),
+            response: None,
+        }
+    }
+
+    /// Helper function to return an unsuccessful response with
+    /// a message but no payload. Note that this implicitly is
+    /// typing the inner payload as `()` for efficiency.
+    pub fn error(message: &str) -> Self {
+        CtlResponse {
+            success: false,
+            message: message.to_string(),
+            response: None,
+        }
+    }
+}
+
 /// A host response to a request to start an actor, confirming the host
 /// has enough capacity to start the actor
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -78,27 +124,10 @@ pub struct ActorInstance {
     pub max_instances: u32,
 }
 
-/// Standard response for control interface operations
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CtlOperationAck {
-    #[serde(default)]
-    pub accepted: bool,
-    #[serde(default)]
-    pub error: String,
-}
-
 /// A response containing the full list of known claims within the lattice
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetClaimsResponse {
     pub claims: Vec<HashMap<String, String>>,
-}
-
-/// A response containing the request config, if it exists
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GetConfigResponse {
-    pub found: bool,
-    #[serde(default)]
-    pub data: HashMap<String, String>,
 }
 
 /// A summary representation of a host
