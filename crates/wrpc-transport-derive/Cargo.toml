@@ -1,0 +1,29 @@
+[package]
+name = "wrpc-transport-derive"
+version = "0.1.0"
+description = """
+Macros which enable deriving traits for wRPC, in particular wrpc_transport::{Encode, Decode}.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+wrpc-transport = { workspace = true }
+wrpc-transport-derive-macro = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [ "macros", "rt-multi-thread" ] }

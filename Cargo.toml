@@ -77,6 +77,7 @@ wasmcloud-test-util = { workspace = true }
 wrpc-interface-http = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+wrpc-transport-derive = { workspace = true }
 wrpc-types = { workspace = true }
 
 [workspace]
@@ -218,5 +219,7 @@ wit-parser = { version = "0.13", default-features = false }
 wrpc-interface-http = { version = "0.11.2", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.5", default-features = false }
 wrpc-transport = { version = "0.14", default-features = false }
+wrpc-transport-derive = { version = "0.1", path = "./crates/wrpc-transport-derive", default-features = false }
+wrpc-transport-derive-macro = { version = "0.1", path = "./crates/wrpc-transport-derive-macro", default-features = false }
 wrpc-transport-nats = { version = "0.11", default-features = false }
 wrpc-types = { version = "0.4", default-features = false }

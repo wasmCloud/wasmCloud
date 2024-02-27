@@ -1,0 +1,26 @@
+[package]
+name = "wrpc-transport-derive-macro"
+version = "0.1.0"
+description = """
+Inner crate of wrpc-transport-derive that contains the macro for deriving wrpc_transport::{EncodeSync, Decode}.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+anyhow = { workspace = true }
+syn = { workspace = true, features = [ "full", "parsing", "extra-traits", "printing", "clone-impls" ] }
+proc-macro2 = { workspace = true, features = [ "proc-macro" ] }
+quote = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [ "fmt", "env-filter" ] }
