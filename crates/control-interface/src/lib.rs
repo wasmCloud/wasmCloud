@@ -3,6 +3,12 @@
 //! This library provides a client API for consuming the wasmCloud control interface over a
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
+//!
+//! ## Usage
+//! All of the [Client] functions are handled by a wasmCloud host running in the specified lattice.
+//! Each function returns a Result<CtlResponse<T>> wrapper around the actual response type. The outer
+//! result should be handled for protocol (timeouts, no hosts available) and deserialization errors (invalid response payload).
+//! The inner result is the actual response from the host(s) and should be handled for application-level errors.
 
 mod broker;
 mod otel;
@@ -163,7 +169,7 @@ impl Client {
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by
     /// _timeout_.
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_hosts(&self) -> Result<Vec<Host>> {
+    pub async fn get_hosts(&self) -> Result<Vec<CtlResponse<Host>>> {
         let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice);
         debug!("get_hosts:publish {}", &subject);
         self.publish_and_wait(subject, Vec::new()).await
@@ -171,7 +177,7 @@ impl Client {
 
     /// Retrieves the contents of a running host
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
+    pub async fn get_host_inventory(&self, host_id: &str) -> Result<CtlResponse<HostInventory>> {
         let subject = broker::queries::host_inventory(
             &self.topic_prefix,
             &self.lattice,
@@ -186,14 +192,11 @@ impl Client {
 
     /// Retrieves the full set of all cached claims in the lattice.   
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_claims(&self) -> Result<Vec<HashMap<String, String>>> {
+    pub async fn get_claims(&self) -> Result<CtlResponse<Vec<HashMap<String, String>>>> {
         let subject = broker::queries::claims(&self.topic_prefix, &self.lattice);
         debug!("get_claims:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
-            Ok(msg) => {
-                let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
-                Ok(list.claims)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive claims from lattice: {e}").into()),
         }
     }
@@ -209,7 +212,7 @@ impl Client {
         actor_ref: &str,
         actor_id: &str,
         constraints: HashMap<String, String>,
-    ) -> Result<Vec<ActorAuctionAck>> {
+    ) -> Result<Vec<CtlResponse<ActorAuctionAck>>> {
         let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
@@ -231,7 +234,7 @@ impl Client {
         provider_ref: &str,
         provider_id: &str,
         constraints: HashMap<String, String>,
-    ) -> Result<Vec<ProviderAuctionAck>> {
+    ) -> Result<Vec<CtlResponse<ProviderAuctionAck>>> {
         let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
@@ -263,7 +266,7 @@ impl Client {
         actor_id: &str,
         max_instances: u32,
         annotations: Option<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
             broker::commands::scale_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
@@ -292,7 +295,7 @@ impl Client {
     pub async fn put_registries(
         &self,
         registries: HashMap<String, RegistryCredential>,
-    ) -> Result<()> {
+    ) -> Result<CtlResponse<()>> {
         let subject = broker::publish_registries(&self.topic_prefix, &self.lattice);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
@@ -307,13 +310,13 @@ impl Client {
         if let Err(e) = resp {
             Err(format!("Failed to push registry credential map: {e}").into())
         } else {
-            Ok(())
+            Ok(CtlResponse::success())
         }
     }
 
     /// Puts a link into the lattice. Returns an error if it was unable to put the link
     #[instrument(level = "debug", skip_all)]
-    pub async fn put_link(&self, link: InterfaceLinkDefinition) -> Result<CtlOperationAck> {
+    pub async fn put_link(&self, link: InterfaceLinkDefinition) -> Result<CtlResponse<()>> {
         // Validate link parameters
         parse_identifier(&IdentifierKind::ComponentId, &link.source_id)?;
         parse_identifier(&IdentifierKind::ComponentId, &link.target)?;
@@ -338,7 +341,7 @@ impl Client {
         link_name: &str,
         wit_namespace: &str,
         wit_package: &str,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let subject = broker::delete_link(&self.topic_prefix, &self.lattice);
         let ld = DeleteInterfaceLinkDefinitionRequest {
             source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
@@ -357,14 +360,11 @@ impl Client {
     /// the client was created with caching, this will return the cached list of links. Otherwise,
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_links(&self) -> Result<Vec<InterfaceLinkDefinition>> {
+    pub async fn get_links(&self) -> Result<CtlResponse<Vec<InterfaceLinkDefinition>>> {
         let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("get_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
-            Ok(msg) => {
-                let links: Vec<InterfaceLinkDefinition> = json_deserialize(&msg.payload)?;
-                Ok(links)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive a response to get links: {e}").into()),
         }
     }
@@ -377,7 +377,7 @@ impl Client {
         &self,
         config_name: &str,
         config: impl Into<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let subject = broker::put_config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Putting config");
         let data = serde_json::to_vec(&config.into())?;
@@ -391,7 +391,7 @@ impl Client {
     ///
     /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
     #[instrument(level = "debug", skip_all)]
-    pub async fn delete_config(&self, config_name: &str) -> Result<CtlOperationAck> {
+    pub async fn delete_config(&self, config_name: &str) -> Result<CtlResponse<()>> {
         let subject = broker::delete_config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Delete config");
         match self
@@ -409,7 +409,10 @@ impl Client {
     ///
     /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_config(&self, config_name: &str) -> Result<GetConfigResponse> {
+    pub async fn get_config(
+        &self,
+        config_name: &str,
+    ) -> Result<CtlResponse<HashMap<String, String>>> {
         let subject = broker::queries::config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Getting config");
         match self
@@ -431,7 +434,7 @@ impl Client {
         host_id: &str,
         key: &str,
         value: &str,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let subject = broker::put_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "putting label");
         let bytes = json_serialize(HostLabel {
@@ -449,7 +452,7 @@ impl Client {
     /// # Errors
     ///
     /// Will return an error if there is a communication problem with the host
-    pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlOperationAck> {
+    pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlResponse<()>> {
         let subject = broker::delete_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "removing label");
         let bytes = json_serialize(HostLabel {
@@ -477,7 +480,7 @@ impl Client {
         existing_actor_id: &str,
         new_actor_ref: &str,
         annotations: Option<HashMap<String, String>>,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
             broker::commands::update_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
@@ -508,7 +511,7 @@ impl Client {
         provider_id: &str,
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
             broker::commands::start_provider(&self.topic_prefix, &self.lattice, host_id.as_str());
@@ -532,7 +535,7 @@ impl Client {
     /// _will not_ supply a discrete confirmation that a provider has terminated. For that kind of
     /// information, the client must also monitor the control event stream
     #[instrument(level = "debug", skip_all)]
-    pub async fn stop_provider(&self, host_id: &str, provider_id: &str) -> Result<CtlOperationAck> {
+    pub async fn stop_provider(&self, host_id: &str, provider_id: &str) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
 
         let subject =
@@ -558,7 +561,7 @@ impl Client {
         &self,
         host_id: &str,
         timeout_ms: Option<u64>,
-    ) -> Result<CtlOperationAck> {
+    ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
             broker::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
@@ -781,5 +784,255 @@ mod tests {
         assert_eq!(actor_id, "iambatman");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    /// Test after large 1.0 refactors to ensure all return types are formatted as [CtlResponse] types, and that
+    /// the host can handle all of the requests.
+    ///
+    /// You must run NATS and one host locally to run this test successfully.
+    async fn ctl_response_comprehensive() {
+        let client = Client::new(
+            async_nats::connect("127.0.0.1:4222")
+                .await
+                .expect("should be able to connect to local NATS"),
+        );
+        // Fetch the one host we ran
+        let hosts = client
+            .get_hosts()
+            .await
+            .expect("should be able to fetch at least a host");
+        assert_eq!(hosts.len(), 1);
+        let host = hosts.first().expect("one host to exist");
+        assert!(host.success);
+        assert!(host.message.is_empty());
+        assert!(host.response.is_some());
+        let host = host.response.as_ref().unwrap();
+        ////
+        // Actor operations
+        ////
+        // Actor Auction
+        let auction_response = client
+            .perform_actor_auction(
+                "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0",
+                "echo",
+                HashMap::new(),
+            )
+            .await
+            .expect("should be able to auction an actor");
+        assert_eq!(auction_response.len(), 1);
+        let first_ack = auction_response.first().expect("a single actor ack");
+        let auction_ack = first_ack.response.as_ref().unwrap();
+        let (actor_ref, actor_id) = (&auction_ack.actor_ref, &auction_ack.actor_id);
+        // Actor Scale
+        let scale_response = client
+            .scale_actor(&host.id, actor_ref, actor_id, 1, None)
+            .await
+            .expect("should be able to scale actor");
+        assert!(scale_response.success);
+        assert!(scale_response.message.is_empty());
+        assert!(scale_response.response.is_none());
+        // Actor Update (TODO(brooksmtownsend): we should test this with a real update, but I'm using a failure case)
+        let update_actor_resp = client
+            .update_actor(
+                &host.id,
+                "nonexistantactorID",
+                "wasmcloud.azurecr.io/kvcounter:0.4.0",
+                None,
+            )
+            .await
+            .expect("should be able to issue update actor request");
+        assert!(!update_actor_resp.success);
+        assert_eq!(update_actor_resp.message, "actor not found".to_string());
+        assert_eq!(update_actor_resp.response, None);
+
+        ////
+        // Provider operations
+        ////
+        // Provider Auction
+        let provider_acks = client
+            .perform_provider_auction(
+                "wasmcloud.azurecr.io/httpserver:0.19.1",
+                "httpserver",
+                HashMap::new(),
+            )
+            .await
+            .expect("should be able to hold provider auction");
+        assert_eq!(provider_acks.len(), 1);
+        let provider_ack = provider_acks.first().expect("a single provider ack");
+        assert!(provider_ack.success);
+        assert!(provider_ack.message.is_empty());
+        assert!(provider_ack.response.is_some());
+        let auction_ack = provider_ack.response.as_ref().unwrap();
+        let (provider_ref, provider_id) = (&auction_ack.provider_ref, &auction_ack.provider_id);
+        // Provider Start
+        let start_response = client
+            .start_provider(&host.id, provider_ref, provider_id, None, None)
+            .await
+            .expect("should be able to start provider");
+        assert!(start_response.success);
+        assert!(start_response.message.is_empty());
+        assert!(start_response.response.is_none());
+        // Provider Stop (TODO(brooksmtownsend): not enough time to let the provider really stop, so I'm using a failure case)
+        let stop_response = client
+            .stop_provider(&host.id, "notarealproviderID")
+            .await
+            .expect("should be able to issue stop provider request");
+        assert!(!stop_response.success);
+        assert_eq!(
+            stop_response.message,
+            "provider with that ID is not running".to_string()
+        );
+        assert!(stop_response.response.is_none());
+        ////
+        // Link operations
+        ////
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        // Link Put
+        let link_put = client
+            .put_link(InterfaceLinkDefinition {
+                source_id: "echo".to_string(),
+                target: "httpserver".to_string(),
+                name: "default".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "http".to_string(),
+                interfaces: vec!["incoming-handler".to_string()],
+                source_config: vec![],
+                target_config: vec![],
+            })
+            .await
+            .expect("should be able to put link");
+        assert!(link_put.success);
+        assert!(link_put.message.is_empty());
+        assert!(link_put.response.is_none());
+        let links_get = client
+            .get_links()
+            .await
+            .expect("should be able to get links");
+        assert!(links_get.success);
+        assert!(links_get.message.is_empty());
+        assert!(links_get.response.is_some());
+        // Link Get
+        let link_get = links_get.response.as_ref().unwrap().first().unwrap();
+        assert_eq!(link_get.source_id, "echo");
+        assert_eq!(link_get.target, "httpserver");
+        assert_eq!(link_get.name, "default");
+        assert_eq!(link_get.wit_namespace, "wasi");
+        assert_eq!(link_get.wit_package, "http");
+        // Link Del
+        let link_del = client
+            .delete_link("echo", "default", "wasi", "http")
+            .await
+            .expect("should be able to delete link");
+        assert!(link_del.success);
+        assert!(link_del.message.is_empty());
+        assert!(link_del.response.is_none());
+
+        ////
+        // Label operations
+        ////
+        // Label Put
+        let label_one = client
+            .put_label(&host.id, "idk", "lol")
+            .await
+            .expect("should be able to put label");
+        assert!(label_one.success);
+        assert!(label_one.message.is_empty());
+        assert!(label_one.response.is_none());
+        let label_two = client
+            .put_label(&host.id, "foo", "bar")
+            .await
+            .expect("should be able to put another label");
+        assert!(label_two.success);
+        assert!(label_two.message.is_empty());
+        assert!(label_two.response.is_none());
+        // Label Del
+        let del_label_one = client
+            .delete_label(&host.id, "idk")
+            .await
+            .expect("should be able to delete label");
+        assert!(del_label_one.success);
+        assert!(del_label_one.message.is_empty());
+        assert!(del_label_one.response.is_none());
+        ////
+        // Registry operations
+        ////
+        // Registry Put
+        let registry_put = client
+            .put_registries(HashMap::from_iter([(
+                "mycloud.io".to_string(),
+                RegistryCredential {
+                    username: Some("user".to_string()),
+                    password: Some("pass".to_string()),
+                    registry_type: "oci".to_string(),
+                    token: None,
+                },
+            )]))
+            .await
+            .expect("should be able to put registries");
+        assert!(registry_put.success);
+        assert!(registry_put.message.is_empty());
+        assert!(registry_put.response.is_none());
+
+        ////
+        // Config operations
+        ////
+        // Config Put
+        let config_put = client
+            .put_config(
+                "test_config",
+                HashMap::from_iter([("sup".to_string(), "hey".to_string())]),
+            )
+            .await
+            .expect("should be able to put config");
+        assert!(config_put.success);
+        assert!(config_put.message.is_empty());
+        assert!(config_put.response.is_none());
+        // Config Get
+        let config_get = client
+            .get_config("test_config")
+            .await
+            .expect("should be able to get config");
+        assert!(config_get.success);
+        assert!(config_get.message.is_empty());
+        assert!(config_get
+            .response
+            .is_some_and(|r| r.get("sup").is_some_and(|s| s == "hey")));
+        // Config Del
+        let config_del = client
+            .delete_config("test_config")
+            .await
+            .expect("should be able to delete config");
+        assert!(config_del.success);
+        assert!(config_del.message.is_empty());
+        assert!(config_del.response.is_none());
+
+        ////
+        // Host operations
+        ////
+        // Host Get
+        let inventory = client
+            .get_host_inventory(&host.id)
+            .await
+            .expect("should be able to fetch at least a host");
+        assert!(inventory.success);
+        assert!(inventory.message.is_empty());
+        assert!(inventory.response.is_some());
+        let host_inventory = inventory.response.unwrap();
+        assert!(host_inventory.actors.iter().all(|a| a.id == "echo"));
+        assert!(host_inventory.labels.get("idk").is_none());
+        assert!(host_inventory
+            .labels
+            .get("foo")
+            .is_some_and(|f| f == &"bar".to_string()));
+        // Host Stop
+        let stop_host = client
+            .stop_host(&host.id, Some(1234))
+            .await
+            .expect("should be able to stop host");
+        assert!(stop_host.success);
+        assert!(stop_host.message.is_empty());
+        assert!(stop_host.response.is_none());
     }
 }

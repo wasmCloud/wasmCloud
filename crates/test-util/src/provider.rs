@@ -11,8 +11,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
 use url::Url;
-
-use wasmcloud_control_interface::CtlOperationAck;
+use wasmcloud_control_interface::CtlResponse;
 
 /// Arguments to [`assert_start_provider`]
 pub struct StartProviderArgs<'a> {
@@ -52,7 +51,9 @@ pub async fn assert_start_provider(
     }: StartProviderArgs<'_>,
 ) -> Result<()> {
     let rpc_client = client.nats_client();
-    let CtlOperationAck { accepted, error } = client
+    let CtlResponse {
+        success, message, ..
+    } = client
         .start_provider(
             &host_key.public_key(),
             url.as_ref(),
@@ -62,8 +63,8 @@ pub async fn assert_start_provider(
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    ensure!(message == "");
+    ensure!(success);
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
