@@ -34,12 +34,8 @@ impl Instance {
     pub async fn into_logging(
         mut self,
     ) -> anyhow::Result<InterfaceInstance<logging_bindings::Logging>> {
-        let (bindings, _) = logging_bindings::Logging::instantiate_async(
-            &mut self.store,
-            &self.component,
-            &self.linker,
-        )
-        .await?;
+        let (bindings, _) =
+            logging_bindings::Logging::instantiate_pre(&mut self.store, &self.instance_pre).await?;
         Ok(InterfaceInstance {
             store: Mutex::new(self.store),
             bindings,
