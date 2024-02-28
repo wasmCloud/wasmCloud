@@ -1,7 +1,8 @@
-package wasmcloud:testing;
+package test-wrpc:pinger;
 
-world test {
-  import wrpc:testing/pingpong;
+world actor {
+  import wasmcloud:testing/pingpong;
+  import wasmcloud:testing/busybox;
 
-  export wrpc:testing/invoke;
+  export wasmcloud:testing/invoke;
 }
