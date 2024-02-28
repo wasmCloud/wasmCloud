@@ -22,6 +22,7 @@ cloudevents-sdk = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 hex = { workspace = true, features = ["std"] }
 http = { workspace = true }
+http-body = { workspace = true }
 humantime = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 names = { workspace = true }
@@ -35,7 +36,14 @@ serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
-tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "process",
+    "rt-multi-thread",
+    "time",
+] }
 tokio-stream = { workspace = true, features = ["net", "time"] }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
@@ -47,6 +55,8 @@ wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmtime-wasi-http = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http", "wasmtime-wasi-http"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }

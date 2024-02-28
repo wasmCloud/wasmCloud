@@ -1,7 +1,7 @@
 use super::{Ctx, Instance, InterfaceInstance};
 
 use crate::capability::http::types;
-use crate::capability::{IncomingHttp, OutgoingHttp, OutgoingHttpRequest};
+use crate::capability::{IncomingHttp, OutgoingHttp};
 
 use core::pin::Pin;
 use core::task::Poll;
@@ -43,44 +43,21 @@ impl WasiHttpView for Ctx {
 
     fn send_request(
         &mut self,
-        OutgoingRequest {
-            use_tls,
-            authority,
-            request,
-            connect_timeout,
-            first_byte_timeout,
-            between_bytes_timeout,
-        }: OutgoingRequest,
+        request: OutgoingRequest,
     ) -> wasmtime::Result<Resource<HostFutureIncomingResponse>>
     where
         Self: Sized,
     {
-        let request = request.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
-            Box::new(BodyAsyncRead::new(body))
-        });
         let handler = self.handler.clone();
+        let between_bytes_timeout = request.between_bytes_timeout;
         let res = HostFutureIncomingResponse::new(preview2::spawn(async move {
-            match OutgoingHttp::handle(
-                &handler,
-                OutgoingHttpRequest {
-                    use_tls,
-                    authority,
-                    request,
-                    connect_timeout,
-                    first_byte_timeout,
+            match OutgoingHttp::handle(&handler, request).await {
+                Ok(Ok(resp)) => Ok(Ok(IncomingResponseInternal {
+                    resp,
+                    worker: Arc::new(preview2::spawn(async {})),
                     between_bytes_timeout,
-                },
-            )
-            .await
-            {
-                Ok(resp) => {
-                    let resp = resp.map(|body| BoxBody::new(AsyncReadBody::new(body, 1024)));
-                    Ok(Ok(IncomingResponseInternal {
-                        resp,
-                        worker: Arc::new(preview2::spawn(async {})),
-                        between_bytes_timeout,
-                    }))
-                }
+                })),
+                Ok(Err(err)) => Ok(Err(err)),
                 Err(e) => Err(e),
             }
         }));
