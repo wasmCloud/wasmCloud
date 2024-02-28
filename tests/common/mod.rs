@@ -22,7 +22,7 @@ pub fn tempdir() -> Result<TempDir> {
 
 /// Retrieve a free port to use from the OS
 pub async fn free_port() -> Result<u16> {
-    TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0))
+    TcpListener::bind((Ipv6Addr::LOCALHOST, 0))
         .await
         .context("failed to start TCP listener")?
         .local_addr()
