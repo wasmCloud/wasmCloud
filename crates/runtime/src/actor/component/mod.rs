@@ -17,7 +17,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace, warn};
 use wascap::jwt;
-use wasmtime::component::{self, types, Linker, ResourceTable, ResourceTableError, Type, Val};
+use wasmtime::component::{
+    self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Type, Val,
+};
 use wasmtime_wasi::preview2::command::{self};
 use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
 use wasmtime_wasi::preview2::{
@@ -209,14 +211,13 @@ impl Debug for Ctx {
 /// Pre-compiled actor [Component], which is cheapily-[Cloneable](Clone)
 #[derive(Clone)]
 pub struct Component {
-    component: component::Component,
     engine: wasmtime::Engine,
-    linker: Linker<Ctx>,
     claims: Option<jwt::Claims<jwt::Actor>>,
     handler: builtin::HandlerBuilder,
     polyfilled_imports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     ty: types::Component,
+    instance_pre: wasmtime::component::InstancePre<Ctx>,
 }
 
 impl Debug for Component {
@@ -407,11 +408,10 @@ where
 
 #[instrument(level = "trace", skip_all)]
 fn instantiate(
-    component: wasmtime::component::Component,
     engine: &wasmtime::Engine,
-    linker: Linker<Ctx>,
     handler: impl Into<builtin::Handler>,
     ty: types::Component,
+    instance_pre: InstancePre<Ctx>,
 ) -> anyhow::Result<Instance> {
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
@@ -486,9 +486,8 @@ fn instantiate(
     };
     let store = wasmtime::Store::new(engine, ctx);
     Ok(Instance {
-        component,
-        linker,
         store,
+        instance_pre,
     })
 }
 
@@ -544,16 +543,16 @@ impl Component {
         let ty = linker
             .substituted_component_type(&component)
             .context("failed to introspect component type")?;
+        let instance_pre = linker.instantiate_pre(&component)?;
         // TODO: Record the substituted type exports, not parser exports
         Ok(Self {
-            component,
             engine,
-            linker,
             claims,
             handler: rt.handler.clone(),
             polyfilled_imports,
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
+            instance_pre,
         })
     }
 
@@ -614,13 +613,7 @@ impl Component {
     pub fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        let instance = instantiate(
-            self.component,
-            &self.engine,
-            self.linker,
-            self.handler,
-            self.ty,
-        )?;
+        let instance = instantiate(&self.engine, self.handler, self.ty, self.instance_pre)?;
         Ok((instance, self.claims))
     }
 
@@ -628,11 +621,10 @@ impl Component {
     #[instrument]
     pub fn instantiate(&self) -> anyhow::Result<Instance> {
         instantiate(
-            self.component.clone(),
             &self.engine,
-            self.linker.clone(),
             self.handler.clone(),
             self.ty.clone(),
+            self.instance_pre.clone(),
         )
     }
 
@@ -659,9 +651,8 @@ impl From<Component> for Option<jwt::Claims<jwt::Actor>> {
 
 /// An instance of a [Component]
 pub struct Instance {
-    component: wasmtime::component::Component,
-    linker: wasmtime::component::Linker<Ctx>,
     store: wasmtime::Store<Ctx>,
+    instance_pre: InstancePre<Ctx>,
 }
 
 impl Debug for Instance {
@@ -714,8 +705,8 @@ impl Instance {
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         let component = self
-            .linker
-            .instantiate_async(&mut self.store, &self.component)
+            .instance_pre
+            .instantiate_async(&mut self.store)
             .await
             .context("failed to instantiate component")?;
         let func = {
