@@ -58,9 +58,9 @@ async fn wrpc() -> anyhow::Result<()> {
         PINGER_COMPONENT_ID,
         PONGER_COMPONENT_ID,
         "default",
-        "wrpc",
+        "wasmcloud",
         "testing",
-        vec!["pingpong".to_string()],
+        vec!["pingpong".to_string(), "busybox".to_string()],
         vec![],
         vec![],
     )
@@ -69,7 +69,7 @@ async fn wrpc() -> anyhow::Result<()> {
 
     let result = wrpc_client
         .invoke_dynamic(
-            "wrpc:testing/invoke",
+            "wasmcloud:testing/invoke",
             "call",
             [],
             &[wrpc_types::Type::String],
@@ -78,7 +78,7 @@ async fn wrpc() -> anyhow::Result<()> {
     match result {
         Ok((values, _tx)) => {
             if let Some(wrpc_transport::Value::String(result)) = values.first() {
-                assert_eq!(result, "Ping pong");
+                assert_eq!(result, "Ping pong, meaning of universe is: 42, split: [\"hi\", \"there\", \"friend\"], is_same: true, archie good boy: true");
             } else {
                 panic!("Got something other than a string from the component")
             }
