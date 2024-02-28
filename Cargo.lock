@@ -6478,9 +6478,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f1358e65b09ec370b1eb9438a77a10cbc8feb7f05cb681aa103150aa5cfbfab"
+checksum = "b0fd7e2ef8190da62227e2c60df1833d8fb72204dae6d6863494088708cb9888"
 dependencies = [
  "anyhow",
  "futures",
@@ -6492,9 +6492,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.4.0"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3623106b08545e13dbdcb53e4c0ff0b5a8a0df52d2b8a0c4857436a6c315fc20"
+checksum = "26b31b0a64eda7d308bb49ab2114b43dc79ff94bc2f32484c59d74ebd6a8981b"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6510,9 +6510,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.3.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c383e66c649fc032b440ec4a1b0b2356da9f0e82f6fe1a432669e053c5829d0"
+checksum = "90565e4becebda83ee51b90734dc9d4624ae06d28f5a3da9b525991107e64f46"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6526,9 +6526,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-types"
-version = "0.2.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e0a4250f7e554b7f80e2cc211132d7a63f5c95b057d65a2cba69bd0d549b17d"
+checksum = "9b0658d60dedef749f4981542f003ccd19f132c72f3b58e6534ab1944093fbd5"
 dependencies = [
  "anyhow",
  "serde",

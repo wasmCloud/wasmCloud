@@ -71,7 +71,7 @@ async fn wrpc() -> anyhow::Result<()> {
         .invoke_dynamic(
             "wrpc:testing/invoke",
             "call",
-            [],
+            (),
             &[wrpc_types::Type::String],
         )
         .await;
