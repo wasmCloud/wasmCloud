@@ -23,8 +23,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{
-    future::{self, Either},
-    join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt,
+    future::Either, join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt,
 };
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
@@ -60,7 +59,7 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
-use wrpc_transport::{Client, Transmitter};
+use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -1151,7 +1150,7 @@ impl Actor {
         name: &str,
         inv_params: Vec<wrpc_transport::Value>,
         response_subject: wrpc_transport_nats::Subject,
-        transmitter: wrpc_transport_nats::Transmitter,
+        transmitter: &wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
         // TODO(#1548): implement querying policy server
 
@@ -2125,25 +2124,43 @@ impl Host {
                     limit,
                     move |(instance, name, invocation)| {
                         let actor_instance = Arc::clone(&actor_instance);
-                        let Ok((inv_params, response_subject, tx)) = invocation else {
-                            error!("invocation did not include required parameters to invoke, ignoring.");
-                            return future::ready(());
-                        };
-                        // TODO(#1568): When headers are added to wRPC, ensure we propagate the trace parent
-                        // Linked PR above is when the functionality was removed.
-                        spawn(async move {
+                        async move {
+                            let AcceptedInvocation {
+                                context,
+                                params,
+                                result_subject,
+                                error_subject,
+                                transmitter,
+                            } = match invocation {
+                                Ok(invocation) => invocation,
+                                Err(err) => {
+                                    error!(?err, "failed to accept invocation");
+                                    return;
+                                }
+                            };
+                            // TODO(#1568): Propagate the trace parent from context (headers)
+                            // Linked PR above is when the functionality was removed.
+                            _ = context;
                             let actor_instance = Arc::clone(&actor_instance);
-                            actor_instance
+                            if let Err(err) = actor_instance
                                 .handle_wrpc_call(
                                     &instance,
                                     &name,
-                                    inv_params,
-                                    response_subject,
-                                    tx,
+                                    params,
+                                    result_subject,
+                                    &transmitter,
                                 )
                                 .await
-                        });
-                        future::ready(())
+                            {
+                                error!(?err, "failed to handle invocation");
+                                if let Err(err) = transmitter
+                                    .transmit_static(error_subject, format!("{err:#}"))
+                                    .await
+                                {
+                                    error!(?err, "failed to transmit error to invoker");
+                                }
+                            }
+                        }
                     },
                 )
             });
