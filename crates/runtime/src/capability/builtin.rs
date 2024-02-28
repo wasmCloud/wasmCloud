@@ -15,6 +15,7 @@ use futures::{Stream, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
 use tracing::{instrument, trace};
+use wasmtime_wasi_http::body::HyperIncomingBody;
 
 #[derive(Clone, Default)]
 pub struct Handler {
@@ -475,8 +476,13 @@ pub trait OutgoingHttp {
     /// Handle `wasi:http/outgoing-handler`
     async fn handle(
         &self,
-        request: OutgoingHttpRequest,
-    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
+        request: wasmtime_wasi_http::types::OutgoingRequest,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<HyperIncomingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    >;
 }
 
 #[async_trait]
@@ -780,8 +786,13 @@ impl OutgoingHttp for Handler {
     #[instrument(skip(request))]
     async fn handle(
         &self,
-        request: OutgoingHttpRequest,
-    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        request: wasmtime_wasi_http::types::OutgoingRequest,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<HyperIncomingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    > {
         proxy(
             &self.outgoing_http,
             "OutgoingHttp",

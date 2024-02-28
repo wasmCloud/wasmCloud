@@ -37,6 +37,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
 use wasmcloud_tracing::{global, KeyValue};
+use wasmtime_wasi_http::body::HyperIncomingBody;
 
 pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
@@ -54,8 +55,7 @@ use wasmcloud_core::{
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, KeyValueAtomic,
-    KeyValueEventual, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
-    WrpcInterfaceTarget,
+    KeyValueEventual, Logging, Messaging, OutgoingHttp, TargetEntity, WrpcInterfaceTarget,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -1060,34 +1060,40 @@ impl OutgoingHttp for Handler {
     #[instrument(skip_all)]
     async fn handle(
         &self,
-        OutgoingHttpRequest {
-            use_tls: _,
-            authority: _,
-            request,
-            connect_timeout: _,
-            first_byte_timeout: _,
-            between_bytes_timeout: _,
-        }: OutgoingHttpRequest,
-    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        let req = wasmcloud_compat::HttpClientRequest::from_http(request)
-            .await
-            .context("failed to convert HTTP request")?;
-        let target = self
+        request: wasmtime_wasi_http::types::OutgoingRequest,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<HyperIncomingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    > {
+        use wrpc_interface_http::OutgoingHandler;
+
+        let Some(TargetEntity::Wrpc(WrpcInterfaceTarget { id, .. })) = self
             .identify_interface_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "http",
                 "outgoing-handler",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(target, "wasmcloud:httpclient/HttpClient.Request", &req)
-            .await?;
-        let res: wasmcloud_compat::HttpResponse = decode_provider_response(res)?;
-        let res = ::http::Response::<Vec<u8>>::try_from(res)?;
-        Ok(res.map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
-            Box::new(Cursor::new(body))
-        }))
+            .await?
+        else {
+            bail!("invalid target")
+        };
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (resp, body_errors, tx) = wrpc
+            .invoke_handle_wasmtime(request)
+            .await
+            .context("failed to invoke `wrpc:http/outgoing-handler.handle`")?;
+        spawn(async move {
+            if let Err(err) = tx.await {
+                error!(?err, "failed to transmit parameter values")
+            }
+        });
+        // TODO: Do not ignore outgoing body errors
+        let _ = body_errors;
+        Ok(resp)
     }
 }
 
