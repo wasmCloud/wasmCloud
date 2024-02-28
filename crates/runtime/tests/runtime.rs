@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use futures::lock::Mutex;
+use http_body_util::BodyExt as _;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::fs;
@@ -22,6 +23,7 @@ use wasmcloud_runtime::capability::provider::{
 };
 use wasmcloud_runtime::capability::{self, guest_config, messaging, IncomingHttp};
 use wasmcloud_runtime::{Component, Runtime};
+use wasmtime_wasi_http::body::HyperIncomingBody;
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
     tracing_subscriber::registry()
@@ -47,7 +49,7 @@ struct Handler {
     blobstore: Arc<MemoryBlobstore>,
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-    outgoing_http: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
+    outgoing_http: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
     config: HashMap<String, Vec<u8>>,
 
     link_name: Arc<RwLock<String>>,
@@ -195,16 +197,23 @@ impl capability::Messaging for Handler {
 impl capability::OutgoingHttp for Handler {
     async fn handle(
         &self,
-        request: capability::OutgoingHttpRequest,
-    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        request: wasmtime_wasi_http::types::OutgoingRequest,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<HyperIncomingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    > {
         self.outgoing_http.lock().await.push(request);
 
-        let body: Box<dyn AsyncRead + Sync + Send + Unpin> = Box::new(Cursor::new("test"));
+        let body = http_body_util::Full::new("test".into())
+            .map_err(|_| unreachable!())
+            .boxed();
         let res = http::Response::builder()
             .status(200)
             .body(body)
             .expect("failed to build response");
-        Ok(res)
+        Ok(Ok(res))
     }
 }
 
@@ -213,7 +222,7 @@ fn new_runtime(
     keyvalue: Arc<MemoryKeyValue>,
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-    sent: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
+    sent: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
     config: HashMap<String, Vec<u8>>,
 ) -> Runtime {
     let handler = Arc::new(Handler {
@@ -335,7 +344,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
     let mut sent = Arc::try_unwrap(sent).unwrap().into_inner().into_iter();
     match (sent.next(), sent.next()) {
         (
-            Some(capability::OutgoingHttpRequest {
+            Some(wasmtime_wasi_http::types::OutgoingRequest {
                 use_tls,
                 authority,
                 request,
@@ -352,13 +361,12 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             ensure!(between_bytes_timeout == DEFAULT_HTTP_TIMEOUT);
             ensure!(request.method() == http::Method::PUT);
             ensure!(*request.uri() == *format!("http://localhost:42424/test"));
-            let mut body = String::new();
-            request
+            let body = request
                 .into_body()
-                .read_to_string(&mut body)
+                .collect()
                 .await
                 .context("failed to read request body")?;
-            ensure!(body == "test");
+            ensure!(body.to_bytes() == "test");
         }
         (None, None) => bail!("no messages published"),
         _ => bail!("too many messages published"),

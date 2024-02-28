@@ -5324,6 +5324,7 @@ dependencies = [
  "wasmcloud-host",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
+ "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
  "wrpc-types",
@@ -5465,6 +5466,7 @@ dependencies = [
  "futures",
  "hex",
  "http 1.0.0",
+ "http-body 1.0.0",
  "humantime",
  "names",
  "nkeys",
@@ -5490,6 +5492,8 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
+ "wasmtime-wasi-http",
+ "wrpc-interface-http",
  "wrpc-transport",
  "wrpc-transport-nats",
  "wrpc-types",
@@ -6477,10 +6481,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "wrpc-runtime-wasmtime"
-version = "0.3.0"
+name = "wrpc-interface-http"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd7e2ef8190da62227e2c60df1833d8fb72204dae6d6863494088708cb9888"
+checksum = "bc563243cc546d3878ba3ac34198b8da0285fb1bdb24b4d371a72fc58bf9fdd9"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "http 1.0.0",
+ "http-body 1.0.0",
+ "http-body-util",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "wasmtime-wasi-http",
+ "wrpc-transport",
+]
+
+[[package]]
+name = "wrpc-runtime-wasmtime"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "718e39f98f06ee5acc17bc23f37dddcd2f36a34d6671aca7ae623b287fcd4ce2"
 dependencies = [
  "anyhow",
  "futures",
@@ -6492,9 +6516,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.12.2"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26b31b0a64eda7d308bb49ab2114b43dc79ff94bc2f32484c59d74ebd6a8981b"
+checksum = "89c48ebeb12d9c32d8cdfc11786d24c08a70bfa299ee3c836ffe4ffc7bbd2682"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6510,9 +6534,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.9.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90565e4becebda83ee51b90734dc9d4624ae06d28f5a3da9b525991107e64f46"
+checksum = "51a68e4a866b03424542b07ee3a98925ca3455f56a61a3c4e866d22a5b8f88f8"
 dependencies = [
  "anyhow",
  "async-nats",
