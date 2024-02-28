@@ -93,10 +93,9 @@ impl Instance {
     pub async fn into_incoming_http(
         mut self,
     ) -> anyhow::Result<InterfaceInstance<incoming_http_bindings::IncomingHttp>> {
-        let (bindings, _) = incoming_http_bindings::IncomingHttp::instantiate_async(
+        let (bindings, _) = incoming_http_bindings::IncomingHttp::instantiate_pre(
             &mut self.store,
-            &self.component,
-            &self.linker,
+            &self.instance_pre,
         )
         .await?;
         Ok(InterfaceInstance {
