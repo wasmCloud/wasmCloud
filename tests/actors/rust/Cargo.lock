@@ -3237,6 +3237,7 @@ dependencies = [
 name = "wrpc-pinger-component"
 version = "0.1.0"
 dependencies = [
+ "wasmcloud-actor",
  "wit-bindgen 0.16.0",
 ]
 

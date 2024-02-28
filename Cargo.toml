@@ -74,6 +74,7 @@ vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
+wrpc-interface-http = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
@@ -214,7 +215,8 @@ wit-bindgen-core = { version = "=0.17.0", default-features = false }
 wit-bindgen-go = { version = "0.17", default-features = false }
 wit-component = { version = "0.20", default-features = false }
 wit-parser = { version = "0.13", default-features = false }
-wrpc-runtime-wasmtime = { version = "0.3", default-features = false }
-wrpc-transport = { version = "0.12", default-features = false }
-wrpc-transport-nats = { version = "0.9", default-features = false }
+wrpc-interface-http = { version = "0.11.2", default-features = false }
+wrpc-runtime-wasmtime = { version = "0.5", default-features = false }
+wrpc-transport = { version = "0.14", default-features = false }
+wrpc-transport-nats = { version = "0.11", default-features = false }
 wrpc-types = { version = "0.4", default-features = false }
