@@ -740,30 +740,21 @@ impl Bus for Handler {
         name: &str,
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        if let Some(TargetEntity::Wrpc(interface_target)) = target {
-            let result_types = match self
+        if let Some(TargetEntity::Wrpc(WrpcInterfaceTarget { id, .. })) = target {
+            let results = self
                 .polyfilled_imports
                 .get(instance)
-                .and_then(|functions| functions.get(name))
-            {
-                Some(results) => results.as_ref(),
-                None => bail!(
-                    "polyfilled import {}/{} not found, could not determine result types",
-                    instance,
-                    name
-                ),
-            };
-            let prefix = format!("{}.{}", self.lattice, interface_target.id);
-            let wrpc_client =
-                wrpc_transport_nats::Client::new(self.nats.clone(), prefix.to_string());
-            let (result, _tx) = wrpc_client
-                .invoke_dynamic(instance, name, params, result_types)
-                .await?;
-
-            Ok(result)
+                .and_then(|functions| functions.get(name)).with_context(|| format!("polyfilled import {instance}/{name} not found, could not determine result types"))?;
+            let (results, tx) = wrpc_transport_nats::Client::new(
+                self.nats.clone(),
+                format!("{}.{id}", self.lattice),
+            )
+            .invoke_dynamic(instance, name, params, results)
+            .await?;
+            tx.await.context("failed to transmit parameters")?;
+            Ok(results)
         } else {
-            error!("invalid target");
-            Ok(vec![])
+            bail!("invalid target")
         }
     }
 }
