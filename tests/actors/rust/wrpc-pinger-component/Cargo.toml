@@ -10,4 +10,4 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { workspace = true }
+wit-bindgen = { workspace = true, features = ["default"] }
