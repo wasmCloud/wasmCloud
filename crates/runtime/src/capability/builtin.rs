@@ -15,7 +15,7 @@ use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
 use tracing::{instrument, trace};
-use wasmtime_wasi_http::body::HyperIncomingBody;
+use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::IncomingInputStream;
 
 #[derive(Clone, Default)]
@@ -406,8 +406,13 @@ pub trait IncomingHttp {
     /// Handle `wasi:http/incoming-handler`
     async fn handle(
         &self,
-        request: ::http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
-    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
+        request: ::http::Request<HyperIncomingBody>,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<HyperOutgoingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    >;
 }
 
 #[async_trait]
@@ -744,8 +749,13 @@ impl IncomingHttp for Handler {
     #[instrument(skip(request))]
     async fn handle(
         &self,
-        request: ::http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
-    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        request: ::http::Request<HyperIncomingBody>,
+    ) -> anyhow::Result<
+        Result<
+            ::http::Response<HyperOutgoingBody>,
+            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        >,
+    > {
         proxy(
             &self.incoming_http,
             "IncomingHttp",
