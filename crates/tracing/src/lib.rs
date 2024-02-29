@@ -10,7 +10,7 @@ pub use metrics::configure_metrics;
 #[cfg(feature = "otel")]
 pub use opentelemetry::{
     global,
-    metrics::{Histogram, Meter},
+    metrics::{Counter, Histogram, Meter, Unit},
     KeyValue,
 };
 
