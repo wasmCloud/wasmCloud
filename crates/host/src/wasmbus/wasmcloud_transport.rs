@@ -10,23 +10,20 @@ use std::{pin::Pin, sync::Arc};
 use async_nats::HeaderMap;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{Future, Stream};
+use futures::{Future, Stream, StreamExt};
 use tracing::instrument;
 use wrpc_transport::{Encode, IncomingInvocation, OutgoingInvocation};
-use wrpc_transport_nats::{Acceptor, Subject, Subscriber, Transmission};
+use wrpc_transport_nats::{Subject, Subscriber, Transmission};
 
-/// Wrapper around [wrpc_transport_nats::Transmitter] that includes headers. Lifetime specifier
-/// is useful in order to be able to use a reference to the underlying transmitter.
-pub(crate) struct TransmitterWithHeaders<'a> {
-    inner: &'a wrpc_transport_nats::Transmitter,
+/// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
+/// passing invocation and trace context.
+pub(crate) struct TransmitterWithHeaders {
+    inner: wrpc_transport_nats::Transmitter,
     headers: HeaderMap,
 }
 
-impl<'a> TransmitterWithHeaders<'a> {
-    pub(crate) fn new(
-        transmitter: &'a wrpc_transport_nats::Transmitter,
-        headers: HeaderMap,
-    ) -> Self {
+impl TransmitterWithHeaders {
+    pub(crate) fn new(transmitter: wrpc_transport_nats::Transmitter, headers: HeaderMap) -> Self {
         Self {
             inner: transmitter,
             headers,
@@ -35,7 +32,7 @@ impl<'a> TransmitterWithHeaders<'a> {
 }
 
 #[async_trait]
-impl<'a> wrpc_transport::Transmitter for TransmitterWithHeaders<'a> {
+impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     type Subject = Subject;
     type PublishError = async_nats::PublishError;
 
@@ -51,6 +48,8 @@ impl<'a> wrpc_transport::Transmitter for TransmitterWithHeaders<'a> {
     }
 }
 
+/// Wrapper around [wrpc_transport_nats::Invocation] that includes a [async_nats::HeaderMap] for
+/// passing invocation and trace context.
 pub(crate) struct InvocationWithHeaders {
     inner: wrpc_transport_nats::Invocation,
     headers: HeaderMap,
@@ -88,6 +87,36 @@ impl wrpc_transport::Invocation for InvocationWithHeaders {
     }
 }
 
+/// Wrapper around [wrpc_transport_nats::Acceptor] that includes a [async_nats::HeaderMap] for
+/// passing invocation and trace context.
+pub(crate) struct AcceptorWithHeaders {
+    inner: wrpc_transport_nats::Acceptor,
+    headers: HeaderMap,
+}
+
+impl wrpc_transport::Acceptor for AcceptorWithHeaders {
+    type Subject = Subject;
+    type Transmitter = TransmitterWithHeaders;
+
+    #[instrument(level = "trace", skip(self))]
+    async fn accept(
+        self,
+        rx: Self::Subject,
+    ) -> anyhow::Result<(Self::Subject, Self::Subject, Self::Transmitter)> {
+        let (result_subject, error_subject, transmitter) = self
+            .inner
+            .accept_with_headers(rx, self.headers.clone())
+            .await?;
+        Ok((
+            result_subject,
+            error_subject,
+            TransmitterWithHeaders::new(transmitter, self.headers),
+        ))
+    }
+}
+
+/// Wrapper around [wrpc_transport_nats::Client] that includes a [async_nats::HeaderMap] for
+/// passing invocation and trace context.
 #[derive(Debug, Clone)]
 pub(crate) struct Client {
     inner: wrpc_transport_nats::Client,
@@ -95,6 +124,12 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    /// Create a new wRPC [Client] with the given NATS client, lattice, and headers.
+    ///
+    /// ## Arguments
+    /// * `nats` - The NATS client to use for communication.
+    /// * `lattice` - The lattice to use for communication.
+    /// * `headers` - The headers to include with each outbound invocation.
     pub(crate) fn new(
         nats: impl Into<Arc<async_nats::Client>>,
         lattice: String,
@@ -113,7 +148,7 @@ impl wrpc_transport::Client for Client {
     type Subject = Subject;
     type Subscriber = Subscriber;
     type Transmission = Transmission;
-    type Acceptor = Acceptor;
+    type Acceptor = AcceptorWithHeaders;
     type InvocationStream = Pin<
         Box<
             dyn Stream<
@@ -132,7 +167,23 @@ impl wrpc_transport::Client for Client {
 
     #[instrument(level = "trace", skip(self))]
     async fn serve(&self, instance: &str, func: &str) -> anyhow::Result<Self::InvocationStream> {
-        self.inner.serve(instance, func).await
+        let inner_stream = self.inner.serve(instance, func).await?;
+
+        // Map invocations in the stream to construct an `IncomingInvocation` and `Acceptor` with headers.
+        Ok(inner_stream
+            .map(|result_invocation| {
+                result_invocation.map(|invocation| IncomingInvocation {
+                    context: invocation.context.clone(),
+                    payload: invocation.payload,
+                    reply_subject: invocation.reply_subject,
+                    subscriber: invocation.subscriber,
+                    acceptor: AcceptorWithHeaders {
+                        inner: invocation.acceptor,
+                        headers: invocation.context.unwrap_or_default(),
+                    },
+                })
+            })
+            .boxed())
     }
 
     fn new_invocation(

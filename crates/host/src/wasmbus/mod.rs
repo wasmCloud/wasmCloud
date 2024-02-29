@@ -8,7 +8,6 @@ use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
-use std::f32::consts::E;
 use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -615,7 +614,7 @@ impl Bus for Handler {
             .unwrap_or_default()))
     }
 
-    #[instrument(level = "info", skip(self, target, params, instance, name), fields(interface = instance, function = name))]
+    #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -1142,7 +1141,7 @@ impl Actor {
 
     /// Handle an incoming wRPC request to invoke an export on this actor instance.
     #[instrument(
-        level = "debug",
+        level = "info",
         skip(self, context, result_subject, transmitter),
         fields(
             component_id = self.id.as_str(),
@@ -1153,7 +1152,7 @@ impl Actor {
         context: Option<async_nats::HeaderMap>,
         params: InvocationParams,
         result_subject: wrpc_transport_nats::Subject,
-        transmitter: &wrpc_transport_nats::Transmitter,
+        transmitter: &wasmcloud_transport::TransmitterWithHeaders,
     ) -> anyhow::Result<()> {
         // TODO(#1548): implement querying policy server
 
@@ -1203,19 +1202,9 @@ impl Actor {
                         format!("{instance}/{name}"),
                         Box::pin(async {
                             let results = res?;
-                            if let Some(headers) = context {
-                                // Transmit the response with context headers
-                                wasmcloud_transport::TransmitterWithHeaders::new(
-                                    transmitter,
-                                    headers,
-                                )
+                            transmitter
                                 .transmit_tuple_dynamic(result_subject, results)
                                 .await
-                            } else {
-                                transmitter
-                                    .transmit_tuple_dynamic(result_subject, results)
-                                    .await
-                            }
                         }),
                     )
                 }
@@ -2130,9 +2119,12 @@ impl Host {
     ) -> anyhow::Result<Arc<Actor>> {
         trace!(actor_ref, max_instances, "instantiating actor");
 
-        let wrpc = wrpc_transport_nats::Client::new(
+        let wrpc = wasmcloud_transport::Client::new(
             self.rpc_nats.clone(),
             format!("{}.{actor_id}", self.host_config.lattice),
+            // NOTE(brooksmtownsend): We only use this client for serving functions,
+            // and the headers will be set by the incoming invocation.
+            async_nats::HeaderMap::new(),
         );
         let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
         let actor = Arc::new(Actor {
