@@ -618,7 +618,7 @@ impl Component {
     }
 
     /// Instantiates a [Component] and returns the resulting [Instance].
-    #[instrument]
+    #[instrument(level = "debug", skip(self))]
     pub fn instantiate(&self) -> anyhow::Result<Instance> {
         instantiate(
             &self.engine,
@@ -697,7 +697,7 @@ impl Instance {
     }
 
     /// Invoke an operation on an [Instance] producing a result.
-    #[instrument(skip_all)]
+    #[instrument(skip(self, params, instance, name), fields(interface = instance, function = name))]
     pub async fn call(
         &mut self,
         instance: &str,
