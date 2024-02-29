@@ -45,7 +45,7 @@ struct Args {
         env = "WASMCLOUD_LATTICE"
     )]
     lattice: String,
-    /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key  
+    /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations

@@ -1374,15 +1374,32 @@ impl ActorInstance {
                 let res = self.handle_call(invocation).await;
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
 
+                let mut attributes = vec![
+                    KeyValue::new("actor.ref", self.image_reference.clone()),
+                    KeyValue::new("operation", operation.clone()),
+                    KeyValue::new("lattice", self.metrics.lattice_id.clone()),
+                    KeyValue::new("host", self.metrics.host_id.clone()),
+                ];
+                if origin.contract_id.is_empty() {
+                    attributes.push(KeyValue::new("caller.actor.id", origin.public_key.clone()));
+                } else {
+                    attributes.push(KeyValue::new(
+                        "caller.provider.id",
+                        origin.public_key.clone(),
+                    ));
+                    attributes.push(KeyValue::new(
+                        "caller.provider.contract_id",
+                        origin.contract_id.clone(),
+                    ));
+                    attributes.push(KeyValue::new(
+                        "caller.provider.link_name",
+                        origin.link_name.clone(),
+                    ));
+                }
                 self.metrics
-                    .wasmcloud_host_handle_rpc_message_duration_ns
-                    .record(
-                        elapsed,
-                        &[
-                            KeyValue::new("actor.ref", self.image_reference.clone()),
-                            KeyValue::new("operation", operation.clone()),
-                        ],
-                    );
+                    .handle_rpc_message_duration_ns
+                    .record(elapsed, &attributes);
+                self.metrics.actor_invocations.add(1, &attributes);
 
                 match res {
                     Ok((msg, content_length)) => InvocationResponse {
@@ -1393,6 +1410,8 @@ impl ActorInstance {
                         ..Default::default()
                     },
                     Err(e) => {
+                        self.metrics.actor_errors.add(1, &attributes);
+
                         error!(
                             ?origin,
                             ?target,
@@ -1973,7 +1992,11 @@ impl Host {
                 KeyValue::new("host.version", env!("CARGO_PKG_VERSION")),
             ]),
         );
-        let metrics = HostMetrics::new(&meter);
+        let metrics = HostMetrics::new(
+            &meter,
+            host_key.public_key().clone(),
+            config.lattice.clone(),
+        );
 
         let host = Host {
             actors: RwLock::default(),
