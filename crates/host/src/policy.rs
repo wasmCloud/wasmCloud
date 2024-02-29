@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use std::collections::{hash_map, HashMap};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -273,53 +273,53 @@ impl Manager {
             target: target.clone(),
             action: action.clone(),
         };
-        let mut decision_cache = self.decision_cache.write().await;
-        match decision_cache.entry(cache_key.clone()) {
-            hash_map::Entry::Occupied(entry) => {
-                let entry = entry.get();
-                trace!(?cache_key, ?entry, "using cached policy decision");
-                Ok(entry.clone())
-            }
-            hash_map::Entry::Vacant(entry) => {
-                let request_id = Uuid::from_u128(Ulid::new().into()).to_string();
-                let decision = if let Some(policy_topic) = self.policy_topic.clone() {
-                    trace!(?cache_key, "requesting policy decision");
-                    let payload = serde_json::to_vec(&Request {
-                        request_id: request_id.clone(),
-                        source,
-                        target,
-                        host: self.host_info.clone(),
-                        action,
-                    })
-                    .context("failed to serialize policy request")?;
-                    let request = async_nats::Request::new()
-                        .payload(payload.into())
-                        .timeout(Some(self.policy_timeout));
-                    let res = self
-                        .nats
-                        .send_request(policy_topic, request)
-                        .await
-                        .context("policy request failed")?;
-                    serde_json::from_slice::<Response>(&res.payload)
-                        .context("failed to deserialize policy response")?
-                } else {
-                    trace!(
-                        ?cache_key,
-                        "no policy topic configured, defaulting to permitted"
-                    );
-                    // default to permitted if no policy topic is configured
-                    Response {
-                        request_id: request_id.clone(),
-                        permitted: true,
-                        message: None,
-                    }
-                };
-                entry.insert(decision.clone()); // cache policy decision
-                let mut request_to_key = self.request_to_key.write().await;
-                request_to_key.insert(request_id, cache_key); // cache request id -> decision key
-                Ok(decision)
-            }
+        if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
+            trace!(?cache_key, ?entry, "using cached policy decision");
+            return Ok(entry.clone());
         }
+
+        let request_id = Uuid::from_u128(Ulid::new().into()).to_string();
+        let decision = if let Some(policy_topic) = self.policy_topic.clone() {
+            trace!(?cache_key, "requesting policy decision");
+            let payload = serde_json::to_vec(&Request {
+                request_id: request_id.clone(),
+                source,
+                target,
+                host: self.host_info.clone(),
+                action,
+            })
+            .context("failed to serialize policy request")?;
+            let request = async_nats::Request::new()
+                .payload(payload.into())
+                .timeout(Some(self.policy_timeout));
+            let res = self
+                .nats
+                .send_request(policy_topic, request)
+                .await
+                .context("policy request failed")?;
+            serde_json::from_slice::<Response>(&res.payload)
+                .context("failed to deserialize policy response")?
+        } else {
+            trace!(
+                ?cache_key,
+                "no policy topic configured, defaulting to permitted"
+            );
+            // default to permitted if no policy topic is configured
+            Response {
+                request_id: request_id.clone(),
+                permitted: true,
+                message: None,
+            }
+        };
+        self.decision_cache
+            .write()
+            .await
+            .insert(cache_key.clone(), decision.clone()); // cache policy decision
+        self.request_to_key
+            .write()
+            .await
+            .insert(request_id, cache_key); // cache request id -> decision key
+        Ok(decision)
     }
 
     #[instrument(skip(self))]
