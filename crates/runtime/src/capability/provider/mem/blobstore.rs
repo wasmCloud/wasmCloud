@@ -3,16 +3,16 @@ use crate::capability::{self, blobstore};
 use core::ops::RangeInclusive;
 
 use std::collections::{hash_map, BTreeMap, HashMap};
-use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::{stream, Stream};
-use tokio::io::{self, AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing::instrument;
+use wrpc_transport::IncomingInputStream;
 
 #[derive(Debug)]
 /// In-memory [`Blobstore`] [`Container`] object
@@ -166,23 +166,19 @@ impl capability::Blobstore for Blobstore {
         container: &str,
         name: String,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+    ) -> anyhow::Result<IncomingInputStream> {
         let store = self.0.read().await;
         let container = store.get(container).context("container not found")?;
         let Container { ref objects, .. } = *container.read().await;
         let Object { data, .. } = objects.get(&name).context("object not found")?;
         let Some(len) = NonZeroUsize::new(data.len()) else {
-            return Ok((Box::new(io::empty()), 0));
+            return Ok(Box::new(stream::empty()));
         };
         let start = (*range.start()).try_into().unwrap_or(usize::MAX);
         let end = (*range.end()).try_into().unwrap_or(usize::MAX);
         let len = len.into();
         let data = data[start.min(len)..=end.min(len - 1)].to_vec();
-        let n = data
-            .len()
-            .try_into()
-            .context("length does not fit in `u64`")?;
-        Ok((Box::new(Cursor::new(data)), n))
+        Ok(Box::new(stream::iter([Ok(data)])))
     }
 
     #[instrument]
@@ -228,12 +224,13 @@ impl capability::Blobstore for Blobstore {
     async fn list_objects(
         &self,
         container: &str,
-    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<Vec<String>>> + Sync + Send + Unpin>>
+    {
         let store = self.0.read().await;
         let container = store.get(container).context("container not found")?;
         let Container { ref objects, .. } = *container.read().await;
         let names: Vec<_> = objects.keys().cloned().collect();
-        Ok(Box::new(stream::iter(names.into_iter().map(Ok))))
+        Ok(Box::new(stream::iter([Ok(names)])))
     }
 
     #[instrument]
@@ -259,5 +256,13 @@ impl capability::Blobstore for Blobstore {
             size,
             created_at: created_at.as_secs(),
         })
+    }
+
+    #[instrument]
+    async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
+        let store = self.0.read().await;
+        let container = store.get(container).context("container not found")?;
+        container.write().await.objects.clear();
+        Ok(())
     }
 }

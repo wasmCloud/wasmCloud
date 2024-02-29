@@ -11,11 +11,12 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use futures::{Stream, TryStreamExt};
+use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
 use tracing::{instrument, trace};
 use wasmtime_wasi_http::body::HyperIncomingBody;
+use wrpc_transport::IncomingInputStream;
 
 #[derive(Clone, Default)]
 pub struct Handler {
@@ -218,6 +219,17 @@ pub enum TargetEntity {
     Wrpc(WrpcInterfaceTarget),
 }
 
+impl TargetEntity {
+    /// Tries to unwrap [`WrpcInterfaceTarget`]
+    pub fn try_unwrap_wrpc(self) -> Option<WrpcInterfaceTarget> {
+        if let Self::Wrpc(target) = self {
+            Some(target)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 /// Call target identifier, which is equivalent to a WIT specification, which
 /// can identify an interface being called and optionally a specific function on that interface.
@@ -299,7 +311,7 @@ pub trait Blobstore {
         container: &str,
         name: String,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+    ) -> anyhow::Result<IncomingInputStream>;
 
     /// Handle `wasi:blobstore/container.has-object`
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool>;
@@ -319,7 +331,7 @@ pub trait Blobstore {
     async fn list_objects(
         &self,
         container: &str,
-    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<Vec<String>>> + Sync + Send + Unpin>>;
 
     /// Handle `wasi:blobstore/container.object-info`
     async fn object_info(
@@ -329,17 +341,7 @@ pub trait Blobstore {
     ) -> anyhow::Result<blobstore::container::ObjectMetadata>;
 
     /// Handle `wasi:blobstore/container.clear`
-    async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
-        let names = self
-            .list_objects(container)
-            .await
-            .context("failed to list objects")?;
-        let names = names
-            .try_collect()
-            .await
-            .context("failed to collect object names")?;
-        self.delete_objects(container, names).await
-    }
+    async fn clear_container(&self, container: &str) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -350,6 +352,21 @@ pub trait Bus {
         &self,
         interface: &CallTargetInterface,
     ) -> anyhow::Result<Option<TargetEntity>>;
+
+    /// Identify the wRPC target of component interface invocation
+    async fn identify_wrpc_target(
+        &self,
+        interface: &CallTargetInterface,
+    ) -> anyhow::Result<Option<WrpcInterfaceTarget>> {
+        let target = self.identify_interface_target(interface).await?;
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        target
+            .try_unwrap_wrpc()
+            .context("invalid target type")
+            .map(Some)
+    }
 
     /// Set link name
     async fn set_link_name(
@@ -413,11 +430,7 @@ pub trait KeyValueAtomic {
 /// `wasi:keyvalue/eventual` implementation
 pub trait KeyValueEventual {
     /// Handle `wasi:keyvalue/eventual.get`
-    async fn get(
-        &self,
-        bucket: &str,
-        key: String,
-    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>>;
+    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>>;
 
     /// Handle `wasi:keyvalue/eventual.set`
     async fn set(
@@ -524,7 +537,7 @@ impl Blobstore for Handler {
         container: &str,
         name: String,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+    ) -> anyhow::Result<IncomingInputStream> {
         self.proxy_blobstore("wasi:blobstore/container.get-data")?
             .get_data(container, name, range)
             .await
@@ -560,7 +573,8 @@ impl Blobstore for Handler {
     async fn list_objects(
         &self,
         container: &str,
-    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<Vec<String>>> + Sync + Send + Unpin>>
+    {
         self.proxy_blobstore("wasi:blobstore/container.list-objects")?
             .list_objects(container)
             .await
@@ -692,11 +706,7 @@ impl KeyValueAtomic for Handler {
 #[async_trait]
 impl KeyValueEventual for Handler {
     #[instrument]
-    async fn get(
-        &self,
-        bucket: &str,
-        key: String,
-    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>> {
+    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
         self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.get")?
             .get(bucket, key)
             .await
