@@ -44,8 +44,9 @@ use wasmcloud_control_interface::{
 use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTargetId, LinkName, OtelConfig};
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, KeyValueAtomic,
-    KeyValueEventual, Logging, Messaging, OutgoingHttp, TargetEntity, WrpcInterfaceTarget,
+    blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
+    KeyValueAtomic, KeyValueEventual, Logging, Messaging, OutgoingHttp, TargetEntity,
+    WrpcInterfaceTarget,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -1105,7 +1106,7 @@ enum InvocationParams {
         name: Arc<String>,
         params: Vec<wrpc_transport::Value>,
     },
-    IncomingHttpHandle(wrpc_interface_http::IncomingRequest),
+    IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
 }
 
 impl Actor {
@@ -1154,32 +1155,40 @@ impl Actor {
                     (
                         format!("{instance}/{name}"),
                         Box::pin(async {
-                            match res {
-                                Ok(results) => {
-                                    transmitter
-                                        .transmit_tuple_dynamic(result_subject, results)
-                                        .await
-                                }
-                                Err(err) => Err(err),
-                            }
+                            let results = res?;
+                            transmitter
+                                .transmit_tuple_dynamic(result_subject, results)
+                                .await
                         }),
                     )
                 }
-                InvocationParams::IncomingHttpHandle(_request) => {
-                    let _actor = actor
+                InvocationParams::IncomingHttpHandle(request) => {
+                    let actor = actor
                         .into_incoming_http()
                         .await
                         .context("failed to instantiate `wasi:http/incoming-handler`")?;
-                    bail!("incoming HTTP not supported yet")
-                    // TODO: Implement
-                    //let res = actor
-                    //    .handle(http::Request::default())
-                    //    .await
-                    //    .context("failed to call `wasi:http/incoming-handler.handle`")?;
-                    //(
-                    //    "wrpc:http/incoming-handler.handle".to_string(),
-                    //    Box::pin(async { Ok(()) }),
-                    //)
+                    let res = actor
+                        .handle(request)
+                        .await
+                        .context("failed to call `wasi:http/incoming-handler.handle`");
+                    (
+                        "wrpc:http/incoming-handler.handle".to_string(),
+                        Box::pin(async {
+                            let res = match res? {
+                                Ok(resp) => {
+                                    let (resp, _errors) =
+                                        wrpc_interface_http::try_wasmtime_to_outgoing_response(
+                                            resp,
+                                        )
+                                        .context("failed to convert response")?;
+                                    // TODO: Consider handling body errors here
+                                    Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
+                                }
+                                Err(err) => Err(err.into()),
+                            };
+                            transmitter.transmit_static(result_subject, res).await
+                        }),
+                    )
                 }
             };
         // Record metric on duration of the call
@@ -2090,7 +2099,7 @@ impl Host {
                     use wrpc_interface_http::IncomingHandler;
 
                     let invocations = wrpc
-                        .serve_handle()
+                        .serve_handle_wasmtime()
                         .await
                         .context("failed to serve `wrpc:http/incoming-handler.handle`")?;
                     exports.push(Box::new(invocations.map(move |invocation| {

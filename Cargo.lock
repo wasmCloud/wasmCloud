@@ -6498,9 +6498,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-http"
-version = "0.11.2"
+version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc563243cc546d3878ba3ac34198b8da0285fb1bdb24b4d371a72fc58bf9fdd9"
+checksum = "70125b9803618e479e5e0e671cba67d030399cc8b7084dd2da4d9924489d1e5a"
 dependencies = [
  "anyhow",
  "async-trait",
