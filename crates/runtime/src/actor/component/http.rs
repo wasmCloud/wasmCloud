@@ -5,7 +5,7 @@ use crate::capability::{IncomingHttp, OutgoingHttp};
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use tokio::sync::{oneshot, Mutex};
 use wasmtime::component::{Resource, ResourceTable};
@@ -119,9 +119,6 @@ impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
             .wasi_http_incoming_handler()
             .call_handle(&mut *store, request, response)
             .await?;
-        match response_rx.try_recv() {
-            Ok(res) => Ok(res),
-            Err(_) => bail!("a response was not set"),
-        }
+        response_rx.try_recv().context("a response was not set")
     }
 }
