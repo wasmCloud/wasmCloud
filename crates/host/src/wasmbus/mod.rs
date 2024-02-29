@@ -14,14 +14,13 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
-use async_nats::Subscriber;
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::future::Either;
-use futures::stream::{AbortHandle, Abortable, SelectAll};
+use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
@@ -34,11 +33,6 @@ use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
-use wasmcloud_tracing::{global, KeyValue};
-use wasmtime_wasi_http::body::HyperIncomingBody;
-use wrpc_transport::{AsyncSubscription, AsyncValue, Encode, Receive, Subscribe};
-
-pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, CtlResponse,
@@ -55,9 +49,12 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
+use wasmcloud_tracing::{global, KeyValue};
+use wasmtime_wasi_http::body::HyperIncomingBody;
 use wrpc_transport::{
     AcceptedInvocation, Client, DynamicTuple, EncodeSync, IncomingInputStream, Transmitter,
 };
+use wrpc_transport::{AsyncSubscription, AsyncValue, Encode, Receive, Subscribe};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -68,11 +65,13 @@ use crate::{
 /// wasmCloud host configuration
 pub mod config;
 
+pub use config::Host as HostConfig;
+
 mod event;
 
 #[derive(Debug)]
 struct Queue {
-    all_streams: SelectAll<Subscriber>,
+    all_streams: SelectAll<async_nats::Subscriber>,
 }
 
 impl Stream for Queue {
@@ -1099,6 +1098,16 @@ impl Deref for Actor {
     }
 }
 
+// This enum is used to differentiate between component export invocations
+enum InvocationParams {
+    Custom {
+        instance: Arc<String>,
+        name: Arc<String>,
+        params: Vec<wrpc_transport::Value>,
+    },
+    IncomingHttpHandle(wrpc_interface_http::IncomingRequest),
+}
+
 impl Actor {
     /// Returns the component specification for this unique actor
     pub(crate) async fn component_specification(&self) -> ComponentSpecification {
@@ -1108,21 +1117,17 @@ impl Actor {
     }
 
     /// Handle an incoming wRPC request to invoke an export on this actor instance.
-    async fn handle_wrpc_call(
+    async fn handle_invocation(
         &self,
-        instance: &str,
-        name: &str,
-        inv_params: Vec<wrpc_transport::Value>,
-        response_subject: wrpc_transport_nats::Subject,
+        params: InvocationParams,
+        result_subject: wrpc_transport_nats::Subject,
         transmitter: &wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
         // TODO(#1548): implement querying policy server
 
         // Instantiate component with expected handlers
-        let mut component_instance = self
-            .instantiate()
-            .expect("should be able to instantiate actor");
-        component_instance
+        let mut actor = self.instantiate().context("failed to instantiate actor")?;
+        actor
             .stderr(stderr())
             .await
             .context("failed to set stderr")?
@@ -1135,29 +1140,59 @@ impl Actor {
             .outgoing_http(Arc::new(self.handler.clone()));
 
         let start_at = Instant::now();
-        let response = component_instance.call(instance, name, inv_params).await;
+        let (operation, tx): (_, Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>) =
+            match params {
+                InvocationParams::Custom {
+                    instance,
+                    name,
+                    params,
+                } => {
+                    let res = actor
+                        .call(&instance, &name, params)
+                        .await
+                        .context("failed to call actor");
+                    (
+                        format!("{instance}/{name}"),
+                        Box::pin(async {
+                            match res {
+                                Ok(results) => {
+                                    transmitter
+                                        .transmit_tuple_dynamic(result_subject, results)
+                                        .await
+                                }
+                                Err(err) => Err(err),
+                            }
+                        }),
+                    )
+                }
+                InvocationParams::IncomingHttpHandle(_request) => {
+                    let _actor = actor
+                        .into_incoming_http()
+                        .await
+                        .context("failed to instantiate `wasi:http/incoming-handler`")?;
+                    bail!("incoming HTTP not supported yet")
+                    // TODO: Implement
+                    //let res = actor
+                    //    .handle(http::Request::default())
+                    //    .await
+                    //    .context("failed to call `wasi:http/incoming-handler.handle`")?;
+                    //(
+                    //    "wrpc:http/incoming-handler.handle".to_string(),
+                    //    Box::pin(async { Ok(()) }),
+                    //)
+                }
+            };
         // Record metric on duration of the call
-        let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
         self.metrics
             .wasmcloud_host_handle_rpc_message_duration_ns
             .record(
-                elapsed,
+                u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default(),
                 &[
                     KeyValue::new("actor.ref", self.image_reference.clone()),
-                    KeyValue::new("operation", format!("{instance}/{name}")),
+                    KeyValue::new("operation", operation),
                 ],
             );
-        match response {
-            Ok(resp) => {
-                transmitter
-                    .transmit_tuple_dynamic(response_subject, resp)
-                    .await
-            }
-            Err(e) => {
-                error!("failed to handle wrpc request: {e}");
-                Ok(())
-            }
-        }
+        tx.await
     }
 }
 
@@ -2021,119 +2056,143 @@ impl Host {
     async fn instantiate_actor(
         &self,
         annotations: &Annotations,
-        actor_ref: impl AsRef<str>,
-        actor_id: impl AsRef<str>,
+        actor_ref: String,
+        actor_id: String,
         max_instances: NonZeroUsize,
         component: wasmcloud_runtime::Component,
         handler: Handler,
     ) -> anyhow::Result<Arc<Actor>> {
-        trace!(
-            actor_ref = actor_ref.as_ref(),
-            max_instances,
-            "instantiating actor"
+        trace!(actor_ref, max_instances, "instantiating actor");
+
+        let wrpc = wrpc_transport_nats::Client::new(
+            self.rpc_nats.clone(),
+            format!("{}.{actor_id}", self.host_config.lattice),
         );
+        let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
+        let actor = Arc::new(Actor {
+            component: component.clone(),
+            id: actor_id,
+            calls: calls_abort,
+            handler: handler.clone(),
+            annotations: annotations.clone(),
+            max_instances,
+            valid_issuers: self.cluster_issuers.clone(),
+            policy_manager: Arc::clone(&self.policy_manager),
+            image_reference: actor_ref,
+            actor_claims: Arc::clone(&self.actor_claims),
+            metrics: Arc::clone(&self.metrics),
+        });
 
-        let actor_ref = actor_ref.as_ref();
-        let actor_id = actor_id.as_ref();
-        let component = component.clone();
-        let handler = handler.clone();
+        let mut exports: Vec<Box<dyn Stream<Item = _> + Send + Unpin>> = Vec::new();
+        for (instance, functions) in component.exports().iter() {
+            match instance.as_str() {
+                "wasi:http/incoming-handler@0.2.0" => {
+                    use wrpc_interface_http::IncomingHandler;
 
-        let lattice = &self.host_config.lattice;
-        let prefix = format!("{lattice}.{actor_id}");
-        let wrpc_client = wrpc_transport_nats::Client::new(self.rpc_nats.clone(), prefix);
-        let instance = async move {
-            let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
-            let actor_instance = Arc::new(Actor {
-                component: component.clone(),
-                id: actor_id.to_string(),
-                calls: calls_abort,
-                handler: handler.clone(),
-                annotations: annotations.clone(),
-                max_instances,
-                valid_issuers: self.cluster_issuers.clone(),
-                policy_manager: Arc::clone(&self.policy_manager),
-                image_reference: actor_ref.to_string(),
-                actor_claims: Arc::clone(&self.actor_claims),
-                metrics: Arc::clone(&self.metrics),
-            });
-
-            let mut component_export_handlers = Vec::new();
-            let exports = component.exports();
-            for (instance, name_and_func) in exports.iter() {
-                for (name, function) in name_and_func {
-                    if let wrpc_types::DynamicFunction::Static { params, .. } = function {
-                        let instance = instance.clone();
-                        let name = name.clone();
-                        // TODO(#1220): In order to implement invocation signing and response verification, we can override the
-                        // wrpc_transport::Invocation and wrpc_transport::Client trait in order to wrap the invocation with necessary
-                        // logic to verify the incoming invocations and sign the outgoing responses.
-                        trace!(instance, name, "serving wrpc function export");
-                        let export_handler = wrpc_client
-                            .serve_dynamic(&instance, &name, params.clone())
-                            .await
-                            .expect("should be able to serve function export")
-                            // map the stream to include the instance and name to call for each invocation
-                            .map(move |invocation| (instance.clone(), name.clone(), invocation));
-                        component_export_handlers.push(export_handler);
-                    }
-                }
-            }
-
-            let all_handlers = futures::stream::select_all::select_all(component_export_handlers);
-            let limit = max_instances.get();
-            let actor_instance = Arc::clone(&actor_instance);
-            let _calls = spawn({
-                let actor_instance = Arc::clone(&actor_instance);
-                Abortable::new(all_handlers, calls_abort_reg).for_each_concurrent(
-                    limit,
-                    move |(instance, name, invocation)| {
-                        let actor_instance = Arc::clone(&actor_instance);
-                        async move {
-                            let AcceptedInvocation {
+                    let invocations = wrpc
+                        .serve_handle()
+                        .await
+                        .context("failed to serve `wrpc:http/incoming-handler.handle`")?;
+                    exports.push(Box::new(invocations.map(move |invocation| {
+                        invocation.map(
+                            |AcceptedInvocation {
+                                 context,
+                                 params,
+                                 result_subject,
+                                 error_subject,
+                                 transmitter,
+                             }| AcceptedInvocation {
                                 context,
-                                params,
+                                params: InvocationParams::IncomingHttpHandle(params),
                                 result_subject,
                                 error_subject,
                                 transmitter,
-                            } = match invocation {
-                                Ok(invocation) => invocation,
-                                Err(err) => {
-                                    error!(?err, "failed to accept invocation");
-                                    return;
-                                }
-                            };
-                            // TODO(#1568): Propagate the trace parent from context (headers)
-                            // Linked PR above is when the functionality was removed.
-                            _ = context;
-                            let actor_instance = Arc::clone(&actor_instance);
-                            if let Err(err) = actor_instance
-                                .handle_wrpc_call(
-                                    &instance,
-                                    &name,
-                                    params,
-                                    result_subject,
-                                    &transmitter,
+                            },
+                        )
+                    })))
+                }
+                _ => {
+                    let instance = Arc::new(instance.to_string());
+                    for (name, function) in functions {
+                        if let wrpc_types::DynamicFunction::Static { params, .. } = function {
+                            // TODO(#1220): In order to implement invocation signing and response verification, we can override the
+                            // wrpc_transport::Invocation and wrpc_transport::Client trait in order to wrap the invocation with necessary
+                            // logic to verify the incoming invocations and sign the outgoing responses.
+                            trace!(?instance, name, "serving wrpc function export");
+                            let invocations = wrpc
+                                .serve_dynamic(&instance, name, params.clone())
+                                .await
+                                .context("failed to serve custom function export")?;
+                            let name = Arc::new(name.to_string());
+                            let instance = Arc::clone(&instance);
+                            exports.push(Box::new(invocations.map(move |invocation| {
+                                invocation.map(
+                                    |AcceptedInvocation {
+                                         context,
+                                         params,
+                                         result_subject,
+                                         error_subject,
+                                         transmitter,
+                                     }| AcceptedInvocation {
+                                        context,
+                                        params: InvocationParams::Custom {
+                                            instance: Arc::clone(&instance),
+                                            name: Arc::clone(&name),
+                                            params,
+                                        },
+                                        result_subject,
+                                        error_subject,
+                                        transmitter,
+                                    },
                                 )
+                            })));
+                        }
+                    }
+                }
+            }
+        }
+
+        let _calls = spawn({
+            let actor = Arc::clone(&actor);
+            Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
+                max_instances.get(),
+                move |invocation| {
+                    let actor = Arc::clone(&actor);
+                    async move {
+                        let AcceptedInvocation {
+                            context,
+                            params,
+                            result_subject,
+                            error_subject,
+                            transmitter,
+                        } = match invocation {
+                            Ok(invocation) => invocation,
+                            Err(err) => {
+                                error!(?err, "failed to accept invocation");
+                                return;
+                            }
+                        };
+                        // TODO(#1568): Propagate the trace parent from context (headers)
+                        // Linked PR above is when the functionality was removed.
+                        _ = context;
+                        if let Err(err) = {
+                            actor
+                                .handle_invocation(params, result_subject, &transmitter)
+                                .await
+                        } {
+                            error!(?err, "failed to handle invocation");
+                            if let Err(err) = transmitter
+                                .transmit_static(error_subject, format!("{err:#}"))
                                 .await
                             {
-                                error!(?err, "failed to handle invocation");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit error to invoker");
-                                }
+                                error!(?err, "failed to transmit error to invoker");
                             }
                         }
-                    },
-                )
-            });
-            anyhow::Result::<_>::Ok(actor_instance)
-        }
-        .await
-        .context("failed to instantiate actor")?;
-
-        Ok(instance)
+                    }
+                },
+            )
+        });
+        Ok(actor)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2204,8 +2263,8 @@ impl Host {
         let actor = self
             .instantiate_actor(
                 &annotations,
-                &actor_ref,
-                &actor_id,
+                actor_ref.clone(),
+                actor_id,
                 max_instances,
                 component.clone(),
                 handler.clone(),
@@ -2516,8 +2575,8 @@ impl Host {
                     let instance = self
                         .instantiate_actor(
                             &annotations,
-                            &actor_ref,
-                            &actor.id,
+                            actor_ref.to_string(),
+                            actor.id.to_string(),
                             max,
                             actor.component.clone(),
                             actor.handler.clone(),
@@ -2595,8 +2654,8 @@ impl Host {
         let Ok(new_actor) = self
             .instantiate_actor(
                 &annotations,
-                &new_actor_ref,
-                &actor_id,
+                new_actor_ref.clone(),
+                actor_id.clone(),
                 max,
                 new_actor.clone(),
                 actor.handler.clone(),
