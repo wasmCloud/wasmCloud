@@ -229,10 +229,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .map_err(|e| e.trace())
             .expect("failed to get `foo`")
             .expect("`foo` does not exist in bucket");
-        let foo_value_size = foo_value
-            .incoming_value_size()
-            .expect("failed to get `foo` size");
-        assert_eq!(foo_value_size, 3);
+        assert!(foo_value.incoming_value_size().is_err());
 
         let foo_value = keyvalue::types::IncomingValue::incoming_value_consume_sync(foo_value)
             .map_err(|e| e.trace())

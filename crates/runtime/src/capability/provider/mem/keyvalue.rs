@@ -3,14 +3,15 @@ use crate::capability::{KeyValueAtomic, KeyValueEventual};
 use core::sync::atomic::AtomicU64;
 
 use std::collections::{hash_map, BTreeMap, HashMap};
-use std::io::Cursor;
 use std::sync::atomic::Ordering;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use tokio::io::AsyncReadExt;
+use futures::stream;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing::instrument;
+use wrpc_transport::IncomingInputStream;
 
 /// Bucket entry
 #[derive(Debug)]
@@ -133,11 +134,7 @@ impl KeyValueAtomic for KeyValue {
 #[async_trait]
 impl KeyValueEventual for KeyValue {
     #[instrument]
-    async fn get(
-        &self,
-        bucket: &str,
-        key: String,
-    ) -> anyhow::Result<Option<(Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>, u64)>> {
+    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?.read().await;
         let value = match bucket.get(&key) {
@@ -145,11 +142,7 @@ impl KeyValueEventual for KeyValue {
             Some(Entry::Atomic(value)) => value.load(Ordering::Relaxed).to_string().into_bytes(),
             Some(Entry::Blob(value)) => value.clone(),
         };
-        let size = value
-            .len()
-            .try_into()
-            .context("size does not fit in `u64`")?;
-        Ok(Some((Box::new(Cursor::new(value)), size)))
+        Ok(Some(Box::new(stream::iter([Ok(value)]))))
     }
 
     #[instrument(skip(value))]
@@ -157,7 +150,7 @@ impl KeyValueEventual for KeyValue {
         &self,
         bucket: &str,
         key: String,
-        mut value: Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>,
+        mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
         let mut buf = vec![];
         value

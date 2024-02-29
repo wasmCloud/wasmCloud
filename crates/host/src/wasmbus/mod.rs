@@ -8,7 +8,6 @@ use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
-use std::io::Cursor;
 use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -28,7 +27,7 @@ use futures::{
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{empty, stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
@@ -59,7 +58,7 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
-use wrpc_transport::{AcceptedInvocation, Client, DynamicTuple, Transmitter};
+use wrpc_transport::{AcceptedInvocation, Client, DynamicTuple, IncomingInputStream, Transmitter};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -335,59 +334,77 @@ fn decode_empty_provider_response(buf: impl AsRef<[u8]>) -> anyhow::Result<()> {
 impl Blobstore for Handler {
     #[instrument]
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:blobstore/Blobstore.CreateContainer",
-            &name,
-        )
-        .await
-        .and_then(decode_empty_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_create_container(name.to_string())
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.create-container`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
     }
 
     #[instrument]
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:blobstore/Blobstore.ContainerExists",
-            &name,
-        )
-        .await
-        .and_then(decode_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_container_exists(name.to_string())
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.container-exists`")?;
+        // TODO: return a result directly
+        let exists = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(exists)
     }
 
     #[instrument]
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:blobstore/Blobstore.DeleteContainer",
-            &name,
-        )
-        .await
-        .and_then(decode_empty_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_delete_container(name.to_string())
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.delete-container`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
     }
 
     #[instrument]
@@ -395,33 +412,28 @@ impl Blobstore for Handler {
         &self,
         name: &str,
     ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::{Blobstore, ContainerMetadata};
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:blobstore/Blobstore.GetContainerInfo",
-                &name,
-            )
-            .await?;
-        let wasmcloud_compat::blobstore::ContainerMetadata {
-            container_id: name,
-            created_at,
-        } = decode_provider_response(res)?;
-        let created_at = created_at
-            .map(|wasmcloud_compat::Timestamp { sec, .. }| sec.try_into())
-            .transpose()
-            .context("timestamp seconds do not fit in `u64`")?;
-        Ok(blobstore::container::ContainerMetadata {
-            name,
-            created_at: created_at.unwrap_or_default(),
-        })
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_get_container_info(name.to_string())
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.get-container-info`")?;
+        // TODO: return a result directly
+        let ContainerMetadata { name, created_at } =
+            res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(blobstore::container::ContainerMetadata { name, created_at })
     }
 
     #[instrument]
@@ -430,78 +442,63 @@ impl Blobstore for Handler {
         container: &str,
         name: String,
         range: RangeInclusive<u64>,
-    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+    ) -> anyhow::Result<IncomingInputStream> {
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:blobstore/Blobstore.GetObject",
-                &wasmcloud_compat::blobstore::GetObjectRequest {
-                    object_id: name.clone(),
-                    container_id: container.into(),
-                    range_start: Some(*range.start()),
-                    range_end: Some(*range.end()),
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_get_container_data(
+                ObjectId {
+                    container: container.to_string(),
+                    object: name,
                 },
+                *range.start(),
+                *range.end(),
             )
-            .await?;
-        let wasmcloud_compat::blobstore::GetObjectResponse {
-            success,
-            error,
-            initial_chunk,
-            ..
-        } = decode_provider_response(res)?;
-        match (success, initial_chunk, error) {
-            (_, _, Some(err)) => Err(anyhow!(err).context("failed to get object response")),
-            (false, _, None) => bail!("failed to get object response"),
-            (true, None, None) => Ok((Box::new(empty()), 0)),
-            (
-                true,
-                Some(wasmcloud_compat::blobstore::Chunk {
-                    object_id,
-                    container_id,
-                    bytes,
-                    ..
-                }),
-                None,
-            ) => {
-                ensure!(object_id == name);
-                ensure!(container_id == container);
-                let size = bytes
-                    .len()
-                    .try_into()
-                    .context("value size does not fit in `u64`")?;
-                Ok((Box::new(Cursor::new(bytes)), size))
-            }
-        }
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.get-container-data`")?;
+        // TODO: return a result directly
+        let data = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(data)
     }
 
     #[instrument]
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:blobstore/Blobstore.ObjectExists",
-            &wasmcloud_compat::blobstore::ContainerObject {
-                container_id: container.into(),
-                object_id: name,
-            },
-        )
-        .await
-        .and_then(decode_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_has_object(ObjectId {
+                container: container.to_string(),
+                object: name,
+            })
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.has-object`")?;
+        // TODO: return a result directly
+        let has = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(has)
     }
 
     #[instrument(skip(value))]
@@ -511,75 +508,63 @@ impl Blobstore for Handler {
         name: String,
         mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        let mut bytes = Vec::new();
-        value
-            .read_to_end(&mut bytes)
-            .await
-            .context("failed to read bytes")?;
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:blobstore/Blobstore.PutObject",
-                &wasmcloud_compat::blobstore::PutObjectRequest {
-                    chunk: wasmcloud_compat::blobstore::Chunk {
-                        object_id: name,
-                        container_id: container.into(),
-                        bytes,
-                        offset: 0,
-                        is_last: true,
-                    },
-                    ..Default::default()
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let mut buf = vec![];
+        value
+            .read_to_end(&mut buf)
+            .await
+            .context("failed to read value")?;
+        let (res, tx) = wrpc
+            .invoke_write_container_data(
+                ObjectId {
+                    container: container.to_string(),
+                    object: name,
                 },
+                stream::iter([buf.into()]),
             )
-            .await?;
-        let wasmcloud_compat::blobstore::PutObjectResponse { stream_id } =
-            decode_provider_response(res)?;
-        ensure!(
-            stream_id.is_none(),
-            "provider returned an unexpected stream ID"
-        );
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.write-container-data`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
         Ok(())
     }
 
     #[instrument]
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:blobstore/Blobstore.RemoveObjects",
-                &wasmcloud_compat::blobstore::RemoveObjectsRequest {
-                    container_id: container.into(),
-                    objects: names,
-                },
-            )
-            .await?;
-        for wasmcloud_compat::blobstore::ItemResult {
-            key,
-            success,
-            error,
-        } in decode_provider_response::<Vec<_>>(res)?
-        {
-            if let Some(err) = error {
-                bail!(err)
-            }
-            ensure!(success, "failed to delete object `{key}`");
-        }
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let container = container.to_string();
+        let (res, tx) = wrpc
+            .invoke_delete_objects(container.to_string(), names)
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.write-container-data`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
         Ok(())
     }
 
@@ -587,36 +572,29 @@ impl Blobstore for Handler {
     async fn list_objects(
         &self,
         container: &str,
-    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<Vec<String>>> + Sync + Send + Unpin>>
+    {
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:blobstore/Blobstore.ListObjects",
-                &wasmcloud_compat::blobstore::ListObjectsRequest {
-                    container_id: container.into(),
-                    max_items: Some(u32::MAX),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let wasmcloud_compat::blobstore::ListObjectsResponse {
-            objects,
-            is_last,
-            continuation,
-        } = decode_provider_response(res)?;
-        ensure!(is_last);
-        ensure!(continuation.is_none(), "chunked responses not supported");
-        Ok(Box::new(stream::iter(objects.into_iter().map(
-            |wasmcloud_compat::blobstore::ObjectMetadata { object_id, .. }| Ok(object_id),
-        ))))
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        // TODO: implement a stream with limit and offset
+        let (res, tx) = wrpc
+            .invoke_list_container_objects(container.to_string(), None, None)
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.list-container-objects`")?;
+        let names = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(names)
     }
 
     #[instrument]
@@ -625,29 +603,66 @@ impl Blobstore for Handler {
         container: &str,
         name: String,
     ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_blobstore::{Blobstore, ObjectId, ObjectMetadata};
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
                 "blobstore",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(target, "wasmcloud:blobstore/Blobstore.GetObjectInfo", &name)
-            .await?;
-        let wasmcloud_compat::blobstore::ObjectMetadata {
-            object_id,
-            container_id,
-            content_length,
-            ..
-        } = decode_provider_response(res)?;
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_get_object_info(ObjectId {
+                container: container.to_string(),
+                object: name,
+            })
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.get-object-info`")?;
+        // TODO: return a result directly
+        let ObjectMetadata {
+            name,
+            container,
+            created_at,
+            size,
+        } = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
         Ok(blobstore::container::ObjectMetadata {
-            name: object_id,
-            container: container_id,
-            size: content_length,
-            created_at: 0,
+            name,
+            container,
+            created_at,
+            size,
         })
+    }
+
+    #[instrument]
+    async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::Blobstore;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+                None,
+            )))
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let container = container.to_string();
+        let (res, tx) = wrpc
+            .invoke_clear_container(container.to_string())
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.clear-container`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
     }
 }
 
@@ -762,25 +777,24 @@ impl Bus for Handler {
 impl KeyValueAtomic for Handler {
     #[instrument(skip(self))]
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
-        if !bucket.is_empty() {
-            bail!("buckets not currently supported")
-        }
-        let value = delta.try_into().context("delta does not fit in `i32`")?;
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_keyvalue::Atomic;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "atomic", None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:keyvalue/KeyValue.Increment",
-                &wasmcloud_compat::keyvalue::IncrementRequest { key, value },
-            )
-            .await?;
-        let new: i32 = decode_provider_response(res)?;
-        let new = new.try_into().context("result does not fit in `u64`")?;
-        Ok(new)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_increment(bucket.to_string(), key, delta)
+            .await
+            .context("failed to invoke `wrpc:keyvalue/atomic.increment`")?;
+        // TODO: return a result directly
+        let value = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(value)
     }
 
     #[allow(unused)] // TODO: Implement https://github.com/wasmCloud/wasmCloud/issues/457
@@ -792,39 +806,49 @@ impl KeyValueAtomic for Handler {
         old: u64,
         new: u64,
     ) -> anyhow::Result<bool> {
-        bail!("not supported")
+        use wrpc_interface_keyvalue::Atomic;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "atomic", None,
+            )))
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_compare_and_swap(bucket.to_string(), key, old, new)
+            .await
+            .context("failed to invoke `wrpc:keyvalue/atomic.compare-and-swap`")?;
+        // TODO: return a result directly
+        let value = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(value)
     }
 }
 
 #[async_trait]
 impl KeyValueEventual for Handler {
     #[instrument(skip(self))]
-    async fn get(
-        &self,
-        bucket: &str,
-        key: String,
-    ) -> anyhow::Result<Option<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>> {
-        if !bucket.is_empty() {
-            bail!("buckets not currently supported")
-        }
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
+        use wrpc_interface_keyvalue::Eventual;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "eventual", None,
             )))
-            .await?;
-        let res = self
-            .call_operation(target, "wasmcloud:keyvalue/KeyValue.Get", &key)
-            .await?;
-        let wasmcloud_compat::keyvalue::GetResponse { value, exists } =
-            decode_provider_response(res)?;
-        if !exists {
-            return Ok(None);
-        }
-        let size = value
-            .len()
-            .try_into()
-            .context("value size does not fit in `u64`")?;
-        Ok(Some((Box::new(Cursor::new(value)), size)))
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_get(bucket.to_string(), key)
+            .await
+            .context("failed to invoke `wrpc:keyvalue/eventual.get`")?;
+        // TODO: return a result directly
+        let value = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(value)
     }
 
     #[instrument(skip(self, value))]
@@ -834,63 +858,75 @@ impl KeyValueEventual for Handler {
         key: String,
         mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        if !bucket.is_empty() {
-            bail!("buckets not currently supported")
-        }
-        let mut buf = String::new();
-        value
-            .read_to_string(&mut buf)
-            .await
-            .context("failed to read value")?;
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_keyvalue::Eventual;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "eventual", None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:keyvalue/KeyValue.Set",
-            &wasmcloud_compat::keyvalue::SetRequest {
-                key,
-                value: buf,
-                expires: 0,
-            },
-        )
-        .await
-        .and_then(decode_empty_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
+        let mut buf = vec![];
+        value
+            .read_to_end(&mut buf)
+            .await
+            .context("failed to read value")?;
+        let (res, tx) = wrpc
+            .invoke_set(bucket.to_string(), key, stream::iter([buf.into()]))
+            .await
+            .context("failed to invoke `wrpc:keyvalue/eventual.set`")?;
+        // TODO: return a result directly
+        let value = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(value)
     }
 
     #[instrument(skip(self))]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
-        if !bucket.is_empty() {
-            bail!("buckets not currently supported")
-        }
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_keyvalue::Eventual;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "eventual", None,
             )))
-            .await?;
-        let res = self
-            .call_operation(target, "wasmcloud:keyvalue/KeyValue.Del", &key)
-            .await?;
-        let deleted: bool = decode_provider_response(res)?;
-        ensure!(deleted, "key not found");
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
+        let (res, tx) = wrpc
+            .invoke_delete(bucket.to_string(), key)
+            .await
+            .context("failed to invoke `wrpc:keyvalue/eventual.delete`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
         Ok(())
     }
 
     #[instrument(skip(self))]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
-        if !bucket.is_empty() {
-            bail!("buckets not currently supported")
-        }
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        use wrpc_interface_keyvalue::Eventual;
+
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "eventual", None,
             )))
-            .await?;
-        self.call_operation(target, "wasmcloud:keyvalue/KeyValue.Contains", &key)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_exists(bucket.to_string(), key)
             .await
-            .and_then(decode_provider_response)
+            .context("failed to invoke `wrpc:keyvalue/eventual.exists`")?;
+        // TODO: return a result directly
+        let exists = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(exists)
     }
 }
 
@@ -1069,20 +1105,18 @@ impl OutgoingHttp for Handler {
     > {
         use wrpc_interface_http::OutgoingHandler;
 
-        let Some(TargetEntity::Wrpc(WrpcInterfaceTarget { id, .. })) = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "http",
                 "outgoing-handler",
                 None,
             )))
             .await?
-        else {
-            bail!("invalid target")
-        };
+            .context("unknown target")?;
         let wrpc =
             wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
-        let (resp, body_errors, tx) = wrpc
+        let (res, body_errors, tx) = wrpc
             .invoke_handle_wasmtime(request)
             .await
             .context("failed to invoke `wrpc:http/outgoing-handler.handle`")?;
@@ -1093,7 +1127,7 @@ impl OutgoingHttp for Handler {
         });
         // TODO: Do not ignore outgoing body errors
         let _ = body_errors;
-        Ok(resp)
+        Ok(res)
     }
 }
 

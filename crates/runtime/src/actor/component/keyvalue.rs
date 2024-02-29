@@ -2,13 +2,14 @@ use super::{Ctx, Instance};
 
 use crate::capability::keyvalue::{atomic, eventual, types, wasi_keyvalue_error};
 use crate::capability::{KeyValueAtomic, KeyValueEventual};
-use crate::io::AsyncVec;
+use crate::io::{AsyncVec, IncomingInputStreamReader};
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, ensure, Context};
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use futures::TryStreamExt as _;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tracing::instrument;
 use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
@@ -85,11 +86,8 @@ impl eventual::Host for Ctx {
     ) -> anyhow::Result<Result<Option<Resource<types::IncomingValue>>>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match self.handler.get(bucket, key).await {
-            Ok(Some((stream, size))) => {
-                let value = self
-                    .table
-                    .push((stream, size))
-                    .context("failed to push stream and size")?;
+            Ok(Some(stream)) => {
+                let value = self.table.push(stream).context("failed to push stream")?;
                 Ok(Ok(Some(value)))
             }
             Ok(None) => Ok(Ok(None)),
@@ -246,7 +244,8 @@ impl types::HostOutgoingValue for Ctx {
 impl types::HostIncomingValue for Ctx {
     #[instrument]
     fn drop(&mut self, incoming_value: Resource<types::IncomingValue>) -> anyhow::Result<()> {
-        self.table
+        let _ = self
+            .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
         Ok(())
@@ -257,18 +256,12 @@ impl types::HostIncomingValue for Ctx {
         &mut self,
         incoming_value: Resource<types::IncomingValue>,
     ) -> anyhow::Result<Result<types::IncomingValueSyncBody>> {
-        let (stream, size) = self
+        let stream = self
             .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
-        let mut stream = stream.take(size);
-        let size = size.try_into().context("size does not fit in `usize`")?;
-        let mut buf = Vec::with_capacity(size);
-        match stream.read_to_end(&mut buf).await {
-            Ok(n) => {
-                ensure!(n == size);
-                Ok(Ok(buf))
-            }
+        match stream.try_collect::<Vec<Vec<_>>>().await {
+            Ok(bufs) => Ok(Ok(bufs.concat())),
             Err(err) => {
                 let err = self
                     .table
@@ -284,13 +277,15 @@ impl types::HostIncomingValue for Ctx {
         &mut self,
         incoming_value: Resource<types::IncomingValue>,
     ) -> anyhow::Result<Result<Resource<InputStream>>> {
-        let (stream, _) = self
+        let stream = self
             .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
+            .push(InputStream::Host(Box::new(AsyncReadStream::new(
+                IncomingInputStreamReader::new(stream),
+            ))))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
@@ -298,13 +293,13 @@ impl types::HostIncomingValue for Ctx {
     #[instrument]
     async fn incoming_value_size(
         &mut self,
-        incoming_value: Resource<types::IncomingValue>,
+        _incoming_value: Resource<types::IncomingValue>,
     ) -> anyhow::Result<Result<u64>> {
-        let (_, size): &(Box<dyn AsyncRead + Sync + Send + Unpin>, _) = self
+        let err = self
             .table
-            .get(&incoming_value)
-            .context("failed to get incoming value")?;
-        Ok(Ok(*size))
+            .push(anyhow!("size unknown"))
+            .context("failed to push error")?;
+        Ok(Err(err))
     }
 }
 
