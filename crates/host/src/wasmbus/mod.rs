@@ -8,6 +8,7 @@ use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
+use std::f32::consts::E;
 use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -65,6 +66,8 @@ use crate::{
 
 /// wasmCloud host configuration
 pub mod config;
+/// wasmCloud [wrpc_transport] implementations
+pub mod wasmcloud_transport;
 
 pub use config::Host as HostConfig;
 
@@ -171,6 +174,8 @@ struct Handler {
     config_data: Arc<RwLock<ConfigCache>>,
     lattice: String,
     claims: jwt::Claims<jwt::Actor>,
+    /// The identifier of the component that this handler is associated with
+    component_id: String,
     /// The current link name to use for interface targets, overridable in actor code via set_target()
     interface_link_name: Arc<RwLock<LinkName>>,
 
@@ -623,9 +628,14 @@ impl Bus for Handler {
                 .polyfilled_imports
                 .get(instance)
                 .and_then(|functions| functions.get(name)).with_context(|| format!("polyfilled import {instance}/{name} not found, could not determine result types"))?;
-            let (results, tx) = wrpc_transport_nats::Client::new(
+
+            let injector = TraceContextInjector::default_with_span();
+            let mut headers = injector_to_headers(&injector);
+            headers.insert("source-id", self.component_id.as_str());
+            let (results, tx) = wasmcloud_transport::Client::new(
                 self.nats.clone(),
                 format!("{}.{id}", self.lattice),
+                headers,
             )
             .invoke_dynamic(instance, name, DynamicTuple(params), results)
             .await?;
@@ -1120,11 +1130,29 @@ impl Actor {
     /// Handle an incoming wRPC request to invoke an export on this actor instance.
     async fn handle_invocation(
         &self,
+        context: Option<async_nats::HeaderMap>,
         params: InvocationParams,
         result_subject: wrpc_transport_nats::Subject,
         transmitter: &wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
         // TODO(#1548): implement querying policy server
+        let injector = TraceContextInjector::default_with_span();
+        let trace_headers = injector_to_headers(&injector);
+
+        if let Some(ref context) = context {
+            // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
+            // flattening the values
+            let trace_context = context
+                .iter()
+                .flat_map(|(key, value)| {
+                    value
+                        .iter()
+                        .map(|v| (key.to_string(), v.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<(String, String)>>();
+            wasmcloud_tracing::context::attach_span_context(&trace_context);
+        }
 
         // Instantiate component with expected handlers
         let mut actor = self.instantiate().context("failed to instantiate actor")?;
@@ -1174,9 +1202,25 @@ impl Actor {
                         format!("{instance}/{name}"),
                         Box::pin(async {
                             let results = res?;
-                            transmitter
+                            if let Some(mut headers) = context {
+                                // Append the current trace context headers to the invocation context
+                                trace_headers.iter().for_each(|(k, v)| {
+                                    v.iter().for_each(|v| {
+                                        headers.append(k.clone(), v.clone());
+                                    });
+                                });
+                                // Transmit the response with context headers
+                                wasmcloud_transport::TransmitterWithHeaders::new(
+                                    transmitter,
+                                    headers,
+                                )
                                 .transmit_tuple_dynamic(result_subject, results)
                                 .await
+                            } else {
+                                transmitter
+                                    .transmit_tuple_dynamic(result_subject, results)
+                                    .await
+                            }
                         }),
                     )
                 }
@@ -2194,12 +2238,9 @@ impl Host {
                                 return;
                             }
                         };
-                        // TODO(#1568): Propagate the trace parent from context (headers)
-                        // Linked PR above is when the functionality was removed.
-                        _ = context;
                         if let Err(err) = {
                             actor
-                                .handle_invocation(params, result_subject, &transmitter)
+                                .handle_invocation(context, params, result_subject, &transmitter)
                                 .await
                         } {
                             error!(?err, "failed to handle invocation");
@@ -2276,6 +2317,7 @@ impl Host {
             nats: self.rpc_nats.clone(),
             config_data: Arc::clone(&self.config_data_cache),
             lattice: self.host_config.lattice.clone(),
+            component_id: actor_id.clone(),
             claims: claims.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
