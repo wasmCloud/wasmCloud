@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
@@ -13,7 +12,7 @@ use http_body_util::BodyExt as _;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::fs;
-use tokio::io::{stderr, AsyncRead, AsyncReadExt};
+use tokio::io::stderr;
 use tokio::sync::RwLock;
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
@@ -288,7 +287,9 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .stderr(stderr())
             .await
             .context("failed to set stderr")?;
-        let req: Box<dyn AsyncRead + Send + Sync + Unpin> = Box::new(Cursor::new(BODY));
+        let body = http_body_util::Full::new(BODY.into())
+            .map_err(|_| unreachable!())
+            .boxed();
         let req = http::Request::builder()
             .method("POST")
             .uri("/foo?bar=baz")
@@ -296,7 +297,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .header("content-length", BODY.len())
             .header("host", "fake:42")
             .header("test-header", "test-value")
-            .body(req)
+            .body(body)
             .expect("failed to construct request");
         actor
             .into_incoming_http()
@@ -306,21 +307,20 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .await
             .context("failed to call `wasi:http/incoming-handler.handle`")?
     };
+    let res = res.context("request failed")?;
     let (
         http::response::Parts {
             status, headers, ..
         },
-        mut body,
+        body,
     ) = res.into_parts();
     ensure!(status.as_u16() == 200);
     ensure!(headers.is_empty());
-    let body = {
-        let mut buf = vec![];
-        body.read_to_end(&mut buf)
-            .await
-            .context("failed to read response body")?;
-        buf
-    };
+    let body = body
+        .collect()
+        .await
+        .context("failed to read response body")?;
+    let body = body.to_bytes();
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
     let published = match (published.next(), published.next()) {
