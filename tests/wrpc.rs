@@ -22,7 +22,7 @@ const PONGER_COMPONENT_ID: &str = "wrpc_ponger_component";
 #[tokio::test]
 async fn wrpc() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().pretty().without_time())
+        .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
