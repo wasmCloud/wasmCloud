@@ -59,7 +59,7 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
-use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
+use wrpc_transport::{AcceptedInvocation, Client, DynamicTuple, Transmitter};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -222,7 +222,7 @@ async fn resolve_target(target: Option<&TargetEntity>) -> anyhow::Result<WasmClo
 }
 
 impl Handler {
-    #[instrument(level = "debug", skip(self, operation, request))]
+    #[instrument(level = "debug", skip_all)]
     async fn call_operation_with_payload(
         &self,
         target: Option<TargetEntity>,
@@ -291,7 +291,7 @@ impl Handler {
         }
     }
 
-    #[instrument(level = "debug", skip(self, operation, request))]
+    #[instrument(level = "debug", skip_all)]
     async fn call_operation(
         &self,
         target: Option<TargetEntity>,
@@ -731,7 +731,7 @@ impl Bus for Handler {
             .unwrap_or_default()))
     }
 
-    #[instrument(level = "debug", skip(self, params))]
+    #[instrument(level = "debug", skip(self, target, params))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -748,7 +748,7 @@ impl Bus for Handler {
                 self.nats.clone(),
                 format!("{}.{id}", self.lattice),
             )
-            .invoke_dynamic(instance, name, params, results)
+            .invoke_dynamic(instance, name, DynamicTuple(params), results)
             .await?;
             tx.await.context("failed to transmit parameters")?;
             Ok(results)
