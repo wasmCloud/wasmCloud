@@ -18,17 +18,16 @@ mod bindgen {
 
     mod keyvalue {
         pub type Bucket = std::sync::Arc<String>;
-        pub type IncomingValue = (Box<dyn tokio::io::AsyncRead + Send + Sync + Unpin>, u64);
+        pub type IncomingValue = wrpc_transport::IncomingInputStream;
         pub type OutgoingValue = crate::io::AsyncVec;
         pub type Error = anyhow::Error;
     }
 
     mod blobstore {
         pub type Container = std::sync::Arc<String>;
-        pub type IncomingValue = (Box<dyn tokio::io::AsyncRead + Send + Sync + Unpin>, u64);
+        pub type IncomingValue = wrpc_transport::IncomingInputStream;
         pub type OutgoingValue = crate::io::AsyncVec;
-        pub type StreamObjectNames =
-            Box<dyn futures::Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>;
+        pub type StreamObjectNames = crate::io::BufferedIncomingStream<String>;
     }
 
     wasmtime::component::bindgen!({
