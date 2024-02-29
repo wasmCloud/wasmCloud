@@ -65,10 +65,8 @@ mod bindgen {
 }
 
 pub use bindgen::wasi::{blobstore, keyvalue, logging};
-pub use bindgen::wasmcloud::{
-    bus::{self, guest_config},
-    messaging,
-};
+pub use bindgen::wasmcloud::bus::{self, guest_config};
+pub use bindgen::wasmcloud::messaging;
 pub use bindgen::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;
 

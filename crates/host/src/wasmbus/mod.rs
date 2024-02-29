@@ -12,18 +12,17 @@ use std::process::Stdio;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context as ErrContext};
+use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
 use async_nats::Subscriber;
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
+use futures::future::Either;
 use futures::stream::{AbortHandle, Abortable, SelectAll};
-use futures::{
-    future::Either, join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt,
-};
+use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -37,6 +36,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
 use wasmcloud_tracing::{global, KeyValue};
 use wasmtime_wasi_http::body::HyperIncomingBody;
+use wrpc_transport::{AsyncSubscription, AsyncValue, Encode, Receive, Subscribe};
 
 pub use config::Host as HostConfig;
 use wascap::{jwt, prelude::ClaimsBuilder};
@@ -48,8 +48,7 @@ use wasmcloud_control_interface::{
     StopProviderCommand, UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{
-    HealthCheckResponse, HostData, Invocation, InvocationResponse, LatticeTargetId, LinkName,
-    OtelConfig, WasmCloudEntity,
+    HealthCheckResponse, HostData, LatticeTargetId, LinkName, OtelConfig, WasmCloudEntity,
 };
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
@@ -58,7 +57,9 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
-use wrpc_transport::{AcceptedInvocation, Client, DynamicTuple, IncomingInputStream, Transmitter};
+use wrpc_transport::{
+    AcceptedInvocation, Client, DynamicTuple, EncodeSync, IncomingInputStream, Transmitter,
+};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -70,9 +71,6 @@ use crate::{
 pub mod config;
 
 mod event;
-
-const WRPC: &str = "wrpc";
-const WRPC_VERSION: &str = "0.0.1";
 
 #[derive(Debug)]
 struct Queue {
@@ -174,10 +172,7 @@ struct Handler {
     nats: async_nats::Client,
     config_data: Arc<RwLock<ConfigCache>>,
     lattice: String,
-    cluster_key: Arc<KeyPair>,
-    host_key: Arc<KeyPair>,
     claims: jwt::Claims<jwt::Actor>,
-    origin: WasmCloudEntity,
     /// The current link name to use for interface targets, overridable in actor code via set_target()
     interface_link_name: Arc<RwLock<LinkName>>,
 
@@ -218,116 +213,6 @@ async fn resolve_target(target: Option<&TargetEntity>) -> anyhow::Result<WasmClo
         _ => bail!("target entity was not resolvable to a wasmcloud entity target"),
     };
     Ok(target)
-}
-
-impl Handler {
-    #[instrument(level = "debug", skip_all)]
-    async fn call_operation_with_payload(
-        &self,
-        target: Option<TargetEntity>,
-        operation: impl Into<String>,
-        request: Vec<u8>,
-    ) -> anyhow::Result<Result<Vec<u8>, String>> {
-        let operation = operation.into();
-        // Determine the target for the operation
-        let (_, interface_and_func) = operation
-            .rsplit_once('/')
-            .context("failed to parse operation")?;
-        let inv_target = resolve_target(target.as_ref()).await?;
-        let injector = TraceContextInjector::default_with_span();
-        let headers = injector_to_headers(&injector);
-        let invocation = Invocation::new(
-            &self.cluster_key,
-            &self.host_key,
-            self.origin.clone(),
-            inv_target.clone(),
-            operation.clone(),
-            request,
-            injector.into(),
-        )?;
-
-        let payload =
-            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
-
-        // Determine the subject on which to transmit
-        let subject = match target {
-            Some(TargetEntity::Wrpc(target)) => {
-                let (namespace, package, interface, _) = target.interface.as_parts();
-                let (_, function) = interface_and_func
-                    .split_once('.')
-                    .context("interface and function should be specified")?;
-                format!(
-                    "{}.{}.{WRPC}.{WRPC_VERSION}.{}:{}/{}.{}",
-                    self.lattice, target.id, namespace, package, interface, function
-                )
-            }
-            // TODO: just remove other options entirely
-            _ => bail!("target entity was not resolvable to a WRPC target"),
-        };
-
-        let request = async_nats::Request::new()
-            .payload(payload.into())
-            .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
-        let res = self
-            .nats
-            .send_request(subject, request)
-            .await
-            .context("failed to publish on NATS subject")?;
-
-        // Process response
-        let InvocationResponse {
-            invocation_id,
-            msg,
-            error,
-            ..
-        } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
-        ensure!(invocation_id == invocation.id, "invocation ID mismatch");
-
-        if let Some(error) = error {
-            Ok(Err(error))
-        } else {
-            Ok(Ok(msg))
-        }
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn call_operation(
-        &self,
-        target: Option<TargetEntity>,
-        operation: impl Into<String>,
-        request: &impl Serialize,
-    ) -> anyhow::Result<Vec<u8>> {
-        // TODO(brooksmtownsend): This handler should be sending requests over wRPC, rather than creating
-        // invocations.
-        let request = rmp_serde::to_vec_named(request).context("failed to encode request")?;
-        self.call_operation_with_payload(target, operation, request)
-            .await
-            .context("failed to call target entity")?
-            .map_err(|err| anyhow!(err).context("call failed"))
-    }
-}
-
-/// Decode provider response accounting for the custom wasmbus-rpc encoding format
-fn decode_provider_response<T>(buf: impl AsRef<[u8]>) -> anyhow::Result<T>
-where
-    for<'a> T: Deserialize<'a>,
-{
-    let buf = buf.as_ref();
-    match buf.split_first() {
-        Some((0x7f, _)) => bail!("CBOR responses are not supported"),
-        Some((0xc1, buf)) => rmp_serde::from_slice(buf),
-        _ => rmp_serde::from_slice(buf),
-    }
-    .context("failed to decode response")
-}
-
-fn decode_empty_provider_response(buf: impl AsRef<[u8]>) -> anyhow::Result<()> {
-    let buf = buf.as_ref();
-    if buf.is_empty() {
-        Ok(())
-    } else {
-        decode_provider_response(buf)
-    }
 }
 
 #[async_trait]
@@ -999,6 +884,71 @@ impl Logging for Handler {
     }
 }
 
+#[derive(Clone, Debug)]
+struct BrokerMessage(messaging::types::BrokerMessage);
+
+#[async_trait]
+impl Encode for BrokerMessage {
+    #[instrument(level = "trace", skip_all)]
+    async fn encode(
+        self,
+        mut payload: &mut (impl BufMut + Send),
+    ) -> anyhow::Result<Option<AsyncValue>> {
+        let Self(messaging::types::BrokerMessage {
+            subject,
+            body,
+            reply_to,
+        }) = self;
+        subject
+            .encode_sync(&mut payload)
+            .context("failed to encode `subject`")?;
+        body.encode(&mut payload)
+            .await
+            .context("failed to encode `body`")?;
+        EncodeSync::encode_sync_option(reply_to, payload).context("failed to encode `reply_to`")?;
+        Ok(None)
+    }
+}
+
+impl Subscribe for BrokerMessage {
+    async fn subscribe<T: wrpc_transport::Subscriber + Send + Sync>(
+        _subscriber: &T,
+        _subject: T::Subject,
+    ) -> Result<Option<AsyncSubscription<T::Stream>>, T::SubscribeError> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl Receive for BrokerMessage {
+    async fn receive<T>(
+        payload: impl Buf + Send + 'static,
+        rx: &mut (impl Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin),
+        _sub: Option<AsyncSubscription<T>>,
+    ) -> anyhow::Result<(Self, Box<dyn Buf + Send>)>
+    where
+        T: Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin + 'static,
+    {
+        let (subject, payload) = Receive::receive_sync(payload, rx)
+            .await
+            .context("failed to receive `subject`")?;
+        let (body, payload) = Receive::receive_sync(payload, rx)
+            .await
+            .context("failed to receive `body`")?;
+        let (reply_to, payload) = Receive::receive_sync(payload, rx)
+            .await
+            .context("failed to receive `reply_to`")?;
+        Ok((
+            Self(messaging::types::BrokerMessage {
+                subject,
+                body,
+                reply_to,
+            }),
+            payload,
+        ))
+    }
+}
+
 #[async_trait]
 impl Messaging for Handler {
     #[instrument(skip(self, body))]
@@ -1008,39 +958,29 @@ impl Messaging for Handler {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        let timeout_ms = timeout
-            .as_millis()
-            .try_into()
-            .context("timeout milliseconds do not fit in `u32`")?;
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasmcloud",
                 "messaging",
                 "consumer",
                 None,
             )))
-            .await?;
-        let res = self
-            .call_operation(
-                target,
-                "wasmcloud:messaging/Messaging.Request",
-                &wasmcloud_compat::messaging::RequestMessage {
-                    subject,
-                    body: body.unwrap_or_default(),
-                    timeout_ms,
-                },
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_static::<Result<_, String>>(
+                "wasmcloud:messaging/consumer",
+                "request",
+                (subject, body, timeout),
             )
-            .await?;
-        let wasmcloud_compat::messaging::ReplyMessage {
-            subject,
-            reply_to,
-            body,
-        } = decode_provider_response(res)?;
-        Ok(messaging::types::BrokerMessage {
-            subject,
-            reply_to,
-            body: Some(body),
-        })
+            .await
+            .context("failed to invoke `wasmcloud:messaging/consumer.request`")?;
+        // TODO: return a result directly
+        let BrokerMessage(msg) = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(msg)
     }
 
     #[instrument(skip(self, body))]
@@ -1051,43 +991,57 @@ impl Messaging for Handler {
         timeout: Duration,
         max_results: u32,
     ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        match max_results {
-            0..=1 => {
-                let res = self.request(subject, body, timeout).await?;
-                Ok(vec![res])
-            }
-            2.. => bail!("at most 1 result can be requested at the time"),
-        }
-    }
-
-    #[instrument(skip_all)]
-    async fn publish(
-        &self,
-        messaging::types::BrokerMessage {
-            subject,
-            reply_to,
-            body,
-        }: messaging::types::BrokerMessage,
-    ) -> anyhow::Result<()> {
-        let target = self
-            .identify_interface_target(&CallTargetInterface::from_parts((
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasmcloud",
                 "messaging",
                 "consumer",
                 None,
             )))
-            .await?;
-        self.call_operation(
-            target,
-            "wasmcloud:messaging/Messaging.Publish",
-            &wasmcloud_compat::messaging::PubMessage {
-                subject,
-                reply_to,
-                body: body.unwrap_or_default(),
-            },
-        )
-        .await
-        .and_then(decode_empty_provider_response)
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_static::<Result<Vec<_>, String>>(
+                "wasmcloud:messaging/consumer",
+                "request-multi",
+                (subject, body, timeout, max_results),
+            )
+            .await
+            .context("failed to invoke `wasmcloud:messaging/consumer.request`")?;
+        // TODO: return a result directly
+        let msgs = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        let msgs = msgs.into_iter().map(|BrokerMessage(msg)| msg).collect();
+        Ok(msgs)
+    }
+
+    #[instrument(skip_all)]
+    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+        let WrpcInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasmcloud",
+                "messaging",
+                "consumer",
+                None,
+            )))
+            .await?
+            .context("unknown target")?;
+        let wrpc =
+            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let (res, tx) = wrpc
+            .invoke_static::<Result<(), String>>(
+                "wasmcloud:messaging/consumer",
+                "publish",
+                BrokerMessage(msg),
+            )
+            .await
+            .context("failed to invoke `wasmcloud:messaging/consumer.publish`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
     }
 }
 
@@ -2235,10 +2189,6 @@ impl Host {
             .await
             .context("failed to store claims")?;
 
-        let origin = WasmCloudEntity {
-            public_key: claims.subject.clone(),
-            ..Default::default()
-        };
         let polyfilled_imports = component.polyfilled_imports().clone();
         // Map the imports to pull out the result types of the functions for lookup when invoking them
         let imports = polyfilled_imports
@@ -2266,12 +2216,9 @@ impl Host {
             nats: self.rpc_nats.clone(),
             config_data: Arc::clone(&self.config_data_cache),
             lattice: self.host_config.lattice.clone(),
-            origin,
-            cluster_key: Arc::clone(&self.cluster_key),
             claims: claims.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
-            host_key: Arc::clone(&self.host_key),
             polyfilled_imports: imports,
         };
 
