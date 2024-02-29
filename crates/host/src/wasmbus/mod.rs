@@ -615,7 +615,7 @@ impl Bus for Handler {
             .unwrap_or_default()))
     }
 
-    #[instrument(level = "debug", skip(self, target, params))]
+    #[instrument(level = "info", skip(self, target, params, instance, name), fields(interface = instance, function = name))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -1119,6 +1119,19 @@ enum InvocationParams {
     IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
 }
 
+impl std::fmt::Debug for InvocationParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InvocationParams::Custom { instance, name, .. } => f
+                .debug_struct("Custom")
+                .field("interface", instance)
+                .field("function", name)
+                .finish(),
+            InvocationParams::IncomingHttpHandle(_) => f.debug_tuple("IncomingHttpHandle").finish(),
+        }
+    }
+}
+
 impl Actor {
     /// Returns the component specification for this unique actor
     pub(crate) async fn component_specification(&self) -> ComponentSpecification {
@@ -1128,6 +1141,13 @@ impl Actor {
     }
 
     /// Handle an incoming wRPC request to invoke an export on this actor instance.
+    #[instrument(
+        level = "debug",
+        skip(self, context, result_subject, transmitter),
+        fields(
+            component_id = self.id.as_str(),
+            component_ref = self.image_reference.as_str())
+    )]
     async fn handle_invocation(
         &self,
         context: Option<async_nats::HeaderMap>,
@@ -1136,10 +1156,9 @@ impl Actor {
         transmitter: &wrpc_transport_nats::Transmitter,
     ) -> anyhow::Result<()> {
         // TODO(#1548): implement querying policy server
-        let injector = TraceContextInjector::default_with_span();
-        let trace_headers = injector_to_headers(&injector);
 
         if let Some(ref context) = context {
+            // TODO: wasmcloud_tracing take HeaderMap for my own sanity
             // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
             // flattening the values
             let trace_context = context
@@ -1184,13 +1203,7 @@ impl Actor {
                         format!("{instance}/{name}"),
                         Box::pin(async {
                             let results = res?;
-                            if let Some(mut headers) = context {
-                                // Append the current trace context headers to the invocation context
-                                trace_headers.iter().for_each(|(k, v)| {
-                                    v.iter().for_each(|v| {
-                                        headers.append(k.clone(), v.clone());
-                                    });
-                                });
+                            if let Some(headers) = context {
                                 // Transmit the response with context headers
                                 wasmcloud_transport::TransmitterWithHeaders::new(
                                     transmitter,
