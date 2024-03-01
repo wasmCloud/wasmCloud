@@ -130,20 +130,21 @@ pub async fn fetch_actor(
 }
 
 /// Fetch a provider from a reference.
-#[instrument(skip(provider_ref, link_name))]
+#[instrument(skip(registry_config, provider_id, host_id), fields(provider_ref = %provider_ref.as_ref()))]
 pub async fn fetch_provider(
     provider_ref: impl AsRef<str>,
-    link_name: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
+    host_id: impl AsRef<str>,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
-) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
     match ResourceRef::try_from(provider_ref.as_ref())? {
         ResourceRef::File(provider_ref) => {
             ensure!(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            par::read(provider_ref, link_name)
+            par::read(provider_ref, host_id, provider_id)
                 .await
                 .context("failed to read provider")
         }
@@ -152,7 +153,7 @@ pub async fn fetch_provider(
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
-            .fetch_provider(&provider_ref, link_name)
+            .fetch_provider(&provider_ref, host_id, provider_id)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")

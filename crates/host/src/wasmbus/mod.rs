@@ -1261,8 +1261,7 @@ struct Provider {
     child: JoinHandle<()>,
     annotations: Annotations,
     image_ref: String,
-    /// TODO(#1548): optional claims
-    claims: jwt::Claims<jwt::CapabilityProvider>,
+    claims: Option<jwt::Claims<jwt::CapabilityProvider>>,
 }
 
 type ConfigCache = HashMap<String, HashMap<String, String>>;
@@ -2018,7 +2017,7 @@ impl Host {
             .read()
             .await
             .iter()
-            .filter_map(
+            .map(
                 |(
                     provider_id,
                     Provider {
@@ -2028,20 +2027,23 @@ impl Host {
                         ..
                     },
                 )| {
-                    let jwt::CapabilityProvider {
-                        name,
-                        rev: revision,
-                        ..
-                    } = claims.metadata.as_ref()?;
+                    let name = claims
+                        .as_ref()
+                        .and_then(|claims| claims.metadata.as_ref())
+                        .and_then(|metadata| metadata.name.as_ref())
+                        .cloned();
                     let annotations = Some(annotations.clone().into_iter().collect());
-                    let revision = revision.unwrap_or_default();
-                    Some(ProviderDescription {
+                    ProviderDescription {
                         id: provider_id.into(),
                         image_ref: Some(image_ref.clone()),
                         name: name.clone(),
                         annotations,
-                        revision,
-                    })
+                        revision: claims
+                            .as_ref()
+                            .and_then(|claims| claims.metadata.as_ref())
+                            .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
+                            .unwrap_or_default(),
+                    }
                 },
             )
             .collect();
@@ -2237,7 +2239,7 @@ impl Host {
 
         let annotations = annotations.into();
         let claims = component.claims();
-        if let Some(claims) = claims.clone() {
+        if let Some(claims) = claims {
             self.store_claims(Claims::Actor(claims.clone()))
                 .await
                 .context("failed to store claims")?;
@@ -2758,27 +2760,32 @@ impl Host {
         let registry_config = self.registry_config.read().await;
         let (path, claims) = crate::fetch_provider(
             provider_ref,
-            // TODO: we cache based on link name, why
+            host_id,
             provider_id,
             self.host_config.allow_file_load,
             &registry_config,
         )
         .await
         .context("failed to fetch provider")?;
+        if let Some(claims) = claims.clone() {
+            self.store_claims(Claims::Provider(claims))
+                .await
+                .context("failed to store claims")?;
+        }
 
-        let target = PolicyRequestTarget::from(claims.clone());
-        let PolicyResponse {
-            permitted,
-            request_id,
-            message,
-        } = self
-            .policy_manager
-            .evaluate_action(None, target, PolicyAction::StartProvider)
-            .await?;
-        ensure!(
-            permitted,
-            "policy denied request to start provider `{request_id}`: `{message:?}`",
-        );
+        // let target = PolicyRequestTarget::from(claims.clone());
+        // let PolicyResponse {
+        //     permitted,
+        //     request_id,
+        //     message,
+        // } = self
+        //     .policy_manager
+        //     .evaluate_action(None, target, PolicyAction::StartProvider)
+        //     .await?;
+        // ensure!(
+        //     permitted,
+        //     "policy denied request to start provider `{request_id}`: `{message:?}`",
+        // );
 
         if let Ok(spec) = self.get_component_spec(provider_id).await {
             if spec.url != provider_ref {
@@ -2794,9 +2801,6 @@ impl Host {
             self.store_component_spec(&provider_id, &spec).await?;
             spec
         };
-        self.store_claims(Claims::Provider(claims.clone()))
-            .await
-            .context("failed to store claims")?;
 
         let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
@@ -2908,8 +2912,8 @@ impl Host {
             let event_builder = self.event_builder.clone();
             // NOTE: health_ prefix here is to allow us to move the variables into the closure
             let health_lattice = self.host_config.lattice.clone();
-            let health_provider_id = claims.subject.to_string();
-            let health_contract_id = claims.metadata.clone().map(|m| m.capid).unwrap_or_default();
+            let health_host_id = host_id.to_string();
+            let health_provider_id = provider_id.to_string();
             let child = spawn(async move {
                 // Check the health of the provider every 30 seconds
                 let mut health_check = tokio::time::interval(Duration::from_secs(30));
@@ -2940,9 +2944,8 @@ impl Host {
                                                 &health_lattice,
                                                 "health_check_passed",
                                                 event::provider_health_check(
+                                                    &health_host_id,
                                                     &health_provider_id,
-                                                    "default",
-                                                    &health_contract_id,
                                                 )
                                             ).await {
                                                 warn!(?e, "failed to publish provider health check succeeded event");
@@ -2957,9 +2960,8 @@ impl Host {
                                                 &health_lattice,
                                                 "health_check_failed",
                                                 event::provider_health_check(
+                                                    &health_host_id,
                                                     &health_provider_id,
-                                                    "default",
-                                                    &health_contract_id,
                                                 )
                                             ).await {
                                                 warn!(?e, "failed to publish provider health check failed event");
@@ -2973,9 +2975,8 @@ impl Host {
                                                 &health_lattice,
                                                 "health_check_status",
                                                 event::provider_health_check(
+                                                    &health_host_id,
                                                     &health_provider_id,
-                                                   "default",
-                                                    &health_contract_id,
                                                 )
                                             ).await {
                                                 warn!(?e, "failed to publish provider health check status event");

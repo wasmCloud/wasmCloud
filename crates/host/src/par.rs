@@ -44,45 +44,42 @@ fn native_target() -> String {
     format!("{ARCH}-{OS}")
 }
 
-// TODO: this should respect a host ID in the future so that cached data
-// from two different hosts can't cross over the veil
-pub fn cache_path(
-    claims: &jwt::Claims<jwt::CapabilityProvider>,
-    link_name: impl AsRef<str>,
-) -> PathBuf {
-    let metadata = claims.metadata.as_ref();
-    #[allow(clippy::cast_possible_truncation)] // Legacy implementation casts here
-    let revision = metadata
-        .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
-        .filter(|rev| *rev > 0)
-        .unwrap_or(claims.issued_at as _);
-    let contract = normalize_for_filename(
-        metadata
-            .map(|jwt::CapabilityProvider { capid, .. }| capid.as_str())
-            .unwrap_or_default(),
-    );
-    let link_name = normalize_for_filename(link_name.as_ref());
+/// Returns the path to the cache file for a provider
+///
+/// # Arguments
+/// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
+///            for different hosts
+/// * `provider_id` - The unique provider identifier
+pub fn cache_path(host_id: impl AsRef<str>, provider_id: impl AsRef<str>) -> PathBuf {
+    let provider_id = normalize_for_filename(provider_id.as_ref());
 
     let mut cache = temp_dir();
     cache.push("wasmcloudcache");
-    cache.push(&claims.subject);
-    cache.push(revision.to_string());
-    cache.push(format!("{contract}_{link_name}"));
+    cache.push(host_id.as_ref());
+    cache.push(&provider_id);
     #[cfg(windows)]
     cache.set_extension("exe");
     cache
 }
 
+/// Reads a provider archive from the given path and writes it to the cache
+///
+/// # Arguments
+/// * `path` - The path to the provider archive
+/// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
+///           for different hosts
+/// * `provider_id` - The unique provider identifier. Required to cache provider for future fetches
 pub async fn read(
     path: impl AsRef<Path>,
-    link_name: impl AsRef<str>,
-) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+    host_id: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
+) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
     let par = ProviderArchive::try_load_target_from_file(path, &native_target())
         .await
         .map_err(|e| anyhow!(e).context("failed to load provider archive"))?;
-    let claims = par.claims().context("claims missing")?;
+    let claims = par.claims();
 
-    let exe = cache_path(&claims, link_name);
+    let exe = cache_path(host_id, provider_id);
     // Only write the file if it doesn't exist
     if let Some(mut file) = create(&exe).await? {
         let target = native_target();

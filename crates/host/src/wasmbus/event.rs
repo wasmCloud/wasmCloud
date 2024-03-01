@@ -120,32 +120,41 @@ pub fn linkdef_deleted(
 }
 
 pub fn provider_started(
-    claims: &jwt::Claims<jwt::CapabilityProvider>,
+    claims: &Option<jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
     provider_id: impl AsRef<str>,
 ) -> serde_json::Value {
-    let metadata = claims.metadata.as_ref();
-    json!({
-        "host_id": host_id.as_ref(),
-        "image_ref": image_ref.as_ref(),
-        "provider_id": provider_id.as_ref(),
-        "annotations": annotations,
-        "claims": {
-            "issuer": &claims.issuer,
-            "tags": None::<Vec<()>>, // present in OTP, but hardcoded to `None`
-            "name": metadata.map(|jwt::CapabilityProvider { name, .. }| name),
-            "version": metadata.map(|jwt::CapabilityProvider { ver, .. }| ver),
-            "not_before_human": "TODO",
-            "expires_human": "TODO",
-        },
-        // TODO(#1548): remove these fields when we don't depend on them
-        "instance_id": provider_id.as_ref(),
-        "public_key": provider_id.as_ref(),
-        "link_name": "default",
-        "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
-    })
+    if let Some(claims) = claims {
+        let metadata = claims.metadata.as_ref();
+        json!({
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "provider_id": provider_id.as_ref(),
+            "annotations": annotations,
+            "claims": {
+                "issuer": &claims.issuer,
+                "tags": None::<Vec<()>>, // present in OTP, but hardcoded to `None`
+                "name": metadata.map(|jwt::CapabilityProvider { name, .. }| name),
+                "version": metadata.map(|jwt::CapabilityProvider { ver, .. }| ver),
+                "not_before_human": "TODO",
+                "expires_human": "TODO",
+            },
+            // TODO(#1548): remove these fields when we don't depend on them
+            "instance_id": provider_id.as_ref(),
+            "public_key": provider_id.as_ref(),
+            "link_name": "default",
+            "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
+        })
+    } else {
+        json!({
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "provider_id": provider_id.as_ref(),
+            "annotations": annotations,
+        })
+    }
 }
 
 pub fn provider_start_failed(
@@ -163,35 +172,42 @@ pub fn provider_start_failed(
 }
 
 pub fn provider_stopped(
-    claims: &jwt::Claims<jwt::CapabilityProvider>,
+    claims: &Option<jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     provider_id: impl AsRef<str>,
     reason: impl AsRef<str>,
 ) -> serde_json::Value {
-    let metadata = claims.metadata.as_ref();
-    json!({
-        "host_id": host_id.as_ref(),
-        "provider_id": provider_id.as_ref(),
-        "annotations": annotations,
-        "reason": reason.as_ref(),
-        // TODO(#1548): remove these fields when we don't depend on them
-        "instance_id": provider_id.as_ref(),
-        "public_key": provider_id.as_ref(),
-        "link_name": "default",
-        "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
-    })
+    if let Some(claims) = claims {
+        let metadata = claims.metadata.as_ref();
+        json!({
+            "host_id": host_id.as_ref(),
+            "provider_id": provider_id.as_ref(),
+            "annotations": annotations,
+            "reason": reason.as_ref(),
+            // TODO(#1548): remove these fields when we don't depend on them
+            "instance_id": provider_id.as_ref(),
+            "public_key": provider_id.as_ref(),
+            "link_name": "default",
+            "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
+        })
+    } else {
+        json!({
+            "host_id": host_id.as_ref(),
+            "provider_id": provider_id.as_ref(),
+            "annotations": annotations,
+            "reason": reason.as_ref(),
+        })
+    }
 }
 
 pub fn provider_health_check(
-    public_key: impl AsRef<str>,
-    link_name: impl AsRef<str>,
-    contract_id: impl AsRef<str>,
+    host_id: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
 ) -> serde_json::Value {
     json!({
-        "public_key": public_key.as_ref(),
-        "link_name": link_name.as_ref(),
-        "contract_id": contract_id.as_ref(),
+        "host_id": host_id.as_ref(),
+        "provider_id": provider_id.as_ref(),
     })
 }
 
