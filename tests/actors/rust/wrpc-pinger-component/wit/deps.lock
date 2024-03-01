@@ -14,9 +14,10 @@ sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00
 url = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
 sha512 = "760695f9a25c25bf75a25b731cb21c3bda9e288e450edda823324ecbc73d5d798bbb5de2edad999566980836f037463ee9e57d61789d04b3f3e381475b1a9a0f"
-deps = ["cli", "clocks", "filesystem", "io", "random", "sockets"]
+deps = ["cli", "clocks", "filesystem", "random", "sockets"]
 
 [io]
+url = "https://github.com/WebAssembly/wasi-io/archive/v0.2.0.tar.gz"
 sha256 = "7210e5653539a15478f894d4da24cc69d61924cbcba21d2804d69314a88e5a4c"
 sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee0977ad2291126a37631c0d86eeea75d822fa8af224c422134500bf9f0f2bb"
 
@@ -24,7 +25,6 @@ sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee097
 url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 sha256 = "4724712166fe3475591c085ec06f2e27e1dd564b71f0fe181175098621fbfe03"
 sha512 = "88e0c0e48e5e169726419a7467092d555326a483f0cb616bc896d4853d511989074907750aad36c06f258fa050ebf030cc3566ec01b6f05612bba3c6e8f2690d"
-deps = ["io"]
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
@@ -39,7 +39,12 @@ sha512 = "964c4e8925a53078e4d94ba907b54f89a0b7e154f46823a505391471466c17f53c8692
 sha256 = "622bd28bbeb43736375dc02bd003fd3a016ff8ee91e14bab488325c6b38bf966"
 sha512 = "5a63c1f36de0c4548e1d2297bdbededb28721cbad94ef7825c469eae29d7451c97e00b4c1d6730ee1ec0c4a5aac922961a2795762d4a0c3bb54e30a391a84bae"
 
+[testing]
+path = "../../../wit/testing"
+sha256 = "b59c6b4362fcf0a2af3d2c90a7295b69712fe2ce3fea6ac6bede0a8e99959b04"
+sha512 = "7b62cfd00ed97e6334fe6835b81accd637459befd73d131d47f96bea062b4ece929a12c4b541655ed191043e1fb45c62e849a2828197a525def46ae6516d72c5"
+
 [wasmcloud]
-path = "../../../wit/wasmcloud"
-sha256 = "5b58e9641b34bfb3c68f91ea434e891aedbcb66d2087f0c218f5858c77e096b5"
-sha512 = "13ebd61d80cbb24e24ce61077815bd2e1a298eb8d11750ed0decfa5b6610872d0b0986d97951b96530ea47aba66f00c52e41cbaad76d186a705669bdad0fa645"
+path = "../../../../../wit"
+sha256 = "d420b4677e9dd5edef72fd54b10678aa052ec179401d73e27a6e6b413f07f3c2"
+sha512 = "09ed31b8392d949aefed1f8b858aa6e87fd34733b5027c8a8aaefe47f1cbd9a7784c7656630b2bcc429a9e62a1449a291c5dcad649a6aa5fdd7ac4ce01e6c01f"

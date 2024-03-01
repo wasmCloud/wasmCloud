@@ -2,6 +2,7 @@ package test-wrpc:ponger;
 
 world actor {
   import wasi:logging/logging;
-  export wasmcloud:testing/pingpong;
-  export wasmcloud:testing/busybox;
+
+  export test-actors:testing/pingpong;
+  export test-actors:testing/busybox;
 }
