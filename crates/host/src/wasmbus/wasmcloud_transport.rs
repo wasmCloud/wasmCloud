@@ -34,7 +34,7 @@ impl TransmitterWithHeaders {
 #[async_trait]
 impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     type Subject = Subject;
-    type PublishError = async_nats::PublishError;
+    type PublishError = wrpc_transport_nats::PublishError;
 
     #[instrument(level = "trace", ret, skip(self))]
     async fn transmit(
