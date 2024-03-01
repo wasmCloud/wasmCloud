@@ -142,7 +142,7 @@ impl KeyValueEventual for KeyValue {
             Some(Entry::Atomic(value)) => value.load(Ordering::Relaxed).to_string().into_bytes(),
             Some(Entry::Blob(value)) => value.clone(),
         };
-        Ok(Some(Box::new(stream::iter([Ok(value)]))))
+        Ok(Some(Box::new(stream::iter([Ok(value.into())]))))
     }
 
     #[instrument(skip(value))]
