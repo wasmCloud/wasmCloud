@@ -178,7 +178,7 @@ impl capability::Blobstore for Blobstore {
         let end = (*range.end()).try_into().unwrap_or(usize::MAX);
         let len = len.into();
         let data = data[start.min(len)..=end.min(len - 1)].to_vec();
-        Ok(Box::new(stream::iter([Ok(data)])))
+        Ok(Box::new(stream::iter([Ok(data.into())])))
     }
 
     #[instrument]

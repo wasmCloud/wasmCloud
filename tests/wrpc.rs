@@ -1,4 +1,4 @@
-use core::str::FromStr as _;
+use core::str::{self, FromStr as _};
 use core::time::Duration;
 
 use std::net::Ipv4Addr;
@@ -139,7 +139,7 @@ async fn serve_outgoing_http(
                 .await
                 .context("failed to receive body item")?
                 .context("unexpected end of body stream")?;
-            assert_eq!(String::from_utf8(item).unwrap(), "test");
+            assert_eq!(str::from_utf8(&item).unwrap(), "test");
             info!("await request body end");
             let item = body
                 .try_next()
@@ -253,7 +253,7 @@ async fn assert_incoming_http(
             ensure!(config_value.is_none());
             ensure!(all_config == []);
             ensure!(ping == "pong");
-            ensure!(long_value == "1234567890".repeat(1000));
+            ensure!(long_value == "1234567890".repeat(5000));
             ensure!(meaning_of_universe == 42);
             ensure!(split == ["hi", "there", "friend"]);
             ensure!(is_same);
