@@ -229,13 +229,14 @@ impl Fetcher {
     pub async fn fetch_provider(
         &self,
         oci_ref: impl AsRef<str>,
-        link_name: impl AsRef<str>,
-    ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+        host_id: impl AsRef<str>,
+        provider_id: impl AsRef<str>,
+    ) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
         let path = self
             .fetch_path(oci_ref, vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE])
             .await
             .context("failed to fetch OCI path")?;
-        par::read(&path, link_name)
+        par::read(&path, host_id, provider_id)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))
     }
