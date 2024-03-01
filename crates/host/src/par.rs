@@ -49,14 +49,14 @@ fn native_target() -> String {
 /// # Arguments
 /// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
 ///            for different hosts
-/// * `provider_id` - The unique provider identifier
-pub fn cache_path(host_id: impl AsRef<str>, provider_id: impl AsRef<str>) -> PathBuf {
-    let provider_id = normalize_for_filename(provider_id.as_ref());
+/// * `provider_ref` - The provider reference, e.g. file or OCI
+pub fn cache_path(host_id: impl AsRef<str>, provider_ref: impl AsRef<str>) -> PathBuf {
+    let provider_ref = normalize_for_filename(provider_ref.as_ref());
 
     let mut cache = temp_dir();
     cache.push("wasmcloudcache");
     cache.push(host_id.as_ref());
-    cache.push(&provider_id);
+    cache.push(&provider_ref);
     #[cfg(windows)]
     cache.set_extension("exe");
     cache
@@ -68,18 +68,18 @@ pub fn cache_path(host_id: impl AsRef<str>, provider_id: impl AsRef<str>) -> Pat
 /// * `path` - The path to the provider archive
 /// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
 ///           for different hosts
-/// * `provider_id` - The unique provider identifier. Required to cache provider for future fetches
+/// * `provider_ref` - The reference to the provider (e.g. file or OCI). Required to cache provider for future fetches
 pub async fn read(
     path: impl AsRef<Path>,
     host_id: impl AsRef<str>,
-    provider_id: impl AsRef<str>,
+    provider_ref: impl AsRef<str>,
 ) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
     let par = ProviderArchive::try_load_target_from_file(path, &native_target())
         .await
         .map_err(|e| anyhow!(e).context("failed to load provider archive"))?;
     let claims = par.claims();
 
-    let exe = cache_path(host_id, provider_id);
+    let exe = cache_path(host_id, provider_ref);
     // Only write the file if it doesn't exist
     if let Some(mut file) = create(&exe).await? {
         let target = native_target();

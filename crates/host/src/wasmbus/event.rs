@@ -37,7 +37,7 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
 }
 
 pub fn actor_scaled(
-    claims: &Option<&jwt::Claims<jwt::Actor>>,
+    claims: Option<&jwt::Claims<jwt::Actor>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     max_instances: impl Into<usize>,
@@ -63,7 +63,7 @@ pub fn actor_scaled(
 }
 
 pub fn actor_scale_failed(
-    claims: &Option<&jwt::Claims<jwt::Actor>>,
+    claims: Option<&jwt::Claims<jwt::Actor>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
@@ -120,7 +120,7 @@ pub fn linkdef_deleted(
 }
 
 pub fn provider_started(
-    claims: &Option<jwt::Claims<jwt::CapabilityProvider>>,
+    claims: Option<&jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
@@ -172,7 +172,7 @@ pub fn provider_start_failed(
 }
 
 pub fn provider_stopped(
-    claims: &Option<jwt::Claims<jwt::CapabilityProvider>>,
+    claims: Option<jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     provider_id: impl AsRef<str>,
