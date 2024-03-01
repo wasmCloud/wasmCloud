@@ -6485,9 +6485,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1729c1dbbcd42986d19dc26f369da621c813b50dce4ec1ef87ed5c83a0c0c8c0"
+checksum = "a7e63850fe1e12aa328c7a3173a468fdd19329ba883638967b3fc2e3519c8711"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6499,9 +6499,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-http"
-version = "0.11.5"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4738793904ea58ebe776c2a3e4a125abbc6688b70690577f9e61e04d538547f4"
+checksum = "b80e258700eaf3e46e861623f7759c68e5378e9e0dbca22041a5c88f3d5f3f83"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6520,9 +6520,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-keyvalue"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a7479b1552a8811605081e41c134747ff40afc656c3bae393d855890609c41"
+checksum = "a882682e0112b8f29798750352be1c26665fcc8e20a79c10283f3d56fc53890a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6533,9 +6533,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "718e39f98f06ee5acc17bc23f37dddcd2f36a34d6671aca7ae623b287fcd4ce2"
+checksum = "7ac4406b018c7bdf6e167f678f31490dbc1b294e5715b338395e5deaf953ac42"
 dependencies = [
  "anyhow",
  "futures",
@@ -6547,9 +6547,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89c48ebeb12d9c32d8cdfc11786d24c08a70bfa299ee3c836ffe4ffc7bbd2682"
+checksum = "001e9403c5339f14caf4e4e953794faa7138b5962f5ebc40532e14ba0967bdfe"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6593,9 +6593,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.11.4"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1409ea5be0dfcb5b1ad0d0fdc627e901016a19da5155d0e8efc7b32c6e9806d1"
+checksum = "a7ca67a314f6e3aba2087754dc0080f14d925400481d5816931a0474572c03d9"
 dependencies = [
  "anyhow",
  "async-nats",

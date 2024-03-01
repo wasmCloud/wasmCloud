@@ -3641,9 +3641,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89c48ebeb12d9c32d8cdfc11786d24c08a70bfa299ee3c836ffe4ffc7bbd2682"
+checksum = "001e9403c5339f14caf4e4e953794faa7138b5962f5ebc40532e14ba0967bdfe"
 dependencies = [
  "anyhow",
  "async-nats",
