@@ -59,8 +59,8 @@ use wrpc_transport::{AsyncSubscription, AsyncValue, Encode, Receive, Subscribe};
 use wrpc_types::DynamicFunction;
 
 use crate::{
-    fetch_actor, HostMetrics, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
-    PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig, RegistryType,
+    fetch_actor, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
+    RegistryAuth, RegistryConfig, RegistryType,
 };
 
 /// wasmCloud [wrpc_transport] implementations
@@ -1105,7 +1105,7 @@ impl Deref for Actor {
 }
 
 // This enum is used to differentiate between component export invocations
-enum InvocationParams {
+pub(crate) enum InvocationParams {
     Custom {
         instance: Arc<String>,
         name: Arc<String>,
@@ -1150,7 +1150,36 @@ impl Actor {
         result_subject: wrpc_transport_nats::Subject,
         transmitter: &wasmcloud_transport::TransmitterWithHeaders,
     ) -> anyhow::Result<()> {
-        // TODO(#1548): implement querying policy server
+        let (interface, function) = match params {
+            InvocationParams::Custom {
+                ref instance,
+                ref name,
+                ..
+            } => (instance.to_string(), name.to_string()),
+            InvocationParams::IncomingHttpHandle(_) => (
+                "wasi:http/incoming-handler".to_string(),
+                "handle".to_string(),
+            ),
+        };
+        let PolicyResponse {
+            request_id,
+            permitted,
+            message,
+        } = self
+            .policy_manager
+            .evaluate_perform_invocation(
+                &self.id,
+                &self.image_reference,
+                &self.annotations,
+                self.claims(),
+                interface,
+                function,
+            )
+            .await?;
+        ensure!(
+            permitted,
+            "policy denied request to invoke component `{request_id}`: `{message:?}`",
+        );
 
         if let Some(ref context) = context {
             // TODO: wasmcloud_tracing take HeaderMap for my own sanity
@@ -1744,9 +1773,8 @@ impl Host {
             ctl_nats.clone(),
             PolicyHostInfo {
                 public_key: host_key.public_key(),
-                lattice_id: config.lattice.clone(),
+                lattice: config.lattice.clone(),
                 labels: labels.clone(),
-                cluster_issuers: cluster_issuers.clone(),
             },
             config.policy_service_config.policy_topic.clone(),
             config.policy_service_config.policy_timeout_ms,
@@ -2309,7 +2337,7 @@ impl Host {
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                &claims,
+                claims,
                 &annotations,
                 &self.host_key.public_key(),
                 max_instances,
@@ -2330,7 +2358,7 @@ impl Host {
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                &actor.claims(),
+                actor.claims(),
                 &actor.annotations,
                 host_id,
                 0_usize,
@@ -2514,21 +2542,17 @@ impl Host {
 
         let actor = self.fetch_actor(actor_ref).await?;
         let claims = actor.claims();
-        // let resp = self
-        //     .policy_manager
-        //     .evaluate_action(
-        //         None,
-        //         PolicyRequestTarget::from(claims.clone()),
-        //         PolicyAction::StartActor,
-        //     )
-        //     .await?;
-        // if !resp.permitted {
-        //     bail!(
-        //         "Policy denied request to scale actor `{}`: `{:?}`",
-        //         resp.request_id,
-        //         resp.message
-        //     )
-        // };
+        let resp = self
+            .policy_manager
+            .evaluate_start_component(actor_id, actor_ref, max_instances, &annotations, claims)
+            .await?;
+        if !resp.permitted {
+            bail!(
+                "Policy denied request to scale actor `{}`: `{:?}`",
+                resp.request_id,
+                resp.message
+            )
+        };
 
         let actor_ref = actor_ref.to_string();
         match (
@@ -2559,7 +2583,7 @@ impl Host {
                     self.publish_event(
                         "actor_scale_failed",
                         event::actor_scale_failed(
-                            &claims,
+                            claims,
                             &annotations,
                             host_id,
                             &actor_ref,
@@ -2582,7 +2606,7 @@ impl Host {
                     self.publish_event(
                         "actor_scale_failed",
                         event::actor_scale_failed(
-                            &claims,
+                            claims,
                             &actor.annotations,
                             host_id,
                             actor_ref,
@@ -2598,7 +2622,7 @@ impl Host {
                 self.publish_event(
                     "actor_scaled",
                     event::actor_scaled(
-                        &claims,
+                        claims,
                         &actor.annotations,
                         host_id,
                         0_usize,
@@ -2635,7 +2659,7 @@ impl Host {
                             self.publish_event(
                                 "actor_scaled",
                                 event::actor_scaled(
-                                    &actor.claims(),
+                                    actor.claims(),
                                     &actor.annotations,
                                     host_id,
                                     max,
@@ -2715,13 +2739,7 @@ impl Host {
         info!(%new_actor_ref, "actor updated");
         self.publish_event(
             "actor_scaled",
-            event::actor_scaled(
-                &new_claims,
-                &actor.annotations,
-                host_id,
-                max,
-                &new_actor_ref,
-            ),
+            event::actor_scaled(new_claims, &actor.annotations, host_id, max, &new_actor_ref),
         )
         .await?;
 
@@ -2732,7 +2750,7 @@ impl Host {
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                &actor.claims(),
+                actor.claims(),
                 &actor.annotations,
                 host_id,
                 0_usize,
@@ -2761,7 +2779,6 @@ impl Host {
         let (path, claims) = crate::fetch_provider(
             provider_ref,
             host_id,
-            provider_id,
             self.host_config.allow_file_load,
             &registry_config,
         )
@@ -2773,19 +2790,20 @@ impl Host {
                 .context("failed to store claims")?;
         }
 
-        // let target = PolicyRequestTarget::from(claims.clone());
-        // let PolicyResponse {
-        //     permitted,
-        //     request_id,
-        //     message,
-        // } = self
-        //     .policy_manager
-        //     .evaluate_action(None, target, PolicyAction::StartProvider)
-        //     .await?;
-        // ensure!(
-        //     permitted,
-        //     "policy denied request to start provider `{request_id}`: `{message:?}`",
-        // );
+        let annotations: Annotations = annotations.into_iter().collect();
+
+        let PolicyResponse {
+            permitted,
+            request_id,
+            message,
+        } = self
+            .policy_manager
+            .evaluate_start_provider(provider_id, provider_ref, &annotations, claims.as_ref())
+            .await?;
+        ensure!(
+            permitted,
+            "policy denied request to start provider `{request_id}`: `{message:?}`",
+        );
 
         if let Ok(spec) = self.get_component_spec(provider_id).await {
             if spec.url != provider_ref {
@@ -2802,7 +2820,6 @@ impl Host {
             spec
         };
 
-        let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
             let invocation_seed = self
@@ -3005,7 +3022,13 @@ impl Host {
             info!(provider_ref, provider_id, "provider started");
             self.publish_event(
                 "provider_started",
-                event::provider_started(&claims, &annotations, host_id, provider_ref, provider_id),
+                event::provider_started(
+                    claims.as_ref(),
+                    &annotations,
+                    host_id,
+                    provider_ref,
+                    provider_id,
+                ),
             )
             .await?;
             entry.insert(Provider {
@@ -3125,7 +3148,7 @@ impl Host {
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
-            event::provider_stopped(&claims, &annotations, host_id, provider_id, "stop"),
+            event::provider_stopped(claims, &annotations, host_id, provider_id, "stop"),
         )
         .await?;
         Ok(CtlResponse::success())
