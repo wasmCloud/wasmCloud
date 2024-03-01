@@ -34,7 +34,7 @@ impl TransmitterWithHeaders {
 #[async_trait]
 impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     type Subject = Subject;
-    type PublishError = async_nats::PublishError;
+    type PublishError = wrpc_transport_nats::PublishError;
 
     #[instrument(level = "trace", ret, skip(self))]
     async fn transmit(
@@ -175,7 +175,9 @@ impl wrpc_transport::Client for Client {
                 result_invocation.map(|invocation| IncomingInvocation {
                     context: invocation.context.clone(),
                     payload: invocation.payload,
-                    reply_subject: invocation.reply_subject,
+                    param_subject: invocation.param_subject,
+                    error_subject: invocation.error_subject,
+                    handshake_subject: invocation.handshake_subject,
                     subscriber: invocation.subscriber,
                     acceptor: AcceptorWithHeaders {
                         inner: invocation.acceptor,
