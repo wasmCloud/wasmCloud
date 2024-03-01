@@ -4,6 +4,7 @@ use core::task::{Context, Poll};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::sync::{Arc, MutexGuard};
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 use wrpc_transport::IncomingInputStream;
@@ -88,7 +89,7 @@ impl AsyncSeek for AsyncVec {
 /// [`AsyncRead`] adapter for [`IncomingInputStream`]
 pub struct IncomingInputStreamReader {
     stream: IncomingInputStream,
-    buffer: Vec<u8>,
+    buffer: Bytes,
 }
 
 impl IncomingInputStreamReader {
@@ -96,7 +97,7 @@ impl IncomingInputStreamReader {
     pub fn new(stream: IncomingInputStream) -> Self {
         Self {
             stream,
-            buffer: Vec::default(),
+            buffer: Bytes::default(),
         }
     }
 }
