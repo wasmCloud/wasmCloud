@@ -4,8 +4,8 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging,
-    Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity, WrpcInterfaceTarget,
+    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual,
+    LatticeInterfaceTarget, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
 };
 
 // NOTE: this import is used below in bindgen

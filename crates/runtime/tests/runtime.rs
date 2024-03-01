@@ -20,7 +20,9 @@ use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
-use wasmcloud_runtime::capability::{self, guest_config, messaging, IncomingHttp};
+use wasmcloud_runtime::capability::{
+    self, guest_config, messaging, IncomingHttp, LatticeInterfaceTarget,
+};
 use wasmcloud_runtime::{Component, Runtime};
 use wasmtime_wasi_http::body::HyperIncomingBody;
 
@@ -59,17 +61,22 @@ impl capability::Bus for Handler {
     async fn identify_interface_target(
         &self,
         interface: &capability::CallTargetInterface,
-    ) -> anyhow::Result<Option<capability::TargetEntity>> {
+    ) -> Option<capability::TargetEntity> {
         match interface {
             capability::CallTargetInterface {
                 namespace,
                 package,
-                interface,
+                interface: interface_name,
                 ..
-            } if namespace == "test-actors" && package == "foobar" && interface == "foobar" => {
-                Ok(Some(capability::TargetEntity::Actor(
-                    capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
-                )))
+            } if namespace == "test-actors"
+                && package == "foobar"
+                && interface_name == "foobar" =>
+            {
+                Some(capability::TargetEntity::Lattice(LatticeInterfaceTarget {
+                    id: "foobar-component-command-preview2".to_string(),
+                    interface: interface.clone(),
+                    link_name: "default".to_string(),
+                }))
             }
             _ => panic!("interface `{interface:?}` not supported"),
         }
@@ -116,13 +123,13 @@ impl capability::Bus for Handler {
 
     async fn call(
         &self,
-        target: Option<capability::TargetEntity>,
+        target: capability::TargetEntity,
         instance: &str,
         name: &str,
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         match (target, instance, name) {
-            (Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))), "test-actors:foobar/foobar", "foobar") if name == "foobar-component-command-preview2" => {
+            (capability::TargetEntity::Lattice(LatticeInterfaceTarget { id: target_id, .. }), "test-actors:foobar/foobar", "foobar") if target_id == "foobar-component-command-preview2" => {
                 let mut params = params.into_iter();
                 match (params.next(), params.next()) {
                     (Some(wrpc_transport::Value::String(s)), None) => {

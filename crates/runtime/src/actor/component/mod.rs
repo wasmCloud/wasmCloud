@@ -382,7 +382,7 @@ where
                         let result_values = handler
                             .call(target, &instance_name, &func_name, params)
                             .await
-                            .context("failed to call target")?;
+                            .context("failed to call target interface")?;
                         let result_ty = store
                             .data()
                             .custom_result_types
