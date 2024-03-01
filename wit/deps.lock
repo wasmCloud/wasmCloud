@@ -1,4 +1,0 @@
-[io]
-url = "https://github.com/WebAssembly/wasi-io/archive/v0.2.0.tar.gz"
-sha256 = "7210e5653539a15478f894d4da24cc69d61924cbcba21d2804d69314a88e5a4c"
-sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee0977ad2291126a37631c0d86eeea75d822fa8af224c422134500bf9f0f2bb"
