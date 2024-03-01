@@ -9,12 +9,12 @@ use core::time::Duration;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
-use tracing::{instrument, trace};
+use tracing::{error, instrument, trace};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::IncomingInputStream;
 
@@ -191,8 +191,8 @@ impl PartialEq for ActorIdentifier {
 impl Eq for ActorIdentifier {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Interface target to be invoked over `wRPC`
-pub struct WrpcInterfaceTarget {
+/// Interface target to be invoked over the lattice using `wRPC`
+pub struct LatticeInterfaceTarget {
     /// wRPC component routing identifier
     pub id: String,
     /// wRPC component interface
@@ -201,7 +201,7 @@ pub struct WrpcInterfaceTarget {
     pub link_name: String,
 }
 
-impl std::fmt::Display for WrpcInterfaceTarget {
+impl std::fmt::Display for LatticeInterfaceTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (wit_ns, wit_pkg, wit_iface, _) = self.interface.as_parts();
         let link_name = &self.link_name;
@@ -211,25 +211,15 @@ impl std::fmt::Display for WrpcInterfaceTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Target entity
+#[non_exhaustive]
+/// Target entity for a component interface invocation
 pub enum TargetEntity {
-    /// Link target entity
-    Link(Option<String>),
-    /// Actor target entity
-    Actor(ActorIdentifier),
-    /// WRPC component
-    Wrpc(WrpcInterfaceTarget),
-}
-
-impl TargetEntity {
-    /// Tries to unwrap [`WrpcInterfaceTarget`]
-    pub fn try_unwrap_wrpc(self) -> Option<WrpcInterfaceTarget> {
-        if let Self::Wrpc(target) = self {
-            Some(target)
-        } else {
-            None
-        }
-    }
+    /// Component to invoke over the lattice using wRPC
+    Lattice(LatticeInterfaceTarget),
+    // NOTE(brooksmtownsend): This is an enum with one member
+    // to allow for future expansion of the `TargetEntity` type,
+    // for example to route invocations in-process instead of over
+    // the lattice.
 }
 
 /// Outgoing HTTP request
@@ -313,21 +303,18 @@ pub trait Bus {
     async fn identify_interface_target(
         &self,
         interface: &CallTargetInterface,
-    ) -> anyhow::Result<Option<TargetEntity>>;
+    ) -> Option<TargetEntity>;
 
     /// Identify the wRPC target of component interface invocation
     async fn identify_wrpc_target(
         &self,
         interface: &CallTargetInterface,
-    ) -> anyhow::Result<Option<WrpcInterfaceTarget>> {
-        let target = self.identify_interface_target(interface).await?;
-        let Some(target) = target else {
-            return Ok(None);
+    ) -> Option<LatticeInterfaceTarget> {
+        let target = self.identify_interface_target(interface).await;
+        let Some(TargetEntity::Lattice(lattice_target)) = target else {
+            return None;
         };
-        target
-            .try_unwrap_wrpc()
-            .context("invalid target type")
-            .map(Some)
+        Some(lattice_target)
     }
 
     /// Set link name
@@ -355,7 +342,7 @@ pub trait Bus {
     /// Handle `wasmcloud:bus/host.call` without streaming
     async fn call(
         &self,
-        target: Option<TargetEntity>,
+        target: TargetEntity,
         instance: &str,
         name: &str,
         params: Vec<wrpc_transport::Value>,
@@ -572,12 +559,13 @@ impl Bus for Handler {
     async fn identify_interface_target(
         &self,
         interface: &CallTargetInterface,
-    ) -> anyhow::Result<Option<TargetEntity>> {
+    ) -> Option<TargetEntity> {
         if let Some(ref bus) = self.bus {
             trace!("call `Bus` handler");
             bus.identify_interface_target(interface).await
         } else {
-            bail!("host cannot identify the interface call target")
+            error!("host cannot identify the interface call target");
+            None
         }
     }
 
@@ -619,7 +607,7 @@ impl Bus for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn call(
         &self,
-        target: Option<TargetEntity>,
+        target: TargetEntity,
         instance: &str,
         name: &str,
         params: Vec<wrpc_transport::Value>,
