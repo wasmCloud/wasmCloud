@@ -1,12 +1,12 @@
 wit_bindgen::generate!({
     world: "actor",
     exports: {
-        "wasmcloud:testing/pingpong": Component,
-        "wasmcloud:testing/busybox": Component,
+        "test-actors:testing/pingpong": Component,
+        "test-actors:testing/busybox": Component,
     },
 });
 
-use exports::wasmcloud::testing::*;
+use exports::test_actors::testing::*;
 
 struct Component;
 
