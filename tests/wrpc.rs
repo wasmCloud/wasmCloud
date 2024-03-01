@@ -1,16 +1,27 @@
+use core::str::FromStr as _;
 use core::time::Duration;
 
-use anyhow::Context;
+use std::net::Ipv6Addr;
+use std::sync::Arc;
+
+use anyhow::{anyhow, ensure, Context as _};
 use futures::stream;
-use futures::TryStreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
+use hyper::header::HOST;
+use hyper::Uri;
+use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::TokioIo;
+use serde::Deserialize;
 use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT};
+use tokio::net::TcpListener;
 use tokio::try_join;
 use tracing::info;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 use wasmcloud_test_util::{
     actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
 };
-use wrpc_transport::{AcceptedInvocation, Client as _, Transmitter as _};
+use wrpc_transport::{AcceptedInvocation, Transmitter as _};
 
 pub mod common;
 use common::nats::start_nats;
@@ -41,13 +52,14 @@ async fn wrpc() -> anyhow::Result<()> {
         nats_client.clone(),
         format!("{LATTICE}.{PINGER_COMPONENT_ID}"),
     );
+    let wrpc_client = Arc::new(wrpc_client);
     // Build the host
     let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None)
         .await
         .context("failed to start test host")?;
 
     let mut outgoing_http_invocations =
-        wrpc_interface_http::OutgoingHandler::serve_handle(&wrpc_client)
+        wrpc_interface_http::OutgoingHandler::serve_handle(wrpc_client.as_ref())
             .await
             .context("failed to serve `wrpc:http/outgoing-handler` invocations")?;
 
@@ -81,7 +93,7 @@ async fn wrpc() -> anyhow::Result<()> {
         PINGER_COMPONENT_ID,
         PONGER_COMPONENT_ID,
         "default",
-        "wasmcloud",
+        "test-actors",
         "testing",
         vec!["pingpong".to_string(), "busybox".to_string()],
         vec![],
@@ -107,15 +119,131 @@ async fn wrpc() -> anyhow::Result<()> {
 
     try_join!(
         async {
-            let (results, tx) = wrpc_client
-                .invoke_static::<String>("wasmcloud:testing/invoke", "call", ())
+            let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, 0))
                 .await
-                .context("invocation failed")?;
-            tx.await.context("failed to transmit parameters")?;
-            assert_eq!(
-                results,
-                r#"Ping pong, meaning of universe is: 42, split: ["hi", "there", "friend"], is_same: true, archie good boy: true"#
-            );
+                .context("failed to start TCP listener")?;
+            let addr = listener
+                .local_addr()
+                .context("failed to query listener local address")?;
+            try_join!(
+                async {
+                    info!("await connection");
+                    let (stream, addr) = listener
+                        .accept()
+                        .await
+                        .context("failed to accept connection")?;
+                    info!("accepted connection from {addr}");
+                    let wrpc_client = Arc::clone(&wrpc_client);
+                    hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                         .serve_connection(
+                             TokioIo::new(stream),
+                             hyper::service::service_fn(
+                                 move |mut request: hyper::Request<hyper::body::Incoming>| {
+                                     use wrpc_interface_http::IncomingHandler as _;
+
+                                     let host = request.headers().get(HOST).expect("`host` header missing");
+                                     let host = host.to_str().expect("`host` header value is not a valid string");
+                                     let path_and_query = request.uri().path_and_query().expect("`path_and_query` missing");
+                                     let uri = Uri::builder()
+                                         .scheme("http")
+                                         .authority(host)
+                                         .path_and_query(path_and_query.clone())
+                                         .build()
+                                         .expect("failed to build request URI");
+                                     *request.uri_mut() = uri;
+                                     let wrpc_client = Arc::clone(&wrpc_client);
+                                     async move {
+                                         info!(?request, "invoke `handle`");
+                                         let (response, tx, errors) =
+                                             wrpc_client.invoke_handle_hyper(request).await.context(
+                                                 "failed to invoke `wrpc:http/incoming-handler.handle`",
+                                             )?;
+                                         info!("await parameter transmit");
+                                         tx.await.context("failed to transmit parameters")?;
+                                         info!("await error collect");
+                                         let errors: Vec<_> = errors.collect().await;
+                                         assert!(errors.is_empty());
+                                         info!("request served");
+                                         response
+                                     }
+                                 },
+                             ),
+                         )
+                         .await
+                         .map_err(|err| anyhow!(err).context("failed to serve connection"))
+                },
+                async {
+                    let http_client = reqwest::Client::builder()
+                        .timeout(Duration::from_secs(20))
+                        .connect_timeout(Duration::from_secs(20))
+                        .build()
+                        .context("failed to build HTTP client")?;
+                    let http_res = http_client
+                        .post(format!("http://localhost:{}/foo?bar=baz", addr.port()))
+                        .header("test-header", "test-value")
+                        .body(
+                             format!(r#"{{"min":42,"max":4242,"port":4242,"config_key":"test-config-data","authority":"localhost:{}"}}"#,
+                                addr.port())
+                         )
+                        .send()
+                        .await
+                        .context("failed to connect to server")?
+                        .text()
+                        .await
+                        .context("failed to get response text")?;
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    // NOTE: If values are truly random, we have nothing to assert for some of these fields
+                    struct Response {
+                        #[allow(dead_code)]
+                        get_random_bytes: [u8; 8],
+                        #[allow(dead_code)]
+                        get_random_u64: u64,
+                        guid: String,
+                        random_in_range: u32,
+                        #[allow(dead_code)]
+                        random_32: u32,
+                        #[allow(dead_code)]
+                        long_value: String,
+                        config_value: Option<Vec<u8>>,
+                        all_config: Vec<(String, Vec<u8>)>,
+                        ping: String,
+                        meaning_of_universe: u8,
+                        split: Vec<String>,
+                        is_same: bool,
+                        archie: bool,
+                    }
+                    let Response {
+                        get_random_bytes: _,
+                        get_random_u64: _,
+                        guid,
+                        random_32: _,
+                        random_in_range,
+                        long_value,
+                        config_value,
+                        all_config,
+                        ping,
+                        meaning_of_universe,
+                        split,
+                        is_same,
+                        archie,
+                    } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
+                    ensure!(Uuid::from_str(&guid).is_ok());
+                    ensure!(
+                        (42..=4242).contains(&random_in_range),
+                        "{random_in_range} should have been within range from 42 to 4242 inclusive"
+                    );
+                    ensure!(config_value.is_none());
+                    ensure!(all_config == []);
+                    ensure!(ping == "pong");
+                    ensure!(long_value == "1234567890".repeat(1000));
+                    ensure!(meaning_of_universe == 42);
+                    ensure!(split == ["hi", "there", "friend"]);
+                    ensure!(is_same);
+                    ensure!(archie);
+                    Ok(())
+                }
+            )?;
             anyhow::Ok(())
         },
         async {
