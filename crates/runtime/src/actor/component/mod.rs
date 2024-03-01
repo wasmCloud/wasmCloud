@@ -270,6 +270,7 @@ where
             | "wasi:io/error@0.2.0"
             | "wasi:io/poll@0.2.0"
             | "wasi:io/streams@0.2.0"
+            | "wasi:logging/logging"
             | "wasi:sockets/tcp@0.2.0"
             | "wasmcloud:bus/lattice"
             | "wasmcloud:bus/guest-config"
