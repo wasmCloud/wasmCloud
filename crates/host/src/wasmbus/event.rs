@@ -37,38 +37,57 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
 }
 
 pub fn actor_scaled(
-    claims: &jwt::Claims<jwt::Actor>,
+    claims: &Option<&jwt::Claims<jwt::Actor>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     max_instances: impl Into<usize>,
     image_ref: impl AsRef<str>,
 ) -> serde_json::Value {
-    json!({
-        "public_key": claims.subject,
-        "claims": format_actor_claims(claims),
-        "annotations": annotations,
-        "host_id": host_id.as_ref(),
-        "image_ref": image_ref.as_ref(),
-        "max_instances": max_instances.into(),
-    })
+    if let Some(claims) = claims {
+        json!({
+            "public_key": claims.subject,
+            "claims": format_actor_claims(claims),
+            "annotations": annotations,
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "max_instances": max_instances.into(),
+        })
+    } else {
+        json!({
+            "annotations": annotations,
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "max_instances": max_instances.into(),
+        })
+    }
 }
 
 pub fn actor_scale_failed(
-    claims: &jwt::Claims<jwt::Actor>,
+    claims: &Option<&jwt::Claims<jwt::Actor>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
     max_instances: NonZeroUsize,
     error: &anyhow::Error,
 ) -> serde_json::Value {
-    json!({
-        "public_key": claims.subject,
-        "annotations": annotations,
-        "host_id": host_id.as_ref(),
-        "image_ref": image_ref.as_ref(),
-        "max_instances": max_instances,
-        "error": format!("{error:#}"),
-    })
+    if let Some(claims) = claims {
+        json!({
+            "public_key": claims.subject,
+            "annotations": annotations,
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "max_instances": max_instances,
+            "error": format!("{error:#}"),
+        })
+    } else {
+        json!({
+            "annotations": annotations,
+            "host_id": host_id.as_ref(),
+            "image_ref": image_ref.as_ref(),
+            "max_instances": max_instances,
+            "error": format!("{error:#}"),
+        })
+    }
 }
 
 pub fn linkdef_set(
@@ -208,11 +227,6 @@ pub(crate) async fn publish(
         .build()
         .context("failed to build cloud event")?;
     let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
-    // TODO(pre-1.0): deprecate general subject and remove this
-    let _ = ctl_nats
-        .publish(format!("wasmbus.evt.{lattice}"), ev.clone().into())
-        .await
-        .with_context(|| format!("failed to publish `{name}` event on general subject"));
     ctl_nats
         .publish(format!("wasmbus.evt.{lattice}.{name}"), ev.into())
         .await

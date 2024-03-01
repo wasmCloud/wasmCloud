@@ -178,7 +178,6 @@ struct Handler {
     // placed into is also inside of an Arc
     config_data: Arc<RwLock<ConfigBundle>>,
     lattice: String,
-    claims: jwt::Claims<jwt::Actor>,
     /// The identifier of the component that this handler is associated with
     component_id: String,
     /// The current link name to use for interface targets, overridable in actor code via set_target()
@@ -817,7 +816,7 @@ impl Logging for Handler {
             logging::Level::Trace => {
                 tracing::event!(
                     tracing::Level::TRACE,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -826,7 +825,7 @@ impl Logging for Handler {
             logging::Level::Debug => {
                 tracing::event!(
                     tracing::Level::DEBUG,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -835,7 +834,7 @@ impl Logging for Handler {
             logging::Level::Info => {
                 tracing::event!(
                     tracing::Level::INFO,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -844,7 +843,7 @@ impl Logging for Handler {
             logging::Level::Warn => {
                 tracing::event!(
                     tracing::Level::WARN,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -853,7 +852,7 @@ impl Logging for Handler {
             logging::Level::Error => {
                 tracing::event!(
                     tracing::Level::ERROR,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -862,7 +861,7 @@ impl Logging for Handler {
             logging::Level::Critical => {
                 tracing::event!(
                     tracing::Level::ERROR,
-                    actor_id = self.claims.subject,
+                    actor_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -1095,10 +1094,6 @@ struct Actor {
     // TODO(#1548): ensure we are validating actor start and invocations
     #[allow(unused)]
     policy_manager: Arc<PolicyManager>,
-    // TODO: use a single map once Claims is an enum
-    // TODO(#1548): make optional
-    #[allow(unused)]
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>,
 }
 
 impl Deref for Actor {
@@ -2114,7 +2109,6 @@ impl Host {
             valid_issuers: self.cluster_issuers.clone(),
             policy_manager: Arc::clone(&self.policy_manager),
             image_reference: actor_ref,
-            actor_claims: Arc::clone(&self.actor_claims),
             metrics: Arc::clone(&self.metrics),
         });
 
@@ -2242,7 +2236,13 @@ impl Host {
         debug!(actor_ref, ?max_instances, "starting new actor");
 
         let annotations = annotations.into();
-        let claims = component.claims().context("claims missing")?;
+        let claims = component.claims();
+        if let Some(claims) = claims.clone() {
+            self.store_claims(Claims::Actor(claims.clone()))
+                .await
+                .context("failed to store claims")?;
+        }
+
         let component_spec = if let Ok(spec) = self.get_component_spec(&actor_id).await {
             if spec.url != actor_ref {
                 bail!(
@@ -2257,9 +2257,6 @@ impl Host {
             self.store_component_spec(&actor_id, &spec).await?;
             spec
         };
-        self.store_claims(Claims::Actor(claims.clone()))
-            .await
-            .context("failed to store claims")?;
 
         let polyfilled_imports = component.polyfilled_imports().clone();
         // Map the imports to pull out the result types of the functions for lookup when invoking them
@@ -2289,7 +2286,6 @@ impl Host {
             config_data: Arc::new(RwLock::new(config)),
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
-            claims: claims.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_spec.links)),
             polyfilled_imports: imports,
@@ -2311,7 +2307,7 @@ impl Host {
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                claims,
+                &claims,
                 &annotations,
                 &self.host_key.public_key(),
                 max_instances,
@@ -2329,11 +2325,10 @@ impl Host {
 
         actor.calls.abort();
 
-        let claims = actor.claims().context("claims missing")?;
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                claims,
+                &actor.claims(),
                 &actor.annotations,
                 host_id,
                 0_usize,
@@ -2516,22 +2511,22 @@ impl Host {
         trace!(actor_ref, max_instances, "scale actor task");
 
         let actor = self.fetch_actor(actor_ref).await?;
-        let claims = actor.claims().context("claims missing")?;
-        let resp = self
-            .policy_manager
-            .evaluate_action(
-                None,
-                PolicyRequestTarget::from(claims.clone()),
-                PolicyAction::StartActor,
-            )
-            .await?;
-        if !resp.permitted {
-            bail!(
-                "Policy denied request to scale actor `{}`: `{:?}`",
-                resp.request_id,
-                resp.message
-            )
-        };
+        let claims = actor.claims();
+        // let resp = self
+        //     .policy_manager
+        //     .evaluate_action(
+        //         None,
+        //         PolicyRequestTarget::from(claims.clone()),
+        //         PolicyAction::StartActor,
+        //     )
+        //     .await?;
+        // if !resp.permitted {
+        //     bail!(
+        //         "Policy denied request to scale actor `{}`: `{:?}`",
+        //         resp.request_id,
+        //         resp.message
+        //     )
+        // };
 
         let actor_ref = actor_ref.to_string();
         match (
@@ -2562,7 +2557,7 @@ impl Host {
                     self.publish_event(
                         "actor_scale_failed",
                         event::actor_scale_failed(
-                            claims,
+                            &claims,
                             &annotations,
                             host_id,
                             &actor_ref,
@@ -2585,7 +2580,7 @@ impl Host {
                     self.publish_event(
                         "actor_scale_failed",
                         event::actor_scale_failed(
-                            claims,
+                            &claims,
                             &actor.annotations,
                             host_id,
                             actor_ref,
@@ -2601,7 +2596,7 @@ impl Host {
                 self.publish_event(
                     "actor_scaled",
                     event::actor_scaled(
-                        claims,
+                        &claims,
                         &actor.annotations,
                         host_id,
                         0_usize,
@@ -2638,7 +2633,7 @@ impl Host {
                             self.publish_event(
                                 "actor_scaled",
                                 event::actor_scaled(
-                                    claims,
+                                    &actor.claims(),
                                     &actor.annotations,
                                     host_id,
                                     max,
@@ -2693,12 +2688,12 @@ impl Host {
         let annotations = annotations.unwrap_or_default().into_iter().collect();
 
         let new_actor = self.fetch_actor(&new_actor_ref).await?;
-        let new_claims = new_actor
-            .claims()
-            .context("claims missing from new actor")?;
-        self.store_claims(Claims::Actor(new_claims.clone()))
-            .await
-            .context("failed to store claims")?;
+        let new_claims = new_actor.claims();
+        if let Some(claims) = new_claims.cloned() {
+            self.store_claims(Claims::Actor(claims))
+                .await
+                .context("failed to store claims")?;
+        }
 
         let max = actor.max_instances;
         let Ok(new_actor) = self
@@ -2718,13 +2713,15 @@ impl Host {
         info!(%new_actor_ref, "actor updated");
         self.publish_event(
             "actor_scaled",
-            event::actor_scaled(new_claims, &actor.annotations, host_id, max, &new_actor_ref),
+            event::actor_scaled(
+                &new_claims,
+                &actor.annotations,
+                host_id,
+                max,
+                &new_actor_ref,
+            ),
         )
         .await?;
-
-        let old_claims = actor
-            .claims()
-            .context("claims missing from running actor")?;
 
         // TODO(#1548): If this errors, we need to rollback
         self.stop_actor(actor, host_id)
@@ -2733,7 +2730,7 @@ impl Host {
         self.publish_event(
             "actor_scaled",
             event::actor_scaled(
-                old_claims,
+                &actor.claims(),
                 &actor.annotations,
                 host_id,
                 0_usize,
