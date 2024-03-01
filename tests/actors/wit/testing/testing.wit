@@ -1,4 +1,4 @@
-package wasmcloud:testing;
+package test-actors:testing;
 
 /// Invoke a component and receive string output. Similar to wasi:cli/command.run, without args
 interface invoke {
