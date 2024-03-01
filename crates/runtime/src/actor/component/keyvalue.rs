@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::TryStreamExt as _;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tracing::instrument;
@@ -260,7 +261,7 @@ impl types::HostIncomingValue for Ctx {
             .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
-        match stream.try_collect::<Vec<Vec<_>>>().await {
+        match stream.try_collect::<Vec<Bytes>>().await {
             Ok(bufs) => Ok(Ok(bufs.concat())),
             Err(err) => {
                 let err = self
