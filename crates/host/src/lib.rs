@@ -24,9 +24,7 @@ pub(crate) mod metrics;
 pub use metrics::HostMetrics;
 pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
 pub use policy::{
-    Action as PolicyAction, HostInfo as PolicyHostInfo, Manager as PolicyManager,
-    RequestSource as PolicyRequestSource, RequestTarget as PolicyRequestTarget,
-    Response as PolicyResponse,
+    HostInfo as PolicyHostInfo, Manager as PolicyManager, Response as PolicyResponse,
 };
 pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
@@ -130,21 +128,20 @@ pub async fn fetch_actor(
 }
 
 /// Fetch a provider from a reference.
-#[instrument(skip(registry_config, provider_id, host_id), fields(provider_ref = %provider_ref.as_ref()))]
+#[instrument(skip(registry_config, host_id), fields(provider_ref = %provider_ref.as_ref()))]
 pub async fn fetch_provider(
     provider_ref: impl AsRef<str>,
-    provider_id: impl AsRef<str>,
     host_id: impl AsRef<str>,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
     match ResourceRef::try_from(provider_ref.as_ref())? {
-        ResourceRef::File(provider_ref) => {
+        ResourceRef::File(provider_path) => {
             ensure!(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            par::read(provider_ref, host_id, provider_id)
+            par::read(provider_path, host_id, provider_ref)
                 .await
                 .context("failed to read provider")
         }
@@ -153,7 +150,7 @@ pub async fn fetch_provider(
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
-            .fetch_provider(&provider_ref, host_id, provider_id)
+            .fetch_provider(&provider_ref, host_id)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")

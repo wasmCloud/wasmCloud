@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,7 +10,7 @@ use futures::{
     stream::{AbortHandle, Abortable},
     StreamExt,
 };
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use tokio::spawn;
 use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, trace, warn};
@@ -18,27 +18,21 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
-/// Relevant information about the actor or provider making an invocation. This struct is empty for
-/// policy decisions related to starting actors or providers. All fields are optional for backwards-compatibility
+// NOTE: All requests will be v1 until the schema changes, at which point we can change the version
+// per-request type
+const POLICY_TYPE_VERSION: &str = "v1";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
-// TODO: convert to an enum where variants use relevant fields, then remove the above comment about backwards-compatibility
-pub struct RequestSource {
-    /// The public key of the actor or provider
+/// Claims associated with a policy request, if embedded inside the component or provider
+pub struct PolicyClaims {
+    /// The public key of the component
     #[serde(rename = "publicKey")]
-    pub public_key: Option<String>,
-    /// The contract ID of the provider, or None if the source is an actor
-    #[serde(rename = "contractId")]
-    pub contract_id: Option<String>,
-    /// The link name of the provider, or None if the source is an actor
-    #[serde(rename = "linkName")]
-    pub link_name: Option<String>,
-    /// The list of capabilities of the actor, or None if the source is a provider
-    pub capabilities: Vec<String>,
-    /// The issuer of the source's claims
-    pub issuer: Option<String>,
+    pub public_key: String,
+    /// The issuer key of the component
+    pub issuer: String,
     /// The time the claims were signed
-    #[serde(rename = "issuedOn")]
-    pub issued_on: Option<String>,
+    #[serde(rename = "issuedAt")]
+    pub issued_at: String,
     /// The time the claims expire, if any
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<u64>,
@@ -46,74 +40,116 @@ pub struct RequestSource {
     pub expired: bool,
 }
 
-/// Relevant information about the actor that is being invoked, or the actor or provider that is
-/// being started. All fields are optional for backwards-compatibility
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
-// TODO: convert to an enum where variants use relevant fields, then remove the above comment about backwards-compatibility
-pub struct RequestTarget {
-    /// The public key of the actor or provider
-    #[serde(rename = "publicKey")]
-    pub public_key: Option<String>,
-    /// The issuer of the target's claims
-    pub issuer: Option<String>,
-    /// The contract ID of the provider, or None if the target is an actor
-    #[serde(rename = "contractId")]
-    pub contract_id: Option<String>,
-    /// The link name of the provider, or None if the target is an actor
-    #[serde(rename = "linkName")]
-    pub link_name: Option<String>,
+/// Relevant policy information for evaluating a component
+pub struct ComponentInformation {
+    /// The unique identifier of the component
+    #[serde(rename = "componentId")]
+    pub component_id: String,
+    /// The image reference of the component
+    #[serde(rename = "imageRef")]
+    pub image_ref: String,
+    /// The requested maximum number of concurrent instances for this component
+    #[serde(rename = "maxInstances")]
+    pub max_instances: u32,
+    /// Annotations associated with the component
+    pub annotations: BTreeMap<String, String>,
+    /// Claims, if embedded, within the component
+    pub claims: Option<PolicyClaims>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
+/// Relevant policy information for evaluating a provider
+pub struct ProviderInformation {
+    /// The unique identifier of the provider
+    #[serde(rename = "providerId")]
+    pub provider_id: String,
+    /// The image reference of the provider
+    #[serde(rename = "imageRef")]
+    pub image_ref: String,
+    /// Annotations associated with the provider
+    pub annotations: BTreeMap<String, String>,
+    /// Claims, if embedded, within the provider
+    pub claims: Option<PolicyClaims>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
+/// A request to invoke a component function
+pub struct PerformInvocationRequest {
+    /// The interface of the invocation
+    pub interface: String,
+    /// The function of the invocation
+    pub function: String,
+    /// Target of the invocation
+    pub target: ComponentInformation,
 }
 
 /// Relevant information about the host that is receiving the invocation, or starting the actor or provider
 #[derive(Clone, Debug, Serialize)]
 pub struct HostInfo {
-    /// The public key of the host
+    /// The public key ID of the host
     #[serde(rename = "publicKey")]
     pub public_key: String,
-    /// The ID of the lattice the host is running in
-    #[serde(rename = "latticeId")]
-    pub lattice_id: String,
+    /// The name of the lattice the host is running in
+    #[serde(rename = "lattice")]
+    pub lattice: String,
     /// The labels associated with the host
     pub labels: HashMap<String, String>,
-    /// The host's list of issuers it will accept invocations from
-    #[serde(rename = "clusterIssuers")]
-    pub cluster_issuers: Vec<String>,
 }
 
 /// The action being requested
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Hash)]
-pub enum Action {
-    /// The host is checking whether it may invoke the target actor
-    #[serde(rename = "perform_invocation")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Hash)]
+#[serde(untagged)]
+pub enum RequestKind {
+    /// The host is checking whether it may invoke the target component
+    #[serde(rename = "performInvocation")]
     PerformInvocation,
-    /// The host is checking whether it may start the target actor
-    #[serde(rename = "start_actor")]
-    StartActor,
+    /// The host is checking whether it may start the target component
+    #[serde(rename = "startComponent")]
+    StartComponent,
     /// The host is checking whether it may start the target provider
-    #[serde(rename = "start_provider")]
+    #[serde(rename = "startProvider")]
     StartProvider,
+    /// An unknown or unsupported request type
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Hash)]
+#[serde(untagged)]
+/// The body of a policy request, typed by the request kind
+pub enum RequestBody {
+    /// A request to invoke a function on a component
+    PerformInvocation(PerformInvocationRequest),
+    /// A request to start a component on a host
+    StartComponent(ComponentInformation),
+    /// A request to start a provider on a host
+    StartProvider(ProviderInformation),
+    /// Request body has an unknown type
+    Unknown,
 }
 
 /// A request for a policy decision
 #[derive(Serialize)]
 struct Request {
-    /// a unique request id. This value is returned in the response
+    /// A unique request id. This value is returned in the response
     #[serde(rename = "requestId")]
     #[allow(clippy::struct_field_names)]
     request_id: String,
-    // Use a custom serializer to handle the case where the source is None
-    #[serde(serialize_with = "serialize_source")]
-    source: Option<RequestSource>,
-    target: RequestTarget,
+    /// The kind of policy request being made
+    kind: RequestKind,
+    /// The version of the policy request body
+    version: String,
+    /// The policy request body
+    request: RequestBody,
+    /// Information about the host making the request
     host: HostInfo,
-    action: Action,
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct RequestKey {
-    source: RequestSource,
-    target: RequestTarget,
-    action: Action,
+    kind: RequestKind,
+    request: RequestBody,
 }
 
 /// A policy decision response
@@ -125,19 +161,8 @@ pub struct Response {
     /// Whether the request is permitted
     pub permitted: bool,
     /// An optional error explaining why the request was denied. Suitable for logging
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-}
-
-/// Policy services expect a source on all requests, even though no data is relevant for the start
-/// actions. When source is None, we still serialize an (empty) object
-fn serialize_source<S>(source: &Option<RequestSource>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match source {
-        Some(source) => source.serialize(serializer),
-        None => RequestSource::default().serialize(serializer),
-    }
 }
 
 fn is_expired(expires: u64) -> bool {
@@ -148,54 +173,26 @@ fn is_expired(expires: u64) -> bool {
         > expires
 }
 
-impl From<jwt::Claims<jwt::Actor>> for RequestSource {
-    fn from(claims: jwt::Claims<jwt::Actor>) -> Self {
-        RequestSource {
-            public_key: Some(claims.subject),
-            contract_id: None,
-            link_name: None,
-            capabilities: claims.metadata.and_then(|m| m.caps).unwrap_or_default(),
-            issuer: Some(claims.issuer),
-            issued_on: Some(claims.issued_at.to_string()),
+impl From<&jwt::Claims<jwt::Actor>> for PolicyClaims {
+    fn from(claims: &jwt::Claims<jwt::Actor>) -> Self {
+        PolicyClaims {
+            public_key: claims.subject.to_string(),
+            issuer: claims.issuer.to_string(),
+            issued_at: claims.issued_at.to_string(),
             expires_at: claims.expires,
             expired: claims.expires.map(is_expired).unwrap_or_default(),
         }
     }
 }
 
-impl From<jwt::Claims<jwt::CapabilityProvider>> for RequestSource {
-    fn from(claims: jwt::Claims<jwt::CapabilityProvider>) -> Self {
-        RequestSource {
-            public_key: Some(claims.subject),
-            contract_id: claims.metadata.map(|m| m.capid),
-            link_name: None, // Unfortunately, since claims don't include a link name, we can't populate this
-            capabilities: vec![],
-            issuer: Some(claims.issuer),
-            issued_on: Some(claims.issued_at.to_string()),
+impl From<&jwt::Claims<jwt::CapabilityProvider>> for PolicyClaims {
+    fn from(claims: &jwt::Claims<jwt::CapabilityProvider>) -> Self {
+        PolicyClaims {
+            public_key: claims.subject.to_string(),
+            issuer: claims.issuer.to_string(),
+            issued_at: claims.issued_at.to_string(),
             expires_at: claims.expires,
             expired: claims.expires.map(is_expired).unwrap_or_default(),
-        }
-    }
-}
-
-impl From<jwt::Claims<jwt::Actor>> for RequestTarget {
-    fn from(claims: jwt::Claims<jwt::Actor>) -> Self {
-        RequestTarget {
-            public_key: Some(claims.subject),
-            issuer: Some(claims.issuer),
-            contract_id: None,
-            link_name: None,
-        }
-    }
-}
-
-impl From<jwt::Claims<jwt::CapabilityProvider>> for RequestTarget {
-    fn from(claims: jwt::Claims<jwt::CapabilityProvider>) -> Self {
-        RequestTarget {
-            public_key: Some(claims.subject),
-            issuer: Some(claims.issuer),
-            contract_id: claims.metadata.map(|m| m.capid),
-            link_name: None, // Unfortunately, since claims don't include a link name, we can't populate this
         }
     }
 }
@@ -260,18 +257,97 @@ impl Manager {
         Ok(manager)
     }
 
-    /// Constructs a
     #[instrument(level = "trace", skip_all)]
-    pub async fn evaluate_action(
+    /// Use the policy manager to evaluate whether a component may be started
+    pub async fn evaluate_start_component(
         &self,
-        source: Option<RequestSource>,
-        target: RequestTarget,
-        action: Action,
+        component_id: impl AsRef<str>,
+        image_ref: impl AsRef<str>,
+        max_instances: u32,
+        annotations: &BTreeMap<String, String>,
+        claims: Option<&jwt::Claims<jwt::Actor>>,
     ) -> anyhow::Result<Response> {
-        let cache_key = RequestKey {
-            source: source.clone().unwrap_or_default(),
-            target: target.clone(),
-            action: action.clone(),
+        let request = ComponentInformation {
+            component_id: component_id.as_ref().to_string(),
+            image_ref: image_ref.as_ref().to_string(),
+            max_instances,
+            annotations: annotations.clone(),
+            claims: claims.map(PolicyClaims::from),
+        };
+        self.evaluate_action(RequestBody::StartComponent(request))
+            .await
+    }
+
+    /// Use the policy manager to evaluate whether a provider may be started
+    #[instrument(level = "trace", skip_all)]
+    pub async fn evaluate_start_provider(
+        &self,
+        provider_id: impl AsRef<str>,
+        provider_ref: impl AsRef<str>,
+        annotations: &BTreeMap<String, String>,
+        claims: Option<&jwt::Claims<jwt::CapabilityProvider>>,
+    ) -> anyhow::Result<Response> {
+        let request = ProviderInformation {
+            provider_id: provider_id.as_ref().to_string(),
+            image_ref: provider_ref.as_ref().to_string(),
+            annotations: annotations.clone(),
+            claims: claims.map(PolicyClaims::from),
+        };
+        self.evaluate_action(RequestBody::StartProvider(request))
+            .await
+    }
+
+    /// Use the policy manager to evaluate whether a component may be invoked
+    #[instrument(level = "trace", skip_all)]
+    pub async fn evaluate_perform_invocation(
+        &self,
+        component_id: impl AsRef<str>,
+        image_ref: impl AsRef<str>,
+        annotations: &BTreeMap<String, String>,
+        claims: Option<&jwt::Claims<jwt::Actor>>,
+        interface: String,
+        function: String,
+    ) -> anyhow::Result<Response> {
+        let request = PerformInvocationRequest {
+            interface,
+            function,
+            target: ComponentInformation {
+                component_id: component_id.as_ref().to_string(),
+                image_ref: image_ref.as_ref().to_string(),
+                max_instances: 0,
+                annotations: annotations.clone(),
+                claims: claims.map(PolicyClaims::from),
+            },
+        };
+        self.evaluate_action(RequestBody::PerformInvocation(request))
+            .await
+    }
+
+    /// Sends a policy request to the policy server and caches the response
+    #[instrument(level = "trace", skip_all)]
+    pub async fn evaluate_action(&self, request: RequestBody) -> anyhow::Result<Response> {
+        let kind = match request {
+            RequestBody::StartComponent(_) => RequestKind::StartComponent,
+            RequestBody::StartProvider(_) => RequestKind::StartProvider,
+            RequestBody::PerformInvocation(_) => RequestKind::PerformInvocation,
+            RequestBody::Unknown => RequestKind::Unknown,
+        };
+        let cache_key = match request {
+            RequestBody::StartComponent(ref req) => RequestKey {
+                kind,
+                request: RequestBody::StartComponent(req.clone()),
+            },
+            RequestBody::StartProvider(ref req) => RequestKey {
+                kind,
+                request: RequestBody::StartProvider(req.clone()),
+            },
+            RequestBody::PerformInvocation(ref req) => RequestKey {
+                kind,
+                request: RequestBody::PerformInvocation(req.clone()),
+            },
+            RequestBody::Unknown => {
+                return Err(anyhow::anyhow!("unsupported request type"));
+            }
         };
         if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
             trace!(?cache_key, ?entry, "using cached policy decision");
@@ -283,10 +359,10 @@ impl Manager {
             trace!(?cache_key, "requesting policy decision");
             let payload = serde_json::to_vec(&Request {
                 request_id: request_id.clone(),
-                source,
-                target,
+                request,
+                kind,
+                version: POLICY_TYPE_VERSION.to_string(),
                 host: self.host_info.clone(),
-                action,
             })
             .context("failed to serialize policy request")?;
             let request = async_nats::Request::new()
