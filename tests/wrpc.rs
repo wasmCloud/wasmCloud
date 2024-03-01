@@ -1,7 +1,7 @@
 use core::str::FromStr as _;
 use core::time::Duration;
 
-use std::net::Ipv6Addr;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, ensure, Context as _};
@@ -163,7 +163,7 @@ async fn serve_outgoing_http(
 async fn assert_incoming_http(
     wrpc_client: &Arc<wrpc_transport_nats::Client>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, 0))
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .context("failed to start TCP listener")?;
     let addr = listener
