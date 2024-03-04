@@ -1,13 +1,18 @@
 use std::net::Ipv6Addr;
 use std::path::Path;
 use std::process::ExitStatus;
+use std::sync::Arc;
 
 use anyhow::{anyhow, ensure, Context, Result};
+use futures::StreamExt;
+use hyper::header::HOST;
+use hyper::Uri;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tracing::info;
 use url::Url;
 
 pub mod minio;
@@ -93,4 +98,48 @@ pub async fn copy_par(path: impl AsRef<Path>) -> Result<(Url, NamedTempFile)> {
     let provider_url =
         Url::from_file_path(provider_tmp.path()).expect("failed to construct provider ref");
     Ok((provider_url, provider_tmp))
+}
+
+/// Helper for serving HTTP requests via wrpc for testing. Will likely be subsumed once we have a
+/// new http provider
+pub async fn serve_incoming_http(
+    wrpc_client: &Arc<wrpc_transport_nats::Client>,
+    mut request: hyper::Request<hyper::body::Incoming>,
+) -> anyhow::Result<
+    hyper::Response<
+        wrpc_interface_http::IncomingBody<
+            wrpc_transport::IncomingInputStream,
+            wrpc_interface_http::IncomingFields,
+        >,
+    >,
+> {
+    use wrpc_interface_http::IncomingHandler as _;
+
+    let host = request.headers().get(HOST).expect("`host` header missing");
+    let host = host
+        .to_str()
+        .expect("`host` header value is not a valid string");
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .expect("`path_and_query` missing");
+    let uri = Uri::builder()
+        .scheme("http")
+        .authority(host)
+        .path_and_query(path_and_query.clone())
+        .build()
+        .expect("failed to build request URI");
+    *request.uri_mut() = uri;
+    info!(?request, "invoke `handle`");
+    let (response, tx, errors) = wrpc_client
+        .invoke_handle_hyper(request)
+        .await
+        .context("failed to invoke `wrpc:http/incoming-handler.handle`")?;
+    info!("await parameter transmit");
+    tx.await.context("failed to transmit parameters")?;
+    info!("await error collect");
+    let errors: Vec<_> = errors.collect().await;
+    assert!(errors.is_empty());
+    info!("request served");
+    response
 }

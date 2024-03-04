@@ -1,0 +1,7 @@
+package test-wrpc:ponger;
+
+world actor {
+  import wasmcloud:bus/guest-config;
+
+  export test-actors:testing/pingpong;
+}

@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, ensure, Context as _};
 use futures::stream;
-use futures::{StreamExt as _, TryStreamExt as _};
-use hyper::header::HOST;
-use hyper::Uri;
+use futures::TryStreamExt;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
@@ -24,53 +22,11 @@ use wasmcloud_test_util::{
 use wrpc_transport::{AcceptedInvocation, Transmitter as _};
 
 pub mod common;
-use common::nats::start_nats;
+use common::{nats::start_nats, serve_incoming_http};
 
 const LATTICE: &str = "default";
 const PINGER_COMPONENT_ID: &str = "wrpc_pinger_component";
 const PONGER_COMPONENT_ID: &str = "wrpc_ponger_component";
-
-async fn serve_incoming_http(
-    wrpc_client: &Arc<wrpc_transport_nats::Client>,
-    mut request: hyper::Request<hyper::body::Incoming>,
-) -> anyhow::Result<
-    hyper::Response<
-        wrpc_interface_http::IncomingBody<
-            wrpc_transport::IncomingInputStream,
-            wrpc_interface_http::IncomingFields,
-        >,
-    >,
-> {
-    use wrpc_interface_http::IncomingHandler as _;
-
-    let host = request.headers().get(HOST).expect("`host` header missing");
-    let host = host
-        .to_str()
-        .expect("`host` header value is not a valid string");
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .expect("`path_and_query` missing");
-    let uri = Uri::builder()
-        .scheme("http")
-        .authority(host)
-        .path_and_query(path_and_query.clone())
-        .build()
-        .expect("failed to build request URI");
-    *request.uri_mut() = uri;
-    info!(?request, "invoke `handle`");
-    let (response, tx, errors) = wrpc_client
-        .invoke_handle_hyper(request)
-        .await
-        .context("failed to invoke `wrpc:http/incoming-handler.handle`")?;
-    info!("await parameter transmit");
-    tx.await.context("failed to transmit parameters")?;
-    info!("await error collect");
-    let errors: Vec<_> = errors.collect().await;
-    assert!(errors.is_empty());
-    info!("request served");
-    response
-}
 
 async fn serve_outgoing_http(
     mut invocations: <wrpc_transport_nats::Client as wrpc_interface_http::OutgoingHandler>::HandleInvocationStream,
