@@ -456,10 +456,11 @@ impl VisitMut for WitBindgenOutputVisitor {
                     ..
                 } = cloned_t;
 
-                // If the type that we're about to process has `super::`s attached, we need to translate those
+                // If the type alias that we're about to process has `super::`s attached, we need to translate those
                 // to the actual types they *should* be, which are likely hanging off the crate or some other
                 // dep like `wasmtime` (ex. `wasmtime::component::Resource`)
-                if count_preceeding_supers(item_ty.as_ref()) > 0 {
+                let preceeding_super_count = count_preceeding_supers(item_ty.as_ref());
+                if preceeding_super_count > 0 {
                     if let Type::Path(ty_path) = item_ty.as_mut() {
                         // Create a cloned version fo the original path to use for modifications
                         let cloned_ty_path = ty_path.clone();
@@ -500,11 +501,26 @@ impl VisitMut for WitBindgenOutputVisitor {
                 // Having both the type declaration and the top level struct/enum declaration would cause a conflict
                 if !self.serde_extended_enums.contains_key(&t.ident.to_string())
                     && !self
-                        .serde_extended_structs
-                        .contains_key(&t.ident.to_string())
+                    .serde_extended_structs
+                    .contains_key(&t.ident.to_string())
                 // We exclude built-in wasi types here because they *should*
                 // be implemented & brought in as enums/structs
                     && !self.is_wasi_builtin()
+                // If this type alias has no preceeding `super::` count and it has not been seen, it's most likely the
+                // resolved alias to a basic Rust type:
+                // ```
+                // type T = vec<u8>
+                // ```
+                //
+                // Otherwise, if there *is* a preceeding `super::` count, it likely looks like this:
+                // ```
+                // type T = super::some::dep::T
+                // ```
+                // We should avoid overwriting the basic Rust type alias, since that one should be hoisted to the top.
+                // All code will deal with the types that the top level(i.e. generated code will contain `T`, not `super::some::dep::T`)
+                // otherwise, we can add if it's not overlapping with an existing entry.
+                    && (preceeding_super_count == 0
+                    || !self.type_lookup.contains_key(&t.ident.to_string()))
                 {
                     // Add the type to the lookup so it can be used later for fully qualified names
                     self.type_lookup

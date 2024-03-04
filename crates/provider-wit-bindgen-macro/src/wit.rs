@@ -865,7 +865,7 @@ impl WitFunctionLatticeTranslationStrategy {
                     .await?;
 
                 if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Failed(err.to_string()))
+                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(err.to_string()))
                 } else {
                     Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&response.msg)?)
                 }
