@@ -1603,10 +1603,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@remix-run/router@npm:1.15.1":
-  version: 1.15.1
-  resolution: "@remix-run/router@npm:1.15.1"
-  checksum: d262285d155f80779894ee1d9ef07e35421986ba2546378dfe0e3b09397ce71becb6a4677e9efcd4155e2bd3f9f7f7ecbc110cd99bacee6dd7d3e5ce51b7caa8
+"@remix-run/router@npm:1.15.2":
+  version: 1.15.2
+  resolution: "@remix-run/router@npm:1.15.2"
+  checksum: 2a2c9c062228130d0383328de2757301e878fc268a72f813b60b8463bb7ed2c1fa4018072883af8096982a4b2741ec6eb349587cd7f95acfdf09588d93adea67
   languageName: node
   linkType: hard
 
@@ -2065,22 +2065,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-table@npm:^8.12.0":
-  version: 8.12.0
-  resolution: "@tanstack/react-table@npm:8.12.0"
+"@tanstack/react-table@npm:^8.13.2":
+  version: 8.13.2
+  resolution: "@tanstack/react-table@npm:8.13.2"
   dependencies:
-    "@tanstack/table-core": "npm:8.12.0"
+    "@tanstack/table-core": "npm:8.13.2"
   peerDependencies:
     react: ">=16"
     react-dom: ">=16"
-  checksum: 4fe03b995e485c0b2734e0c8df5c17daedbbdf2692a7bf5b19bb217cc23e14fe88ada810a6ebc47bf1a1978bc23171cfe00ce179944f0b669df4d3fe74b92ae0
+  checksum: b91d5fc04a9a0b43c38da00a5a5c2fcfe0c3b3ec521c97f5e2eb2893a7f3446209fe4d07950b8179a0ab10b7b49230abce3d2db2a56fdc9d8fdb27023afea639
   languageName: node
   linkType: hard
 
-"@tanstack/table-core@npm:8.12.0":
-  version: 8.12.0
-  resolution: "@tanstack/table-core@npm:8.12.0"
-  checksum: a1b127e4b010f75e74509e1e121fef62c88e60a2a52c6425d8ce81694c8403b1de706f029cb2a8cea19c87b8904b9e6f981840580a9bb10f14f1fb5905fc1cde
+"@tanstack/table-core@npm:8.13.2":
+  version: 8.13.2
+  resolution: "@tanstack/table-core@npm:8.13.2"
+  checksum: 7381147fd9d50905cb581e1498f2924a3b46646872248b25cb4f287419b0819919211da983873921497efb82e4ca40b20db86dac332027a371df4d84cddc9532
   languageName: node
   linkType: hard
 
@@ -2485,7 +2485,7 @@ __metadata:
     "@radix-ui/react-toast": "npm:^1.1.5"
     "@radix-ui/react-toggle": "npm:^1.0.3"
     "@radix-ui/react-tooltip": "npm:^1.0.7"
-    "@tanstack/react-table": "npm:^8.12.0"
+    "@tanstack/react-table": "npm:^8.13.2"
     "@types/node": "npm:^20.11.24"
     "@types/react": "npm:^18.2.61"
     "@types/react-dom": "npm:^18.2.19"
@@ -2512,14 +2512,14 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.14.3"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.3"
-    lucide-react: "npm:^0.341.0"
+    lucide-react: "npm:^0.344.0"
     nats.ws: "npm:^1.20.0"
     postcss: "npm:^8.4.35"
     prettier: "npm:^3.2.5"
     react: "npm:^18.2.0"
     react-dom: "npm:^18.2.0"
-    react-hook-form: "npm:^7.50.1"
-    react-router-dom: "npm:^6.22.1"
+    react-hook-form: "npm:^7.51.0"
+    react-router-dom: "npm:^6.22.2"
     rxjs: "npm:^7.8.1"
     tailwind-merge: "npm:^2.2.1"
     tailwindcss: "npm:^3.4.1"
@@ -5446,12 +5446,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.341.0":
-  version: 0.341.0
-  resolution: "lucide-react@npm:0.341.0"
+"lucide-react@npm:^0.344.0":
+  version: 0.344.0
+  resolution: "lucide-react@npm:0.344.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: d540ddda86b66ecb5f8e87ee3f7bd271c9260cf35ffe4a83fdb512eb3daf16d7a0ed097990bcf33324bb6a607dabbdf14ddd0cf83aa0dbf5789e84a409b99277
+  checksum: 34f89ef0df9fa11d6fb7eddc69fcfbf33741546a1fa16af504d5a7eb262790a125c855bc290e90da1f7ca7b8fd4f8b40d6a99f19a822a5ccf1c8c1bef4481d5d
   languageName: node
   linkType: hard
 
@@ -6262,12 +6262,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-hook-form@npm:^7.50.1":
-  version: 7.50.1
-  resolution: "react-hook-form@npm:7.50.1"
+"react-hook-form@npm:^7.51.0":
+  version: 7.51.0
+  resolution: "react-hook-form@npm:7.51.0"
   peerDependencies:
     react: ^16.8.0 || ^17 || ^18
-  checksum: 54a9daa2143c601a9867e96a2159a0bbe98707b5bbeb5953bfdf3342d2f04bfcaa6169907ed167c5c1f3a044630860d4f43685f4ac4e15b9cd892d1b00d54dde
+  checksum: 2697e2b56afca36098aed04d187e9756641e1f61e1a29c566b7bba0899c885fc5f995219a29a9535db748bd55e186cdf95ff8af546247a4bf3418a00863cbd24
   languageName: node
   linkType: hard
 
@@ -6320,27 +6320,27 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-router-dom@npm:^6.22.1":
-  version: 6.22.1
-  resolution: "react-router-dom@npm:6.22.1"
+"react-router-dom@npm:^6.22.2":
+  version: 6.22.2
+  resolution: "react-router-dom@npm:6.22.2"
   dependencies:
-    "@remix-run/router": "npm:1.15.1"
-    react-router: "npm:6.22.1"
+    "@remix-run/router": "npm:1.15.2"
+    react-router: "npm:6.22.2"
   peerDependencies:
     react: ">=16.8"
     react-dom: ">=16.8"
-  checksum: 73ab964083bb407773a5c4ca61249ed6b0a1b47fa58c39afca08a361eb25b349be2bcbaf6d89e112b020f6e55e40e62689c9fe2beae524030ce5ccede3c7d9e3
+  checksum: 1469ea32fd5b35d44909c8e64a778620e990b43a1c6f4d5989630e769a9956e0057a54771ccde2e434a9aff7591c02752dcfe0678a1868d4e53411cec7ecf7a8
   languageName: node
   linkType: hard
 
-"react-router@npm:6.22.1":
-  version: 6.22.1
-  resolution: "react-router@npm:6.22.1"
+"react-router@npm:6.22.2":
+  version: 6.22.2
+  resolution: "react-router@npm:6.22.2"
   dependencies:
-    "@remix-run/router": "npm:1.15.1"
+    "@remix-run/router": "npm:1.15.2"
   peerDependencies:
     react: ">=16.8"
-  checksum: f6e814b8e3005f16a5fb0e831f0e4352076cde65ab25448d56dba87a43fd3e102f55f9b366bdf1fbd8136fc1dc141bcec8d6b85d45f309e89180fb50f173744d
+  checksum: 744c9c3d3b6f3d031ef8c34d86f16075f96d4487584f2a526f722bc5b05c5879fc5056236b824472530fc5aad0ecf6eef88d2848d5b1a32aab9849bda3a5c839
   languageName: node
   linkType: hard
 
