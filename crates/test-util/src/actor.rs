@@ -129,3 +129,20 @@ pub async fn assert_scale_actor(
 
     Ok(())
 }
+
+pub async fn assert_put_config(
+    ctl_client: impl Into<&WasmCloudCtlClient>,
+    config_name: &str,
+    config: impl Into<HashMap<String, String>>,
+) -> Result<()> {
+    let ctl_client = ctl_client.into();
+
+    let CtlResponse { success, .. } = ctl_client
+        .put_config(config_name, config)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to put config"))?;
+
+    ensure!(success);
+
+    Ok(())
+}

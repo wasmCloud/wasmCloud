@@ -1,0 +1,6 @@
+name = "ponger-config-component"
+language = "rust"
+type = "actor"
+
+[actor]
+wasm_target = "wasm32-wasi-preview2"
