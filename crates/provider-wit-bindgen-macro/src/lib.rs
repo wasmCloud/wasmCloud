@@ -397,11 +397,14 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .type_lookup
         .iter()
         .filter_map(|(_, (_, ty))| {
-            // If the name of the type is identical to a bindgen-produced struct that will
+            // If the name of the type is identical to a bindgen-produced struct or enum that will
             // be added later, this was likely a type alias -- we won't need it
             if visitor
                 .serde_extended_structs
                 .contains_key(&ty.ident.to_string())
+                || visitor
+                    .serde_extended_enums
+                    .contains_key(&ty.ident.to_string())
             {
                 None
             } else {
