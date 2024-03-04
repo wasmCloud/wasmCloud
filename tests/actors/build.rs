@@ -204,17 +204,21 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                     "--target=wasm32-wasi",
                     "-p=builtins-component-reactor",
                     "-p=foobar-component-command",
+                    "-p=pinger-config-component",
+                    "-p=ponger-config-component",
                     "-p=wrpc-pinger-component",
                     "-p=wrpc-ponger-component",
                 ],
                 |name, kind| {
-                    ["builtins-component-reactor", "foobar-component-command", "wrpc-pinger-component", "wrpc-ponger-component"].contains(&name)
+                    ["builtins-component-reactor", "foobar-component-command", "pinger-config-component", "ponger-config-component", "wrpc-pinger-component", "wrpc-ponger-component"].contains(&name)
                         && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
                 },
             )
             .await
-            .context("failed to build `builtins-component-reactor`, `foobar-component-command`, `wrpc-pinger-component` and `wrpc-ponger-component` crates")?;
+            .context("failed to build `builtins-component-reactor`, `foobar-component-command`, `pinger-config-component`, `pinger-config-component`, `wrpc-pinger-component` and `wrpc-ponger-component` crates")?;
             match (
+                artifacts.next().deref_artifact(),
+                artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
@@ -224,6 +228,8 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 (
                     Some(("builtins-component-reactor", [builtins_component_reactor])),
                     Some(("foobar-component-command", [foobar_component_command])),
+                    Some(("pinger-config-component", [pinger_config_component])),
+                    Some(("ponger-config-component", [ponger_config_component])),
                     Some(("wrpc-pinger-component", [wrpc_pinger_component])),
                     Some(("wrpc-ponger-component", [wrpc_ponger_component])),
                     None
@@ -238,6 +244,14 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                             out_dir.join("rust-foobar-component-command.wasm"),
                         ),
                         copy(
+                            pinger_config_component,
+                            out_dir.join("rust-pinger-config-component.wasm"),
+                        ),
+                        copy(
+                            ponger_config_component,
+                            out_dir.join("rust-ponger-config-component.wasm"),
+                        ),
+                        copy(
                             wrpc_pinger_component,
                             out_dir.join("rust-wrpc-pinger-component.wasm"),
                         ),
@@ -247,7 +261,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                         )
                     )
                 }
-                _ => bail!("invalid `builtins-component-reactor`, `foobar-component-command`, `wrpc-pinger-component` and `wrpc-ponger-component` build artifacts"),
+                _ => bail!("invalid `builtins-component-reactor`, `foobar-component-command`, `pinger-config-component`, `pinger-config-component`, `wrpc-pinger-component` and `wrpc-ponger-component` build artifacts"),
             }
         },
     )
@@ -291,6 +305,8 @@ async fn main() -> anyhow::Result<()> {
     // Build WASI component wasm modules
     for name in [
         "builtins-component-reactor",
+        "pinger-config-component",
+        "ponger-config-component",
         "wrpc-pinger-component",
         "wrpc-ponger-component",
     ] {
@@ -365,6 +381,8 @@ async fn main() -> anyhow::Result<()> {
             "messaging-receiver-smithy",
             Some(vec![caps::MESSAGING.into()]),
         ),
+        ("pinger-config-component-preview2", None),
+        ("ponger-config-component-preview2", None),
         ("wrpc-pinger-component-preview2", None),
         ("wrpc-ponger-component-preview2", None),
     ] {

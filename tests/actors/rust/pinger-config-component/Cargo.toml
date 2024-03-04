@@ -1,0 +1,16 @@
+[package]
+name = "pinger-config-component"
+edition = "2021"
+description = """
+A wit-based actor that invokes other components with configuration information
+"""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+wasmcloud-actor = { workspace = true }
+wit-bindgen = { workspace = true, features = ["default"] }
