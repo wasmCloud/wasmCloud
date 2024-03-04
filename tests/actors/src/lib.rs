@@ -70,3 +70,12 @@ pub const RUST_WRPC_PONGER_COMPONENT: &str = concat!(
     env!("OUT_DIR"),
     "/rust-wrpc-ponger-component-preview2.signed.wasm"
 );
+
+pub const RUST_PINGER_CONFIG_COMPONENT: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-pinger-config-component-preview2.signed.wasm"
+);
+pub const RUST_PONGER_CONFIG_COMPONENT: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-ponger-config-component-preview2.signed.wasm"
+);
