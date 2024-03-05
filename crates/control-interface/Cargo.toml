@@ -30,4 +30,5 @@ tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
+wasmcloud-core = { workspace = true }
 anyhow = { workspace = true }
