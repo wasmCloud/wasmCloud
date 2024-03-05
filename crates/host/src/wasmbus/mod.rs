@@ -2312,7 +2312,7 @@ impl Host {
             .instantiate_actor(
                 &annotations,
                 actor_ref.clone(),
-                actor_id,
+                actor_id.clone(),
                 max_instances,
                 component.clone(),
                 handler.clone(),
@@ -2329,6 +2329,7 @@ impl Host {
                 &self.host_key.public_key(),
                 max_instances,
                 &actor_ref,
+                &actor_id,
             ),
         )
         .await?;
@@ -2350,6 +2351,7 @@ impl Host {
                 host_id,
                 0_usize,
                 &actor.image_reference,
+                &actor.id,
             ),
         )
         .await?;
@@ -2574,6 +2576,7 @@ impl Host {
                             &annotations,
                             host_id,
                             &actor_ref,
+                            actor_id,
                             max,
                             &e,
                         ),
@@ -2597,6 +2600,7 @@ impl Host {
                             &actor.annotations,
                             host_id,
                             actor_ref,
+                            &actor.id,
                             actor.max_instances,
                             &err,
                         ),
@@ -2614,6 +2618,7 @@ impl Host {
                         host_id,
                         0_usize,
                         &actor.image_reference,
+                        &actor.id,
                     ),
                 )
                 .await?;
@@ -2651,6 +2656,7 @@ impl Host {
                                     host_id,
                                     max,
                                     &actor.image_reference,
+                                    &actor.id,
                                 ),
                             )
                             .await
@@ -2726,7 +2732,14 @@ impl Host {
         info!(%new_actor_ref, "actor updated");
         self.publish_event(
             "actor_scaled",
-            event::actor_scaled(new_claims, &actor.annotations, host_id, max, &new_actor_ref),
+            event::actor_scaled(
+                new_claims,
+                &actor.annotations,
+                host_id,
+                max,
+                &new_actor_ref,
+                &actor_id,
+            ),
         )
         .await?;
 
@@ -2742,6 +2755,7 @@ impl Host {
                 host_id,
                 0_usize,
                 &actor.image_reference,
+                &actor.id,
             ),
         )
         .await?;

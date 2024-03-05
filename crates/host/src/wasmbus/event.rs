@@ -42,6 +42,7 @@ pub fn actor_scaled(
     host_id: impl AsRef<str>,
     max_instances: impl Into<usize>,
     image_ref: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
         json!({
@@ -51,6 +52,7 @@ pub fn actor_scaled(
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances.into(),
+            "actor_id": actor_id.as_ref(),
         })
     } else {
         json!({
@@ -58,6 +60,7 @@ pub fn actor_scaled(
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances.into(),
+            "actor_id": actor_id.as_ref(),
         })
     }
 }
@@ -67,12 +70,14 @@ pub fn actor_scale_failed(
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
     max_instances: NonZeroUsize,
     error: &anyhow::Error,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
         json!({
             "public_key": claims.subject,
+            "actor_id": actor_id.as_ref(),
             "annotations": annotations,
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
@@ -82,6 +87,7 @@ pub fn actor_scale_failed(
     } else {
         json!({
             "annotations": annotations,
+            "actor_id": actor_id.as_ref(),
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances,
