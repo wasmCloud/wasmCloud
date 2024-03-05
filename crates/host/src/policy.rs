@@ -129,6 +129,32 @@ pub enum RequestBody {
     Unknown,
 }
 
+impl From<&RequestBody> for RequestKey {
+    fn from(val: &RequestBody) -> RequestKey {
+        match val {
+            RequestBody::StartComponent(ref req) => RequestKey {
+                kind: RequestKind::StartComponent,
+                cache_key: format!("{}_{}", req.component_id, req.image_ref),
+            },
+            RequestBody::StartProvider(ref req) => RequestKey {
+                kind: RequestKind::StartProvider,
+                cache_key: format!("{}_{}", req.provider_id, req.image_ref),
+            },
+            RequestBody::PerformInvocation(ref req) => RequestKey {
+                kind: RequestKind::PerformInvocation,
+                cache_key: format!(
+                    "{}_{}_{}_{}",
+                    req.target.component_id, req.target.image_ref, req.interface, req.function
+                ),
+            },
+            RequestBody::Unknown => RequestKey {
+                kind: RequestKind::Unknown,
+                cache_key: "".to_string(),
+            },
+        }
+    }
+}
+
 /// A request for a policy decision
 #[derive(Serialize)]
 struct Request {
@@ -148,8 +174,13 @@ struct Request {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct RequestKey {
+    /// The kind of request being made
     kind: RequestKind,
-    request: RequestBody,
+    /// Information about this request combined to form a unique string.
+    /// For example, a StartComponent request can be uniquely cached based
+    /// on the component_id and image_ref, so this cache_key is a concatenation
+    /// of those values
+    cache_key: String,
 }
 
 /// A policy decision response
@@ -326,67 +357,48 @@ impl Manager {
     /// Sends a policy request to the policy server and caches the response
     #[instrument(level = "trace", skip_all)]
     pub async fn evaluate_action(&self, request: RequestBody) -> anyhow::Result<Response> {
+        let Some(policy_topic) = self.policy_topic.clone() else {
+            // Ensure we short-circuit and allow the request if no policy topic is configured
+            return Ok(Response {
+                request_id: "".to_string(),
+                permitted: true,
+                message: None,
+            });
+        };
+
         let kind = match request {
             RequestBody::StartComponent(_) => RequestKind::StartComponent,
             RequestBody::StartProvider(_) => RequestKind::StartProvider,
             RequestBody::PerformInvocation(_) => RequestKind::PerformInvocation,
             RequestBody::Unknown => RequestKind::Unknown,
         };
-        let cache_key = match request {
-            RequestBody::StartComponent(ref req) => RequestKey {
-                kind,
-                request: RequestBody::StartComponent(req.clone()),
-            },
-            RequestBody::StartProvider(ref req) => RequestKey {
-                kind,
-                request: RequestBody::StartProvider(req.clone()),
-            },
-            RequestBody::PerformInvocation(ref req) => RequestKey {
-                kind,
-                request: RequestBody::PerformInvocation(req.clone()),
-            },
-            RequestBody::Unknown => {
-                return Err(anyhow::anyhow!("unsupported request type"));
-            }
-        };
+        let cache_key = (&request).into();
         if let Some(entry) = self.decision_cache.read().await.get(&cache_key) {
             trace!(?cache_key, ?entry, "using cached policy decision");
             return Ok(entry.clone());
         }
 
         let request_id = Uuid::from_u128(Ulid::new().into()).to_string();
-        let decision = if let Some(policy_topic) = self.policy_topic.clone() {
-            trace!(?cache_key, "requesting policy decision");
-            let payload = serde_json::to_vec(&Request {
-                request_id: request_id.clone(),
-                request,
-                kind,
-                version: POLICY_TYPE_VERSION.to_string(),
-                host: self.host_info.clone(),
-            })
-            .context("failed to serialize policy request")?;
-            let request = async_nats::Request::new()
-                .payload(payload.into())
-                .timeout(Some(self.policy_timeout));
-            let res = self
-                .nats
-                .send_request(policy_topic, request)
-                .await
-                .context("policy request failed")?;
-            serde_json::from_slice::<Response>(&res.payload)
-                .context("failed to deserialize policy response")?
-        } else {
-            trace!(
-                ?cache_key,
-                "no policy topic configured, defaulting to permitted"
-            );
-            // default to permitted if no policy topic is configured
-            Response {
-                request_id: request_id.clone(),
-                permitted: true,
-                message: None,
-            }
-        };
+        trace!(?cache_key, "requesting policy decision");
+        let payload = serde_json::to_vec(&Request {
+            request_id: request_id.clone(),
+            request,
+            kind,
+            version: POLICY_TYPE_VERSION.to_string(),
+            host: self.host_info.clone(),
+        })
+        .context("failed to serialize policy request")?;
+        let request = async_nats::Request::new()
+            .payload(payload.into())
+            .timeout(Some(self.policy_timeout));
+        let res = self
+            .nats
+            .send_request(policy_topic, request)
+            .await
+            .context("policy request failed")?;
+        let decision = serde_json::from_slice::<Response>(&res.payload)
+            .context("failed to deserialize policy response")?;
+
         self.decision_cache
             .write()
             .await
