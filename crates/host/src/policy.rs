@@ -99,7 +99,6 @@ pub struct HostInfo {
 
 /// The action being requested
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Hash)]
-#[serde(untagged)]
 pub enum RequestKind {
     /// The host is checking whether it may invoke the target component
     #[serde(rename = "performInvocation")]
