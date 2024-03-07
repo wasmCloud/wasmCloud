@@ -70,7 +70,7 @@ Iterate:
   stop         Stop an actor or provider, or host
   update       Update an actor running in a host to a newer version
   link         Link an actor and a provider
-  call         Invoke a wasmCloud actor
+  call         Invoke a simple function on a component running in a wasmCloud host
   ctl          Interact with a wasmCloud control interface (deprecated, use above commands)
   label        Label (or un-label) a host with a key=value label pair
 
@@ -134,7 +134,7 @@ enum CliCommand {
     /// Build (and sign) a wasmCloud actor, provider, or interface
     #[clap(name = "build")]
     Build(BuildCommand),
-    /// Invoke a wasmCloud actor
+    /// Invoke a simple function on a component running in a wasmCloud host
     #[clap(name = "call")]
     Call(CallCli),
     /// Capture and debug cluster invocations and state
