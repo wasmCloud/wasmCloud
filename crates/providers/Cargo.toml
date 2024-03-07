@@ -11,9 +11,10 @@ opt-level = "z"
 lto = true
 
 [workspace]
-members = [
+members = [ "blobstore-azblob",
     "blobstore-fs",
     "blobstore-s3",
+    "blobstore-azblob",
     "http-client",
     "http-server",
     "kv-redis",

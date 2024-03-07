@@ -1,0 +1,364 @@
+package wasmcloud:blobstore;
+
+/// This interface represents the functions necessary
+/// to implement the [blobstore wasmCloud interface](https://github.com/wasmCloud/interfaces/blob/main/blobstore/blobstore.smithy)
+///
+/// Derived from https://github.com/wasmCloud/interfaces/blob/f020c93d4cacd50318301f686e2f059a15862e1e/blobstore/blobstore.smithy
+interface blobstore {
+    type container-id = string;
+
+    /// For Smithy, timestamps mean time between January 1, 0001 CE to 23:59:59.999 and
+    /// December 31, 9999 CE, with millisecond granularity. While Smithy (v2.0) intentionally
+    /// does not constrain serialization/deserialiation semantics, we must take a stance here.
+    ///
+    /// This timestamp represents - represents absolute time in UTC,
+    /// as non-leap seconds and nanoseconds since the UNIX EPOCH
+    record timestamp {
+      /// The number of non-leap seconds since UNIX EPOCH in UTC
+      /// NOTE: this is a break with the previous Timestamp type which used an i64
+      sec: u64,
+      /// The number of nanoseconds since the beginning of the last whole non-leap second
+      nsec: u32,
+    }
+
+    /// Metadata related to a container managed by the blobstore
+    record container-metadata {
+        /// name/ID of the container
+        container-id: container-id,
+
+        /// Time when the container was created
+        created-at: option<timestamp>,
+    }
+
+    /// The result of an operation on the blobstore
+    record operation-result {
+        /// Operation-specific key (ex. container name/ID, when removing containers)
+        key: string,
+
+        /// Whether the operation was successful or not
+        success: bool,
+
+        /// (optional) error message
+        error: option<string>,
+    }
+
+    /// Information that uniquely identifies an object in a container
+    record container-object-selector {
+        /// The name/ID of the container
+        container-id: container-id,
+
+        /// The name/ID of the objectn
+        object-id: string,
+    }
+
+    /// Metadata for an object inside a container
+    record object-metadata {
+        /// The container name/ID
+        container-id: container-id,
+
+        /// Object identifier that is unique within the given container
+        ///
+        /// Naming of object is determined by the capability provider
+        /// An object ID could be a path, hash of object contents, or some other unique ID.
+        object-id: string,
+
+        /// Size of the object in bytes
+        content-length: u64,
+
+        /// Date the object was last modified
+        last-modified: option<timestamp>,
+
+        /// A MIME type of the object
+        ///
+        /// see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.17
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-type: option<string>,
+
+        /// Specifies what content encodings have been applied to the object
+        /// and thus what decoding mechanisms must be applied to obtain the media-type
+        /// referenced by the contentType field.
+        ///
+        /// For more information, see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.11.
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-encoding: option<string>,
+    }
+
+    //////////////////////////
+    // Container operations //
+    //////////////////////////
+
+    /// Check if a container exists, by name/ID
+    container-exists: func(id: string) -> bool;
+
+    /// Create a container by name/ID, returning if successful.
+    ///
+    /// Note that container names may not be globally unique -- just unique within the
+    /// "namespace" of the connecting actor and linkdef
+    create-container: func(id: string);
+
+    /// Retrieves information about the container
+    ///
+    /// Returns error if the container ID is missing/invalid.
+    get-container-info: func(id: string) -> container-metadata;
+
+    /// Returns a list of container names/IDs
+    list-containers: func() -> list<container-metadata>;
+
+    /// Empty and remove container(s) by name/ID
+    ///
+    /// The operation-result list contains one entry for each container, depending
+    /// on whether it was successfully removed or not,
+    /// with the 'key' value representing container name
+    ///
+    /// If the multi-result list is empty
+    remove-containers: func(ids: list<string>) -> list<operation-result>;
+
+    ///////////////////////
+    // Object operations //
+    ///////////////////////
+
+    /// Parameter used when calling list-objects
+    record list-objects-request {
+        /// The container name/ID
+        container-id: container-id,
+
+        /// (optional) request object names starting with this value
+        start-with: option<string>,
+
+        /// (optional) Continuation token passe din list-objects-response
+        ///
+        /// If this is set, start-with is ignored.
+        continuation: option<string>,
+
+        /// (optional) Last item to return (inclusive terminator)
+        end-with: option<string>,
+
+        /// (optional) Stop returning items before returning this value (exclusive terminator)
+        ///
+        /// if start-from is "a" and end-before is "b", and items are ordered alphabetically,
+        /// then only items starting with "a" would be returned.
+        end-before: option<string>,
+
+        /// Maximum number of items to return
+        ///
+        /// If not specified, the provider will return an initial set of up to 1000 items.
+        /// if max-items > 1000, the provider implementation may return fewer items than requested.
+        max-items: option<u32>,
+    }
+
+    /// Response to list-objects
+    ///
+    /// If `isLast` is false, the list was truncated by the provider,
+    /// and the remainder of the objects can be retrieved with another
+    /// request using the `continuation` token.
+    record list-objects-response {
+        /// Objects that match the request
+        objects: list<object-metadata>,
+
+        /// Indicates if the item list is complete, or the last item in a multi-part response
+        is-last: bool,
+
+        /// If `isLast` is false, this value can be used in the `continuation` field
+        /// of a `ListObjectsRequest`.
+        ///
+        /// Clients should not attempt to interpret this field: it may or may not
+        /// be a real key or object name, and may be obfuscated by the provider.
+        continuation: option<string>,
+    }
+
+    /// Parameter used when calling remove-objects
+    record remove-objects-request {
+        /// The container name/ID
+        container-id: container-id,
+
+        /// List of object names/IDs to be removed
+        objects: list<string>,
+    }
+
+    /// A chunk of data (recommended to be less than 1MB)
+    record chunk {
+        /// The container name/ID
+        container-id: container-id,
+
+        /// Object identifier that is unique within the given container
+        ///
+        /// Naming of object is determined by the capability provider
+        /// An object ID could be a path, hash of object contents, or some other unique ID.
+        object-id: string,
+
+        /// Bytes in this chunk
+        bytes: list<u8>,
+
+        /// The byte offset within the object for the chunk
+        offset: u64,
+
+        /// True if this is the last chunk
+        is-last: bool,
+    }
+
+    /// Parameter used when calling put-object
+    record put-object-request {
+        /// File path and initial data
+        chunk: chunk,
+
+        /// A MIME type of the object
+        ///
+        /// see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.17
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-type: option<string>,
+
+        /// Specifies what content encodings have been applied to the object
+        /// and thus what decoding mechanisms must be applied to obtain the media-type
+        /// referenced by the contentType field.
+        ///
+        /// For more information, see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.11.
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-encoding: option<string>,
+    }
+
+    /// Response to put-object
+    record put-object-response {
+        /// If this is a multi-part upload, `streamId` must be returned with subsequent put-chunk-requests
+        stream-id: option<string>,
+    }
+
+    /// Parameter used when calling get-object
+    record get-object-request {
+        /// The container name/ID
+        container-id: container-id,
+
+        /// Object identifier that is unique within the given container
+        ///
+        /// Naming of object is determined by the capability provider
+        /// An object ID could be a path, hash of object contents, or some other unique ID.
+        object-id: string,
+
+        /// Requested start of object to retrieve.
+        ///
+        /// The first byte is at offset 0. Range values are inclusive.
+        ///
+        /// If rangeStart is beyond the end of the file, an empty chunk will be returned with isLast == true
+        range-start: option<u64>,
+
+        /// Requested end of object to retrieve.
+        ///
+        /// Defaults to the object's size, but it is not an error for range-end to be greater than the object size.
+        ///
+        /// Range values are inclusive.
+        range-end: option<u64>,
+    }
+
+    /// Response to get-object
+    record get-object-response {
+        /// Whether the operation was successful or not
+        success: bool,
+
+        /// (optional) If success is false, this may contain an error
+        error: option<string>,
+
+        /// The provider may begin the download by returning a first chunk
+        initial-chunk: option<chunk>,
+
+        /// Size of the object in bytes
+        content-length: u64,
+
+        /// A MIME type of the object
+        ///
+        /// see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.17
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-type: option<string>,
+
+        /// Specifies what content encodings have been applied to the object
+        /// and thus what decoding mechanisms must be applied to obtain the media-type
+        /// referenced by the contentType field.
+        ///
+        /// For more information, see http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.11.
+        ///
+        /// Provider implementations _may_ return None for this field for metadata returned from ListObjects
+        content-encoding: option<string>,
+    }
+
+    /// Parameter to put-chunk
+    record put-chunk-request {
+        /// Upload chunk from the file
+        ///
+        /// If is-last is set, this will be the last chunk uploaded
+        chunk: chunk,
+
+        /// This value should be set to the `streamId` returned from teh initial put-object call
+        stream-id: option<string>,
+
+        /// If set, the receiving provider should cancel the upload process and remove the file
+        cancel-and-remove: bool,
+    }
+
+    /// Check whether an object exists
+    object-exists: func(c: container-object-selector) -> bool;
+
+    /// Retrieve information about an object
+    ///
+    /// Returns error if the object ID is missing/invalid
+    get-object-info: func(c: container-object-selector) -> object-metadata;
+
+    /// Lists the objects in the container.
+    ///
+    /// If the container exists and is empty, the returned `objects` list is empty.
+    ///
+    /// Parameters of the request may be used to limit the object names returned
+    /// with an optional start value, end value, and maximum number of items.
+    ///
+    /// The provider may limit the number of items returned. If the list is truncated,
+    /// the response contains a `continuation` token that may be submitted in
+    /// a subsequent ListObjects request.
+    ///
+    /// Optional object metadata fields (i.e., `contentType` and `contentEncoding`) may not be
+    /// filled in for ListObjects response. To get complete object metadata, use GetObjectInfo.
+    list-objects: func(req: list-objects-request) -> list-objects-response;
+
+    /// Removes the specified objects.
+    ///
+    /// In the event any of the objects cannot be removed,
+    /// the operation continues until all requested deletions have been attempted.
+    ///
+    /// The MultiRequest includes a list of errors, one for each deletion request
+    /// that did not succeed. If the list is empty, all removals succeeded.
+    remove-objects: func(req: remove-objects-request) -> list<operation-result>;
+
+    /// Requests to start upload of a file/blob to the Blobstore.
+    ///
+    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size.
+    put-object: func(req: put-object-request) -> put-object-response;
+
+    /// Requests to retrieve an object.
+    ///
+    /// If the object is large, the provider may split the response into multiple parts.
+    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size.
+    get-object: func(req: get-object-request) -> get-object-response;
+
+    /// Uploads a file chunk to a blobstore.
+    ///
+    /// This must be called AFTER PutObject.
+    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size
+    put-chunk: func(req: put-chunk-request);
+}
+
+/// Operations that must be supported & invokable on actors that use blobstore.
+interface chunk-receiver {
+    use blobstore.{chunk};
+
+    record chunk-response {
+        /// If set and `true`, the sender will stop sending chunks.
+        cancel-download: bool,
+    }
+
+    /// Receives a file chunk from a blobstore.
+    ///
+    /// A blobstore provider invokes this operation on actors in response to the GetObject request.
+    /// If the response sets cancelDownload, the provider will stop downloading chunks
+    receive-chunk: func(c: chunk) -> chunk-response;
+}
