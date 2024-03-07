@@ -1,0 +1,35 @@
+package wasmcloud:bus;
+
+interface lattice {
+    /// Interface target. This represents an interface, which can be selected by `set-link-name`.
+    /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
+    /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
+    resource call-target-interface {
+        constructor(namespace: string, %package: string, %interface: string, %function: option<string>);
+    }
+
+    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
+    /// todo(vados-cosmonic): the list of interfaces should not be necessary once signing is removed
+    /// see: https://github.com/wasmCloud/wasmCloud/issues/1219
+    set-link-name: func(name: string, interfaces: list<call-target-interface>);
+
+    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
+    get-link-name: func() -> string;
+}
+
+/// An interface for getting configuration data for a wasm module
+interface guest-config {
+    /// Errors that can be returned from config sources
+    variant config-error {
+        /// An error occurred on the config source when fetching data
+        upstream(string),
+        /// I/O or connection failure
+        io(string),
+    }
+
+    /// Gets a single opaque config value set at the given key if it exists
+    get: func(key: string) -> result<option<list<u8>>, config-error>;
+
+    /// Gets a list of all set config data
+    get-all: func() -> result<list<tuple<string, list<u8>>>, config-error>;
+}

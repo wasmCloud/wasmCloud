@@ -349,7 +349,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 // TODO: REFACTOR -- for WRPC, we should *never* bundle, the args and type names they
                 // were supposed to be should always be together
 
-                // TODO: Build the code that is going to pull and convert items from the list of params we'll get
+                // Build the code that is going to pull and convert items from the list of params we'll get
                 // params are a `Vec<wrpc_transport::Value>`, so we'll need to decode them one by one
                 let mut input_decoding_lines = Vec::<TokenStream>::new();
 
@@ -556,11 +556,17 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// Interfaces imported by the provider can use this to send traffic across the lattice
         pub struct InvocationHandler<'a> {
             ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::InterfaceLinkDefinition,
+            wrpc_client: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::wrpc::Client
         }
 
         impl<'a> InvocationHandler<'a> {
             pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> Self {
-                Self { ld }
+                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
+                // NOTE: The link definition that is used here is likely (source_id=?, target=<provider>)
+                //
+                // todo(vados-cosmonic): This invocation handler should arguably create a uni-directional
+                // "return" link to anything it wants to call, since links are uni-directional now.
+                Self { ld, wrpc_client: connection.get_wrpc_client(&ld.source_id) }
             }
 
             #(
@@ -735,7 +741,6 @@ fn build_wrpc_impls(impl_struct_name: &Ident, resolve: &Resolve) -> anyhow::Resu
                 let lattice_name = lattice_name.as_ref();
                 let wrpc_version = wrpc_version.as_ref();
                 let component_id = component_id.as_ref();
-                // TODO: this is really wasteful
                 let mut mapping = ::std::collections::HashMap::new();
                 #(
                     #insertion_lines

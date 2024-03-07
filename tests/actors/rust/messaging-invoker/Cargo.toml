@@ -1,0 +1,18 @@
+[package]
+name = "messaging-invoker"
+version = "0.1.0"
+edition = "2021"
+description = """
+A component that listens on a NATS cluster via a nats-messaging provider, and invokes other functionality in providers and actors.
+"""
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true, features = [ "std" ] }
+bytes = { workspace = true, features = [ "serde" ] }
+serde = { workspace = true, features = ["std", "derive"]  }
+serde_json = { workspace = true, features = [ "std" ] }
+wit-bindgen = { workspace = true, features = [ "default" ] }

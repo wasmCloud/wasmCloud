@@ -27,11 +27,6 @@ pub(crate) fn count_preceeding_supers(t: &Type) -> usize {
     }
 }
 
-/// Check if a given TokenStream is the Rust unit type
-pub(crate) fn is_rust_unit_type(t: &TokenStream) -> bool {
-    t.to_string() == "()"
-}
-
 /// Convert a possibly not owned `FnArg` type (ex. `s: &str`) to a TokenStream
 /// that represents an owned type `FnArg` (ex. `s: String`)
 pub(crate) fn convert_to_owned_type_arg(

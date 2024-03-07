@@ -15,10 +15,10 @@ use uuid::Uuid;
 use wascap::prelude::KeyPair;
 
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
+use wasmcloud_core::wrpc::Client as WrpcNatsClient;
 use wasmcloud_core::InterfaceLinkDefinition;
 use wasmcloud_core::{HealthCheckRequest, HostData};
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
-use wrpc_transport_nats::Client as WrpcNatsClient;
 
 #[cfg(feature = "otel")]
 use wasmcloud_core::TraceContext;
@@ -153,6 +153,15 @@ impl ProviderConnection {
         self.rpc_client.clone()
     }
 
+    /// Used for fetching the RPC client in order to make RPC calls
+    pub fn get_wrpc_client(&self, target: impl AsRef<str>) -> WrpcNatsClient {
+        let target = target.as_ref();
+        let mut headers = HeaderMap::new();
+        headers.insert("source-id", self.provider_key());
+        headers.insert("target-id", target);
+        WrpcNatsClient::new(self.rpc_client.client(), &self.lattice, target, headers)
+    }
+
     /// Get the provider key that was assigned to this host @ startup
     pub fn provider_key(&self) -> &str {
         &self.host_data.provider_key
@@ -240,10 +249,7 @@ impl ProviderConnection {
         let provider_id = provider_id.as_ref();
 
         // Build a wrpc client that we can use to listen for incoming invocations
-        let wrpc_client = WrpcNatsClient::new(
-            self.rpc_client.client(),
-            format!("{lattice}.{}", provider_id),
-        );
+        let wrpc_client = self.get_wrpc_client(provider_id);
         let link_name = self.host_data.link_name.clone();
 
         // For every mapping of world key names to dynamic functions to call, spawn a client that will listen
@@ -270,87 +276,95 @@ impl ProviderConnection {
                 world_key_name.as_str(),
                 wit_fn.as_str()
             );
+
+            // Set up stream of incoming invocations
+            let mut invocations = wrpc_client
+                .serve_dynamic(world_key_name.as_str(), wit_fn.as_str(), fn_params)
+                .await
+                .map_err(|e| {
+                    ProviderInitError::Initialization(format!("failed to start wprc serving: {e}"))
+                })?;
+
+            // Spawn off process to handle invocations forever
             handles.push(tokio::spawn(async move {
-                tokio::select! {
-                    _ = quit.recv() => {
-                        Ok(())
-                    }
+                loop {
+                    tokio::select! {
+                        _ = quit.recv() => {
+                            break Ok(());
+                        }
 
-                    invocations = wrpc_client
-                        .serve_dynamic(world_key_name.as_str(), wit_fn.as_str(), fn_params) => {
-
+                        invocation = invocations.try_next() => {
                             // Get the stream of invocations out
-                            let mut invocations = match invocations {
-                                Ok(inv) => inv,
-                                Err(e) => {
-                                    error!(error = %e, world_key_name, wit_fn, "failed to serve via wrpc");
-                                    return Err(e);
-                                }
-                            };
-
-                            // Handle each invocation (this code is adapted from legacy wasmbus)
-                            //
-                            // Invocations are (value, subject, transmitter) tuples
-                            while let Ok(Some(AcceptedInvocation {
+                            let AcceptedInvocation {
                                 context,
                                 params,
                                 result_subject,
                                 error_subject,
                                 transmitter
-                            })) = invocations.try_next().await {
-
-                                let invocation_id = Uuid::from_u128(Ulid::new().into()).to_string();
-                                let operation = format!("{world_key_name}.{wit_fn}");
-
-                                // Build a trace context from incoming headers
-                                let context = context.unwrap_or_default();
-                                #[cfg(feature = "otel")]
-                                {
-                                    let trace_context: TraceContext = convert_header_map_to_hashmap(&context)
-                                        .into_iter()
-                                        .collect::<Vec<(String, String)>>();
-                                    attach_span_context(&trace_context);
+                            } = match invocation {
+                                Ok(Some(inv)) => inv,
+                                // If we get an invocation that is empty, skip
+                                Ok(None) => {
+                                    continue;
+                                },
+                                // Process errors if we fail to get the invocation
+                                Err(e) => {
+                                    error!(error = %e, world_key_name, wit_fn, "failed to serve via wrpc");
+                                    continue;
                                 }
+                            };
 
-                                // Determine source ID for the invocation
-                                let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME).map(ToString::to_string).unwrap_or_else(|| "<unknown>".into());
+                            let invocation_id = Uuid::from_u128(Ulid::new().into()).to_string();
+                            let operation = format!("{world_key_name}.{wit_fn}");
 
-                                let current = tracing::Span::current();
-                                current.record("operation", &tracing::field::display(&operation));
-                                current.record("lattice_name", &tracing::field::display(&lattice));
-                                current.record("invocation_id", &tracing::field::display(&invocation_id));
-                                current.record("source_id", &tracing::field::display(&source_id));
-                                current.record(
-                                    "host_id", 
-                                    &tracing::field::display(&context.get(WRPC_HEADER_NAME_HOST_ID).map(ToString::to_string).unwrap_or("<unknown>".to_string()))
-                                );
-                                current.record("provider_id", provider_id.clone());
-                                current.record("link_name", &tracing::field::display(&link_name));
-
-                                // Perform RPC
-                                match this.handle_wrpc(provider.clone(), &operation, source_id, params, context).in_current_span().await {
-                                    Ok(bytes) => {
-                                        // Assuming that the provider has processed the request and produced objects
-                                        // that conform to wrpc, transmit the response that were returned by the invocation
-                                        if let Err(err) = transmitter.transmit(result_subject, bytes.into()).await {
-                                            error!(%err, "failed to transmit invocation results");
-                                        }
-                                    },
-                                    Err(err) => {
-                                        error!(%err, %operation, "wRPC invocation failed");
-
-                                        // Send the error forwards on the error subject
-                                        if let Err(err) = transmitter
-                                            .transmit_static(error_subject, format!("{err:#}"))
-                                            .await
-                                        {
-                                            error!(?err, "failed to transmit error to invoker");
-                                        }
-                                    },
-                                };
+                            // Build a trace context from incoming headers
+                            let context = context.unwrap_or_default();
+                            #[cfg(feature = "otel")]
+                            {
+                                let trace_context: TraceContext = convert_header_map_to_hashmap(&context)
+                                    .into_iter()
+                                    .collect::<Vec<(String, String)>>();
+                                attach_span_context(&trace_context);
                             }
-                            Ok(())
+
+                            // Determine source ID for the invocation
+                            let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME).map(ToString::to_string).unwrap_or_else(|| "<unknown>".into());
+
+                            let current = tracing::Span::current();
+                            current.record("operation", &tracing::field::display(&operation));
+                            current.record("lattice_name", &tracing::field::display(&lattice));
+                            current.record("invocation_id", &tracing::field::display(&invocation_id));
+                            current.record("source_id", &tracing::field::display(&source_id));
+                            current.record(
+                                "host_id", 
+                                &tracing::field::display(&context.get(WRPC_HEADER_NAME_HOST_ID).map(ToString::to_string).unwrap_or("<unknown>".to_string()))
+                            );
+                            current.record("provider_id", provider_id.clone());
+                            current.record("link_name", &tracing::field::display(&link_name));
+
+                            // Perform RPC
+                            match this.handle_wrpc(provider.clone(), &operation, source_id, params, context).in_current_span().await {
+                                Ok(bytes) => {
+                                    // Assuming that the provider has processed the request and produced objects
+                                    // that conform to wrpc, transmit the response that were returned by the invocation
+                                    if let Err(err) = transmitter.transmit(result_subject, bytes.into()).await {
+                                        error!(%err, "failed to transmit invocation results");
+                                    }
+                                },
+                                Err(err) => {
+                                    error!(%err, %operation, "wRPC invocation failed");
+
+                                    // Send the error forwards on the error subject
+                                    if let Err(err) = transmitter
+                                        .transmit_static(error_subject, format!("{err:#}"))
+                                        .await
+                                    {
+                                        error!(?err, "failed to transmit error to invoker");
+                                    }
+                                },
+                            };
                         }
+                    }
                 }
             }));
         }
@@ -465,14 +479,10 @@ impl ProviderConnection {
     where
         P: Provider + Clone,
     {
-        // todo(vados-cosmonic): this is what it *should* be
-        //
-        // let ldput_topic = format!(
-        //     "wasmbus.rpc.{}.{}.linkdefs.put",
-        //     &self.lattice, &self.host_data.provider_key,
-        // );
-
-        let ldput_topic = format!("wasmbus.ctl.{}.link.put", &self.lattice,);
+        let ldput_topic = format!(
+            "wasmbus.rpc.{}.{}.linkdefs.put",
+            &self.lattice, &self.host_data.provider_key,
+        );
         let mut sub = self.rpc_client.client().subscribe(ldput_topic).await?;
         let (this, provider) = (self.clone(), provider.clone());
         let handle = tokio::spawn(async move {
