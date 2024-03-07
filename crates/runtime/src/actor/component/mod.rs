@@ -273,9 +273,7 @@ where
             | "wasi:logging/logging"
             | "wasi:sockets/tcp@0.2.0"
             | "wasmcloud:bus/lattice"
-            | "wasmcloud:bus/guest-config"
-            | "wasmcloud:messaging/messaging"
-            | "wasmcloud:messaging/message-subscriber" => continue,
+            | "wasmcloud:bus/guest-config" => continue,
             _ => {}
         }
         let wit_parser::WorldItem::Interface(interface) = item else {
@@ -452,11 +450,10 @@ fn instantiate(
                 | "wasi:io/streams@0.2.0"
                 | "wasi:sockets/tcp@0.2.0"
                 | "wasmcloud:bus/lattice"
-                | "wasmcloud:bus/guest-config"
-                | "wasmcloud:messaging/messaging"
-                | "wasmcloud:messaging/message-subscriber" => continue,
+                | "wasmcloud:bus/guest-config" => continue,
                 _ => {}
             }
+
             let item = match item {
                 component::types::ComponentItem::ComponentInstance(item) => item,
                 _ => continue,

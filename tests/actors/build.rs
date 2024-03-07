@@ -195,27 +195,38 @@ async fn install_rust_wasm32_unknown_unknown_actors(
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
+    // NOTE: this list should be kept sorted
+    let project_names = [
+        "builtins-component-reactor",
+        "foobar-component-command",
+        "messaging-invoker",
+        "pinger-config-component",
+        "ponger-config-component",
+        "wrpc-pinger-component",
+        "wrpc-ponger-component",
+    ];
+
+    let cargo_build_args = [
+        vec![
+            "--manifest-path=./rust/Cargo.toml".to_string(),
+            "--target=wasm32-wasi".to_string(),
+        ],
+        project_names
+            .iter()
+            .map(|n| format!("-p={n}"))
+            .collect::<Vec<String>>(),
+    ]
+    .concat();
+
     try_join!(
         // Build component actors
         async {
-            let mut artifacts = build_artifacts(
-                [
-                    "--manifest-path=./rust/Cargo.toml",
-                    "--target=wasm32-wasi",
-                    "-p=builtins-component-reactor",
-                    "-p=foobar-component-command",
-                    "-p=pinger-config-component",
-                    "-p=ponger-config-component",
-                    "-p=wrpc-pinger-component",
-                    "-p=wrpc-ponger-component",
-                ],
-                |name, kind| {
-                    ["builtins-component-reactor", "foobar-component-command", "pinger-config-component", "ponger-config-component", "wrpc-pinger-component", "wrpc-ponger-component"].contains(&name)
-                        && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
-                },
-            )
+            let mut artifacts = build_artifacts(cargo_build_args, |name, kind| {
+                project_names.contains(&name)
+                    && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
+            })
             .await
-            .context("failed to build `builtins-component-reactor`, `foobar-component-command`, `pinger-config-component`, `pinger-config-component`, `wrpc-pinger-component` and `wrpc-ponger-component` crates")?;
+            .with_context(|| format!("failed to build {:?} crates", project_names))?;
             match (
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
@@ -223,16 +234,18 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
-                artifacts.next()
+                artifacts.next().deref_artifact(),
+                artifacts.next(),
             ) {
                 (
                     Some(("builtins-component-reactor", [builtins_component_reactor])),
                     Some(("foobar-component-command", [foobar_component_command])),
+                    Some(("messaging-invoker", [messaging_invoker])),
                     Some(("pinger-config-component", [pinger_config_component])),
                     Some(("ponger-config-component", [ponger_config_component])),
                     Some(("wrpc-pinger-component", [wrpc_pinger_component])),
                     Some(("wrpc-ponger-component", [wrpc_ponger_component])),
-                    None
+                    None,
                 ) => {
                     try_join!(
                         copy(
@@ -242,6 +255,10 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                         copy(
                             foobar_component_command,
                             out_dir.join("rust-foobar-component-command.wasm"),
+                        ),
+                        copy(
+                            messaging_invoker,
+                            out_dir.join("rust-messaging-invoker.wasm"),
                         ),
                         copy(
                             pinger_config_component,
@@ -261,7 +278,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                         )
                     )
                 }
-                _ => bail!("invalid `builtins-component-reactor`, `foobar-component-command`, `pinger-config-component`, `pinger-config-component`, `wrpc-pinger-component` and `wrpc-ponger-component` build artifacts"),
+                v => bail!("invalid {:?} build artifacts: {v:#?}", project_names),
             }
         },
     )
@@ -303,9 +320,10 @@ async fn main() -> anyhow::Result<()> {
         install_rust_wasm32_wasi_actors(&out_dir),
     )?;
 
-    // Build WASI component wasm modules
+    // Build WASI reactor components
     for name in [
         "builtins-component-reactor",
+        "messaging-invoker",
         "pinger-config-component",
         "ponger-config-component",
         "wrpc-pinger-component",
@@ -323,6 +341,8 @@ async fn main() -> anyhow::Result<()> {
             .await
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
+
+    // Build WASI command components
     for name in ["foobar-component-command"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
@@ -386,6 +406,7 @@ async fn main() -> anyhow::Result<()> {
         ("ponger-config-component-preview2", None),
         ("wrpc-pinger-component-preview2", None),
         ("wrpc-ponger-component-preview2", None),
+        ("messaging-invoker-preview2", None),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await

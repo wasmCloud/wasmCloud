@@ -52,12 +52,13 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
             .ident
             .clone()
             .context("unexpectedly missing field name in struct")?;
+        let member_name_lit_str = LitStr::new(member_name.to_string().as_ref(), Span::call_site());
         members.push(member_name.clone());
         // Add a line that receives this member
         receive_lines.push(quote::quote!(
             let (#member_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                 .await
-                .context("failed to receive member `#member_name`")?;
+                .with_context(|| format!("failed to receive member `{}`", #member_name_lit_str))?;
         ));
     }
 
