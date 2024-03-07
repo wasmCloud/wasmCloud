@@ -11,7 +11,7 @@ opt-level = "z"
 lto = true
 
 [workspace]
-members = [ "blobstore-azblob",
+members = [
     "blobstore-fs",
     "blobstore-s3",
     "blobstore-azblob",
