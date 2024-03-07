@@ -1,0 +1,63 @@
+package wasmcloud:keyvalue;
+
+// Based on https://github.com/wasmCloud/interfaces/blob/f020c93d4cacd50318301f686e2f059a15862e1e/keyvalue/keyvalue.smithy
+
+interface key-value {
+    record get-response {
+        value: string,
+        exists: bool,
+    }
+
+    record set-request {
+        key: string,
+        value: string,
+        expires: u32,
+    }
+
+    record increment-request {
+        key: string,
+        value: s32,
+    }
+
+    record list-add-request {
+        list-name: string,
+        value: string,
+    }
+
+    record list-del-request {
+        list-name: string,
+        value: string,
+    }
+
+    record list-range-request {
+        list-name: string,
+        start: s32,
+        stop: s32,
+    }
+
+    record set-add-request {
+        set-name: string,
+        value: string,
+    }
+
+    record set-del-request {
+        set-name: string,
+        value: string,
+    }
+
+    contains: func(input: string) -> bool;
+    del: func(input: string) -> bool;
+    get: func(input: string) -> get-response;
+    increment: func(input: increment-request) -> s32;
+    list-add: func(input: list-add-request) -> u32;
+    list-clear: func(input: string) -> bool;
+    list-del: func(input: list-del-request) -> bool;
+    list-range: func(input: list-range-request) -> list<string>;
+    set-add: func(input: set-add-request) -> u32;
+    set-clear: func(input: string) -> bool;
+    set-del: func(input: set-del-request) -> u32;
+    set-intersection: func(input: list<string>) -> list<string>;
+    set-query: func(input: string) -> list<string>;
+    set-union: func(input: list<string>) -> list<string>;
+    set: func(input: set-request);
+}

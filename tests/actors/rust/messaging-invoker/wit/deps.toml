@@ -1,0 +1,12 @@
+blobstore = "../../../../../wit/wasmcloud/blobstore"
+bus = "../../../../../wit"
+keyvalue = "../../../../../wit/wasmcloud/keyvalue"
+lattice-control = "../../../../../wit/wasmcloud/lattice-control"
+messaging = "../../../../../wit/wasmcloud/messaging"
+testing = "../../../wit/testing"
+
+# note(vados-cosmonic): for some reason using the normal URL didn't work here on my machine,
+# an older commit without the semicolon WIT changes was pulled, so for now we pin to latest main
+# commit as of 2024/03/08
+[logging]
+url = "https://github.com/WebAssembly/wasi-logging/archive/3293e84de91a1ead98a1b4362f95ac8af5a16ddd.tar.gz"
