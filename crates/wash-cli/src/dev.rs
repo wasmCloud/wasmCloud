@@ -258,7 +258,8 @@ pub async fn handle_command(
     );
 
     // Build the project
-    let artifact_path = build_project(&project_cfg, sign_cfg.clone())
+    let artifact_path = build_project(&project_cfg, sign_cfg.as_ref())
+        .await
         .context("failed to build project")?
         .canonicalize()
         .context("failed to canonicalize path")?;
