@@ -2,6 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use provider_archive::ProviderArchive;
 use std::path::PathBuf;
 
+/// Helper function for detecting the arch used by the current machine
+pub fn detect_arch() -> String {
+    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+}
+
 pub struct ParCreateArgs {
     pub capid: String,
     pub vendor: String,
@@ -12,7 +17,7 @@ pub struct ParCreateArgs {
     pub arch: String,
 }
 
-pub async fn create_provider_archive(
+pub fn create_provider_archive(
     ParCreateArgs {
         capid,
         vendor,

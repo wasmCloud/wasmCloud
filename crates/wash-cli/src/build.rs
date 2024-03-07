@@ -83,12 +83,12 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     &config.common,
                     actor_config,
                     // We prevent supplying both fields in the CLI parser, so this `context` is just a safety fallback
-                    sign_config.context("cannot supply --build-only and --sign-only")?,
+                    &sign_config.context("cannot supply --build-only and --sign-only")?,
                     actor_wasm_path,
                 )?;
                 config.common.path.join(signed_path)
             } else {
-                build_project(&config, sign_config)?
+                build_project(&config, sign_config.as_ref()).await?
             };
 
             let json_output = HashMap::from([
@@ -107,9 +107,20 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                 json_output,
             ))
         }
-        _ => {
-            // Until providers and interfaces have build support, this codepath won't be exercised
-            let path = build_project(&config, None)?;
+        TypeConfig::Provider(ref provider_config) => {
+            let path = build_project(
+                &config,
+                Some(&SignConfig {
+                    keys_directory: command
+                        .keys_directory
+                        .clone()
+                        .or(Some(provider_config.key_directory.to_path_buf())),
+                    issuer: command.issuer,
+                    subject: command.subject,
+                    disable_keygen: command.disable_keygen,
+                }),
+            )
+            .await?;
             Ok(CommandOutput::new(
                 format!("Built artifact can be found at {path:?}"),
                 HashMap::from([("path".to_string(), json!(path))]),

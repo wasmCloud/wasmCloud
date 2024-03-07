@@ -1,5 +1,3 @@
-//! Build (and sign) a wasmCloud actor, provider, or interface. Depends on the "cli" feature
-
 use std::{
     borrow::Cow,
     fs,
@@ -15,75 +13,15 @@ use wasm_encoder::{Encode, Section};
 use wit_bindgen_core::Files;
 use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
-use wit_parser::{Resolve, WorldId};
 
 use crate::{
+    build::*,
     cli::{
         claims::{sign_file, ActorMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
-    parser::{
-        ActorConfig, CommonConfig, InterfaceConfig, LanguageConfig, ProjectConfig, ProviderConfig,
-        RustConfig, TinyGoConfig, TypeConfig, WasmTarget,
-    },
+    parser::{ActorConfig, CommonConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
 };
-
-/// This tag indicates that a Wasm module uses experimental features of wasmCloud
-/// and/or the surrounding ecosystem.
-///
-/// This tag is normally embedded in a Wasm module as a custom section
-const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
-
-/// Configuration for signing an artifact (actor or provider) including issuer and subject key, the path to where keys can be found, and an option to
-/// disable automatic key generation if keys cannot be found.
-#[derive(Debug, Clone, Default)]
-pub struct SignConfig {
-    /// Location of key files for signing
-    pub keys_directory: Option<PathBuf>,
-
-    /// Path to issuer seed key (account). If this flag is not provided, the seed will be sourced from ($HOME/.wash/keys) or generated for you if it cannot be found.
-    pub issuer: Option<String>,
-
-    /// Path to subject seed key (module or service). If this flag is not provided, the seed will be sourced from ($HOME/.wash/keys) or generated for you if it cannot be found.
-    pub subject: Option<String>,
-
-    /// Disables autogeneration of keys if seed(s) are not provided
-    pub disable_keygen: bool,
-}
-
-/// Using a [ProjectConfig], usually parsed from a `wasmcloud.toml` file, build the project
-/// with the installed language toolchain. This will delegate to [build_actor] when the project is an actor,
-/// or return an error when trying to build providers or interfaces. This functionality is planned in a future release.
-///
-/// This function returns the path to the compiled artifact, a signed Wasm module, signed provider archive, or compiled
-/// interface library file.
-///
-/// # Usage
-/// ```no_run
-/// use wash_lib::{build::build_project, parser::get_config};
-/// let config = get_config(None, Some(true))?;
-/// let artifact_path = build_project(config)?;
-/// println!("Here is the signed artifact: {}", artifact_path.to_string_lossy());
-/// ```
-/// # Arguments
-/// * `config`: [ProjectConfig] for required information to find, build, and sign an actor
-/// * `signing`: Optional [SignConfig] with information for signing the project artifact. If omitted, the artifact will only be built
-/// * `adapter_bytes`: Optional [&[u8]] bytes that represent a wasm component adapter that should be used, if present.
-pub fn build_project(config: &ProjectConfig, signing: Option<SignConfig>) -> Result<PathBuf> {
-    match &config.project_type {
-        TypeConfig::Actor(actor_config) => {
-            build_actor(actor_config, &config.language, &config.common, signing)
-        }
-        TypeConfig::Provider(_provider_config) => {
-            bail!(
-                "wash build has not been implemented for providers yet. Please use `make` for now!"
-            )
-        }
-        TypeConfig::Interface(_interface_config) => bail!(
-            "wash build has not be implemented for interfaces yet. Please use `make` for now!"
-        ),
-    }
-}
 
 /// Builds a wasmCloud actor using the installed language toolchain, then signs the actor with
 /// keys, capability claims, and additional friendly information like name, version, revision, etc.
@@ -97,7 +35,7 @@ pub fn build_actor(
     actor_config: &ActorConfig,
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
-    signing_config: Option<SignConfig>,
+    signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
     let actor_wasm_path = if let Some(raw_command) = actor_config.build_command.as_ref() {
         build_custom_actor(common_config, actor_config, raw_command)?
@@ -175,7 +113,7 @@ pub fn build_actor(
 pub fn sign_actor_wasm(
     common_config: &CommonConfig,
     actor_config: &ActorConfig,
-    signing_config: SignConfig,
+    signing_config: &SignConfig,
     actor_wasm_path: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     // If we're building for WASI preview1 or preview2, we're targeting components-first
@@ -207,11 +145,11 @@ pub fn sign_actor_wasm(
             rev: Some(common_config.revision),
             custom_caps: actor_config.claims.clone(),
             call_alias: actor_config.call_alias.clone(),
-            issuer: signing_config.issuer,
-            subject: signing_config.subject,
+            issuer: signing_config.issuer.clone(),
+            subject: signing_config.subject.clone(),
             common: GenerateCommon {
                 disable_keygen: signing_config.disable_keygen,
-                directory: signing_config.keys_directory,
+                directory: signing_config.keys_directory.clone(),
                 ..Default::default()
             },
             tags: tags.into_iter().collect(),
@@ -555,27 +493,6 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Ve
     Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
 }
 
-/// Build a [`wit_parser::Resolve`] from a provided directory
-/// and select a given world
-fn convert_wit_dir_to_world(
-    dir: impl AsRef<Path>,
-    world: impl AsRef<str>,
-) -> Result<(Resolve, WorldId)> {
-    // Resolve the WIT directory packages & worlds
-    let mut resolve = wit_parser::Resolve::default();
-    let (package_id, _paths) = resolve
-        .push_dir(dir.as_ref())
-        .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
-    info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
-
-    // Select the target world that was specified by the user
-    let world_id = resolve
-        .select_world(package_id, world.as_ref().into())
-        .context("failed to select world from built resolver")?;
-
-    Ok((resolve, world_id))
-}
-
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
     project_path: impl AsRef<Path>,
@@ -653,27 +570,6 @@ fn parse_custom_command(command: &str) -> Result<(&str, Vec<&str>)> {
     Ok((command, args))
 }
 
-/// Placeholder for future functionality for building providers
-#[allow(unused)]
-fn build_provider(
-    _provider_config: ProviderConfig,
-    _language_config: LanguageConfig,
-    _common_config: CommonConfig,
-    _no_sign: bool,
-) -> Result<()> {
-    Ok(())
-}
-
-/// Placeholder for future functionality for building interfaces
-#[allow(unused)]
-fn build_interface(
-    _interface_config: InterfaceConfig,
-    _language_config: LanguageConfig,
-    _common_config: CommonConfig,
-) -> Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -689,11 +585,13 @@ mod tests {
 
     use crate::parser::RegistryConfig;
     use crate::{
-        build::{embed_wasm_component_metadata, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
+        build::WASMCLOUD_WASM_TAG_EXPERIMENTAL,
         parser::{ActorConfig, CommonConfig, WasmTarget},
     };
 
-    use super::{generate_tinygo_bindgen, sign_actor_wasm, SignConfig};
+    use super::{
+        embed_wasm_component_metadata, generate_tinygo_bindgen, sign_actor_wasm, SignConfig,
+    };
 
     const MODULE_WAT: &str = "(module)";
     const COMPONENT_BASIC_WIT: &str = r#"
@@ -810,7 +708,7 @@ world downstream {
                     tags: Some(HashSet::from(["test-tag".into()])),
                     ..ActorConfig::default()
                 },
-                SignConfig::default(),
+                &SignConfig::default(),
                 &wasm_path,
             )?;
 

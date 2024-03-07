@@ -19,16 +19,17 @@ pub async fn run_dev_loop(
     ctl_client: &Client,
     sign_cfg: Option<SignConfig>,
 ) -> Result<()> {
-    let built_artifact_path = build_project(project_cfg, sign_cfg)?.canonicalize()?;
+    let built_artifact_path = build_project(project_cfg, sign_cfg.as_ref())
+        .await?
+        .canonicalize()?;
 
     // Restart the artifact so that changes can be observed
     match project_cfg.project_type {
-        TypeConfig::Interface(_) | TypeConfig::Provider(_) => {
+        TypeConfig::Provider(_) => {
             eprintln!(
                 "{} {}",
                 emoji::WARN,
-                style("`wash build` interfaces and providers are not yet supported, skipping...")
-                    .bold(),
+                style("`wash build` providers are not yet supported for dev, skipping...").bold(),
             );
         }
         TypeConfig::Actor(_) => {

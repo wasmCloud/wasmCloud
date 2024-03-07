@@ -24,7 +24,6 @@ pub enum LanguageConfig {
 pub enum TypeConfig {
     Actor(ActorConfig),
     Provider(ProviderConfig),
-    Interface(InterfaceConfig),
 }
 
 /// Project configuration, normally specified in the root keys of a wasmcloud.toml file
@@ -36,7 +35,7 @@ pub struct ProjectConfig {
     /// This is renamed to "type" but is named project_type here to avoid clashing with the type keyword in Rust.
     #[serde(rename = "type")]
     pub project_type: TypeConfig,
-    /// Configuration common amoung all project types & languages.
+    /// Configuration common among all project types & languages.
     pub common: CommonConfig,
 }
 
@@ -114,6 +113,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
             push_insecure: raw_config.push_insecure.unwrap_or(false),
+            // TODO(#1624): Default to ~/.wash/keys
             key_directory: raw_config
                 .key_directory
                 .unwrap_or_else(|| PathBuf::from("./keys")),
@@ -131,20 +131,41 @@ impl TryFrom<RawActorConfig> for ActorConfig {
         })
     }
 }
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ProviderConfig {
-    /// The capability ID of the provider.
-    pub capability_id: String,
     /// The vendor name of the provider.
     pub vendor: String,
+    /// Optional WIT world for the provider, e.g. `wasmcloud:messaging`
+    pub wit_world: Option<String>,
+    /// The target operating system of the provider archive. Defaults to the current OS.
+    pub os: String,
+    /// The target architecture of the provider archive. Defaults to the current architecture.
+    pub arch: String,
+    /// The Rust target triple to build for. Defaults to the default rust toolchain.
+    pub rust_target: Option<String>,
+    /// Optional override for the provider binary name, required if we cannot infer this from Cargo.toml
+    pub bin_name: Option<String>,
+    /// The directory to store the private signing keys in.
+    pub key_directory: PathBuf,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct RawProviderConfig {
-    /// The capability ID of the provider.
-    pub capability_id: String,
-    /// The vendor name of the provider. Optional, defaults to 'NoVendor'.
+    /// The vendor name of the provider.
     pub vendor: Option<String>,
+    /// Optional WIT world for the provider, e.g. `wasmcloud:messaging`
+    pub wit_world: Option<String>,
+    /// The target operating system of the provider archive. Defaults to the current OS.
+    pub os: Option<String>,
+    /// The target architecture of the provider archive. Defaults to the current architecture.
+    pub arch: Option<String>,
+    /// The Rust target triple to build for. Defaults to the default rust toolchain.
+    pub rust_target: Option<String>,
+    /// Optional override for the provider binary name, required if we cannot infer this from Cargo.toml
+    pub bin_name: Option<String>,
+    /// The directory to store the private signing keys in.
+    pub key_directory: Option<PathBuf>,
 }
 
 impl TryFrom<RawProviderConfig> for ProviderConfig {
@@ -152,39 +173,20 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
 
     fn try_from(raw_config: RawProviderConfig) -> Result<Self> {
         Ok(Self {
-            capability_id: raw_config.capability_id,
             vendor: raw_config.vendor.unwrap_or_else(|| "NoVendor".to_string()),
-        })
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
-pub struct InterfaceConfig {
-    /// Directory to output HTML.
-    pub html_target: PathBuf,
-    /// Path to codegen.toml file.
-    pub codegen_config: PathBuf,
-}
-#[derive(Deserialize, Debug, PartialEq)]
-
-struct RawInterfaceConfig {
-    /// Directory to output HTML. Defaults to "./html".
-    pub html_target: Option<PathBuf>,
-    /// Path to codegen.toml file. Optional, defaults to "./codegen.toml".
-    pub codegen_config: Option<PathBuf>,
-}
-
-impl TryFrom<RawInterfaceConfig> for InterfaceConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_config: RawInterfaceConfig) -> Result<Self> {
-        Ok(Self {
-            html_target: raw_config
-                .html_target
-                .unwrap_or_else(|| PathBuf::from("./html")),
-            codegen_config: raw_config
-                .codegen_config
-                .unwrap_or_else(|| PathBuf::from("./codegen.toml")),
+            os: raw_config
+                .os
+                .unwrap_or_else(|| std::env::consts::OS.to_string()),
+            arch: raw_config
+                .arch
+                .unwrap_or_else(|| std::env::consts::ARCH.to_string()),
+            rust_target: raw_config.rust_target,
+            bin_name: raw_config.bin_name,
+            wit_world: raw_config.wit_world,
+            // TODO(#1624): Default to ~/.wash/keys
+            key_directory: raw_config
+                .key_directory
+                .unwrap_or_else(|| PathBuf::from("./keys")),
         })
     }
 }
@@ -323,7 +325,6 @@ struct RawProjectConfig {
     pub revision: i32,
 
     pub actor: Option<RawActorConfig>,
-    pub interface: Option<RawInterfaceConfig>,
     pub provider: Option<RawProviderConfig>,
 
     pub rust: Option<RawRustConfig>,
@@ -484,12 +485,6 @@ impl RawProjectConfig {
             "provider" => TypeConfig::Provider(
                 self.provider
                     .context("missing provider config")?
-                    .try_into()?,
-            ),
-
-            "interface" => TypeConfig::Interface(
-                self.interface
-                    .context("missing interface config")?
                     .try_into()?,
             ),
 
