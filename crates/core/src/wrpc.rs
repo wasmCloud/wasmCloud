@@ -1,7 +1,11 @@
 //! This module provides `wasmcloud`-specific implementations of `wrpc_transport` traits.
-//! Specifically, we wrap the [wrpc_transport::Transmitter], [wrpc_transport::Invocation],
-//! and [wrpc_transport::Client] traits in order to pass invocations with headers, which is how
-//! we propagate trace context and named configuration information along with the invocation.
+//!
+//! Specifically, we wrap the [`wrpc_transport::Transmitter`], [`wrpc_transport::Invocation`],
+//! and [`wrpc_transport::Client`] traits in order to:
+//! - Propagate trace context
+//! - Append invocation headers
+//! - Perform invocation validation (where necessary)
+//!
 //! Most logic is delegated to the underlying `wrpc_transport_nats` client, which provides the
 //! actual NATS-based transport implementation.
 
@@ -17,7 +21,7 @@ use wrpc_transport_nats::{Subject, Subscriber, Transmission};
 
 /// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
-pub(crate) struct TransmitterWithHeaders {
+pub struct TransmitterWithHeaders {
     inner: wrpc_transport_nats::Transmitter,
     headers: HeaderMap,
 }
@@ -50,7 +54,7 @@ impl wrpc_transport::Transmitter for TransmitterWithHeaders {
 
 /// Wrapper around [wrpc_transport_nats::Invocation] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
-pub(crate) struct InvocationWithHeaders {
+pub struct InvocationWithHeaders {
     inner: wrpc_transport_nats::Invocation,
     headers: HeaderMap,
 }
@@ -89,7 +93,7 @@ impl wrpc_transport::Invocation for InvocationWithHeaders {
 
 /// Wrapper around [wrpc_transport_nats::Acceptor] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
-pub(crate) struct AcceptorWithHeaders {
+pub struct AcceptorWithHeaders {
     inner: wrpc_transport_nats::Acceptor,
     headers: HeaderMap,
 }
@@ -115,10 +119,10 @@ impl wrpc_transport::Acceptor for AcceptorWithHeaders {
     }
 }
 
-/// Wrapper around [wrpc_transport_nats::Client] that includes a [async_nats::HeaderMap] for
+/// Wrapper around [`wrpc_transport_nats::Client`] that includes a [`async_nats::HeaderMap`] for
 /// passing invocation and trace context.
 #[derive(Debug, Clone)]
-pub(crate) struct Client {
+pub struct Client {
     inner: wrpc_transport_nats::Client,
     headers: HeaderMap,
 }
@@ -130,7 +134,7 @@ impl Client {
     /// * `nats` - The NATS client to use for communication.
     /// * `lattice` - The lattice to use for communication.
     /// * `headers` - The headers to include with each outbound invocation.
-    pub(crate) fn new(
+    pub fn new(
         nats: impl Into<Arc<async_nats::Client>>,
         lattice: String,
         headers: HeaderMap,
