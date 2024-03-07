@@ -132,7 +132,7 @@ impl Client {
     ///
     /// ## Arguments
     /// * `nats` - The NATS client to use for communication.
-    /// * `lattice` - The lattice to use for communication.
+    /// * `prefix` - The lattice and component ID to use for communication, e.g. "default.echo".
     /// * `headers` - The headers to include with each outbound invocation.
     pub fn new(
         nats: impl Into<Arc<async_nats::Client>>,
