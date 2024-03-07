@@ -8,15 +8,12 @@ use nkeys::KeyPairType;
 use provider_archive::ProviderArchive;
 use serde_json::json;
 use tracing::warn;
-use wash_lib::cli::par::{convert_error, create_provider_archive, insert_provider_binary};
+use wash_lib::cli::par::{
+    convert_error, create_provider_archive, detect_arch, insert_provider_binary,
+};
 use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
-
-/// Helper function for detecting the arch used by the current machine
-fn detect_arch() -> String {
-    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-}
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ParCliCommand {
@@ -278,7 +275,8 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         ),
     };
 
-    let mut par = create_provider_archive(cmd.clone().into(), &lib).await?;
+    let mut par = create_provider_archive(cmd.clone().into(), &lib)
+        .context("failed to create provider archive with built provider")?;
     par.write(&outfile, &issuer, &subject, cmd.compress)
         .await
         .map_err(|e| anyhow!("{}", e))

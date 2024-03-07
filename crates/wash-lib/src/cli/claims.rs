@@ -247,7 +247,6 @@ impl ProviderMetadata {
             version: self
                 .version
                 .or(Some(project_config.common.version.to_string())),
-            capid: self.capid.or(Some(provider_config.capability_id)),
             vendor: self.vendor.or(Some(provider_config.vendor)),
             ..self
         }
@@ -1567,8 +1566,13 @@ mod test {
         assert_eq!(
             project_config.project_type,
             TypeConfig::Provider(ProviderConfig {
-                capability_id: "wasmcloud:httpserver".into(),
-                vendor: "wayne-industries".into()
+                vendor: "wayne-industries".into(),
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
+                key_directory: PathBuf::from("./keys"),
+                wit_world: None,
+                rust_target: None,
+                bin_name: None,
             })
         );
 
