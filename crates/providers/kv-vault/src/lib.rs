@@ -68,20 +68,23 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
     async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        // todo(vados-cosmonic): needs to be adapted to use named config
-        //
-        // // let config = match Config::from_values(&HashMap::from_iter(ld.values.clone().into_iter())) {
-        // //     Ok(config) => config,
-        // //     Err(e) => {
-        // //         error!(
-        // //             source_id = %ld.source_id,
-        // //             link_name = %ld.name,
-        // //             "failed to parse config: {e}",
-        // //         );
-        // //         return false;
-        // //     }
-        // // };
-        let config = Config::default();
+        let config_values = HashMap::from_iter(
+            ld.extract_provider_config_values()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+
+        let config = match Config::from_values(&config_values) {
+            Ok(config) => config,
+            Err(e) => {
+                error!(
+                    source_id = %ld.source_id,
+                    link_name = %ld.name,
+                    "failed to parse config: {e}",
+                );
+                return false;
+            }
+        };
 
         let client = match Client::new(config.clone()) {
             Ok(client) => client,

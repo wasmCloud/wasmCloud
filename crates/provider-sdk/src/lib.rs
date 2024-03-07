@@ -1,4 +1,5 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
@@ -219,7 +220,6 @@ pub trait WrpcNats {
 /// todo: invert this so that the provider takes the wrpc_transport::Client and then hooks up it's own handlers
 
 /// Handler for dispatching invocations that come via wRPC
-// todo(vados-cosmonic): should this replace MessageDispatch all together
 #[async_trait]
 pub trait WrpcDispatch {
     /// Dispatch a single invocation that came in over wRPC

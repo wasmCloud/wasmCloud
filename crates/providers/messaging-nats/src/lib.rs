@@ -213,23 +213,23 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
     async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-
-        let config = self.default_config.clone();
-
-        // todo(vados-cosmonic): this has to be reworked to use custom named config
-        // // If the link definition values are empty, use the default connection configuration
-        // let config = if ld.values.is_empty() {
-        //     self.default_config.clone()
-        // } else {
-        //     // create a config from the supplied values and merge that with the existing default
-        //     match ConnectionConfig::from_tuples(&ld.values) {
-        //         Ok(cc) => self.default_config.merge(&cc),
-        //         Err(e) => {
-        //             error!("Failed to build connection configuration: {e:?}");
-        //             return false;
-        //         }
-        //     }
-        // };
+        let config_values = HashMap::from_iter(
+            ld.extract_provider_config_values()
+                .iter()
+                .map(|(k, v)| (String::from(*k), String::from(*v))),
+        );
+        let config = if config_values.is_empty() {
+            self.default_config.clone()
+        } else {
+            // create a config from the supplied values and merge that with the existing default
+            match ConnectionConfig::from_map(&config_values) {
+                Ok(cc) => self.default_config.merge(&cc),
+                Err(e) => {
+                    error!("Failed to build connection configuration: {e:?}");
+                    return false;
+                }
+            }
+        };
 
         let mut update_map = self.actors.write().await;
         let bundle = match self.connect(config, ld).await {
@@ -415,7 +415,7 @@ fn should_strip_headers(topic: &str) -> bool {
 mod test {
     use crate::{serde_json, ConnectionConfig, NatsMessagingProvider};
     use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::{
-        InterfaceLinkDefinition, ProvideerHandler,
+        InterfaceLinkDefinition, ProviderHandler,
     };
 
     #[test]
@@ -524,15 +524,11 @@ mod test {
         // Add a provider
         let ld = InterfaceLinkDefinition {
             source_id: String::from("???"),
-            link_name: String::from("test"),
-            // contract_id: String::from("test"),
-            // values: vec![
-            //     (
-            //         String::from("SUBSCRIPTION"),
-            //         String::from("test.wasmcloud.unlink"),
-            //     ),
-            //     (String::from("URI"), String::from("99.99.99.99:4222")),
-            // ],
+            name: String::from("test"),
+            target_config: vec![
+                String::from("SUBSCRIPTION=test.wasmcloud.unlink"),
+                String::from("URI=99.99.99.99:4222"),
+            ],
             ..Default::default()
         };
         let link_succeeded = prov.put_link(&ld).await;
