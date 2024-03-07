@@ -59,7 +59,7 @@ impl StorageClient {
         }
 
         let tls_use_webpki_roots = config.tls_use_webpki_roots;
-        let aliases = config.aliases.clone();
+        let mut aliases = config.aliases.clone();
         let mut s3_config = aws_sdk_s3::Config::from(&config.configure_aws().await)
             .to_builder()
             // Since minio requires force path style,
@@ -85,18 +85,16 @@ impl StorageClient {
 
         let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
-        // todo(vados-cosmonic): needs to be adapted to use named config
-        //
-        // // Process aliases
-        // // for (k, v) in ld.values.iter() {
-        // //     if let Some(alias) = k.strip_prefix(ALIAS_PREFIX) {
-        // //         if alias.is_empty() || v.is_empty() {
-        // //             error!("invalid bucket alias_ key and value must not be empty");
-        // //         } else {
-        // //             aliases.insert(alias.to_string(), v.to_string());
-        // //         }
-        // //     }
-        // // }
+        // Process aliases
+        for (k, v) in ld.extract_provider_config_values().iter() {
+            if let Some(alias) = k.strip_prefix(ALIAS_PREFIX) {
+                if alias.is_empty() || v.is_empty() {
+                    error!("invalid bucket alias_ key and value must not be empty");
+                } else {
+                    aliases.insert(alias.to_string(), v.to_string());
+                }
+            }
+        }
 
         StorageClient {
             s3_client,
@@ -1088,12 +1086,9 @@ mod test {
     }
 
     #[tokio::test]
-    #[ignore]
-    // todo(vados-cosmonic): this test can be re-enabled once named config is supported
     async fn aliases() {
         let mut ld = InterfaceLinkDefinition::default();
-        // ld.values
-        //     .push((format!("{}foo", ALIAS_PREFIX), "bar".to_string()));
+        ld.target_config.push(format!("{ALIAS_PREFIX}foo=bar"));
         let client = StorageClient::new(StorageConfig::default(), ld).await;
 
         // no alias

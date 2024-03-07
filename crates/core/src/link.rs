@@ -1,5 +1,7 @@
 //! Core reusable types related to links on wasmCloud lattices
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -60,6 +62,20 @@ pub struct InterfaceLinkDefinition {
     /// List of named configurations to provide to the target upon request
     #[serde(default)]
     pub target_config: Vec<KnownConfigName>,
+}
+
+impl InterfaceLinkDefinition {
+    /// This function is here temporarily to allow pulling a map of configuration out of
+    /// [`InterfaceLinkDefinition`]s that are fed to providers.
+    ///
+    /// The configuration is expected to be extracted from target_config (i.e. upon initial `put_link` to the provider).
+    /// This utility function should be removed in the near future, and provider named configuration should be used.
+    pub fn extract_provider_config_values(&self) -> HashMap<&str, &str> {
+        self.target_config
+            .iter()
+            .flat_map(|v| v.split_once('='))
+            .collect::<HashMap<&str, &str>>()
+    }
 }
 
 /// Helper function to provide a default link name
