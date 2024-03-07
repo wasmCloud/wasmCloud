@@ -220,10 +220,10 @@ pub async fn handle_call(
 
     let out_str = match result {
         Ok((values, _tx)) => {
-            if let Some(wrpc_transport::Value::String(result)) = values.get(0) {
+            if let Some(wrpc_transport::Value::String(result)) = values.first() {
                 result.to_string()
             } else {
-                bail!("Got something other than a string from the component")
+                bail!("Response from a component was not a String, ensure the function {function} returns a String.")
             }
         }
         Err(e) if e.to_string().contains("transmission failed") => bail!("No component responsed to your request, ensure component {component_id} is running in lattice {lattice}"),
