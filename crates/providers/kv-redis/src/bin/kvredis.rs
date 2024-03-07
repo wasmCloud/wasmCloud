@@ -26,8 +26,7 @@ use wasmcloud_provider_wit_bindgen::deps::{
     serde::Deserialize,
     serde_json,
     wasmcloud_provider_sdk::provider_main::start_provider,
-    wasmcloud_provider_sdk::InterfaceLinkDefinition,
-    wasmcloud_provider_sdk::{load_host_data, Context},
+    wasmcloud_provider_sdk::{load_host_data, Context, InterfaceLinkDefinition},
 };
 
 wasmcloud_provider_wit_bindgen::generate!({
@@ -108,8 +107,10 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
     async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let redis_url = ld
-            .try_extract_redis_url()
+        let config = ld.extract_provider_config_values();
+        let redis_url = config
+            .get(CONFIG_REDIS_URL_KEY)
+            .map(|v| String::from(*v))
             .unwrap_or_else(|| self.default_connect_url.clone());
 
         match redis::Client::open(redis_url.clone()) {
@@ -283,27 +284,6 @@ impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
         let mut cmd = redis::Cmd::sunion(arg);
         self.exec(&ctx, &mut cmd).await
-    }
-}
-
-trait ExtractRedisUrl {
-    /// Extract a URL for a redis cluster
-    fn try_extract_redis_url(&self) -> Option<String>;
-}
-
-impl ExtractRedisUrl for InterfaceLinkDefinition {
-    fn try_extract_redis_url(&self) -> Option<String> {
-        // NOTE: here we expect that target_config is full of `NAME=VALUE` values
-        // *instead* of names of named configs (for now).
-        //
-        // In the future this method
-        // would be more involved, looking up the relevant named config and attempting to
-        // find the right value in there.
-        self.target_config
-            .iter()
-            .flat_map(|v| v.split_once('='))
-            .find(|(key, _value)| key.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-            .map(|(_key, url)| url.to_owned())
     }
 }
 
