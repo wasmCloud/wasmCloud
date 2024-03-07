@@ -25,10 +25,18 @@ struct Args {
     #[clap(long = "log-level", alias = "structured-log-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
     pub log_level: TracingLogLevel,
     /// NATS server host to connect to
-    #[clap(long = "nats-host", default_value = "127.0.0.1", env = "NATS_HOST")]
+    #[clap(
+        long = "nats-host",
+        default_value = "127.0.0.1",
+        env = "WASMCLOUD_NATS_HOST"
+    )]
     nats_host: String,
     /// NATS server port to connect to
-    #[clap(long = "nats-port", default_value_t = 4222, env = "NATS_PORT")]
+    #[clap(
+        long = "nats-port",
+        default_value_t = 4222,
+        env = "WASMCLOUD_NATS_PORT"
+    )]
     nats_port: u16,
     /// A user JWT to use to authenticate to NATS
     #[clap(long = "nats-jwt", env = "WASMCLOUD_NATS_JWT", requires = "nats_seed")]
