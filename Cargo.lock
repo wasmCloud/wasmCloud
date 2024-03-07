@@ -5403,6 +5403,7 @@ version = "0.33.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "async-trait",
  "bytes",
  "cloudevents-sdk",
  "futures",
@@ -5443,6 +5444,8 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "async-trait",
+ "bytes",
  "futures",
  "hex",
  "nkeys",
@@ -5454,6 +5457,8 @@ dependencies = [
  "ulid",
  "uuid 1.7.0",
  "wascap",
+ "wrpc-transport",
+ "wrpc-transport-nats",
 ]
 
 [[package]]

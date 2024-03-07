@@ -16,6 +16,8 @@ otel = []
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 nkeys = { workspace = true }
@@ -27,3 +29,5 @@ tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
+wrpc-transport = { workspace = true }
+wrpc-transport-nats = { workspace = true }
