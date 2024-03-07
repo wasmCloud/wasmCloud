@@ -79,3 +79,8 @@ pub const RUST_PONGER_CONFIG_COMPONENT: &str = concat!(
     env!("OUT_DIR"),
     "/rust-ponger-config-component-preview2.signed.wasm"
 );
+
+pub const RUST_MESSAGING_INVOKER_COMPONENT: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-messaging-invoker-preview2.signed.wasm"
+);

@@ -6,6 +6,7 @@ pub mod deps {
     pub use serde;
     pub use serde_bytes;
     pub use serde_json;
+    pub use tracing;
     pub use wasmcloud_provider_sdk;
     pub use wrpc_transport;
     pub use wrpc_transport_derive;

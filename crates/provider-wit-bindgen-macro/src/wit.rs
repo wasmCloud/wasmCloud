@@ -11,7 +11,7 @@ use syn::{bracketed, parse_quote, ImplItemFn, LitStr, Token};
 use tracing::debug;
 use wit_parser::{Handle, Result_, Stream, Tuple, TypeDefKind};
 
-use crate::rust::{convert_to_owned_type_arg, is_rust_unit_type, ToRustType};
+use crate::rust::{convert_to_owned_type_arg, ToRustType};
 use crate::{
     process_fn_arg, LatticeExposedInterface, LatticeMethod, ProviderBindgenConfig, StructLookup,
     TypeLookup,
@@ -598,49 +598,51 @@ impl WitFunctionLatticeTranslationStrategy {
                 match &iface_fn.params.as_slice() {
                     // Handle the no-parameter case
                     [] => {
-                        let lattice_method = LitStr::new(
-                            format!(
-                                "{}.{}",
-                                iface
-                                    .name
-                                    .as_ref()
-                                    .context("failed to find interface name")?
-                                    .to_upper_camel_case(),
-                                iface_fn_name.to_upper_camel_case()
-                            )
-                            .as_str(),
+                        let fn_name =
+                            Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
+                        // Derive the WIT instance (<ns>:<pkg>/<iface>) & fn name
+                        let iface_name = iface
+                            .name
+                            .clone()
+                            .context("unexpectedly missing iface name")?;
+                        let instance_lit_str = LitStr::new(
+                            format!("{}/{iface_name}", cfg.contract).as_str(),
                             Span::call_site(),
                         );
-                        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
-                        let iface_fn_name = format_ident!("{}", iface_fn_name.to_snake_case());
+                        let fn_name_lit_str = LitStr::new(iface_fn_name, Span::call_site());
 
                         let func_ts = quote::quote!(
-                            async fn #iface_fn_name(
+                            async fn #fn_name(
                                 &self,
                             ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<()> {
-                                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
-                                let client = connection.get_rpc_client();
-                                let response = client
-                                    .send(
-                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                                            public_key: connection.provider_key().to_string(),
-                                            link_name: self.ld.name.clone(),
-                                            contract_id: #contract_ident.to_string(),
-                                        },
-                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                                            public_key: self.ld.source_id.clone(),
-                                            ..Default::default()
-                                        },
-                                        #lattice_method,
-                                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&())?
-                                    )
-                                    .await?;
+                                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Client;
 
-                                if let Some(err) = response.error {
-                                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(err.to_string()))
-                                } else {
-                                    Ok(())
-                                }
+                                // Invoke the other end
+                                let (results, tx) = match self.wrpc_client
+                                    .invoke_static::<()>(#instance_lit_str, #fn_name_lit_str, ())
+                                    .await {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            return Err(
+                                                ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                                    format!("invoke for operation [{}.{}] failed: {e}", #instance_lit_str, #fn_name_lit_str)
+                                                )
+                                            )
+                                        }
+                                    };
+                                // Wait for params to send
+                                match tx.await {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        return Err(
+                                            ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                                format!("failed to send params: {e}")
+                                            )
+                                        )
+                                    },
+                                };
+
+                                Ok(())
                             }
                         );
 
@@ -699,23 +701,18 @@ impl WitFunctionLatticeTranslationStrategy {
     ) -> anyhow::Result<(Vec<StructTokenStream>, Vec<FunctionTokenStream>)> {
         let rust_type = convert_wit_type(arg_type, cfg)?;
         let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
-        let lattice_method = LitStr::new(
-            format!(
-                "{}.{}",
-                iface
-                    .name
-                    .as_ref()
-                    .context("failed to find interface name")?
-                    .to_upper_camel_case(),
-                iface_fn_name.to_upper_camel_case()
-            )
-            .as_str(),
+        let arg_name_ident = Ident::new(arg_name, Span::call_site());
+        let iface_name = iface
+            .name
+            .clone()
+            .context("unexpectedly missing iface name")?;
+
+        // Derive the WIT instance (<ns>:<pkg>/<iface>) & fn name
+        let instance_lit_str = LitStr::new(
+            format!("{}/{iface_name}", cfg.contract).as_str(),
             Span::call_site(),
         );
-
-        let arg_name_ident = Ident::new(arg_name, Span::call_site());
-
-        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
+        let fn_name_lit_str = LitStr::new(iface_fn_name, Span::call_site());
 
         // Convert the WIT result type into a Rust type
         let result_rust_type = results.to_rust_type(cfg).with_context(|| {
@@ -725,51 +722,42 @@ impl WitFunctionLatticeTranslationStrategy {
             )
         })?;
 
-        // If the rust_type we're expecting to deal with is unit (`()`), we must return the unit
-        // instead of trying to deserialize what will eventually be an empty response (response.msg = [])
-        // into bytes.
-        //
-        // Attempting to convert an empty byte slice with wasmcloud_provider_sdk::deserialize will fail
-        // with an InvalidMarkerRead error, complaining about failing to fill the whole buffer.
-        let deser_phrase = if is_rust_unit_type(&result_rust_type) {
-            quote::quote!(Ok(()))
-        } else {
-            quote::quote!(Ok(
-                ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(
-                    &response.msg
-                )?
-            ))
-        };
-
         // Return the generated function with appropriate args & return
         let func_tokens = quote::quote!(
             async fn #fn_name(
                 &self,
                 #arg_name_ident: #rust_type
             ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<#result_rust_type> {
-                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
-                let client = connection.get_rpc_client();
-                let response = client
-                    .send(
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.target.clone(),
-                            link_name: self.ld.name.clone(),
-                            contract_id: #contract_ident.to_string(),
-                        },
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.source_id.clone(),
-                            ..Default::default()
-                        },
-                        #lattice_method,
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?
-                    )
-                    .await?;
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::{EncodeSync, Receive};
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Client;
 
-                if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(err.to_string()))
-                } else {
-                    #deser_phrase
-                }
+                // Invoke the other end
+                let (result, tx) = match self.wrpc_client
+                    .invoke_static::<#result_rust_type>(#instance_lit_str, #fn_name_lit_str, #arg_name_ident)
+                    .await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(
+                                ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                    format!("invoke for operation [{}.{}] failed: {e}", #instance_lit_str, #fn_name_lit_str)
+                                )
+                            );
+                        }
+                    };
+
+                // Wait for params to send
+                match tx.await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        return Err(
+                            ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                format!("failed to send params: {e}")
+                            )
+                        )
+                    },
+                };
+
+                Ok(result)
             }
         );
 
@@ -785,21 +773,19 @@ impl WitFunctionLatticeTranslationStrategy {
     ) -> anyhow::Result<(Vec<StructTokenStream>, Vec<FunctionTokenStream>)> {
         let fn_params = &iface_fn.params;
         let fn_results = &iface_fn.results;
-        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
         let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
-        let lattice_method = LitStr::new(
-            format!(
-                "{}.{}",
-                iface
-                    .name
-                    .as_ref()
-                    .context("failed to find interface name")?
-                    .to_upper_camel_case(),
-                iface_fn_name.to_upper_camel_case()
-            )
-            .as_str(),
+
+        // Derive the WIT instance (<ns>:<pkg>/<iface>) & fn name
+        let iface_name = iface
+            .name
+            .clone()
+            .context("unexpectedly missing iface name")?;
+        let instance_lit_str = LitStr::new(
+            format!("{}/{iface_name}", cfg.contract).as_str(),
             Span::call_site(),
         );
+        let fn_name_lit_str = LitStr::new(iface_fn_name, Span::call_site());
+
         // Build the invocation struct that will be used
         let invocation_struct_name = format_ident!("{}Args", iface_fn_name.to_upper_camel_case());
 
@@ -844,29 +830,36 @@ impl WitFunctionLatticeTranslationStrategy {
                 &self,
                 args: #invocation_struct_name,
             ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<#result_rust_type> {
-                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
-                let client = connection.get_rpc_client();
-                let response = client
-                    .send(
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: connection.provider_key().to_string(),
-                            link_name: self.ld.name.clone(),
-                            contract_id: #contract_ident.to_string(),
-                        },
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::WasmCloudEntity {
-                            public_key: self.ld.source_id.clone(),
-                            ..Default::default()
-                        },
-                        #lattice_method,
-                        ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::serialize(&args)?
-                    )
-                    .await?;
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::{EncodeSync, Receive};
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Client;
 
-                if let Some(err) = response.error {
-                    Err(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Failed(err.to_string()))
-                } else {
-                    Ok(::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::deserialize(&response.msg)?)
-                }
+                // Invoke the other end
+                let (result, tx) = match self.wrpc_client
+                    .invoke_static::<#result_rust_type>(#instance_lit_str, #fn_name_lit_str, DynamicTuple(#struct_member_tokens))
+                    .await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(
+                                ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                    format!("invoke for operation [{}.{}] failed: {e}", #instance_lit_str, #fn_name_lit_str)
+                                )
+                            )
+                        }
+                    };
+
+                // Wait for params to send
+                match tx.await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        return Err(
+                            ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                format!("failed to send params: {e}")
+                            )
+                        )
+                    },
+                };
+
+                Ok(result)
             }
         );
 

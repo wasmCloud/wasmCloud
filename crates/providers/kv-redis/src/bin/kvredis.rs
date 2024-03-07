@@ -313,7 +313,7 @@ impl KvRedisProvider {
         // Get read lock on actor-connections HashMap
         let rd = self.actors.read().await;
         let Some(rc) = rd.get(source_id) else {
-            error!("No Redis connection found for actor {source_id}. Please ensure the URL supplied in the link definition is a valid Redis URL");
+            error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");
             return T::default();
         };
 

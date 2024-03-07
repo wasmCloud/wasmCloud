@@ -1,0 +1,37 @@
+package test-actors:testing;
+
+/// Invoke a component and receive string output. Similar to wasi:cli/command.run, without args
+interface invoke {
+    /// Invoke a component
+    call: func() -> string;
+}
+
+/// Invoke a component with a `ping` function and, ideally, receive "pong"
+interface pingpong {
+    /// Call ping, get a pong back
+    ping: func() -> string;
+}
+
+/// A box of functions to demonstrate ability to transfer and receive types
+interface busybox {
+    /// increments a number
+    increment-number: func(num: u32) -> u32;
+    /// split a string based on a char delimiter
+    string-split: func(str: string, del: char) -> list<string>;
+
+    /// Test variant
+    variant easyasonetwothree {
+        a,
+        b,
+        c
+    }
+    /// Assert that a String matches the variant
+    string-assert: func(letter: easyasonetwothree, test: string) -> bool;
+
+    /// Test record
+    record dog {
+        name: string,
+        age: u32,
+    }
+    is-good-boy: func(dog: dog) -> bool;
+}
