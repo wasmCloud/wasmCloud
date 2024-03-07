@@ -35,9 +35,9 @@ spec:
           image: "{{ .Values.wasmcloud.image.repository }}:{{ .Values.wasmcloud.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.wasmcloud.image.pullPolicy }}
           env:
-            - name: NATS_HOST
+            - name: WASMCLOUD_NATS_HOST
               value: {{ .Values.wasmcloud.config.natsHost | quote }}
-            - name: NATS_PORT
+            - name: WASMCLOUD_NATS_PORT
               value: {{ .Values.wasmcloud.config.natsPort | quote }}
             {{- if .Values.wasmcloud.config.natsJwt }}
             - name: NATS_JWT
