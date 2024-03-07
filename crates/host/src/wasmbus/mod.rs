@@ -63,9 +63,6 @@ use crate::{
     RegistryAuth, RegistryConfig, RegistryType,
 };
 
-/// wasmCloud [wrpc_transport] implementations
-pub mod wasmcloud_transport;
-
 /// wasmCloud host configuration
 pub mod host_config;
 pub use host_config::Host as HostConfig;
@@ -631,7 +628,7 @@ impl Bus for Handler {
             let injector = TraceContextInjector::default_with_span();
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
-            let (results, tx) = wasmcloud_transport::Client::new(
+            let (results, tx) = wasmcloud_core::wrpc::Client::new(
                 self.nats.clone(),
                 format!("{}.{id}", self.lattice),
                 headers,
@@ -1148,7 +1145,7 @@ impl Actor {
         context: Option<async_nats::HeaderMap>,
         params: InvocationParams,
         result_subject: wrpc_transport_nats::Subject,
-        transmitter: &wasmcloud_transport::TransmitterWithHeaders,
+        transmitter: &wasmcloud_core::wrpc::TransmitterWithHeaders,
     ) -> anyhow::Result<()> {
         let (interface, function) = match params {
             InvocationParams::Custom {
@@ -2108,7 +2105,7 @@ impl Host {
     ) -> anyhow::Result<Arc<Actor>> {
         trace!(actor_ref, max_instances, "instantiating actor");
 
-        let wrpc = wasmcloud_transport::Client::new(
+        let wrpc = wasmcloud_core::wrpc::Client::new(
             self.rpc_nats.clone(),
             format!("{}.{actor_id}", self.host_config.lattice),
             // NOTE(brooksmtownsend): We only use this client for serving functions,
