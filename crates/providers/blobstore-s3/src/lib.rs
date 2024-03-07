@@ -65,17 +65,18 @@ impl WasmcloudCapabilityProvider for BlobstoreS3Provider {
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        // todo(vados-cosmonic): needs to be adapted to use named config
-        //
-        // let config =
-        //     match StorageConfig::from_values(&HashMap::from_iter(ld.values.iter().cloned())) {
-        //         Ok(v) => v,
-        //         Err(e) => {
-        //             error!(error = %e, source_id = %ld.source_id, "failed to read storage config");
-        //             return false;
-        //         }
-        //     };
-        let config = StorageConfig::default();
+        let config_values = HashMap::from_iter(
+            ld.extract_provider_config_values()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+        let config = match StorageConfig::from_values(&config_values) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, source_id = %ld.source_id, "failed to read storage config");
+                return false;
+            }
+        };
         let link = StorageClient::new(config, ld.to_owned()).await;
 
         let mut update_map = self.actors.write().await;

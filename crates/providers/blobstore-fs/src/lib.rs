@@ -257,20 +257,16 @@ impl FsProvider {
 impl WasmcloudCapabilityProvider for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
     async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        // todo(vados-cosmonic): needs to be adapted to use named config
-        //
-        // for val in ld.values.iter() {
-        //     info!("ld conf {:?}", val);
-        // }
+        let config_values = ld.extract_provider_config_values();
+        for (k, v) in config_values.iter() {
+            info!("link definition configuration [{k}] set to [{v}]");
+        }
 
-        // todo(vados-cosmonic): needs to be adapted to use named config
-        //
-        // // Determine the root path value
-        // let root_val: PathBuf = match ld.values.iter().find(|(key, _)| key == "ROOT") {
-        //     None => "/tmp".into(),
-        //     Some((_, value)) => value.into(),
-        // };
-        let root_val = PathBuf::from("/tmp");
+        // Determine the root path value
+        let root_val: PathBuf = match config_values.iter().find(|(key, _)| **key == "ROOT") {
+            None => "/tmp".into(),
+            Some((_, value)) => value.into(),
+        };
 
         // Build configuration for FS Provider to use later
         let config = FsProviderConfig {
