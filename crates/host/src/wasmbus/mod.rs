@@ -1216,75 +1216,66 @@ impl Actor {
             .messaging(Arc::new(self.handler.clone()))
             .outgoing_http(Arc::new(self.handler.clone()));
 
-        let start_at = Instant::now();
-        // TODO: undo this operation thing
-        let (operation, tx): (_, Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>) =
-            match params {
-                InvocationParams::Custom {
-                    instance,
-                    name,
-                    params,
-                } => {
-                    let res = actor
-                        .call(&instance, &name, params)
-                        .await
-                        .context("failed to call actor");
-                    // Record metric on duration of the call
-                    let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+        // TODO(metrics): insert information about the source once we have concrete context data
+        let mut attributes = vec![
+            KeyValue::new("actor.ref", self.image_reference.clone()),
+            KeyValue::new("lattice", self.metrics.lattice_id.clone()),
+            KeyValue::new("host", self.metrics.host_id.clone()),
+        ];
 
-                    let mut attributes = vec![
-                        KeyValue::new("actor.ref", self.image_reference.clone()),
-                        KeyValue::new("operation", format!("{instance}/{name}")),
-                        KeyValue::new("lattice", self.metrics.lattice_id.clone()),
-                        KeyValue::new("host", self.metrics.host_id.clone()),
-                    ];
-                    // TODO: add in attributes about the source
-                    self.metrics
-                        .handle_rpc_message_duration_ns
-                        .record(elapsed, &attributes);
-                    self.metrics.actor_invocations.add(1, &attributes);
-                    if res.is_err() {
-                        self.metrics.actor_errors.add(1, &attributes);
-                    }
-                    (
-                        format!("{instance}/{name}"),
-                        Box::pin(async {
-                            let results = res?;
-                            transmitter
-                                .transmit_tuple_dynamic(result_subject, results)
-                                .await
-                        }),
-                    )
-                }
-                InvocationParams::IncomingHttpHandle(request) => {
-                    let actor = actor
-                        .into_incoming_http()
+        let start_at = Instant::now();
+        let tx: Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> = match params {
+            InvocationParams::Custom {
+                instance,
+                name,
+                params,
+            } => {
+                let res = actor
+                    .call(&instance, &name, params)
+                    .await
+                    .context("failed to call actor");
+                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+                attributes.push(KeyValue::new("operation", format!("{instance}/{name}")));
+                self.metrics
+                    .record_component_invocation(elapsed, &attributes, res.is_err());
+                Box::pin(async {
+                    let results = res?;
+                    transmitter
+                        .transmit_tuple_dynamic(result_subject, results)
                         .await
-                        .context("failed to instantiate `wasi:http/incoming-handler`")?;
-                    let res = actor
-                        .handle(request)
-                        .await
-                        .context("failed to call `wasi:http/incoming-handler.handle`");
-                    (
-                        "wrpc:http/incoming-handler.handle".to_string(),
-                        Box::pin(async {
-                            let res = match res? {
-                                Ok(resp) => {
-                                    let (resp, _errors) =
-                                        wrpc_interface_http::try_wasmtime_to_outgoing_response(
-                                            resp,
-                                        )
-                                        .context("failed to convert response")?;
-                                    // TODO: Consider handling body errors here
-                                    Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
-                                }
-                                Err(err) => Err(err.into()),
-                            };
-                            transmitter.transmit_static(result_subject, res).await
-                        }),
-                    )
-                }
-            };
+                })
+            }
+            InvocationParams::IncomingHttpHandle(request) => {
+                let actor = actor
+                    .into_incoming_http()
+                    .await
+                    .context("failed to instantiate `wasi:http/incoming-handler`")?;
+                let res = actor
+                    .handle(request)
+                    .await
+                    .context("failed to call `wasi:http/incoming-handler.handle`");
+                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+                attributes.push(KeyValue::new(
+                    "operation",
+                    "wrpc:http/incoming-handler.handle",
+                ));
+                self.metrics
+                    .record_component_invocation(elapsed, &attributes, res.is_err());
+                Box::pin(async {
+                    let res = match res? {
+                        Ok(resp) => {
+                            let (resp, _errors) =
+                                wrpc_interface_http::try_wasmtime_to_outgoing_response(resp)
+                                    .context("failed to convert response")?;
+                            // TODO: Consider handling body errors here
+                            Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
+                        }
+                        Err(err) => Err(err.into()),
+                    };
+                    transmitter.transmit_static(result_subject, res).await
+                })
+            }
+        };
 
         tx.await
     }
