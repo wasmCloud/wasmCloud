@@ -6,11 +6,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-    - .github/workflows/wash.yml
-    - Cargo.lock
-    - Cargo.toml
-    - crates/wash-cli/**
-    - crates/wash-lib/**
+      - .github/workflows/wash.yml
+      - Cargo.lock
+      - Cargo.toml
+      - crates/wash-cli/**
+      - crates/wash-lib/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/setup-node@v4
         with:
-          node-version: '18.x'
+          node-version: "18.x"
       - uses: actions/checkout@v4.1.1
       - uses: Swatinem/rust-cache@v2
         with:
@@ -54,10 +54,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ubuntu-22.04-shared-cache"
+      - uses: actions/setup-go@v2
+        with:
+          go-version: '1.20'
       - uses: acifani/setup-tinygo@v2
         with:
-          tinygo-version: '0.27.0'
-          install-binaryen: 'false'
+          tinygo-version: "0.27.0"
+          install-binaryen: "false"
       - name: Add wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Launch integration test services
