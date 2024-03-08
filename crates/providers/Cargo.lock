@@ -3954,6 +3954,8 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "async-trait",
+ "bytes",
  "futures",
  "hex",
  "nkeys",
