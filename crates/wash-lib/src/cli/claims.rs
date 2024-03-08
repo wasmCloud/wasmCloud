@@ -1570,7 +1570,7 @@ mod test {
                 os: std::env::consts::OS.to_string(),
                 arch: std::env::consts::ARCH.to_string(),
                 key_directory: PathBuf::from("./keys"),
-                wit_world: None,
+                wit_world: Some("wasmcloud:httpserver".to_string()),
                 rust_target: None,
                 bin_name: None,
             })
@@ -1599,7 +1599,6 @@ mod test {
                 name: Some("testprovider".to_string()),
                 version: Some(Version::parse("0.1.0")?.to_string()),
                 revision: Some(666),
-                capid: Some("wasmcloud:httpserver".into()),
                 vendor: Some("wayne-industries".into()),
                 ..ProviderMetadata::default()
             }

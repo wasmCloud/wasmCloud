@@ -5,7 +5,7 @@ version = "0.1.0"
 revision = 666
 
 [provider]
-capability_id = "wasmcloud:httpserver"
+wit_world = "wasmcloud:httpserver"
 vendor = "wayne-industries"
 
 [rust]
