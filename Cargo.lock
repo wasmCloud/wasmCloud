@@ -5065,6 +5065,8 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "weld-codegen",
  "which",
+ "wrpc-transport",
+ "wrpc-types",
 ]
 
 [[package]]
