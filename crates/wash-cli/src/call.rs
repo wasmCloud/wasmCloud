@@ -9,6 +9,7 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::debug;
 use wash_lib::cli::CommandOutput;
 use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE};
+use wasmcloud_core::parse_wit_meta_from_operation;
 use wrpc_transport::Client;
 
 use crate::util::{default_timeout_ms, msgpack_to_json_val};
@@ -177,7 +178,7 @@ pub struct CallCommand {
     #[clap(name = "component-id")]
     pub component_id: String,
 
-    /// Fully qualified function to invoke on the actor, e.g. `wasi:cli/run.run`
+    /// Fully qualified WIT export to invoke on the component, e.g. `wasi:cli/run.run`
     #[clap(name = "function")]
     pub function: String,
 }
@@ -204,16 +205,20 @@ pub async fn handle_call(
     let mut headers = async_nats::HeaderMap::new();
     headers.insert("source-id", "wash");
     let lattice = opts.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
-    let wrpc_client =
-        wasmcloud_core::wrpc::Client::new(nc, format!("{lattice}.{component_id}"), headers);
+    let wrpc_client = wasmcloud_core::wrpc::Client::new(nc, &lattice, &component_id, headers);
 
-    let Some((instance, name)) = function.rsplit_once('.') else {
-        bail!("Invalid function supplied. Must be in the form of `namespace:package/interface.function`")
-    };
+    let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
+        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
+    )?;
+    let instance = format!("{namespace}:{package}/{interface}");
+    let name = name.context(
+        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
+    )?;
+    debug!("Invoking component {component_id} with {instance}.{name} on lattice {lattice}");
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(opts.timeout_ms),
-        wrpc_client.invoke_dynamic(instance, name, (), &[wrpc_types::Type::String]),
+        wrpc_client.invoke_dynamic(&instance, &name, (), &[wrpc_types::Type::String]),
     )
     .await
     .context("Timeout while invoking component, ensure component {component_id} is running in lattice {lattice}")?;
