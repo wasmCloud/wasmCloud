@@ -1,0 +1,25 @@
+[package]
+name = "wasmcloud-provider-blobstore-azblob"
+version = "0.1.0"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+base64 = { workspace = true }
+simple_env_load = "0.2.0"
+
+azure_storage_blobs = { version = "0.19" }
+azure_storage = { version = "0.19" }
+azure_core = { version = "0.19" }
+bytes = { version = "1", optional = true }
+time = { version = "0.3" }
+futures = { version = "0.3" }
