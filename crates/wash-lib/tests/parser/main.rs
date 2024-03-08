@@ -251,7 +251,7 @@ fn no_interface_config() {
 
     assert_eq!(
         format!(
-            "missing interface config in {}",
+            "unknown project type: interface in {}",
             get_full_path("./tests/parser/files/no_interface.toml")
         ),
         err.to_string().as_str()
