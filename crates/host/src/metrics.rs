@@ -1,4 +1,4 @@
-use wasmcloud_tracing::{Counter, Histogram, Meter, Unit};
+use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, Unit};
 
 /// `HostMetrics` encapsulates the set of metrics emitted by the wasmcloud host
 #[derive(Clone, Debug)]
@@ -48,6 +48,21 @@ impl HostMetrics {
             actor_errors: actor_error_count,
             host_id,
             lattice_id,
+        }
+    }
+
+    /// Record the result of invoking a component, including the elapsed time, any attributes, and whether the invocation resulted in an error.
+    pub(crate) fn record_component_invocation(
+        &self,
+        elapsed: u64,
+        attributes: &[KeyValue],
+        error: bool,
+    ) {
+        self.handle_rpc_message_duration_ns
+            .record(elapsed, attributes);
+        self.actor_invocations.add(1, attributes);
+        if error {
+            self.actor_errors.add(1, attributes);
         }
     }
 }
