@@ -1,5 +1,4 @@
 use crate::actor::claims;
-use crate::capability::builtin::CallTargetInterface;
 use crate::capability::{builtin, Bus, Interfaces};
 use crate::Runtime;
 
@@ -17,6 +16,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace, warn};
 use wascap::jwt;
+use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::{
     self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Type, Val,
 };

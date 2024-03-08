@@ -1,10 +1,10 @@
 use super::{Ctx, Instance, TableResult};
 
-use crate::capability::builtin::CallTargetInterface;
 use crate::capability::bus::{guest_config, lattice};
 use crate::capability::Bus;
 
 use std::sync::Arc;
+use wasmcloud_core::CallTargetInterface;
 
 use anyhow::Context as _;
 use async_trait::async_trait;

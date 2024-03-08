@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 
+use anyhow::Context;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
+
+use crate::{WitFunction, WitInterface, WitNamespace, WitPackage};
 
 // I don't know if these would be generated or if we'd just include them in the library and then use them in the generated code, but they work around the lack of a map type in wit
 
@@ -35,4 +38,102 @@ where
 {
     let values = HashMap::<String, T>::deserialize(deserializer)?;
     Ok(values.into_iter().collect())
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+/// Call target identifier, which is equivalent to a WIT specification, which
+/// can identify an interface being called and optionally a specific function on that interface.
+pub struct CallTargetInterface {
+    /// WIT namespace (ex. `wasi` in `wasi:keyvalue/readwrite.get`)
+    pub namespace: String,
+    /// WIT package name (ex. `keyvalue` in `wasi:keyvalue/readwrite.get`)
+    pub package: String,
+    /// WIT interface (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
+    pub interface: String,
+    // TODO(brooksmtownsend): I'm almost certain we do not need this.
+    /// WIT package name (ex. `get` in `wasi:keyvalue/readwrite.get`)
+    pub function: Option<String>,
+}
+
+impl CallTargetInterface {
+    /// Returns the 3-tuple of (namespace, package, interface) for this interface
+    #[must_use]
+    pub fn as_parts(&self) -> (&str, &str, &str, Option<&str>) {
+        (
+            &self.namespace,
+            &self.package,
+            &self.interface,
+            self.function.as_deref(),
+        )
+    }
+
+    /// Build a [`TargetInterface`] from constituent parts
+    #[must_use]
+    pub fn from_parts(parts: (&str, &str, &str, Option<&str>)) -> Self {
+        let (ns, pkg, iface, function) = parts;
+        Self {
+            namespace: ns.into(),
+            package: pkg.into(),
+            interface: iface.into(),
+            function: function.map(String::from),
+        }
+    }
+
+    /// Build a target interface from a given operation
+    pub fn from_operation(operation: impl AsRef<str>) -> anyhow::Result<Self> {
+        let operation = operation.as_ref();
+        let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(operation)?;
+        Ok(CallTargetInterface::from_parts((
+            &wit_ns,
+            &wit_pkg,
+            &wit_iface,
+            wit_fn.as_deref(),
+        )))
+    }
+}
+
+/// Parse a sufficiently specified WIT operation/method into constituent parts.
+///
+///
+/// # Errors
+///
+/// Returns `Err` if the operation is not of the form "<package>:<ns>/<interface>.<function>"
+///
+/// # Example
+///
+/// ```
+/// let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(("wasmcloud:bus/guest-config"));
+/// #assert_eq!(wit_ns, "wasmcloud")
+/// #assert_eq!(wit_pkg, "bus")
+/// #assert_eq!(wit_iface, "iface")
+/// #assert_eq!(wit_fn, None)
+/// let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(("wasmcloud:bus/guest-config.get"));
+/// #assert_eq!(wit_ns, "wasmcloud")
+/// #assert_eq!(wit_pkg, "bus")
+/// #assert_eq!(wit_iface, "iface")
+/// #assert_eq!(wit_fn, Some("get"))
+/// ```
+pub fn parse_wit_meta_from_operation(
+    operation: impl AsRef<str>,
+) -> anyhow::Result<(WitNamespace, WitPackage, WitInterface, Option<WitFunction>)> {
+    let operation = operation.as_ref();
+    let (ns_and_pkg, interface_and_func) = operation
+        .rsplit_once('/')
+        .context("failed to parse operation")?;
+    let (wit_iface, wit_fn) = interface_and_func
+        .split_once('.')
+        .context("interface and function should be specified")?;
+    let (wit_ns, wit_pkg) = ns_and_pkg
+        .rsplit_once(':')
+        .context("failed to parse operation for WIT ns/pkg")?;
+    Ok((
+        wit_ns.into(),
+        wit_pkg.into(),
+        wit_iface.into(),
+        if wit_fn.is_empty() {
+            None
+        } else {
+            Some(wit_fn.into())
+        },
+    ))
 }
