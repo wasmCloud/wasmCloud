@@ -628,13 +628,10 @@ impl Bus for Handler {
             let injector = TraceContextInjector::default_with_span();
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
-            let (results, tx) = wasmcloud_core::wrpc::Client::new(
-                self.nats.clone(),
-                format!("{}.{id}", self.lattice),
-                headers,
-            )
-            .invoke_dynamic(instance, name, DynamicTuple(params), results)
-            .await?;
+            let (results, tx) =
+                wasmcloud_core::wrpc::Client::new(self.nats.clone(), &self.lattice, id, headers)
+                    .invoke_dynamic(instance, name, DynamicTuple(params), results)
+                    .await?;
             tx.await.context("failed to transmit parameters")?;
             Ok(results)
         } else {
@@ -2120,7 +2117,8 @@ impl Host {
 
         let wrpc = wasmcloud_core::wrpc::Client::new(
             self.rpc_nats.clone(),
-            format!("{}.{actor_id}", self.host_config.lattice),
+            &self.host_config.lattice,
+            &actor_id,
             // NOTE(brooksmtownsend): We only use this client for serving functions,
             // and the headers will be set by the incoming invocation.
             async_nats::HeaderMap::new(),
