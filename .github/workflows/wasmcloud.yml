@@ -400,7 +400,7 @@ jobs:
             done
           done
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
@@ -408,7 +408,7 @@ jobs:
           generate_release_notes: true
           files: ./wasmcloud/*
 
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           draft: true
