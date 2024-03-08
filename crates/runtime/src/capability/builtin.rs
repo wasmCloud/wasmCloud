@@ -220,6 +220,7 @@ pub enum TargetEntity {
     // to allow for future expansion of the `TargetEntity` type,
     // for example to route invocations in-process instead of over
     // the lattice.
+    Local(LatticeInterfaceTarget),
 }
 
 /// Outgoing HTTP request

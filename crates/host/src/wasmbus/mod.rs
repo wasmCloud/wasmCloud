@@ -174,6 +174,7 @@ struct Handler {
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     config_data: Arc<RwLock<ConfigBundle>>,
+    other_actors: Arc<RwLock<HashMap<String, Arc<Actor>>>>,
     lattice: String,
     /// The identifier of the component that this handler is associated with
     component_id: String,
@@ -553,6 +554,16 @@ impl Bus for Handler {
             .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
             .and_then(|interfaces| interfaces.get(interface));
 
+        if let Some(id) = lattice_target_id {
+            if let Some(_actor) = self.other_actors.read().await.get(id) {
+                return Some(TargetEntity::Local(LatticeInterfaceTarget {
+                    id: id.clone(),
+                    interface: target_interface.clone(),
+                    link_name,
+                }));
+            }
+        }
+
         // If we managed to find a target ID, convert it into an entity
         let target_entity = lattice_target_id.map(|id| {
             TargetEntity::Lattice(LatticeInterfaceTarget {
@@ -630,23 +641,35 @@ impl Bus for Handler {
         name: &str,
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        if let TargetEntity::Lattice(LatticeInterfaceTarget { id, .. }) = target {
-            let results = self
+        match target {
+            TargetEntity::Local(LatticeInterfaceTarget { id, .. }) => {
+                let actors = self.other_actors.read().await;
+                let actor = actors.get(&id).with_context(|| {
+                    format!("actor {id} not found, could not determine result types")
+                })?;
+                actor.call(instance, name, params).await
+            }
+            TargetEntity::Lattice(LatticeInterfaceTarget { id, .. }) => {
+                let results = self
                 .polyfilled_imports
                 .get(instance)
                 .and_then(|functions| functions.get(name)).with_context(|| format!("polyfilled import {instance}/{name} not found, could not determine result types"))?;
 
-            let injector = TraceContextInjector::default_with_span();
-            let mut headers = injector_to_headers(&injector);
-            headers.insert("source-id", self.component_id.as_str());
-            let (results, tx) =
-                wasmcloud_core::wrpc::Client::new(self.nats.clone(), &self.lattice, id, headers)
-                    .invoke_dynamic(instance, name, DynamicTuple(params), results)
-                    .await?;
-            tx.await.context("failed to transmit parameters")?;
-            Ok(results)
-        } else {
-            bail!("component attempted to invoke a function on an unknown target")
+                let injector = TraceContextInjector::default_with_span();
+                let mut headers = injector_to_headers(&injector);
+                headers.insert("source-id", self.component_id.as_str());
+                let (results, tx) = wasmcloud_core::wrpc::Client::new(
+                    self.nats.clone(),
+                    &self.lattice,
+                    id,
+                    headers,
+                )
+                .invoke_dynamic(instance, name, DynamicTuple(params), results)
+                .await?;
+                tx.await.context("failed to transmit parameters")?;
+                Ok(results)
+            }
+            _ => bail!("component attempted to invoke a function on an unknown target"),
         }
     }
 }
@@ -1295,7 +1318,7 @@ type ConfigCache = HashMap<String, HashMap<String, String>>;
 pub struct Host {
     // TODO: Clean up actors after stop
     /// The actor map is a map of actor component ID to actor
-    actors: RwLock<HashMap<String, Arc<Actor>>>,
+    actors: Arc<RwLock<HashMap<String, Arc<Actor>>>>,
     cluster_key: Arc<KeyPair>,
     cluster_issuers: Vec<String>,
     event_builder: EventBuilderV10,
@@ -1792,7 +1815,7 @@ impl Host {
         let config_generator = BundleGenerator::new(config_data.clone());
 
         let host = Host {
-            actors: RwLock::default(),
+            actors: Arc::new(RwLock::default()),
             cluster_key,
             cluster_issuers,
             event_builder,
@@ -2307,6 +2330,7 @@ impl Host {
         let handler = Handler {
             nats: self.rpc_nats.clone(),
             config_data: Arc::new(RwLock::new(config)),
+            other_actors: self.actors.clone(),
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
