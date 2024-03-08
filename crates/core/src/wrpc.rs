@@ -128,19 +128,24 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a new wRPC [Client] with the given NATS client, lattice, and headers.
+    /// Create a new wRPC [Client] with the given NATS client, lattice, component ID, and headers.
     ///
     /// ## Arguments
     /// * `nats` - The NATS client to use for communication.
-    /// * `prefix` - The lattice and component ID to use for communication, e.g. "default.echo".
+    /// * `lattice` - The lattice ID to use for communication.
+    /// * `prefix` - The component ID to use for communication.
     /// * `headers` - The headers to include with each outbound invocation.
     pub fn new(
         nats: impl Into<Arc<async_nats::Client>>,
-        lattice: String,
+        lattice: impl AsRef<str>,
+        component_id: impl AsRef<str>,
         headers: HeaderMap,
     ) -> Self {
         Self {
-            inner: wrpc_transport_nats::Client::new(nats, lattice),
+            inner: wrpc_transport_nats::Client::new(
+                nats,
+                format!("{}.{}", lattice.as_ref(), component_id.as_ref()),
+            ),
             headers,
         }
     }

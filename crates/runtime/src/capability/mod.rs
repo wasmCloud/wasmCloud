@@ -9,7 +9,7 @@ pub use builtin::{
 };
 
 // NOTE: this import is used below in bindgen
-pub use builtin::CallTargetInterface;
+pub use wasmcloud_core::CallTargetInterface;
 
 #[allow(clippy::doc_markdown)]
 #[allow(missing_docs)]
