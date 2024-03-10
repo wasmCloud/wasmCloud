@@ -62,25 +62,25 @@ pub const RUST_MESSAGING_RECEIVER_SMITHY_SIGNED: &str = concat!(
     "/rust-messaging-receiver-smithy.signed.wasm"
 );
 
-pub const RUST_WRPC_PINGER_COMPONENT: &str = concat!(
+pub const RUST_WRPC_PINGER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-wrpc-pinger-component-preview2.signed.wasm"
 );
-pub const RUST_WRPC_PONGER_COMPONENT: &str = concat!(
+pub const RUST_WRPC_PONGER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-wrpc-ponger-component-preview2.signed.wasm"
 );
 
-pub const RUST_PINGER_CONFIG_COMPONENT: &str = concat!(
+pub const RUST_PINGER_CONFIG_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-pinger-config-component-preview2.signed.wasm"
 );
-pub const RUST_PONGER_CONFIG_COMPONENT: &str = concat!(
+pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-ponger-config-component-preview2.signed.wasm"
 );
 
-pub const RUST_MESSAGING_INVOKER_COMPONENT: &str = concat!(
+pub const RUST_MESSAGING_INVOKER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-messaging-invoker-preview2.signed.wasm"
 );
