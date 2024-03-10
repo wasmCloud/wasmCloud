@@ -1,5 +1,4 @@
 use anyhow::Context;
-use heck::ToKebabCase;
 
 #[cfg(not(feature = "otel"))]
 pub fn configure_metrics(_: String, _: &wasmcloud_core::OtelConfig) -> anyhow::Result<()> {
@@ -15,7 +14,6 @@ pub fn configure_metrics(
     otel_config: &wasmcloud_core::OtelConfig,
 ) -> anyhow::Result<()> {
     use opentelemetry_otlp::WithExportConfig;
-    let normalized_service_name = service_name.to_kebab_case();
 
     let mut exporter = opentelemetry_otlp::new_exporter()
         .http()
@@ -29,7 +27,7 @@ pub fn configure_metrics(
         .metrics(opentelemetry_sdk::runtime::Tokio)
         .with_exporter(exporter)
         .with_resource(opentelemetry_sdk::Resource::new(vec![
-            opentelemetry::KeyValue::new("service.name", normalized_service_name),
+            opentelemetry::KeyValue::new("service.name", service_name.to_string()),
         ]))
         .with_aggregation_selector(ExponentialHistogramAggregationSelector::new())
         .with_temporality_selector(

@@ -2852,6 +2852,10 @@ impl Host {
                     .context("failed to convert rpc_timeout to u64")?,
             );
             let otel_config = OtelConfig {
+                enable_observability: self.host_config.otel_config.enable_observability,
+                enable_tracing: self.host_config.otel_config.enable_tracing,
+                enable_metrics: self.host_config.otel_config.enable_metrics,
+                enable_logs: self.host_config.otel_config.enable_logs,
                 traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
                 exporter_otlp_endpoint: self.host_config.otel_config.exporter_otlp_endpoint.clone(),
             };

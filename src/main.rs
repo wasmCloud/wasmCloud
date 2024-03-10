@@ -15,7 +15,7 @@ use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::wasmbus::host_config::PolicyService as PolicyServiceConfig;
 use wasmcloud_host::WasmbusHostConfig;
-use wasmcloud_tracing::{configure_metrics, configure_tracing};
+use wasmcloud_tracing::configure_observability;
 
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
@@ -211,6 +211,22 @@ struct Args {
     )]
     oci_password: Option<String>,
 
+    /// Determines whether observability should be enabled.
+    #[clap(long = "enable-observability", env = "WASMCLOUD_OBSERVABILITY_ENABLED")]
+    enable_observability: bool,
+
+    /// Determines whether tracing should be enabled.
+    #[clap(long = "enable-tracing", env = "WASMCLOUD_TRACING_ENABLED")]
+    enable_tracing: Option<bool>,
+
+    /// Determines whether metrics should be enabled.
+    #[clap(long = "enable-metrics", env = "WASMCLOUD_METRICS_ENABLED")]
+    enable_metrics: Option<bool>,
+
+    /// Determines whether logs should be enabled.
+    #[clap(long = "enable-logs", env = "WASMCLOUD_LOGS_ENABLED")]
+    enable_logs: Option<bool>,
+
     /// Specifies which exporter to use for traces. Only "otlp" is supported at this time
     #[clap(long = "otel-traces-exporter", env = "OTEL_TRACES_EXPORTER")]
     otel_traces_exporter: Option<String>,
@@ -239,22 +255,22 @@ async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
     let otel_config = OtelConfig {
+        enable_observability: args.enable_observability,
+        enable_tracing: args.enable_tracing,
+        enable_metrics: args.enable_metrics,
+        enable_logs: args.enable_logs,
         traces_exporter: args.otel_traces_exporter,
         exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
-    if let Err(e) = configure_tracing(
+    if let Err(e) = configure_observability(
         "wasmcloud-host",
         &otel_config,
         args.enable_structured_logging,
         Some(&log_level),
     ) {
-        eprintln!("Failed to configure tracing: {e}");
-    };
-
-    if let Err(e) = configure_metrics("wasmcloud-host", &otel_config) {
-        eprintln!("Failed to configure metrics: {e}");
+        eprintln!("Failed to configure observability: {e}");
     };
 
     let ctl_nats_url = Url::parse(&format!(
