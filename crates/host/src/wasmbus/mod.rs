@@ -2856,8 +2856,10 @@ impl Host {
                 enable_tracing: self.host_config.otel_config.enable_tracing,
                 enable_metrics: self.host_config.otel_config.enable_metrics,
                 enable_logs: self.host_config.otel_config.enable_logs,
-                traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
-                exporter_otlp_endpoint: self.host_config.otel_config.exporter_otlp_endpoint.clone(),
+                observability_endpoint: self.host_config.otel_config.observability_endpoint.clone(),
+                tracing_endpoint: self.host_config.otel_config.tracing_endpoint.clone(),
+                metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
+                logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
             };
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
@@ -2888,25 +2890,6 @@ impl Host {
             // Prevent the provider from inheriting the host's environment, with the exception of
             // the following variables we manually add back
             child_cmd.env_clear();
-
-            // TODO: remove these OTEL vars once all providers are updated to use the new SDK
-            child_cmd
-                .env(
-                    "OTEL_TRACES_EXPORTER",
-                    self.host_config
-                        .otel_config
-                        .traces_exporter
-                        .clone()
-                        .unwrap_or_default(),
-                )
-                .env(
-                    "OTEL_EXPORTER_OTLP_ENDPOINT",
-                    self.host_config
-                        .otel_config
-                        .exporter_otlp_endpoint
-                        .clone()
-                        .unwrap_or_default(),
-                );
 
             if cfg!(windows) {
                 // Proxy SYSTEMROOT to providers. Without this, providers on Windows won't be able to start

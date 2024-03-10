@@ -215,28 +215,41 @@ struct Args {
     #[clap(long = "enable-observability", env = "WASMCLOUD_OBSERVABILITY_ENABLED")]
     enable_observability: bool,
 
-    /// Determines whether tracing should be enabled.
-    #[clap(long = "enable-tracing", env = "WASMCLOUD_TRACING_ENABLED")]
+    /// Determines whether tracing should be enabled, overriding any value set with `--enable-observability`.
+    #[clap(
+        long = "enable-tracing",
+        env = "WASMCLOUD_TRACING_ENABLED",
+        hide = true
+    )]
     enable_tracing: Option<bool>,
 
-    /// Determines whether metrics should be enabled.
-    #[clap(long = "enable-metrics", env = "WASMCLOUD_METRICS_ENABLED")]
+    /// Determines whether metrics should be enabled, overriding any value set with `--enable-observability`.
+    #[clap(
+        long = "enable-metrics",
+        env = "WASMCLOUD_METRICS_ENABLED",
+        hide = true
+    )]
     enable_metrics: Option<bool>,
 
-    /// Determines whether logs should be enabled.
-    #[clap(long = "enable-logs", env = "WASMCLOUD_LOGS_ENABLED")]
+    /// Determines whether logs should be enabled, overriding any value set with `--enable-observability`.
+    #[clap(long = "enable-logs", env = "WASMCLOUD_LOGS_ENABLED", hide = true)]
     enable_logs: Option<bool>,
 
-    /// Specifies which exporter to use for traces. Only "otlp" is supported at this time
-    #[clap(long = "otel-traces-exporter", env = "OTEL_TRACES_EXPORTER")]
-    otel_traces_exporter: Option<String>,
+    /// Overrides the OpenTelemetry endpoint used for emitting traces, metrics and logs. This can also be set with `OTEL_EXPORTER_OTLP_ENDPOINT`.
+    #[clap(long = "override-observability-endpoint")]
+    observability_endpoint: Option<String>,
 
-    /// Specifies the endpoint to use for the OTLP exporter
-    #[clap(
-        long = "otel-exporter-otlp-endpoint",
-        env = "OTEL_EXPORTER_OTLP_ENDPOINT"
-    )]
-    otel_exporter_otlp_endpoint: Option<String>,
+    /// Overrides the OpenTelemetry endpoint used for emitting traces. This can also be set with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
+    #[clap(long = "override-tracing-endpoint", hide = true)]
+    tracing_endpoint: Option<String>,
+
+    /// Overrides the OpenTelemetry endpoint used for emitting metrics. This can also be set with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
+    #[clap(long = "override-metrics-endpoint", hide = true)]
+    metrics_endpoint: Option<String>,
+
+    /// Overrides the OpenTelemetry endpoint used for emitting logs. This can also be set with `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
+    #[clap(long = "override-logs-endpoint", hide = true)]
+    logs_endpoint: Option<String>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -259,8 +272,10 @@ async fn main() -> anyhow::Result<()> {
         enable_tracing: args.enable_tracing,
         enable_metrics: args.enable_metrics,
         enable_logs: args.enable_logs,
-        traces_exporter: args.otel_traces_exporter,
-        exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
+        observability_endpoint: args.observability_endpoint,
+        tracing_endpoint: args.tracing_endpoint,
+        metrics_endpoint: args.metrics_endpoint,
+        logs_endpoint: args.logs_endpoint,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 

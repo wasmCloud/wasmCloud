@@ -15,10 +15,14 @@ pub struct OtelConfig {
     pub enable_metrics: Option<bool>,
     /// Determine whether logs should be enabled.
     pub enable_logs: Option<bool>,
-    /// OTEL_TRACES_EXPORTER https://opentelemetry.io/docs/concepts/sdk-configuration/general-sdk-configuration/#otel_traces_exporter
-    pub traces_exporter: Option<String>,
-    /// OTEL_EXPORTER_OTLP_ENDPOINT https://opentelemetry.io/docs/concepts/sdk-configuration/otlp-exporter-configuration/#otel_exporter_otlp_endpoint
-    pub exporter_otlp_endpoint: Option<String>,
+    /// Overrides the OpenTelemetry endpoint for all signals.
+    pub observability_endpoint: Option<String>,
+    /// Overrides the OpenTelemetry endpoint for tracing.
+    pub tracing_endpoint: Option<String>,
+    /// Overrides the OpenTelemetry endpoint for metrics.
+    pub metrics_endpoint: Option<String>,
+    /// Overrides the OpenTelemetry endpoint for logs.
+    pub logs_endpoint: Option<String>,
 }
 
 /// Environment settings for initializing a capability provider
