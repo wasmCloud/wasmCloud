@@ -10,9 +10,7 @@ use futures::TryStreamExt;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
-use test_actors::{
-    RUST_WRPC_PINGER_COMPONENT_PREVIEW2_SIGNED, RUST_WRPC_PONGER_COMPONENT_PREVIEW2_SIGNED,
-};
+use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT_PREVIEW2};
 use tokio::net::TcpListener;
 use tokio::try_join;
 use tracing::info;
@@ -254,7 +252,7 @@ async fn wrpc() -> anyhow::Result<()> {
     assert_scale_actor(
         &ctl_client,
         &host.host_key(),
-        format!("file://{RUST_WRPC_PINGER_COMPONENT_PREVIEW2_SIGNED}"),
+        format!("file://{RUST_WRPC_PINGER_COMPONENT}"),
         PINGER_COMPONENT_ID,
         None,
         5,
@@ -267,7 +265,7 @@ async fn wrpc() -> anyhow::Result<()> {
     assert_scale_actor(
         &ctl_client,
         &host.host_key(),
-        format!("file://{RUST_WRPC_PONGER_COMPONENT_PREVIEW2_SIGNED}"),
+        format!("file://{RUST_WRPC_PONGER_COMPONENT_PREVIEW2}"),
         PONGER_COMPONENT_ID,
         None,
         5,

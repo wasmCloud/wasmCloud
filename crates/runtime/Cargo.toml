@@ -34,6 +34,7 @@ uuid = { workspace = true }
 wascap = { workspace = true }
 wasi-common = { workspace = true, features = ["sync", "wasmtime"]  }
 wasmcloud-compat = { workspace = true }
+wasmcloud-component-adapters = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["addr2line", "async", "cache", "component-model", "coredump", "cranelift", "parallel-compilation", "pooling-allocator" ] }
