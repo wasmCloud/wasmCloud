@@ -16,6 +16,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{error, instrument, trace, warn};
 use wascap::jwt;
+use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::{
     self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Type, Val,
@@ -491,17 +492,23 @@ fn instantiate(
 
 impl Component {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
+    /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
-        let wasm = match wasmparser::Parser::new(0).parse_all(wasm).next() {
-            Some(Ok(wasmparser::Payload::Version {
-                encoding: wasmparser::Encoding::Component,
-                ..
-            })) => wasm,
-            _ => bail!("TODO: this module will be converted to a component"),
-        };
-
+        if wasmparser::Parser::is_core_wasm(wasm) {
+            let wasm = wit_component::ComponentEncoder::default()
+                .module(wasm)
+                .context("failed to set core component module")?
+                .adapter(
+                    "wasi_snapshot_preview1",
+                    WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
+                )
+                .context("failed to add WASI preview1 adapter")?
+                .encode()
+                .context("failed to encode a component from module")?;
+            return Self::new(rt, wasm);
+        }
         let engine = rt.engine.clone();
         let claims = claims(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
