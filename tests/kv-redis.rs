@@ -59,7 +59,7 @@ async fn kv_redis_suite() -> Result<()> {
 
     // Get actor key/url for pre-built messaging-invoker actor component
     let messaging_invoker_actor_url =
-        Url::from_file_path(test_actors::RUST_MESSAGING_INVOKER_COMPONENT)
+        Url::from_file_path(test_actors::RUST_MESSAGING_INVOKER_COMPONENT_PREVIEW2_SIGNED)
             .map_err(|()| anyhow!("failed to construct messaging invoker actor ref"))?;
 
     // Build client for interacting with the lattice
