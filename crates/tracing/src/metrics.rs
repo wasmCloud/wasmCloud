@@ -19,7 +19,12 @@ pub fn configure_metrics(
         .http()
         .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
 
-    if let Some(ref endpoint) = otel_config.exporter_otlp_endpoint.clone() {
+    let metrics_endpoint = otel_config
+        .metrics_endpoint
+        .clone()
+        .or_else(|| otel_config.observability_endpoint.clone());
+
+    if let Some(ref endpoint) = metrics_endpoint {
         exporter = exporter.with_endpoint(endpoint);
     }
 
