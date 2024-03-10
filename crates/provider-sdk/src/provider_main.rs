@@ -58,7 +58,7 @@ where
         .map_err(|e| {
             ProviderInitError::Initialization(format!("Unable to load host data: {e}"))
         })??;
-    if let Err(e) = wasmcloud_tracing::configure_tracing(
+    if let Err(e) = wasmcloud_tracing::configure_observability(
         &friendly_name.unwrap_or(host_data.provider_key.clone()),
         &host_data.otel_config,
         host_data.structured_logging,
