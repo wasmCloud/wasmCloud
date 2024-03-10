@@ -1769,6 +1769,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
+name = "is_executable"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa9acdc6d67b75e626ad644734e8bc6df893d9cd2a834129065d3dd6158ea9c8"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1961,6 +1970,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bddcd3bf5144b6392de80e04c347cd7fab2508f6df16a85fc496ecd5cec39bc"
 dependencies = [
  "rand",
+]
+
+[[package]]
+name = "nix-nar"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e412c3138d9fcb384da86b4a068c11bad373441eb5c4b89406de4faf649fa02"
+dependencies = [
+ "is_executable",
+ "thiserror",
 ]
 
 [[package]]
@@ -3928,6 +3947,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-component-adapters"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90702ee5cfb61cba7e9982f5d28d9a56cf17ea75710624a8a615e61c86b4afcd"
+dependencies = [
+ "anyhow",
+ "base64 0.21.7",
+ "futures",
+ "nix-nar",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "wasmcloud-control-interface"
 version = "0.33.0"
 dependencies = [
@@ -4217,6 +4256,7 @@ dependencies = [
  "wascap",
  "wasi-common",
  "wasmcloud-compat",
+ "wasmcloud-component-adapters",
  "wasmcloud-core",
  "wasmparser",
  "wasmtime",
