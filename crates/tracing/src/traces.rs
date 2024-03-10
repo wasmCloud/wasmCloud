@@ -148,7 +148,15 @@ pub fn configure_tracing(
 
     let normalized_service_name = service_name.to_string();
 
-    let exporter_endpoint = otel_config.exporter_otlp_endpoint.clone();
+    let tracing_endpoint = otel_config
+        .tracing_endpoint
+        .clone()
+        .or_else(|| otel_config.observability_endpoint.clone());
+
+    let logs_endpoint = otel_config
+        .logs_endpoint
+        .clone()
+        .or_else(|| otel_config.observability_endpoint.clone());
 
     // NOTE: this logic would be simpler if we could conditionally/imperatively construct and add
     // layers, but due to the dynamic types, this is not possible
@@ -158,11 +166,11 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_json_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &exporter_endpoint,
+                    &tracing_endpoint,
                     normalized_service_name.clone(),
                 )?)
                 .with(get_otel_logging_layer(
-                    &exporter_endpoint,
+                    &logs_endpoint,
                     normalized_service_name,
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -172,11 +180,11 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_plaintext_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &exporter_endpoint,
+                    &tracing_endpoint,
                     normalized_service_name.clone(),
                 )?)
                 .with(get_otel_logging_layer(
-                    &exporter_endpoint,
+                    &logs_endpoint,
                     normalized_service_name,
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -186,7 +194,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_json_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &exporter_endpoint,
+                    &tracing_endpoint,
                     normalized_service_name.clone(),
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -196,7 +204,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_plaintext_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &exporter_endpoint,
+                    &tracing_endpoint,
                     normalized_service_name.clone(),
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -206,7 +214,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_json_log_layer()?)
                 .with(get_otel_logging_layer(
-                    &exporter_endpoint,
+                    &logs_endpoint,
                     normalized_service_name,
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -216,7 +224,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_plaintext_log_layer()?)
                 .with(get_otel_logging_layer(
-                    &exporter_endpoint,
+                    &logs_endpoint,
                     normalized_service_name,
                 )?);
             tracing::subscriber::set_global_default(layered)
