@@ -23,8 +23,6 @@ use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    serde::Deserialize,
-    serde_json,
     wasmcloud_provider_sdk::{load_host_data, start_provider, Context, InterfaceLinkDefinition},
 };
 
@@ -310,8 +308,7 @@ fn retrieve_default_url(config: &HashMap<String, String>) -> String {
     let config_supplied_url = config
         .keys()
         .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
-        .map(|url_key| config.get(url_key))
-        .flatten();
+        .and_then(|url_key| config.get(url_key));
 
     if let Some(url) = config_supplied_url {
         info!(url, "Using Redis URL from config");

@@ -373,7 +373,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         instance_id,
         link_definitions,
         cluster_issuers: _,
-        config_json: _,
+        config: _,
         default_rpc_timeout_ms: _,
         structured_logging,
         log_level,
