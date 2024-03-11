@@ -90,11 +90,13 @@ pub struct StartProviderCommand {
     pub annotations: Option<HashMap<String, String>>,
     /// Unique identifier of the provider to start.
     pub provider_id: ComponentId,
-    /// Optional provider configuration in the form of an opaque string. Many
-    /// providers prefer base64-encoded JSON here, though that data should never
-    /// exceed 500KB
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub configuration: Option<String>,
+    /// A list of named configs to use for this provider. It is not required to specify a config.
+    /// Configs are merged together before being given to the provider, with values from the right-most
+    /// config in the list taking precedence. For example, given ordered configs foo {a: 1, b: 2},
+    /// bar {b: 3, c: 4}, and baz {c: 5, d: 6}, the resulting config will be: {a: 1, b: 3, c: 5, d:
+    /// 6}
+    #[serde(default)]
+    pub config: Vec<String>,
     /// The host ID on which to start the provider
     #[serde(default)]
     pub host_id: String,
