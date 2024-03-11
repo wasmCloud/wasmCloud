@@ -20,12 +20,12 @@
     "format:prettier:check": "yarn format:prettier --check"
   },
   "devDependencies": {
-    "@types/node": "^20.11.24",
+    "@types/node": "^20.11.25",
     "@wasmcloud/prettier-config": "workspace:*",
     "eslint": "^8.57.0",
-    "eslint-config-turbo": "^1.12.4",
+    "eslint-config-turbo": "^1.12.5",
     "prettier": "^3.2.5",
-    "turbo": "^1.12.4",
-    "typescript": "^5.3.3"
+    "turbo": "^1.12.5",
+    "typescript": "^5.4.2"
   }
 }
