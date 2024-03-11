@@ -17,9 +17,7 @@ use wash_lib::registry::{
 use wash_lib::{
     cli::{
         labels_vec_to_hashmap,
-        registry::{
-            RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand,
-        },
+        registry::{RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
         CommandOutput, OutputKind,
     },
     parser::get_config,
@@ -178,23 +176,6 @@ pub async fn registry_push(
     ))
 }
 
-pub async fn handle_command(
-    command: RegistryCommand,
-    output_kind: OutputKind,
-) -> Result<CommandOutput> {
-    match command {
-        RegistryCommand::Pull(cmd) => {
-            eprintln!("[warn] `wash reg pull` has been deprecated in favor of `wash pull` and will be removed in a future version.");
-            registry_pull(cmd, output_kind).await
-        }
-        RegistryCommand::Push(cmd) => {
-            eprintln!("[warn] `wash reg push` has been deprecated in favor of `wash push` and will be removed in a future version.");
-            registry_push(cmd, output_kind).await
-        }
-        RegistryCommand::Ping(cmd) => registry_ping(cmd).await,
-    }
-}
-
 fn resolve_artifact_ref(url: &str, registry: &str) -> Result<Reference> {
     let image: Reference = url
         .trim()
@@ -249,8 +230,9 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
 
 #[cfg(test)]
 mod tests {
-    use crate::common::registry_cmd::{RegistryCommand, RegistryPullCommand, RegistryPushCommand};
+    use crate::common::registry_cmd::{RegistryPullCommand, RegistryPushCommand};
     use clap::Parser;
+    use wash_lib::cli::registry::RegistryCommand;
 
     const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const LOCAL_REGISTRY: &str = "localhost:5001";
