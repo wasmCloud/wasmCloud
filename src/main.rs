@@ -215,17 +215,13 @@ struct Args {
     #[clap(
         long = "enable-observability",
         env = "WASMCLOUD_OBSERVABILITY_ENABLED",
-        conflicts_with_all = ["enable_tracing", "enable_metrics", "enable_logs"]
+        conflicts_with_all = ["enable_traces", "enable_metrics", "enable_logs"]
     )]
     enable_observability: bool,
 
-    /// Determines whether tracing should be enabled.
-    #[clap(
-        long = "enable-tracing",
-        env = "WASMCLOUD_TRACING_ENABLED",
-        hide = true
-    )]
-    enable_tracing: Option<bool>,
+    /// Determines whether traces should be enabled.
+    #[clap(long = "enable-traces", env = "WASMCLOUD_TRACES_ENABLED", hide = true)]
+    enable_traces: Option<bool>,
 
     /// Determines whether metrics should be enabled.
     #[clap(
@@ -244,8 +240,8 @@ struct Args {
     observability_endpoint: Option<String>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting traces. This can also be set with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
-    #[clap(long = "override-tracing-endpoint", hide = true)]
-    tracing_endpoint: Option<String>,
+    #[clap(long = "override-traces-endpoint", hide = true)]
+    traces_endpoint: Option<String>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting metrics. This can also be set with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
     #[clap(long = "override-metrics-endpoint", hide = true)]
@@ -273,11 +269,11 @@ async fn main() -> anyhow::Result<()> {
 
     let otel_config = OtelConfig {
         enable_observability: args.enable_observability,
-        enable_tracing: args.enable_tracing,
+        enable_traces: args.enable_traces,
         enable_metrics: args.enable_metrics,
         enable_logs: args.enable_logs,
         observability_endpoint: args.observability_endpoint,
-        tracing_endpoint: args.tracing_endpoint,
+        traces_endpoint: args.traces_endpoint,
         metrics_endpoint: args.metrics_endpoint,
         logs_endpoint: args.logs_endpoint,
     };

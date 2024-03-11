@@ -134,8 +134,8 @@ pub fn configure_tracing(
         .set(std::io::stderr())
         .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
 
-    let enable_tracing = otel_config
-        .enable_tracing
+    let enable_traces = otel_config
+        .enable_traces
         .unwrap_or(otel_config.enable_observability);
 
     let enable_logs = otel_config
@@ -148,8 +148,8 @@ pub fn configure_tracing(
 
     let normalized_service_name = service_name.to_string();
 
-    let tracing_endpoint = otel_config
-        .tracing_endpoint
+    let traces_endpoint = otel_config
+        .traces_endpoint
         .clone()
         .or_else(|| otel_config.observability_endpoint.clone());
 
@@ -160,13 +160,13 @@ pub fn configure_tracing(
 
     // NOTE: this logic would be simpler if we could conditionally/imperatively construct and add
     // layers, but due to the dynamic types, this is not possible
-    let res = match (enable_tracing, enable_logs, use_structured_logging) {
+    let res = match (enable_traces, enable_logs, use_structured_logging) {
         (true, true, true) => {
             let layered = base_reg
                 .with(level_filter)
                 .with(get_json_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &tracing_endpoint,
+                    &traces_endpoint,
                     normalized_service_name.clone(),
                 )?)
                 .with(get_otel_logging_layer(
@@ -180,7 +180,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_plaintext_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &tracing_endpoint,
+                    &traces_endpoint,
                     normalized_service_name.clone(),
                 )?)
                 .with(get_otel_logging_layer(
@@ -194,7 +194,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_json_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &tracing_endpoint,
+                    &traces_endpoint,
                     normalized_service_name.clone(),
                 )?);
             tracing::subscriber::set_global_default(layered)
@@ -204,7 +204,7 @@ pub fn configure_tracing(
                 .with(level_filter)
                 .with(get_plaintext_log_layer()?)
                 .with(get_otel_tracing_layer(
-                    &tracing_endpoint,
+                    &traces_endpoint,
                     normalized_service_name.clone(),
                 )?);
             tracing::subscriber::set_global_default(layered)
