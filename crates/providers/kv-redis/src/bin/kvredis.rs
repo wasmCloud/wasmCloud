@@ -23,8 +23,6 @@ use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    serde::Deserialize,
-    serde_json,
     wasmcloud_provider_sdk::provider_main::start_provider,
     wasmcloud_provider_sdk::{load_host_data, Context, InterfaceLinkDefinition},
 };
@@ -41,35 +39,10 @@ const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 /// Configuration key that will be used to search for Redis config
 const CONFIG_REDIS_URL_KEY: &str = "URL";
 
-#[derive(Deserialize)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
-struct KvRedisConfig {
-    /// Default URL to connect when actor doesn't provide one on a link
-    #[serde(alias = "URL", alias = "Url")]
-    url: String,
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hd = load_host_data()?;
 
-    let default_connect_url = if let Some(raw_config) = hd.config_json.as_ref() {
-        match serde_json::from_str(raw_config) {
-            Ok(KvRedisConfig { url }) => {
-                info!(url, "Using Redis URL from config");
-                url
-            }
-            Err(err) => {
-                warn!(
-                    DEFAULT_CONNECT_URL,
-                    "Failed to parse `config_json`: {err}\nUsing default configuration"
-                );
-                DEFAULT_CONNECT_URL.to_string()
-            }
-        }
-    } else {
-        info!(DEFAULT_CONNECT_URL, "Using default Redis URL");
-        DEFAULT_CONNECT_URL.to_string()
-    };
+    let default_connect_url = retrieve_default_url(&hd.config);
 
     start_provider(
         KvRedisProvider::new(&default_connect_url),
@@ -329,36 +302,41 @@ impl KvRedisProvider {
     }
 }
 
+/// Fetch the default URL to use for connecting to Redis from the configuration, defaulting
+/// to `DEFAULT_CONNECT_URL` if no URL is found in the configuration.
+fn retrieve_default_url(config: &HashMap<String, String>) -> String {
+    // To aid in user experience, find the URL key in the config that matches "URL" in a case-insensitive manner
+    let config_supplied_url = config
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+        .map(|url_key| config.get(url_key))
+        .flatten();
+
+    if let Some(url) = config_supplied_url {
+        info!(url, "Using Redis URL from config");
+        url.to_string()
+    } else {
+        info!(DEFAULT_CONNECT_URL, "Using default Redis URL");
+        DEFAULT_CONNECT_URL.to_string()
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::KvRedisConfig;
-    use crate::serde_json;
+    use std::collections::HashMap;
+
+    use crate::retrieve_default_url;
 
     const PROPER_URL: &str = "redis://127.0.0.1:6379";
 
     #[test]
     fn can_deserialize_config_case_insensitive() {
-        let lowercase_config = format!("{{\"url\": \"{}\"}}", PROPER_URL);
-        let uppercase_config = format!("{{\"URL\": \"{}\"}}", PROPER_URL);
-        let initial_caps_config = format!("{{\"Url\": \"{}\"}}", PROPER_URL);
+        let lowercase_config = HashMap::from_iter([("url".to_string(), PROPER_URL.to_string())]);
+        let uppercase_config = HashMap::from_iter([("URL".to_string(), PROPER_URL.to_string())]);
+        let initial_caps_config = HashMap::from_iter([("Url".to_string(), PROPER_URL.to_string())]);
 
-        assert_eq!(
-            PROPER_URL,
-            serde_json::from_str::<KvRedisConfig>(&lowercase_config)
-                .unwrap()
-                .url
-        );
-        assert_eq!(
-            PROPER_URL,
-            serde_json::from_str::<KvRedisConfig>(&uppercase_config)
-                .unwrap()
-                .url
-        );
-        assert_eq!(
-            PROPER_URL,
-            serde_json::from_str::<KvRedisConfig>(&initial_caps_config)
-                .unwrap()
-                .url
-        );
+        assert_eq!(PROPER_URL, retrieve_default_url(&lowercase_config));
+        assert_eq!(PROPER_URL, retrieve_default_url(&uppercase_config));
+        assert_eq!(PROPER_URL, retrieve_default_url(&initial_caps_config));
     }
 }
