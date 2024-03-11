@@ -1,5 +1,7 @@
 //! Core reusable functionality related to hosts
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::lattice::ClusterIssuerKey;
@@ -41,10 +43,9 @@ pub struct HostData {
     pub link_definitions: Vec<InterfaceLinkDefinition>,
     /// list of cluster issuers
     pub cluster_issuers: Vec<ClusterIssuerKey>,
-    /// Optional configuration JSON sent to a given link name of a provider
-    /// without an actor context
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_json: Option<String>,
+    /// Merged named configuration set for this provider at runtime
+    #[serde(default)]
+    pub config: HashMap<String, String>,
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_rpc_timeout_ms: Option<u64>,
