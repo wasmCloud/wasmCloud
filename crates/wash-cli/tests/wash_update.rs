@@ -78,10 +78,7 @@ async fn integration_update_actor_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            assert!(actors[0]
-                .image_ref
-                .as_ref()
-                .is_some_and(|image_ref| image_ref == OLD_ECHO_OCI_REF));
+            assert!(actors[0].image_ref == OLD_ECHO_OCI_REF);
             break;
         }
     }
@@ -144,22 +141,14 @@ async fn integration_update_actor_serial() -> Result<()> {
             .next()
             .map(|i| i.actors)
             .unwrap_or_default();
-        if !actors[0]
-            .image_ref
-            .as_ref()
-            .is_some_and(|image_ref| image_ref == ECHO_OCI_REF)
-            && retries > 4
-        {
+        if actors[0].image_ref != ECHO_OCI_REF && retries > 4 {
             panic!("Should have started the actor")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            assert!(actors[0]
-                .image_ref
-                .as_ref()
-                .is_some_and(|image_ref| image_ref == ECHO_OCI_REF));
+            assert!(actors[0].image_ref == ECHO_OCI_REF);
             break;
         }
     }

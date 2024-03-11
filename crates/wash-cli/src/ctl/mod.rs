@@ -351,31 +351,39 @@ mod test {
             "--timeout-ms",
             "2001",
             "--link-name",
-            "default",
+            "notdefault",
             ACTOR_ID,
             PROVIDER_ID,
-            "wasmcloud:provider",
-            "THING=foo",
+            "wasmcloud",
+            "provider",
+            "--interface",
+            "foo",
         ])?;
         use wash_lib::cli::link::LinkPutCommand;
         match link_all.command {
             CtlCliCommand::Link(LinkCommand::Put(LinkPutCommand {
                 opts,
-                actor_id,
-                provider_id,
-                contract_id,
+                source_id,
+                target,
+                wit_namespace,
+                wit_package,
+                interfaces,
+                source_config,
+                target_config,
                 link_name,
-                values,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(actor_id, ACTOR_ID);
-                assert_eq!(provider_id, PROVIDER_ID);
-                assert_eq!(contract_id, "wasmcloud:provider".to_string());
-                assert_eq!(link_name.unwrap(), "default".to_string());
-                assert_eq!(values, vec!["THING=foo".to_string()]);
+                assert_eq!(source_id, ACTOR_ID);
+                assert_eq!(target, PROVIDER_ID);
+                assert_eq!(wit_namespace, "wasmcloud".to_string());
+                assert_eq!(wit_package, "provider".to_string());
+                assert_eq!(link_name.unwrap(), "notdefault".to_string());
+                assert_eq!(interfaces.as_slice(), &["foo".to_string()]);
+                assert!(source_config.is_empty());
+                assert!(target_config.is_empty());
             }
             cmd => panic!("ctl link put constructed incorrect command {cmd:?}"),
         }
@@ -428,6 +436,7 @@ mod test {
             "2001",
             HOST_ID,
             "wasmcloud.azurecr.io/actor:v2",
+            "myactorv2",
             "--count",
             "1",
             "--annotations",
@@ -439,6 +448,7 @@ mod test {
                 opts,
                 host_id,
                 actor_ref,
+                actor_id,
                 max_instances,
                 annotations,
             })) => {
@@ -448,6 +458,7 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
+                assert_eq!(actor_id, "myactorv2".to_string());
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
             }

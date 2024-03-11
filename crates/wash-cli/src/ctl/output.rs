@@ -8,7 +8,7 @@ use term_table::{
     Table,
 };
 use wash_lib::cli::CommandOutput;
-use wasmcloud_control_interface::{Host, HostInventory, LinkDefinition};
+use wasmcloud_control_interface::{Host, HostInventory, InterfaceLinkDefinition};
 
 use crate::util::format_optional;
 
@@ -31,19 +31,23 @@ pub fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput 
 }
 
 pub fn link_del_output(
-    actor_id: &str,
-    contract_id: &str,
+    source_id: &str,
     link_name: &str,
+    wit_namespace: &str,
+    wit_package: &str,
     failure: Option<String>,
 ) -> Result<CommandOutput> {
     match failure {
         None => {
             let mut map = HashMap::new();
-            map.insert("actor_id".to_string(), json!(actor_id));
-            map.insert("contract_id".to_string(), json!(contract_id));
+            map.insert("source_id".to_string(), json!(source_id));
+            map.insert("wit_namespace".to_string(), json!(wit_namespace));
+            map.insert("wit_package".to_string(), json!(wit_package));
             map.insert("link_name".to_string(), json!(link_name));
             Ok(CommandOutput::new(
-                format!("Deleted link for {actor_id} on {contract_id} ({link_name}) successfully"),
+                format!(
+                    "Deleted link for {source_id} on {wit_namespace}:{wit_package} ({link_name}) successfully"
+                ),
                 map,
             ))
         }
@@ -52,23 +56,27 @@ pub fn link_del_output(
 }
 
 /// Helper function to transform a LinkDefinitionList into a table string for printing
-pub fn links_table(list: Vec<LinkDefinition>) -> String {
+pub fn links_table(list: Vec<InterfaceLinkDefinition>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
 
     table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Actor ID", 1, Alignment::Left),
-        TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
-        TableCell::new_with_alignment("Contract ID", 1, Alignment::Left),
-        TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
+        TableCell::new_with_alignment("Source ID", 1, Alignment::Left),
+        TableCell::new_with_alignment("Target", 1, Alignment::Left),
+        TableCell::new_with_alignment("WIT", 1, Alignment::Left),
+        TableCell::new_with_alignment("Interfaces", 1, Alignment::Left),
     ]));
 
     list.iter().for_each(|l| {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(l.actor_id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(l.provider_id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(l.contract_id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(l.link_name.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.source_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.target.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(
+                format!("{}:{}", l.wit_namespace, l.wit_package),
+                1,
+                Alignment::Left,
+            ),
+            TableCell::new_with_alignment(l.interfaces.join(","), 1, Alignment::Left),
         ]))
     });
 
@@ -144,7 +152,7 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(a.id, 1, Alignment::Left),
                     TableCell::new_with_alignment(format_optional(a.name), 1, Alignment::Left),
-                    TableCell::new_with_alignment(format_optional(a.image_ref), 2, Alignment::Left),
+                    TableCell::new_with_alignment(a.image_ref, 2, Alignment::Left),
                 ]))
             });
         } else {
@@ -171,7 +179,6 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(p.id, 1, Alignment::Left),
                     TableCell::new_with_alignment(format_optional(p.name), 1, Alignment::Left),
-                    TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
                     TableCell::new_with_alignment(format_optional(p.image_ref), 1, Alignment::Left),
                 ]))
             });

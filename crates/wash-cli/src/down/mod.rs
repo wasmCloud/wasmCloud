@@ -148,7 +148,13 @@ async fn stop_hosts(
         .auction_timeout(std::time::Duration::from_secs(2))
         .build();
 
-    let hosts = client.get_hosts().await.map_err(|e| anyhow!(e))?;
+    let hosts = client
+        .get_hosts()
+        .await
+        .map_err(|e| anyhow!(e))?
+        .into_iter()
+        .filter_map(|r| r.response)
+        .collect::<Vec<_>>();
 
     // If a host ID was supplied, stop only that host
     if let Some(host_id) = host_id {
