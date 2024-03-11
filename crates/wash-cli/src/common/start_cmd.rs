@@ -116,28 +116,31 @@ mod test {
             "default",
             "--skip-wait",
             "wasmcloud.azurecr.io/provider:v1",
+            "providerv1",
         ])?;
         match start_provider_all.command {
             CtlCliCommand::Start(StartCommand::Provider(StartProviderCommand {
                 opts,
                 host_id,
                 provider_ref,
+                provider_id,
                 link_name,
                 constraints,
                 auction_timeout_ms,
-                config_json,
+                config,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(config_json, None);
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
+                assert_eq!(provider_id, "providerv1".to_string());
+                assert!(config.is_empty());
                 assert!(skip_wait);
             }
             cmd => panic!("ctl start provider constructed incorrect command {cmd:?}"),

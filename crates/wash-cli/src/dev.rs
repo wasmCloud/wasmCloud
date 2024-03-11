@@ -1,17 +1,19 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use console::style;
 use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
+use wash_lib::actor::ScaleActorArgs;
 use wash_lib::generate::emoji;
 use wash_lib::{
-    actor::{scale_actor, start_actor, StartActorArgs},
+    actor::scale_actor,
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::CommandOutput,
@@ -191,7 +193,14 @@ pub async fn handle_command(
                                 eprintln!(
                                     "{} {}",
                                     emoji::GREEN_CHECK,
-                                    style(format!("Found single host w/ ID [{}]", h.id)).bold(),
+                                    style(format!(
+                                        "Found single host w/ ID [{}]",
+                                        h.response
+                                            .as_ref()
+                                            .map(|r| r.id.clone())
+                                            .unwrap_or_else(|| "N/A".to_string())
+                                    ))
+                                    .bold(),
                                 );
                                 break Ok(());
                             }
@@ -223,11 +232,15 @@ pub async fn handle_command(
         .or_else(|e| bail!("failed to retrieve hosts from lattice: {e}"))?;
     let host: Host = match &hosts[..] {
         [] => bail!("0 hosts detected, is wasmCloud running?"),
-        [h] => h.clone(),
+        [h] => h
+            .response
+            .clone()
+            .context("received control interface response with empty host")?,
         _ => {
             if let Some(host_id) = cmd.host_id.map(ServerId::into_string) {
                 hosts
                     .into_iter()
+                    .filter_map(|h| h.response)
                     .find(|h| h.id == host_id)
                     .with_context(|| format!("failed to find host [{host_id}]"))?
             } else {
@@ -270,36 +283,26 @@ pub async fn handle_command(
 
     // Since we're using the actor from file on disk, the ref should be the file path (canonicalized) on disk as URI
     let actor_ref = format!("file://{}", artifact_path.display());
-    let actor_id;
+    // Since the only restriction on actor_id is that it must be unique, we can just use the artifact path as the actor_id
+    // to ensure uniqueness
+    let actor_id = artifact_path.display().to_string();
 
-    // Attempt to find or create the actor, scaling any existing actors to zero if it exists
-    let inventory = ctl_client.get_host_inventory(&host.id).await.or_else(|e| {
-        bail!(
-            "failed to retrieve host inventory for host [{}]: {e}",
-            &host.id
-        )
-    })?;
-    if let Some(existing_actor) = inventory
-        .actors
-        .into_iter()
-        .find(|a| a.image_ref == Some(actor_ref.clone()))
-    {
-        actor_id = existing_actor.id;
-        scale_actor(&ctl_client, &host.id, &actor_ref, 1, None).await?;
-    } else {
-        // Start the actor for the first time
-        actor_id = start_actor(StartActorArgs {
-            ctl_client: &ctl_client,
-            host_id: &host.id,
-            actor_ref: &actor_ref,
-            count: 1,
-            skip_wait: false,
-            timeout_ms: None,
-        })
-        .await?
-        .actor_id
-        .ok_or_else(|| anyhow!("failed to do thing"))?;
-    }
+    // Scale the actor to one max replica
+    scale_actor(ScaleActorArgs {
+        client: &ctl_client,
+        host_id: &host.id,
+        actor_id: &actor_id,
+        actor_ref: &actor_ref,
+        max_instances: 1,
+        annotations: Some(HashMap::from_iter(vec![(
+            "wash_dev".to_string(),
+            "true".to_string(),
+        )])),
+        config: vec![],
+        skip_wait: false,
+        timeout_ms: None,
+    })
+    .await?;
 
     // Set up a oneshot channel to remove
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);

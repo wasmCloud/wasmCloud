@@ -261,10 +261,10 @@ async fn integration_up_works_with_labels() -> Result<()> {
     let cmd_output = instance.get_hosts().await.context("failed to call actor")?;
     assert!(cmd_output.success, "call command succeeded");
     assert!(
-        cmd_output.hosts.iter().any(|h| h
-            .labels
-            .as_ref()
-            .is_some_and(|h| h.get("is-label-test").is_some_and(|v| v == "yes"))),
+        cmd_output
+            .hosts
+            .iter()
+            .any(|h| h.labels.get("is-label-test").is_some_and(|v| v == "yes")),
         "a host is present which has the created label",
     );
 

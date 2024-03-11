@@ -79,17 +79,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            let max = actors[0]
-                .instances
-                .iter()
-                .map(|i| {
-                    if i.max_instances == 0 {
-                        1
-                    } else {
-                        i.max_instances
-                    }
-                })
-                .sum::<u32>();
+            let max = actors[0].max_instances;
             assert_eq!(max, 10);
             break;
         }
@@ -159,19 +149,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            // NOTE: This is a compensation for the fact that <0.79.0 hosts include individual instances,
-            // but 0.79.0+ hosts include instances with max counts on them.
-            let max = actors[0]
-                .instances
-                .iter()
-                .map(|i| {
-                    if i.max_instances == 0 {
-                        1
-                    } else {
-                        i.max_instances
-                    }
-                })
-                .sum::<u32>();
+            let max = actors[0].max_instances;
             assert_eq!(max, 5);
             break;
         }
