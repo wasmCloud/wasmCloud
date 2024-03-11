@@ -15,7 +15,7 @@ use tokio::try_join;
 use tracing::info;
 use tracing_subscriber::prelude::*;
 use wasmcloud_host::wasmbus::config::BundleGenerator;
-use wasmcloud_test_util::actor::assert_put_config;
+use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::{
     actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
 };
@@ -148,7 +148,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         .context("failed to start test host")?;
 
     // Put configs for first actor
-    assert_put_config(
+    assert_config_put(
         &ctl_client,
         "pinger",
         [
@@ -157,7 +157,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         ],
     )
     .await?;
-    assert_put_config(
+    assert_config_put(
         &ctl_client,
         "pinger_override",
         [("foo".to_string(), "baz".to_string())],
@@ -177,7 +177,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     .expect("should've scaled pinger actor");
 
     // Put configs for second actor
-    assert_put_config(
+    assert_config_put(
         &ctl_client,
         "ponger",
         [("pong".to_string(), "config".to_string())],

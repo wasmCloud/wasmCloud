@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_nats::subject::ToSubject;
 use async_nats::HeaderMap;
 use base64::Engine;
@@ -356,6 +356,7 @@ struct ProviderInitState {
     pub provider_key: String,
     pub link_definitions: Vec<InterfaceLinkDefinition>,
     pub commands: ProviderCommandReceivers,
+    pub config: HashMap<String, String>,
 }
 
 #[instrument]
@@ -373,7 +374,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         instance_id,
         link_definitions,
         cluster_issuers: _,
-        config: _,
+        config,
         default_rpc_timeout_ms: _,
         structured_logging,
         log_level,
@@ -455,6 +456,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         link_name: link_name.clone(),
         provider_key: provider_key.clone(),
         link_definitions: link_definitions.clone(),
+        config: config.clone(),
         commands: ProviderCommandReceivers {
             health,
             shutdown,
@@ -481,6 +483,43 @@ pub fn start_provider(
     Ok(())
 }
 
+/// Appropriately receive a link (depending on if it's source/target) for a provider
+async fn receive_link_for_provider<P>(
+    provider: &P,
+    connection: &ProviderConnection,
+    ld: InterfaceLinkDefinition,
+) -> Result<()>
+where
+    P: ProviderHandler,
+{
+    let do_receive_link = if ld.source_id == connection.provider_key {
+        provider.receive_link_config_as_source((
+            &ld.source_id,
+            &ld.target,
+            &ld.name,
+            &connection.config,
+        ))
+    } else if ld.target == connection.provider_key {
+        provider.receive_link_config_as_target((
+            &ld.source_id,
+            &ld.target,
+            &ld.name,
+            &connection.config,
+        ))
+    } else {
+        bail!("received link put where provider was neither source nor target");
+    };
+
+    match do_receive_link.await {
+        Ok(()) => connection.put_link(ld).await,
+        Err(e) => {
+            warn!(error = %e, "receiving link failed");
+        }
+    };
+
+    Ok(())
+}
+
 /// Handle provider commands in a loop.
 async fn handle_provider_commands(
     provider: impl ProviderHandler,
@@ -504,13 +543,21 @@ async fn handle_provider_commands(
             }
             req = health.recv() => {
                 if let Some((req, tx)) = req {
-                    let res = provider.health_request(&req).await;
+                    let res = match provider.health_request(&req).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!(error = %e, "provider health request failed");
+                            return;
+                        }
+                    };
                     if tx.send(res).is_err() {
                         error!("failed to send health check response")
                     }
                 } else {
                     error!("failed to handle health check, shutdown");
-                    provider.shutdown().await;
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
                     if quit_tx.send(()).is_err() {
                         error!("failed to send quit")
                     };
@@ -519,13 +566,17 @@ async fn handle_provider_commands(
             }
             req = shutdown.recv() => {
                 if let Some(tx) = req {
-                    provider.shutdown().await;
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
                     if tx.send(()).is_err() {
                         error!("failed to send shutdown response")
                     }
                 } else {
                     error!("failed to handle shutdown, shutdown");
-                    provider.shutdown().await;
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
                     if quit_tx.send(()).is_err() {
                         error!("failed to send quit")
                     };
@@ -539,10 +590,8 @@ async fn handle_provider_commands(
                         warn!("Ignoring duplicate link put");
                     } else {
                         info!("Linking actor with provider");
-                        if provider.put_link(&ld).await {
-                            connection.put_link(ld).await;
-                        } else {
-                            warn!("put_link failed");
+                        if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
+                            error!(error = %e, "failed to receive link for provider");
                         }
                     }
                     if tx.send(()).is_err() {
@@ -550,7 +599,9 @@ async fn handle_provider_commands(
                     }
                 } else {
                     error!("failed to handle link put, shutdown");
-                    provider.shutdown().await;
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
                     if quit_tx.send(()).is_err() {
                         error!("failed to send quit")
                     };
@@ -561,13 +612,17 @@ async fn handle_provider_commands(
                 if let Some((ld, tx)) = req {
                     connection.delete_link(&ld.source_id).await;
                     // notify provider that link is deleted
-                    provider.delete_link(&ld.source_id).await;
+                    if let Err(e) = provider.delete_link(&ld.source_id).await {
+                        error!(error = %e, "failed to delete link");
+                    }
                     if tx.send(()).is_err() {
                         error!("failed to send link del response")
                     }
                 } else {
                     error!("failed to handle link del, shutdown");
-                    provider.shutdown().await;
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
                     if quit_tx.send(()).is_err() {
                         error!("failed to send quit")
                     };
@@ -594,6 +649,7 @@ pub async fn run_provider_handler(
         provider_key,
         link_definitions,
         commands,
+        config,
     } = init_provider(friendly_name).await?;
 
     let wrpc = wrpc_client(
@@ -609,24 +665,24 @@ pub async fn run_provider_handler(
         host_id,
         link_name,
         WrpcInvocationLookup::default(),
+        config,
     )?;
     CONNECTION.set(connection).map_err(|_| {
         ProviderInitError::Initialization("Provider connection was already initialized".to_string())
     })?;
     let connection = get_connection();
 
-    // pre-populate provider and bridge with initial set of link definitions
-    // initialization of any link is fatal for provider startup
+    // Pre-populate provider and bridge with initial set of link definitions
+    // Initialization of any link is fatal for provider startup
     for ld in link_definitions {
-        if !provider.put_link(&ld).await {
+        if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
             error!(
-                link_definition = ?ld,
-                "Failed to initialize link during provider startup",
+                error = %e,
+                "failed to initialize link during provider startup",
             );
-        } else {
-            connection.put_link(ld).await;
         }
     }
+
     Ok((
         wrpc,
         handle_provider_commands(provider, connection, quit_rx, quit_tx, commands),
@@ -649,6 +705,7 @@ pub async fn run_provider(
         provider_key,
         link_definitions,
         commands,
+        config,
     } = init_provider(friendly_name).await?;
 
     let invocation_map = provider
@@ -667,22 +724,21 @@ pub async fn run_provider(
         host_id,
         link_name,
         invocation_map,
+        config,
     )?;
     CONNECTION.set(connection).map_err(|_| {
         ProviderInitError::Initialization("Provider connection was already initialized".to_string())
     })?;
     let connection = get_connection();
 
-    // pre-populate provider and bridge with initial set of link definitions
-    // initialization of any link is fatal for provider startup
+    // Pre-populate provider and bridge with initial set of link definitions
+    // Initialization of any link is fatal for provider startup
     for ld in link_definitions {
-        if !provider.put_link(&ld).await {
+        if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
             error!(
-                link_definition = ?ld,
-                "Failed to initialize link during provider startup",
+                error = ?e,
+                "failed to initialize link during provider startup",
             );
-        } else {
-            connection.put_link(ld).await;
         }
     }
     connection
@@ -714,6 +770,8 @@ pub struct ProviderConnection {
     host_id: String,
     link_name: String,
     provider_key: String,
+
+    config: HashMap<String, String>,
 
     /// Mapping of NATS subjects to dynamic function information for incoming invocations
     #[allow(unused)]
@@ -752,6 +810,7 @@ impl ProviderConnection {
         host_id: String,
         link_name: String,
         incoming_invocation_fn_map: WrpcInvocationLookup,
+        config: HashMap<String, String>,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
             links: Arc::default(),
@@ -761,6 +820,7 @@ impl ProviderConnection {
             link_name,
             provider_key,
             incoming_invocation_fn_map: Arc::new(incoming_invocation_fn_map),
+            config,
         })
     }
 
@@ -905,7 +965,7 @@ impl ProviderConnection {
                             current.record("invocation_id", &tracing::field::display(&invocation_id));
                             current.record("source_id", &tracing::field::display(&source_id));
                             current.record(
-                                "host_id", 
+                                "host_id",
                                 &tracing::field::display(&context.get(WRPC_HEADER_NAME_HOST_ID).map(ToString::to_string).unwrap_or("<unknown>".to_string()))
                             );
                             current.record("provider_id", provider_id.clone());
