@@ -86,7 +86,7 @@ async fn kv_vault_suite() -> Result<()> {
         provider_key: &messaging_nats_provider_key,
         provider_id: &messaging_nats_provider_key.public_key(),
         url: &messaging_nats_provider_url,
-        configuration: None,
+        config: vec![],
     })
     .await?;
 
@@ -98,7 +98,7 @@ async fn kv_vault_suite() -> Result<()> {
         provider_key: &kv_vault_provider_key,
         provider_id: &kv_vault_provider_key.public_key(),
         url: &kv_vault_provider_url,
-        configuration: None,
+        config: vec![],
     })
     .await?;
 
@@ -114,13 +114,10 @@ async fn kv_vault_suite() -> Result<()> {
         vec![],
         // NOTE: this should be temporary, rather than using a named config,
         // we are stuffing credentials into the target_config
-        vec![format!(
-            "config_json={}",
-            serde_json::to_string(&json!({
-                "subscriptions": [ test_subject ],
-                "cluster_uris": [ nats_url ],
-            }))?
-        )],
+        vec![
+            format!("subscriptions={test_subject}"),
+            format!("cluster_uris={nats_url}"),
+        ],
     )
     .await
     .context("should advertise link")?;
