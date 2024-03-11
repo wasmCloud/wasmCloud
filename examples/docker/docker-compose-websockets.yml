@@ -56,7 +56,7 @@ services:
       WASMCLOUD_CTL_HOST: nats
       WASMCLOUD_ALLOW_FILE_LOAD: "true"
       WASMCLOUD_OCI_ALLOWED_INSECURE: registry:5000
-      OTEL_TRACES_EXPORTER: otlp
+      WASMCLOUD_OBSERVABILITY_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     ports:
       - "8000-8010:8000-8010" # Expose ports 8000-8010 for examples that use an HTTP server

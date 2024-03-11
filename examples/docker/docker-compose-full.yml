@@ -80,7 +80,7 @@ services:
       WASMCLOUD_CTL_HOST: nats
       WASMCLOUD_ALLOW_FILE_LOAD: "true"
       WASMCLOUD_OCI_ALLOWED_INSECURE: registry:5000
-      OTEL_TRACES_EXPORTER: otlp
+      WASMCLOUD_OBSERVABILITY_ENABLED: "true"
     ports:
       - "8000-8100:8000-8100" # Expose ports 8000-8100 for examples that use an HTTP server
 
