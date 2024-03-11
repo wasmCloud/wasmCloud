@@ -1,24 +1,13 @@
-use anyhow::Result;
 use clap::Subcommand;
 
 pub use output::*;
 use wash_lib::cli::{
-    get::{GetClaimsCommand, GetCommand, GetHostInventoriesCommand, GetHostsCommand},
+    get::{GetClaimsCommand, GetHostInventoriesCommand, GetHostsCommand},
     link::LinkCommand,
-    scale::{handle_scale_actor, ScaleCommand},
+    scale::ScaleCommand,
     start::StartCommand,
-    stop::{handle_stop_actor, stop_host, stop_provider, StopCommand},
-    update::{handle_update_actor, UpdateCommand},
-    CommandOutput, OutputKind,
-};
-
-use crate::{
-    appearance::spinner::Spinner,
-    common::link_cmd::handle_command as handle_link_command,
-    common::{
-        get_cmd::handle_command as handle_get_command,
-        start_cmd::handle_command as handle_start_command,
-    },
+    stop::StopCommand,
+    update::UpdateCommand,
 };
 
 mod output;
@@ -64,74 +53,6 @@ pub enum CtlGetCommand {
     Claims(GetClaimsCommand),
 }
 
-pub async fn handle_command(
-    command: CtlCliCommand,
-    output_kind: OutputKind,
-) -> Result<CommandOutput> {
-    use CtlCliCommand::*;
-    let sp: Spinner = Spinner::new(&output_kind)?;
-    let out: CommandOutput = match command {
-        Get(CtlGetCommand::Hosts(cmd)) => {
-            eprintln!("[warn] `wash ctl get hosts` has been deprecated in favor of `wash get hosts` and will be removed in a future version.");
-            handle_get_command(GetCommand::Hosts(cmd), output_kind).await?
-        }
-        Get(CtlGetCommand::HostInventories(cmd)) => {
-            eprintln!("[warn] `wash ctl get inventory` has been deprecated in favor of `wash get inventory` and will be removed in a future version.");
-            handle_get_command(GetCommand::HostInventories(cmd), output_kind).await?
-        }
-        Get(CtlGetCommand::Claims(cmd)) => {
-            eprintln!("[warn] `wash ctl get claims` has been deprecated in favor of `wash get claims` and will be removed in a future version.");
-            handle_get_command(GetCommand::Claims(cmd), output_kind).await?
-        }
-        Link(cmd) => {
-            eprintln!("[warn] `wash ctl link` has been deprecated in favor of `wash link` and will be removed in a future version.");
-            handle_link_command(cmd, output_kind).await?
-        }
-        Start(cmd) => {
-            eprintln!("[warn] `wash ctl start` has been deprecated in favor of `wash start` and will be removed in a future version.");
-            handle_start_command(cmd, output_kind).await?
-        }
-        Stop(StopCommand::Actor(cmd)) => {
-            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
-            sp.update_spinner_message(format!(" Stopping actor {} ... ", cmd.actor_id));
-            handle_stop_actor(cmd.clone()).await?
-        }
-        Stop(StopCommand::Provider(cmd)) => {
-            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
-            sp.update_spinner_message(format!(" Stopping provider {} ... ", cmd.provider_id));
-
-            stop_provider(cmd.clone()).await?
-        }
-        Stop(StopCommand::Host(cmd)) => {
-            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
-            sp.update_spinner_message(format!(" Stopping host {} ... ", cmd.host_id));
-
-            stop_host(cmd.clone()).await?
-        }
-        Update(UpdateCommand::Actor(cmd)) => {
-            eprintln!("[warn] `wash ctl update actor` has been deprecated in favor of `wash update actor` and will be removed in a future version.");
-            sp.update_spinner_message(format!(
-                " Updating Actor {} to {} ... ",
-                cmd.actor_id, cmd.new_actor_ref
-            ));
-
-            handle_update_actor(cmd.clone()).await?
-        }
-        Scale(ScaleCommand::Actor(cmd)) => {
-            eprintln!("[warn] `wash ctl scale actor` has been deprecated in favor of `wash scale actor` and will be removed in a future version.");
-            sp.update_spinner_message(format!(
-                " Scaling Actor {} to {} max concurrent instances ... ",
-                cmd.actor_ref, cmd.max_instances
-            ));
-            handle_scale_actor(cmd.clone()).await?
-        }
-    };
-
-    sp.finish_and_clear();
-
-    Ok(out)
-}
-
 #[cfg(test)]
 mod test {
     use clap::Parser;
@@ -164,7 +85,7 @@ mod test {
     /// Enumerates multiple options of the `ctl` command to ensure API doesn't
     /// change between versions. This test will fail if any subcommand of `wash ctl`
     /// changes syntax, ordering of required elements, or flags.
-    fn test_ctl_comprehensive() -> Result<()> {
+    fn test_ctl_comprehensive() -> anyhow::Result<()> {
         let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",

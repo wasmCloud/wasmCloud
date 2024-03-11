@@ -9,7 +9,6 @@ use wash_cli::build::{self, BuildCommand};
 use wash_cli::call::{self, CallCli};
 use wash_cli::common;
 use wash_cli::completions::{self, CompletionOpts};
-use wash_cli::ctl::{self, CtlCliCommand};
 use wash_cli::ctx::{self, CtxCommand};
 use wash_cli::dev::{self, DevCommand};
 use wash_cli::down::{self, DownCommand};
@@ -17,7 +16,6 @@ use wash_cli::drain;
 use wash_cli::generate::{self, NewCliCommand};
 use wash_cli::keys::{self, KeysCliCommand};
 use wash_cli::par::{self, ParCliCommand};
-use wash_cli::smithy::{self, GenerateCli, LintCli, ValidateCli};
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::up::{self, UpCommand};
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
@@ -26,7 +24,7 @@ use wash_lib::cli::get::GetCommand;
 use wash_lib::cli::inspect::InspectCliCommand;
 use wash_lib::cli::label::LabelHostCommand;
 use wash_lib::cli::link::LinkCommand;
-use wash_lib::cli::registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand};
+use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
 use wash_lib::cli::scale::ScaleCommand;
 use wash_lib::cli::spy::SpyCommand;
 use wash_lib::cli::start::StartCommand;
@@ -50,29 +48,29 @@ Interact and manage wasmCloud applications, projects, and runtime environments
 Usage: wash [OPTIONS] <COMMAND>
 
 Build:
-  new          Create a new project from template
-  build        Build (and sign) a wasmCloud actor, capability provider, or interface
-  dev          Run a actor development loop (experimental)
-  inspect      Inspect capability provider or actor module
+  new          Create a new project from a template
+  build        Build (and sign) a wasmCloud component or capability provider
+  dev          Start a developer loop to hot-reload a local wasmCloud component
+  inspect      Inspect a capability provider or Wasm component for signing information and interfaces
   par          Create, inspect, and modify capability provider archive files
 
 Run:
   up           Bootstrap a local wasmCloud environment
   down         Tear down a local wasmCloud environment (launched with wash up)
   app          Manage declarative applications and deployments (wadm)
-  spy          Spy on all invocations between an actor and its linked providers
+  spy          Spy on all invocations a component sends and receives
   ui           Serve a web UI for wasmCloud
 
 Iterate:
-  get          Get information about different resources
-  start        Start an actor or provider
-  scale        Scale an actor running in a host to a certain level of concurrency
-  stop         Stop an actor or provider, or host
-  update       Update an actor running in a host to a newer version
-  link         Link an actor and a provider
+  get          Get information about different running wasmCloud resources
+  start        Start a component or capability provider
+  scale        Scale a component running in a host to a certain level of concurrency
+  stop         Stop a component, capability provider, or host
+  update       Update a component running in a host to newer image reference
+  link         Link one component to another on a set of interfaces
   call         Invoke a simple function on a component running in a wasmCloud host
-  ctl          Interact with a wasmCloud control interface (deprecated, use above commands)
   label        Label (or un-label) a host with a key=value label pair
+  config       Create configuration for components, capability providers and links
 
 Publish:
   pull         Pull an artifact from an OCI compliant registry
@@ -83,13 +81,8 @@ Configure:
   completions  Generate shell completions for wash
   ctx          Manage wasmCloud host configuration contexts
   drain        Manage contents of local wasmCloud caches
-  keys         Utilities for generating and managing keys
-  claims       Generate and manage JWTs for wasmCloud actors
-
-Optimize:
-  gen          Generate code from smithy IDL files
-  lint         Perform lint checks on smithy models
-  validate     Perform validation checks on smithy models
+  keys         Utilities for generating and managing signing keys
+  claims       Generate and manage JWTs for wasmCloud components and capability providers
 
 Options:
   -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
@@ -131,7 +124,7 @@ enum CliCommand {
     /// Manage declarative applications and deployments (wadm)
     #[clap(name = "app", subcommand)]
     App(AppCliCommand),
-    /// Build (and sign) a wasmCloud actor, provider, or interface
+    /// Build (and sign) a wasmCloud component or capability provider
     #[clap(name = "build")]
     Build(BuildCommand),
     /// Invoke a simple function on a component running in a wasmCloud host
@@ -143,16 +136,14 @@ enum CliCommand {
     /// Generate shell completions
     #[clap(name = "completions")]
     Completions(CompletionOpts),
-    /// Generate and manage JWTs for wasmCloud actors
+    /// Generate and manage JWTs for wasmCloud components and capability providers
     #[clap(name = "claims", subcommand)]
     Claims(ClaimsCliCommand),
-    /// Interact with a wasmCloud control interface
-    #[clap(name = "ctl", subcommand)]
-    Ctl(CtlCliCommand),
+    // TODO: Config(ConfigCliCommand),
     /// Manage wasmCloud host configuration contexts
     #[clap(name = "ctx", alias = "context", alias = "contexts", subcommand)]
     Ctx(CtxCommand),
-    /// Run a local development loop for an actor
+    /// Start a developer loop to hot-reload a local wasmCloud component
     #[clap(name = "dev")]
     Dev(DevCommand),
     /// Tear down a wasmCloud environment launched with wash up
@@ -161,55 +152,46 @@ enum CliCommand {
     /// Manage contents of local wasmCloud caches
     #[clap(name = "drain", subcommand)]
     Drain(DrainSelection),
-    /// Generate code from smithy IDL files
-    #[clap(name = "gen")]
-    Gen(GenerateCli),
-    /// Get information about different resources
+    /// Get information about different running wasmCloud resources
     #[clap(name = "get", subcommand)]
     Get(GetCommand),
-    /// Inspect capability provider or actor module
+    /// Inspect a capability provider or Wasm component for signing information and interfaces
     #[clap(name = "inspect")]
     Inspect(InspectCliCommand),
-    /// Utilities for generating and managing keys
+    /// Utilities for generating and managing signing keys
     #[clap(name = "keys", alias = "key", subcommand)]
     Keys(KeysCliCommand),
-    /// Perform lint checks on smithy models
-    #[clap(name = "lint")]
-    Lint(LintCli),
-    /// Link an actor and a provider
+    /// Link one component to another on a set of interfaces
     #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
-    /// Create a new project from template
+    /// Create a new project from a template
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
     /// Create, inspect, and modify capability provider archive files
     #[clap(name = "par", subcommand)]
     Par(ParCliCommand),
-    /// Interact with OCI compliant registries
-    #[clap(name = "reg", subcommand)]
-    Reg(RegistryCommand),
     /// Push an artifact to an OCI compliant registry
     #[clap(name = "push")]
     RegPush(RegistryPushCommand),
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
-    /// (experimental) Spy on all invocations between an actor and its linked providers
+    /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]
     Spy(SpyCommand),
     /// Scale an actor running in a host to a certain level of concurrency
     #[clap(name = "scale", subcommand)]
     Scale(ScaleCommand),
-    /// Start an actor or a provider
+    /// Start a component or capability provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
-    /// Stop an actor, provider, or host
+    /// Stop a component, capability provider, or host
     #[clap(name = "stop", subcommand)]
     Stop(StopCommand),
-    /// Label (or un-label) a host
+    /// Label (or un-label) a host with a key=value label pair
     #[clap(name = "label", alias = "tag")]
     Label(LabelHostCommand),
-    /// Update an actor running in a host to a newer version
+    /// Update a component running in a host to newer image reference
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
     /// Bootstrap a wasmCloud environment
@@ -218,9 +200,6 @@ enum CliCommand {
     /// Serve a web UI for wasmCloud
     #[clap(name = "ui")]
     Ui(UiCommand),
-    /// Perform validation checks on smithy models
-    #[clap(name = "validate")]
-    Validate(ValidateCli),
 }
 
 #[tokio::main]
@@ -230,14 +209,6 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
-
-    // TODO(pre-1.0): remove me
-    if let Ok(lattice) = std::env::var("WASMCLOUD_LATTICE_PREFIX") {
-        eprintln!(
-            "The `WASMCLOUD_LATTICE_PREFIX` environment variable is deprecated and will be removed. Please use `WASMCLOUD_LATTICE` instead."
-        );
-        std::env::set_var("WASMCLOUD_LATTICE", lattice);
-    }
 
     let cli: Cli = Parser::parse();
 
@@ -262,24 +233,18 @@ async fn main() {
         CliCommand::Completions(completions_cli) => {
             completions::handle_command(completions_cli, Cli::command())
         }
-        CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
         CliCommand::Dev(dev_cli) => dev::handle_command(dev_cli, output_kind).await,
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Get(get_cli) => common::get_cmd::handle_command(get_cli, output_kind).await,
-        CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Inspect(inspect_cli) => {
             wash_lib::cli::inspect::handle_command(inspect_cli, output_kind).await
         }
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
-        CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
-        CliCommand::Reg(reg_cli) => {
-            common::registry_cmd::handle_command(reg_cli, output_kind).await
-        }
         CliCommand::RegPush(reg_push_cli) => {
             common::registry_cmd::registry_push(reg_push_cli, output_kind).await
         }
@@ -308,7 +273,6 @@ async fn main() {
         }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Ui(ui_cli) => ui::handle_command(ui_cli, output_kind).await,
-        CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 
     std::process::exit(match res {
