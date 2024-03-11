@@ -13,7 +13,6 @@ use wascap::prelude::KeyPair;
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    serde_json,
     wasmcloud_provider_sdk::core::HostData,
     wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
 };
@@ -57,23 +56,20 @@ pub struct NatsMessagingProvider {
 impl NatsMessagingProvider {
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> NatsMessagingProvider {
-        host_data
-            .config_json
-            .as_ref()
-            .map(|c| {
-                // empty string becomes the default configuration
-                if c.trim().is_empty() {
-                    NatsMessagingProvider::default()
-                } else {
-                    let config: ConnectionConfig = serde_json::from_str(c)
-                        .expect("JSON deserialization from connection config should have worked");
-                    NatsMessagingProvider {
-                        default_config: config,
-                        ..Default::default()
-                    }
+        if host_data.config.is_empty() {
+            NatsMessagingProvider::default()
+        } else {
+            let config = ConnectionConfig::from_map(&host_data.config);
+            if let Ok(config) = config {
+                NatsMessagingProvider {
+                    default_config: config,
+                    ..Default::default()
                 }
-            })
-            .unwrap_or_default()
+            } else {
+                warn!("Failed to build connection configuration, falling back to default");
+                NatsMessagingProvider::default()
+            }
+        }
     }
 
     /// Attempt to connect to nats url (with jwt credentials, if provided)
@@ -413,7 +409,8 @@ fn should_strip_headers(topic: &str) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::{serde_json, ConnectionConfig, NatsMessagingProvider};
+    use crate::{ConnectionConfig, NatsMessagingProvider};
+    use wasmcloud_provider_wit_bindgen::deps::serde_json;
     use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::{
         InterfaceLinkDefinition, ProviderHandler,
     };
