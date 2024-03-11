@@ -12,8 +12,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, wasmcloud_provider_sdk::core::InterfaceLinkDefinition,
-    wasmcloud_provider_sdk::Context,
+    async_trait::async_trait,
+    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
 };
 
 wasmcloud_provider_wit_bindgen::generate!({
@@ -46,10 +46,14 @@ pub struct KafkaMessagingProvider {
 
 #[async_trait]
 impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
-    #[instrument(level = "info", skip(self))]
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        debug!("putting link for actor {ld:?}");
-        let config_values = ld.extract_provider_config_values();
+    #[instrument(level = "info", skip_all, fields(source_id = %link_config.get_source_id()))]
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let source_id = link_config.get_source_id();
+        debug!("putting link for actor [{source_id}]");
+        let config_values = link_config.get_config();
 
         // Collect comma separated hosts into a Vec<String>
         let hosts = config_values
@@ -84,10 +88,10 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
         // Do some basic validation before spawning off in a thread
         let Ok(client) = ClientBuilder::new(hosts.clone()).build().await else {
             warn!(
-                "Could not create Kafka client for actor {}, messages won't be received",
-                ld.source_id
+                source_id,
+                "failed to create Kafka client for actor, messages won't be received",
             );
-            return true;
+            return Ok(());
         };
 
         // Create a partition client
@@ -96,16 +100,17 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
             .await
         else {
             warn!(
-                "Could not create partition client for actor {}, messages won't be received",
-                ld.source_id
+                source_id,
+                "failed to create partition client for actor, messages won't be received",
             );
-            return true;
+            return Ok(());
         };
 
         // Clone for moving into thread
-        let ld = ld.clone();
-        let source_id = ld.source_id.clone();
+        let component_id = source_id.clone();
         let join = tokio::task::spawn(async move {
+            let component_id = component_id.clone();
+
             // construct stream consumer
             let mut stream =
             // StartOffset::Latest only processes new messages, but Earliest will send every message.
@@ -127,7 +132,8 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
                 _water_mark,
             ))) = stream.next().await
             {
-                if let Err(e) = InvocationHandler::new(&ld)
+                let component_id = component_id.clone();
+                if let Err(e) = InvocationHandler::new(component_id)
                     .handle_message(Message {
                         body: message,
                         reply_to: None,
@@ -142,19 +148,19 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
 
         let mut connections = self.connections.write().unwrap();
         connections.insert(
-            source_id,
+            source_id.into(),
             KafkaConnection {
                 consumer_handle: Arc::new(join),
                 connection_hosts: hosts,
             },
         );
 
-        true
+        Ok(())
     }
 
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) {
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         debug!("deleting link for actor {}", source_id);
 
         let mut connections = self.connections.write().unwrap();
@@ -167,10 +173,11 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
         } else {
             debug!("Linkdef deleted for non-existent consumer, ignoring")
         }
+        Ok(())
     }
 
     /// Handle shutdown request with any cleanup necessary
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         self.connections
             .write()
             .expect("failed to write connections")
@@ -178,6 +185,7 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
             .for_each(|(_source_id, connection)| {
                 connection.consumer_handle.abort();
             });
+        Ok(())
     }
 }
 

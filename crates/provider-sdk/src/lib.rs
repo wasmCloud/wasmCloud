@@ -4,9 +4,8 @@ use std::time::Duration;
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
 use async_trait::async_trait;
+use core::{ComponentId, LatticeTarget, LinkName};
 use tracing::{error, info, warn};
-
-use crate::error::InvocationResult;
 
 pub mod error;
 pub mod provider;
@@ -22,6 +21,9 @@ pub use provider::{
 };
 pub use wasmcloud_core as core;
 pub use wasmcloud_tracing;
+
+use crate::error::InvocationResult;
+pub use crate::error::ProviderOperationResult;
 
 /// Parse an sufficiently specified WIT operation/method into constituent parts.
 ///
@@ -134,31 +136,125 @@ pub struct Context {
 /// The super trait containing all necessary traits for a provider
 pub trait Provider: ProviderHandler + WrpcNats + WrpcDispatch + Send + Sync + 'static {}
 
+/// Configuration of a link that is passed to a provider
+pub trait LinkConfig: Send + Sync {
+    /// Given that the link was established with the source as this provider,
+    /// get the target ID which should be a component
+    fn get_target_id(&self) -> &LatticeTarget;
+
+    /// Given that the link was established with the target as this provider,
+    /// get the source ID which should be a component
+    fn get_source_id(&self) -> &ComponentId;
+
+    /// Get the name of the link that was provided
+    fn get_link_name(&self) -> &LinkName;
+
+    /// Get the configuration provided to the provider (either as the target or the source)
+    fn get_config(&self) -> &HashMap<String, String>;
+}
+
+impl LinkConfig
+    for (
+        ComponentId,
+        LatticeTarget,
+        LinkName,
+        HashMap<String, String>,
+    )
+{
+    fn get_source_id(&self) -> &ComponentId {
+        &self.0
+    }
+
+    fn get_target_id(&self) -> &LatticeTarget {
+        &self.1
+    }
+
+    fn get_link_name(&self) -> &LinkName {
+        &self.2
+    }
+
+    fn get_config(&self) -> &HashMap<String, String> {
+        &self.3
+    }
+}
+
+impl LinkConfig
+    for (
+        &ComponentId,
+        &LatticeTarget,
+        &LinkName,
+        &HashMap<String, String>,
+    )
+{
+    fn get_source_id(&self) -> &ComponentId {
+        self.0
+    }
+
+    fn get_target_id(&self) -> &LatticeTarget {
+        self.1
+    }
+
+    fn get_link_name(&self) -> &LinkName {
+        self.2
+    }
+
+    fn get_config(&self) -> &HashMap<String, String> {
+        self.3
+    }
+}
+
 /// CapabilityProvider handling of messages from host
 #[async_trait]
 pub trait ProviderHandler: Sync {
-    /// Provider should perform any operations needed for a new link, including setting up per-actor
-    /// resources, and checking authorization. If the link is allowed, return true, otherwise return
-    /// false to deny the link or if there are errors. This message is idempotent - provider must be able to handle
-    /// duplicates
-    async fn put_link(&self, _ld: &InterfaceLinkDefinition) -> bool {
-        true
+    /// Receive and handle a link that has been established on the lattice where this provider is the source.
+    ///
+    /// Implement this when your provider needs to call other components.
+    ///
+    /// [Links](https://wasmcloud.com/docs/concepts/runtime-linking) are uni-directional -- a "source"
+    /// operates as one end of the link, linking to a "target". When a link is created on the lattice, and
+    /// this provider is the source, this method is called.
+    async fn receive_link_config_as_source(
+        &self,
+        _config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        Ok(())
+    }
+
+    /// Receive and handle a link that has been established on the lattice where this provider is the target.
+    ///
+    /// Implement this when your provider is called by other components.
+    ///
+    /// [Links](https://wasmcloud.com/docs/concepts/runtime-linking) are uni-directional -- a "source"
+    /// operates as one end of the link, linking to a "target". When a link is created on the lattice, and
+    /// this provider is the target, this method is called.
+    async fn receive_link_config_as_target(
+        &self,
+        _config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        Ok(())
     }
 
     /// Notify the provider that the link is dropped
-    async fn delete_link(&self, _actor_id: &str) {}
+    async fn delete_link(&self, _actor_id: &str) -> ProviderOperationResult<()> {
+        Ok(())
+    }
 
     /// Perform health check. Called at regular intervals by host
     /// Default implementation always returns healthy
-    async fn health_request(&self, _arg: &HealthCheckRequest) -> HealthCheckResponse {
-        HealthCheckResponse {
+    async fn health_request(
+        &self,
+        _arg: &HealthCheckRequest,
+    ) -> ProviderOperationResult<HealthCheckResponse> {
+        Ok(HealthCheckResponse {
             healthy: true,
             message: None,
-        }
+        })
     }
 
     /// Handle system shutdown message
-    async fn shutdown(&self) {}
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
+        Ok(())
+    }
 }
 
 /// Human readable name of a [`wit_parser::WorldKey`] which includes interface ID if necessary

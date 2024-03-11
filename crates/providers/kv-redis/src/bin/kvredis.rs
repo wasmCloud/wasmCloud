@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use redis::aio::ConnectionManager;
 use redis::FromRedisValue;
 use tokio::sync::RwLock;
@@ -23,7 +24,9 @@ use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    wasmcloud_provider_sdk::{load_host_data, start_provider, Context, InterfaceLinkDefinition},
+    wasmcloud_provider_sdk::{
+        load_host_data, start_provider, Context, LinkConfig, ProviderOperationResult,
+    },
 };
 
 wasmcloud_provider_wit_bindgen::generate!({
@@ -40,7 +43,6 @@ const CONFIG_REDIS_URL_KEY: &str = "URL";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hd = load_host_data()?;
-
     let default_connect_url = retrieve_default_url(&hd.config);
 
     start_provider(
@@ -71,67 +73,71 @@ impl KvRedisProvider {
 }
 
 /// Handle provider control commands
-/// put_link (new actor link command), del_link (remove link command), and shutdown
 #[async_trait]
 impl WasmcloudCapabilityProvider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let config = ld.extract_provider_config_values();
-        let redis_url = config
+    #[instrument(level = "debug", skip(self, link_config), fields(source_id = %link_config.get_source_id()))]
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let source_id = link_config.get_source_id();
+        let redis_url = link_config
+            .get_config()
             .get(CONFIG_REDIS_URL_KEY)
-            .map(|v| String::from(*v))
-            .unwrap_or_else(|| self.default_connect_url.clone());
+            .unwrap_or(&self.default_connect_url);
 
         match redis::Client::open(redis_url.clone()) {
             Ok(client) => match client.get_tokio_connection_manager().await {
                 Ok(conn_manager) => {
                     info!(redis_url, "established link");
                     let mut update_map = self.actors.write().await;
-                    update_map.insert(ld.source_id.to_string(), RwLock::new(conn_manager));
+                    update_map.insert(source_id.to_string(), RwLock::new(conn_manager));
                 }
                 Err(err) => {
                     warn!(
                         redis_url,
                         ?err,
                     "Could not create Redis connection manager for source [{}], keyvalue operations will fail",
-                    ld.source_id
+                    source_id
                 );
-                    return false;
+                    return Err(anyhow!("failed to create redis connection manager").into());
                 }
             },
             Err(err) => {
                 warn!(
                     ?err,
                     "Could not create Redis client for source [{}], keyvalue operations will fail",
-                    ld.source_id
+                    source_id
                 );
-                return false;
+                return Err(anyhow!("failed to create redis client").into());
             }
         }
 
-        true
+        Ok(())
     }
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) {
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         if let Some(conn) = aw.remove(source_id) {
             info!("redis closing connection for actor {}", source_id);
             drop(conn)
         }
+        Ok(())
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         for (_, conn) in aw.drain() {
             drop(conn)
         }
+        Ok(())
     }
 }
 

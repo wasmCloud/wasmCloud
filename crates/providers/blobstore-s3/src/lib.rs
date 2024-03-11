@@ -8,15 +8,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context as _;
-use anyhow::Result;
+use anyhow::{anyhow, Context as _, Result};
 use aws_sdk_s3::primitives::ByteStream;
 use tokio::sync::RwLock;
 use tracing::error;
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
+    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
 };
 
 mod config;
@@ -64,43 +63,48 @@ impl WasmcloudCapabilityProvider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let config_values = HashMap::from_iter(
-            ld.extract_provider_config_values()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string())),
-        );
-        let config = match StorageConfig::from_values(&config_values) {
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let source_id = link_config.get_source_id();
+        let config_values = link_config.get_config();
+
+        // Build storage config
+        let config = match StorageConfig::from_values(config_values) {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, source_id = %ld.source_id, "failed to read storage config");
-                return false;
+                error!(error = %e, %source_id, "failed to build storage config");
+                return Err(anyhow!(e).context("failed to build source config").into());
             }
         };
-        let link = StorageClient::new(config, ld.to_owned()).await;
+
+        let link = StorageClient::new(config, config_values, source_id.into()).await;
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(ld.source_id.to_string(), link);
+        update_map.insert(source_id.to_string(), link);
 
-        true
+        Ok(())
     }
 
     /// Handle notification that a link is dropped: close the connection
-    async fn delete_link(&self, source_id: &str) {
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         if let Some(link) = aw.remove(source_id) {
             let _ = link.close().await;
         }
+        Ok(())
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         for (_, link) in aw.drain() {
             // close and drop each connection
             let _ = link.close().await;
         }
+        Ok(())
     }
 }
 
