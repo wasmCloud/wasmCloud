@@ -2853,11 +2853,11 @@ impl Host {
             );
             let otel_config = OtelConfig {
                 enable_observability: self.host_config.otel_config.enable_observability,
-                enable_tracing: self.host_config.otel_config.enable_tracing,
+                enable_traces: self.host_config.otel_config.enable_traces,
                 enable_metrics: self.host_config.otel_config.enable_metrics,
                 enable_logs: self.host_config.otel_config.enable_logs,
                 observability_endpoint: self.host_config.otel_config.observability_endpoint.clone(),
-                tracing_endpoint: self.host_config.otel_config.tracing_endpoint.clone(),
+                traces_endpoint: self.host_config.otel_config.traces_endpoint.clone(),
                 metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
             };
