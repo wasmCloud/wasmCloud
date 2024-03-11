@@ -2778,7 +2778,7 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_start_provider_task(
         &self,
-        configuration: Option<String>,
+        config: ConfigBundle,
         provider_id: &str,
         provider_ref: &str,
         annotations: HashMap<String, String>,
@@ -2865,9 +2865,10 @@ impl Host {
                 env_values: vec![],
                 instance_id: Uuid::new_v4().to_string(),
                 provider_key: provider_id.to_string(),
-                // TODO(#1548): Providers should receive [wasmcloud_control_interface::InterfaceLinkDefinition]s
+                // TODO(#1548): Providers should not receive [wasmcloud_control_interface::InterfaceLinkDefinition]s
+                // they should receive a list of named configurations to use
                 link_definitions: vec![],
-                config_json: configuration,
+                config: config.get_config().await.clone(),
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
@@ -2962,7 +2963,7 @@ impl Host {
                                 health_topic.clone(),
                                 request,
                                 ).await {
-                                    match (rmp_serde::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
+                                    match (serde_json::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
                                         (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
                                             trace!(provider_id=health_provider_id, "provider health check succeeded");
                                             previous_healthy = true;
@@ -3061,7 +3062,7 @@ impl Host {
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
         let StartProviderCommand {
-            configuration,
+            config,
             provider_id,
             provider_ref,
             annotations,
@@ -3077,11 +3078,18 @@ impl Host {
 
         info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
 
+        let config = self
+            .config_generator
+            .generate(config)
+            .await
+            .context("Unable to fetch requested config")?;
+        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
+
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
                 .handle_start_provider_task(
-                    configuration,
+                    config,
                     &provider_id,
                     &provider_ref,
                     annotations.unwrap_or_default(),
