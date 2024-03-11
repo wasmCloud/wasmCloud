@@ -501,6 +501,8 @@ impl Client {
     /// OCI registry, indicating either a validation failure or success. If a client needs
     /// deterministic guarantees that the provider has completed its startup process, such a client
     /// needs to monitor the control event stream for the appropriate event.
+    ///
+    /// The `provider_configuration` parameter is a list of named configs to use for this provider. It is not required to specify a config.
     #[instrument(level = "debug", skip_all)]
     pub async fn start_provider(
         &self,
@@ -508,7 +510,7 @@ impl Client {
         provider_ref: &str,
         provider_id: &str,
         annotations: Option<HashMap<String, String>>,
-        provider_configuration: Option<String>,
+        provider_configuration: Vec<String>,
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
@@ -519,7 +521,7 @@ impl Client {
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
             provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
             annotations,
-            configuration: provider_configuration,
+            config: provider_configuration,
         })?;
 
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -825,7 +827,7 @@ mod tests {
         let (provider_ref, provider_id) = (&auction_ack.provider_ref, &auction_ack.provider_id);
         // Provider Start
         let start_response = client
-            .start_provider(&host.id, provider_ref, provider_id, None, None)
+            .start_provider(&host.id, provider_ref, provider_id, None, vec![])
             .await
             .expect("should be able to start provider");
         assert!(start_response.success);
