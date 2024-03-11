@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Context as _, Result};
-use base64::Engine;
+use anyhow::{bail, Result};
 
 use wasmcloud_provider_wit_bindgen::deps::serde::{Deserialize, Serialize};
-use wasmcloud_provider_wit_bindgen::deps::serde_json;
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 
@@ -79,17 +77,9 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
+    /// Construct configuration Struct from the passed hostdata config
     pub fn from_map(values: &HashMap<String, String>) -> Result<ConnectionConfig> {
-        let mut config = if let Some(config_b64) = values.get("config_b64") {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(config_b64.as_bytes())
-                .context("invalid base64 encoding")?;
-            serde_json::from_slice::<ConnectionConfig>(&bytes).context("corrupt config_b64")?
-        } else if let Some(config) = values.get("config_json") {
-            serde_json::from_str::<ConnectionConfig>(config).context("corrupt config_json")?
-        } else {
-            ConnectionConfig::default()
-        };
+        let mut config = ConnectionConfig::default();
 
         if let Some(sub) = values.get(ENV_NATS_SUBSCRIPTION) {
             config
@@ -108,9 +98,7 @@ impl ConnectionConfig {
         if config.auth_jwt.is_some() && config.auth_seed.is_none() {
             bail!("if you specify jwt, you must also specify a seed");
         }
-        if config.cluster_uris.is_empty() {
-            config.cluster_uris.push(DEFAULT_NATS_URI.to_string());
-        }
+
         Ok(config)
     }
 }
