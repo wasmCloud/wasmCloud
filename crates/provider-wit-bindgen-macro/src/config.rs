@@ -2,9 +2,7 @@ use proc_macro2::Span;
 use syn::{braced, parse::Parse, punctuated::Punctuated, Ident, LitStr, Token};
 
 use crate::vendor::wasmtime_component_macro::bindgen::Config as WitBindgenConfig;
-use crate::wit::{
-    WitFnList, WitFunctionLatticeTranslationStrategy, WitNamespaceName, WitPackageName,
-};
+use crate::wit::{WitFnList, WitNamespaceName, WitPackageName};
 use crate::{ImplStructName, LatticeExposedInterface, WasmcloudContract};
 
 /// Inputs to the wit_bindgen_wasmcloud::provider::binary::generate! macro
@@ -37,12 +35,6 @@ pub(crate) struct ProviderBindgenConfig {
     /// file tree (and related WIT) that wit-bindgen would attempt to read
     pub(crate) wit_bindgen_cfg: Option<WitBindgenConfig>,
 
-    /// Translation strategy for functions on imported interfaces when generating lattice data structures and code
-    pub(crate) import_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
-
-    /// Translation strategy for functions on exported interfaces when generating lattice data structures and code
-    pub(crate) export_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
-
     /// Whether to replace WIT-ified maps (`list<tuple<T, T>>`) with a Map type (`std::collections::HashMap`)
     pub(crate) replace_witified_maps: bool,
 }
@@ -70,12 +62,6 @@ impl Parse for ProviderBindgenConfig {
         let mut wit_ns: Option<WitNamespaceName> = None;
         let mut wit_pkg: Option<WitPackageName> = None;
         let mut wit_bindgen_cfg: Option<WitBindgenConfig> = None;
-        let mut import_fn_lattice_translation_strategy: Option<
-            WitFunctionLatticeTranslationStrategy,
-        > = None;
-        let mut export_fn_lattice_translation_strategy: Option<
-            WitFunctionLatticeTranslationStrategy,
-        > = None;
         let mut exposed_interface_allow_list: Option<WitFnList> = None;
         let mut exposed_interface_deny_list: Option<WitFnList> = None;
         let mut replace_witified_maps: bool = false;
@@ -101,12 +87,6 @@ impl Parse for ProviderBindgenConfig {
                 ProviderBindgenConfigOption::ImplStruct(s) => impl_struct = Some(s.to_string()),
                 ProviderBindgenConfigOption::WitBindgenCfg(cfg) => {
                     wit_bindgen_cfg = Some(cfg);
-                }
-                ProviderBindgenConfigOption::ImportFnLatticeTranslationStrategy(strat) => {
-                    import_fn_lattice_translation_strategy = Some(strat);
-                }
-                ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(strat) => {
-                    export_fn_lattice_translation_strategy = Some(strat);
                 }
                 ProviderBindgenConfigOption::ReplaceWitifiedMaps(opt) => {
                     replace_witified_maps = opt.value();
@@ -147,10 +127,6 @@ impl Parse for ProviderBindgenConfig {
                     ),
                 )
             })?),
-            import_fn_lattice_translation_strategy: import_fn_lattice_translation_strategy
-                .unwrap_or_default(),
-            export_fn_lattice_translation_strategy: export_fn_lattice_translation_strategy
-                .unwrap_or_default(),
             replace_witified_maps,
         })
     }
@@ -163,8 +139,6 @@ mod keywords {
     syn::custom_keyword!(wit_package);
     syn::custom_keyword!(impl_struct);
     syn::custom_keyword!(wit_bindgen_cfg);
-    syn::custom_keyword!(import_fn_lattice_translation_strategy);
-    syn::custom_keyword!(export_fn_lattice_translation_strategy);
     syn::custom_keyword!(exposed_interface_allow_list);
     syn::custom_keyword!(exposed_interface_deny_list);
     syn::custom_keyword!(replace_witified_maps);
@@ -200,14 +174,6 @@ pub(crate) enum ProviderBindgenConfigOption {
     ///
     /// If combined with the allow list, this listing will be used last (filtering the list of allowed fns).
     ExposedFnDenyList(WitFnList),
-
-    /// Strategy (e.x. first argument, bundle arguments into struct) to use
-    /// when serializing imported WIT interfaces to be sent across the lattice
-    ImportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
-
-    /// Strategy (e.x. first argument, bundle arguments into struct) to use
-    /// when serializing exported WIT interfaces to be sent across the lattice
-    ExportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
 
     /// Strategy (e.x. first argument, bundle arguments into struct) to use
     /// when serializing exported WIT interfaces to be sent across the lattice
@@ -249,14 +215,6 @@ impl Parse for ProviderBindgenConfigOption {
             input.parse::<keywords::wit_package>()?;
             input.parse::<Token![:]>()?;
             Ok(ProviderBindgenConfigOption::WitPackage(input.parse()?))
-        } else if l.peek(keywords::import_fn_lattice_translation_strategy) {
-            input.parse::<keywords::import_fn_lattice_translation_strategy>()?;
-            input.parse::<Token![:]>()?;
-            Ok(ProviderBindgenConfigOption::ImportFnLatticeTranslationStrategy(input.parse()?))
-        } else if l.peek(keywords::export_fn_lattice_translation_strategy) {
-            input.parse::<keywords::import_fn_lattice_translation_strategy>()?;
-            input.parse::<Token![:]>()?;
-            Ok(ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(input.parse()?))
         } else if l.peek(keywords::replace_witified_maps) {
             input.parse::<keywords::replace_witified_maps>()?;
             input.parse::<Token![:]>()?;

@@ -821,7 +821,7 @@ fn should_ignore_interface(
 
 /// Extract the T from a `wasmtime::Result<T, Error>`, if the tree of tokens does
 /// represent a `wasmtime::Result`
-fn extract_wasmtime_result_type(tts: &Vec<TokenTree>) -> Option<TokenStream> {
+fn extract_wasmtime_result_type(tts: &[TokenTree]) -> Option<TokenStream> {
     match tts[..] {
         [
             TokenTree::Punct(_), // -
