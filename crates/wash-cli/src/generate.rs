@@ -11,9 +11,9 @@ use wash_lib::{
 /// Create a new project from template
 #[derive(Debug, Clone, Subcommand)]
 pub enum NewCliCommand {
-    /// Generate actor project
-    #[clap(name = "actor")]
-    Actor(NewProjectArgs),
+    /// Generate a wasmCloud component project
+    #[clap(name = "component", alias = "actor")]
+    Component(NewProjectArgs),
 
     /// Generate a new interface project
     #[clap(name = "interface")]
@@ -71,7 +71,7 @@ pub struct NewProjectArgs {
 impl From<NewCliCommand> for Project {
     fn from(cmd: NewCliCommand) -> Project {
         let (args, kind) = match cmd {
-            NewCliCommand::Actor(args) => (args, ProjectKind::Actor),
+            NewCliCommand::Component(args) => (args, ProjectKind::Component),
             NewCliCommand::Interface(args) => (args, ProjectKind::Interface),
             NewCliCommand::Provider(args) => (args, ProjectKind::Provider),
         };

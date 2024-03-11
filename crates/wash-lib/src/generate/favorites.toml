@@ -1,6 +1,6 @@
 # Default template choices for project generation
 #
-# Template type is `[[actor]]`, `[[interface]]`, or `[[provider]]`
+# Template type is `[[component]]`, `[[interface]]`, or `[[provider]]`
 # There should be at least one of each template type in this file
 #
 # Settings per template:
@@ -12,27 +12,27 @@
 # branch      git branch name                   - optional if git uri is used
 # path        path to template on disk          - either git or path is required
 
-[[actor]]
+[[component]]
 name = "hello-world-rust"
-description = "a hello-world actor component (in Rust) that responds over an HTTP connection"
+description = "a hello-world component (in Rust) that responds over an HTTP connection"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/actors/http-hello-world"
 
-[[actor]]
+[[component]]
 name = "hello-world-tinygo"
-description = "a hello-world actor component (in TinyGo) that responds over an HTTP connection"
+description = "a hello-world component (in TinyGo) that responds over an HTTP connection"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/golang/actors/http-hello-world"
 
-[[actor]]
+[[component]]
 name = "hello-world-typescript"
-description = "a hello-world actor component (in TypeScript) that responds over an HTTP connection"
+description = "a hello-world component (in TypeScript) that responds over an HTTP connection"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/typescript/actors/http-hello-world"
 
-[[actor]]
+[[component]]
 name = "hello-world-python"
-description = "a hello-world actor component (in Python) that responds over an HTTP connection"
+description = "a hello-world component (in Python) that responds over an HTTP connection"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/python/actors/http-hello-world"
 

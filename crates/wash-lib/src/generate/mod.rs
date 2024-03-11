@@ -35,7 +35,7 @@ const PROJECT_NAME_REGEX: &str = r"^([a-zA-Z][a-zA-Z0-9_-]+)$";
 #[derive(Debug, Default, Clone, Copy)]
 pub enum ProjectKind {
     #[default]
-    Actor,
+    Component,
     Interface,
     Provider,
 }
@@ -46,7 +46,7 @@ impl fmt::Display for ProjectKind {
             f,
             "{}",
             match self {
-                ProjectKind::Actor => "actor",
+                ProjectKind::Component => "component",
                 ProjectKind::Interface => "interface",
                 ProjectKind::Provider => "provider",
             }
