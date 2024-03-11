@@ -1,12 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use wasmcloud_control_interface::LinkDefinition;
+use wasmcloud_control_interface::{CtlResponse, InterfaceLinkDefinition};
 
-use crate::{
-    cli::{labels_vec_to_hashmap, CliConnectionOpts},
-    common::{boxed_err_to_anyhow, find_actor_id, find_provider_id},
-    config::WashConnectionOptions,
-};
+use crate::{cli::CliConnectionOpts, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
 #[derive(Parser, Debug, Clone)]
 pub struct LinkDelCommand {
@@ -15,16 +11,20 @@ pub struct LinkDelCommand {
 
     /// Public key ID or name of actor to match on. If an actor name is given and matches multiple
     /// actors, an error will be returned with a list of matching actors and their IDs.
-    #[clap(name = "actor-id")]
-    pub actor_id: String,
-
-    /// Capability contract ID between actor and provider
-    #[clap(name = "contract-id")]
-    pub contract_id: String,
+    #[clap(name = "source-id")]
+    pub source_id: String,
 
     /// Link name, defaults to "default"
     #[clap(short = 'l', long = "link-name")]
     pub link_name: Option<String>,
+
+    /// WIT namespace of the link
+    #[clap(short = 'n', long = "wit-namespace")]
+    pub wit_namespace: String,
+
+    /// WIT package of the link
+    #[clap(short = 'p', long = "wit-package")]
+    pub wit_package: String,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -35,27 +35,30 @@ pub struct LinkPutCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Public key ID or name of actor to match on. If an actor name is given and matches multiple
-    /// actors, an error will be returned with a list of matching actors and their IDs.
-    #[clap(name = "actor-id")]
-    pub actor_id: String,
+    #[clap(name = "source-id")]
+    pub source_id: String,
 
-    /// Public key ID or name of provider to match on. If an provider name is given and matches
-    /// multiple providers, an error will be returned with a list of matching actors and their IDs.
-    #[clap(name = "provider-id")]
-    pub provider_id: String,
+    #[clap(name = "target")]
+    pub target: String,
 
-    /// Capability contract ID between actor and provider
-    #[clap(name = "contract-id")]
-    pub contract_id: String,
+    #[clap(name = "wit-namespace")]
+    pub wit_namespace: String,
+
+    #[clap(name = "wit-package")]
+    pub wit_package: String,
+
+    #[clap(long = "interface")]
+    pub interfaces: Vec<String>,
+
+    #[clap(long = "source_config")]
+    pub source_config: Vec<String>,
+
+    #[clap(long = "target_config")]
+    pub target_config: Vec<String>,
 
     /// Link name, defaults to "default"
     #[clap(short = 'l', long = "link-name")]
     pub link_name: Option<String>,
-
-    /// Environment values to provide alongside link
-    #[clap(name = "values")]
-    pub values: Vec<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -91,11 +94,12 @@ pub enum LinkCommand {
 /// let ack = query_links(WashConnectionOptions::default()).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
-pub async fn query_links(wco: WashConnectionOptions) -> Result<Vec<LinkDefinition>> {
+pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<InterfaceLinkDefinition>> {
     wco.into_ctl_client(None)
         .await?
-        .query_links()
+        .get_links()
         .await
+        .map(|ctl| ctl.response.unwrap_or_default())
         .map_err(boxed_err_to_anyhow)
 }
 
@@ -104,92 +108,85 @@ pub async fn query_links(wco: WashConnectionOptions) -> Result<Vec<LinkDefinitio
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `actor_id` - The ID of the actor attached to the link
-/// * `contract_id` - The contract ID of the link
+/// * `source_id` - The ID of the source attached to the link
 /// * `link_name` - The link name of the link ('default')
+/// * `wit_namespace` - The WIT namespace of the link
+/// * `wit_package` - The WIT package of the link
 ///
 /// # Examples
 ///
 /// ```no_run
 /// let ack = delete_link(
 ///   WashConnectionOptions::default(),
-///   "wasmcloud:httpserver",
-///   "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5", // wasmcloud.azurecr.io/echo:0.3.8
+///   "httpserver",
 ///   "default",
+///   "wasi",
+///   "http",
 /// ).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
 pub async fn delete_link(
     wco: WashConnectionOptions,
-    contract_id: &str,
-    actor_id: &str,
+    source_id: &str,
     link_name: &str,
-) -> Result<()> {
+    wit_namespace: &str,
+    wit_package: &str,
+) -> Result<CtlResponse<()>> {
     let ctl_client = wco.into_ctl_client(None).await?;
     ctl_client
-        .remove_link(
-            &find_actor_id(actor_id, &ctl_client).await?.0,
-            contract_id,
-            link_name,
-        )
+        .delete_link(source_id, link_name, wit_namespace, wit_package)
         .await
-        .map(|_| ())
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(
-                "Failed to remove link between {} and {} with link name {}",
-                actor_id, contract_id, link_name
+                "Failed to remove link from {source_id} on {wit_namespace}:{wit_package} with link name {link_name}",
             )
         })
 }
 
-/// Create ("put") a new link
+/// Put a new link
 ///
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `contract_id` - The contract ID of the link
-/// * `actor_id` - The ID of the actor attached to the link
-/// * `provider_id` - The ID of the provider attached to the link
-/// * `link_name` - The link name of the link ('default')
+/// * `link` - The [wasmcloud_control_interface::InterfaceLinkDefinition] to create
 ///
 /// # Examples
 ///
 /// ```no_run
 /// let ack = delete_link(
 ///   WashConnectionOptions::default(),
-///   "wasmcloud:httpserver",
-///   "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5", // wasmcloud.azurecr.io/echo:0.3.8
-///   "VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", // wasmcloud.azurecr.io/httpserver:0.17.0
-///   "default",
-///   vec!["KEY", "value"],
+///   InterfaceLinkDefinition {
+///    source_id: "httpserver".to_string(),
+///    target: "echo".to_string(), // wasmcloud.azurecr.io/echo:0.3.8
+///    wit_namespace: "wasi".to_string(),
+///    wit_package: "http".to_string(),
+///    link_name: "default".to_string(),
+///    interfaces: vec!["incoming-handler".to_string()],
+///    source_config: vec![],
+///    target_config: vec![],
+///   }
 /// ).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
-pub async fn create_link(
+pub async fn put_link(
     wco: WashConnectionOptions,
-    contract_id: &str,
-    actor_id: &str,
-    provider_id: &str,
-    link_name: &str,
-    link_values: &Vec<String>,
-) -> Result<()> {
+    link: InterfaceLinkDefinition,
+) -> Result<CtlResponse<()>> {
     let ctl_client = wco.into_ctl_client(None).await?;
     ctl_client
-        .advertise_link(
-            &find_actor_id(actor_id, &ctl_client).await?.0,
-            &find_provider_id(provider_id, &ctl_client).await?.0,
-            contract_id,
-            link_name,
-            labels_vec_to_hashmap(link_values.clone())?,
-        )
+        .put_link(link.clone())
         .await
-        .map(|_| ())
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(
-                "Failed to create link between {} and {} with contract {}. Link name: {}, values: {:?}",
-                actor_id, provider_id, contract_id, link_name, &link_values
+                "Failed to create link between {} and {} on {}:{}/{:?}. Link name: {}",
+                link.source_id,
+                link.target,
+                link.wit_namespace,
+                link.wit_package,
+                link.interfaces,
+                link.name
             )
         })
 }

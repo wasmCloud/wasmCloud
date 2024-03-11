@@ -311,15 +311,19 @@ async fn get_all_inventory(
         .await
         .map_err(|e| anyhow::anyhow!("{e:?}"))?
         .into_iter()
-        .map(|host| (ctl_client.clone(), host.id))
+        .filter_map(|host| host.response.map(|host| (ctl_client.clone(), host.id)))
         .map(|(client, host_id)| async move {
             let inventory = client
                 .get_host_inventory(&host_id)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            Ok(inventory)
+            Ok(inventory.response)
         });
-    futures::future::join_all(futs).await.into_iter().collect()
+    futures::future::join_all(futs)
+        .await
+        .into_iter()
+        .filter_map(Result::transpose)
+        .collect()
 }
 
 fn stream_name(lattice_id: &str) -> String {

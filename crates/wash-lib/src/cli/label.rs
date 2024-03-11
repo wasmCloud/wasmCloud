@@ -50,8 +50,8 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
             .delete_label(&host_id, key)
             .await
             .map_err(boxed_err_to_anyhow)?;
-        if !ack.accepted {
-            bail!("Operation failed: {}", ack.error);
+        if !ack.success {
+            bail!("Operation failed: {}", ack.message);
         }
 
         Ok(CommandOutput::from_key_and_text(
@@ -67,8 +67,8 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
             .put_label(&host_id, key, value)
             .await
             .map_err(boxed_err_to_anyhow)?;
-        if !ack.accepted {
-            bail!("Operation failed: {}", ack.error);
+        if !ack.success {
+            bail!("Operation failed: {}", ack.message);
         }
 
         Ok(CommandOutput::from_key_and_text(

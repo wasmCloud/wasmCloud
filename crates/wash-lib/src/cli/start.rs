@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::time::Duration;
 
 use crate::{
-    actor::{start_actor, ActorStartedInfo, StartActorArgs},
+    actor::{scale_actor, ActorScaledInfo, ScaleActorArgs},
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
@@ -44,6 +43,10 @@ pub struct StartActorCommand {
     #[clap(name = "actor-ref")]
     pub actor_ref: String,
 
+    /// Unique actor ID to use for the actor
+    #[clap(name = "actor-id")]
+    pub actor_id: String,
+
     /// Maximum number of instances this actor can run concurrently.
     #[clap(
         long = "max-instances",
@@ -80,6 +83,7 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
+    // TODO: absolutize the path if it's a relative file
     let actor_ref = if cmd.actor_ref.starts_with('/') {
         format!("file://{}", &cmd.actor_ref) // prefix with file:// if it's an absolute path
     } else {
@@ -92,6 +96,7 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
             let suitable_hosts = client
                 .perform_actor_auction(
                     &actor_ref,
+                    &cmd.actor_id,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
                 .await
@@ -102,40 +107,41 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
             if suitable_hosts.is_empty() {
                 bail!("No suitable hosts found for actor {}", actor_ref);
             } else {
-                suitable_hosts[0].host_id.parse().with_context(|| {
-                    format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
-                })?
+                let acks = suitable_hosts
+                    .into_iter()
+                    .filter_map(|h| h.response)
+                    .collect::<Vec<_>>();
+                let ack = acks.first().context("No suitable hosts found")?;
+                ack.host_id
+                    .parse()
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
             }
         }
     };
 
     // Start the actor
-    let ActorStartedInfo {
+    let ActorScaledInfo {
         host_id,
         actor_ref,
         actor_id,
-    } = start_actor(StartActorArgs {
-        ctl_client: &client,
+    } = scale_actor(ScaleActorArgs {
+        client: &client,
         host_id: &host,
         actor_ref: &cmd.actor_ref,
-        count: cmd.max_instances,
+        actor_id: &cmd.actor_id,
+        max_instances: cmd.max_instances,
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
+        annotations: None,
+        // TODO: implement config
+        config: vec![],
     })
     .await?;
 
     let text = if cmd.skip_wait {
-        format!(
-            "Start actor [{}] request received on host [{}]",
-            actor_ref, host_id
-        )
+        format!("Start actor [{actor_ref}] request received on host [{host_id}]",)
     } else {
-        format!(
-            "Actor [{}] (ref: [{}]) started on host [{}]",
-            actor_id.clone().unwrap_or("<unknown>".into()),
-            &actor_ref,
-            &host_id
-        )
+        format!("Actor [{actor_id}] (ref: [{actor_ref}]) started on host [{host_id}]",)
     };
 
     Ok(CommandOutput::new(
@@ -165,6 +171,10 @@ pub struct StartProviderCommand {
     #[clap(name = "provider-ref")]
     pub provider_ref: String,
 
+    /// Unique provider ID to use for the provider
+    #[clap(name = "provider-id")]
+    pub provider_id: String,
+
     /// Link name of provider
     #[clap(short = 'l', long = "link-name", default_value = "default")]
     pub link_name: String,
@@ -177,9 +187,9 @@ pub struct StartProviderCommand {
     #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
     pub auction_timeout_ms: u64,
 
-    /// Path to provider configuration JSON file
-    #[clap(long = "config-json")]
-    pub config_json: Option<PathBuf>,
+    /// List of named configuration to apply to the provider, may be empty
+    #[clap(long = "config")]
+    pub config: Vec<String>,
 
     /// By default, the command will wait until the provider has been started.
     /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the provider to start.
@@ -225,27 +235,16 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             if suitable_hosts.is_empty() {
                 bail!("No suitable hosts found for provider {}", provider_ref);
             } else {
-                suitable_hosts[0].host_id.parse().with_context(|| {
-                    format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
-                })?
+                let acks = suitable_hosts
+                    .into_iter()
+                    .filter_map(|h| h.response)
+                    .collect::<Vec<_>>();
+                let ack = acks.first().context("No suitable hosts found")?;
+                ack.host_id
+                    .parse()
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
             }
         }
-    };
-
-    let config_json = if let Some(config_path) = cmd.config_json {
-        let config_str = match std::fs::read_to_string(&config_path) {
-            Ok(s) => s,
-            Err(e) => bail!("Error reading provider configuration: {}", e),
-        };
-        match serde_json::from_str::<serde_json::Value>(&config_str) {
-            Ok(_v) => Some(config_str),
-            _ => bail!(
-                "Configuration path provided but was invalid JSON: {}",
-                config_path.display()
-            ),
-        }
-    } else {
-        None
     };
 
     let mut receiver = client
@@ -261,21 +260,22 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .start_provider(
             &host,
             &provider_ref,
-            Some(cmd.link_name.clone()),
+            &cmd.provider_id,
             None,
-            config_json.clone(),
+            None,
+            // TODO: use cmd.config
         )
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(
-                "Failed to start provider {} on host {:?} with link name {} and configuration {:?}",
-                &provider_ref, &host, &cmd.link_name, &config_json
+                "Failed to start provider {} on host {:?}",
+                &cmd.provider_id, &host
             )
         })?;
 
-    if !ack.accepted {
-        bail!("Start provider ack not accepted: {}", ack.error);
+    if !ack.success {
+        bail!("Start provider ack not accepted: {}", ack.message);
     }
 
     if cmd.skip_wait {

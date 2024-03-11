@@ -1,14 +1,12 @@
-use std::{collections::HashMap, str::FromStr, task::Poll};
+use std::{collections::HashMap, task::Poll};
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use futures::{Stream, StreamExt};
+use wasmcloud_control_interface::ComponentId;
 use wasmcloud_core::Invocation;
 
-use crate::{
-    common::{find_actor_id, CLAIMS_NAME, CLAIMS_SUBJECT},
-    id::{ModuleId, ServiceId},
-};
+use crate::{common::find_actor_id, id::ModuleId};
 
 /// A struct that represents an invocation that was observed by the spier.
 #[derive(Debug)]
@@ -102,12 +100,7 @@ impl Spier {
             .await?;
 
         let mut subs = futures::future::join_all(linked_providers.iter().map(|prov| {
-            let topic = format!(
-                "{}.{}.{}",
-                rpc_topic_prefix,
-                prov.id.as_ref(),
-                &prov.link_name
-            );
+            let topic = format!("{}.{}.default", rpc_topic_prefix, &prov.id);
             nats_client.subscribe(topic)
         }))
         .await
@@ -123,7 +116,7 @@ impl Spier {
             friendly_name,
             provider_info: linked_providers
                 .into_iter()
-                .map(|prov| (prov.id.clone().into_string(), prov))
+                .map(|prov| (prov.id.clone(), prov))
                 .collect(),
         })
     }
@@ -174,7 +167,7 @@ impl Stream for Spier {
                     let pubkey = &inv.origin.public_key;
                     self.provider_info
                         .get(pubkey)
-                        .and_then(|prov| prov.friendly_name.clone())
+                        .map(|prov| prov.id.clone())
                         .unwrap_or_else(|| pubkey.clone())
                 };
 
@@ -199,9 +192,7 @@ impl Stream for Spier {
 
 #[derive(Debug)]
 struct ProviderDetails {
-    id: ServiceId,
-    link_name: String,
-    friendly_name: Option<String>,
+    id: ComponentId,
 }
 
 /// Fetches all providers linked to the given actor, along with their link names
@@ -209,44 +200,24 @@ async fn get_linked_providers(
     actor_id: &ModuleId,
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<Vec<ProviderDetails>> {
-    let mut details = ctl_client
-        .query_links()
+    let details = ctl_client
+        .get_links()
         .await
         .map_err(|e| anyhow::anyhow!("Unable to get linkdefs: {e:?}"))
+        .map(|response| response.response)?
         .map(|linkdefs| {
             linkdefs
                 .into_iter()
                 .filter_map(|link| {
-                    if link.actor_id == actor_id.as_ref() {
-                        let provider_id = ServiceId::from_str(&link.provider_id).ok()?;
-                        Some(ProviderDetails {
-                            id: provider_id,
-                            link_name: link.link_name,
-                            friendly_name: None,
-                        })
+                    if link.source_id == actor_id.as_ref() {
+                        Some(ProviderDetails { id: link.target })
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<_>>()
-        })?;
-    let mut claim_names: HashMap<String, String> = ctl_client
-        .get_claims()
-        .await
-        .map_err(|e| anyhow::anyhow!("Unable to get claims: {e:?}"))?
-        .into_iter()
-        .filter_map(|mut claims| {
-            let id = claims.remove(CLAIMS_SUBJECT).unwrap_or_default();
-            // If it isn't a provider, skip
-            if !id.starts_with(ServiceId::prefix()) {
-                return None;
-            }
-            // Only return it if it has a name
-            claims.remove(CLAIMS_NAME).map(|name| (id, name))
         })
-        .collect();
-    details.iter_mut().for_each(|detail| {
-        detail.friendly_name = claim_names.remove(detail.id.as_ref());
-    });
+        .unwrap_or_default();
+
     Ok(details)
 }

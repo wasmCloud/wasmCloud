@@ -53,8 +53,8 @@ pub async fn handle_update_actor(cmd: UpdateActorCommand) -> Result<CommandOutpu
     };
 
     let ack = update_actor(&client, &host_id, &actor_id, &cmd.new_actor_ref).await?;
-    if !ack.accepted {
-        bail!("Operation failed: {}", ack.error);
+    if !ack.success {
+        bail!("Operation failed: {}", ack.message);
     }
 
     Ok(CommandOutput::from_key_and_text(

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::{
-    actor::scale_actor,
+    actor::{scale_actor, ScaleActorArgs},
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::find_host_id,
     config::WashConnectionOptions,
@@ -29,6 +29,10 @@ pub struct ScaleActorCommand {
     #[clap(name = "actor-ref")]
     pub actor_ref: String,
 
+    /// Unique actor ID to use for the actor
+    #[clap(name = "actor-id")]
+    pub actor_id: String,
+
     /// Maximum number of actor instances allowed to run concurrently. Setting this value to `0` will stop the actor.
     #[clap(short = 'c', long = "max-instances", alias = "max-concurrent", alias = "max", alias = "count", default_value_t = u32::MAX)]
     pub max_instances: u32,
@@ -45,15 +49,19 @@ pub async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput>
 
     let annotations = labels_vec_to_hashmap(cmd.annotations)?;
 
-    scale_actor(
-        &client,
+    scale_actor(ScaleActorArgs {
+        client: &client,
         // NOTE(thomastaylor312): In the future, we could check if this is interactive and then
         // prompt the user to choose if more than one thing matches
-        &find_host_id(&cmd.host_id, &client).await?.0,
-        &cmd.actor_ref,
-        cmd.max_instances,
-        Some(annotations),
-    )
+        host_id: &find_host_id(&cmd.host_id, &client).await?.0,
+        actor_id: &cmd.actor_id,
+        actor_ref: &cmd.actor_ref,
+        max_instances: cmd.max_instances,
+        annotations: Some(annotations),
+        config: vec![],
+        skip_wait: false,
+        timeout_ms: None,
+    })
     .await?;
 
     let scale_msg = if cmd.max_instances == u32::MAX {

@@ -3,7 +3,7 @@ use cloudevents::event::{AttributesReader, Event};
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{Duration, Instant};
 
-use crate::actor::ActorStartedInfo;
+use crate::actor::ActorScaledInfo;
 
 /// Useful parts of a CloudEvent coming in from the wasmbus.
 #[derive(Debug)]
@@ -110,12 +110,12 @@ async fn find_event<T>(
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub async fn wait_for_actor_start_event(
+pub async fn wait_for_actor_scaled_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
     actor_ref: String,
-) -> Result<FindEventOutcome<ActorStartedInfo>> {
+) -> Result<FindEventOutcome<ActorScaledInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -124,21 +124,20 @@ pub async fn wait_for_actor_start_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_started" | "com.wasmcloud.lattice.actor_scaled" => {
+            "com.wasmcloud.lattice.actor_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == actor_ref {
-                    let actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
-                    return Ok(EventCheckOutcome::Success(ActorStartedInfo {
+                    let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")?;
+                    return Ok(EventCheckOutcome::Success(ActorScaledInfo {
                         host_id: host_id.as_str().into(),
                         actor_ref: actor_ref.as_str().into(),
-                        actor_id: Some(actor_id),
+                        actor_id: actor_id.as_str().into(),
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_start_failed"
-            | "com.wasmcloud.lattice.actor_scale_failed" => {
-                let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "actor_ref")?;
+            "com.wasmcloud.lattice.actor_scale_failed" => {
+                let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if returned_actor_ref == actor_ref {
                     let error = anyhow!(

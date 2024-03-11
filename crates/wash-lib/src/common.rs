@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
+use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::id::{ModuleId, ServerId, ServiceId};
@@ -98,11 +99,16 @@ async fn find_id_matches<T: FromStr + ToString + Display>(
     // Case insensitive searching here to make things nicer
     let value = value.to_lowercase();
     // If it wasn't an ID, get the claims
-    let claims = ctl_client
+    let ctl_response = ctl_client
         .get_claims()
         .await
         .map_err(boxed_err_to_anyhow)
         .context("unable to get claims for lookup")?;
+    let Some(claims) = ctl_response.response else {
+        error!("received claims response from control interface but no claims were present in the response");
+        return Err(FindIdError::NoMatches);
+    };
+
     let all_matches = claims
         .iter()
         .filter_map(|v| {
@@ -174,6 +180,7 @@ pub async fn find_host_id(
 
     let all_matches = hosts
         .into_iter()
+        .filter_map(|h| h.response)
         .filter_map(|h| {
             if h.id.to_lowercase().starts_with(&value)
                 || h.friendly_name.to_lowercase().contains(&value)
@@ -211,7 +218,7 @@ pub async fn get_all_inventories(
     let hosts = client.get_hosts().await.map_err(boxed_err_to_anyhow)?;
     let host_ids = match hosts.len() {
         0 => return Ok(Vec::with_capacity(0)),
-        _ => hosts.into_iter().map(|h| h.id),
+        _ => hosts.into_iter().filter_map(|h| h.response.map(|h| h.id)),
     };
 
     let futs =
@@ -221,10 +228,12 @@ pub async fn get_all_inventories(
                 client
                     .get_host_inventory(&host_id)
                     .await
+                    .map(|inventory| inventory.response)
                     .map_err(boxed_err_to_anyhow)
             });
     futures::future::join_all(futs)
         .await
         .into_iter()
+        .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<HostInventory>>>()
 }

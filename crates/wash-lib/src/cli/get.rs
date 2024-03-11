@@ -63,10 +63,16 @@ pub async fn get_host_inventories(cmd: GetHostInventoriesCommand) -> Result<Vec<
     let client = wco.into_ctl_client(None).await?;
 
     if let Some(host_id) = cmd.host_id {
-        Ok(vec![client
+        if let Some(inventory) = client
             .get_host_inventory(&host_id)
             .await
-            .map_err(boxed_err_to_anyhow)?])
+            .map(|inventory| inventory.response)
+            .map_err(boxed_err_to_anyhow)?
+        {
+            Ok(vec![inventory])
+        } else {
+            Ok(vec![])
+        }
     } else {
         let hosts = get_all_inventories(&client)
             .await
@@ -88,5 +94,11 @@ pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
         .get_hosts()
         .await
         .map_err(boxed_err_to_anyhow)
+        .map(|hosts| {
+            hosts
+                .into_iter()
+                .filter_map(|h| h.response)
+                .collect::<Vec<_>>()
+        })
         .context("Was able to connect to NATS, but failed to get hosts.")
 }
