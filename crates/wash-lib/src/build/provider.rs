@@ -4,7 +4,7 @@ use std::process;
 
 use anyhow::{anyhow, bail, Context, Result};
 use nkeys::KeyPairType;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::build::SignConfig;
 use crate::cli::par::{create_provider_archive, detect_arch, ParCreateArgs};
@@ -29,6 +29,7 @@ pub(crate) async fn build_provider(
 
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
+    trace!("Building provider in {:?}", common_config.path);
 
     // Build for a specified target if provided, or the default rust target
     let mut build_args = Vec::with_capacity(4);
@@ -76,6 +77,8 @@ pub(crate) async fn build_provider(
     }
     provider_path_buf.push("release");
     provider_path_buf.push(&bin_name);
+
+    trace!("Retrieving provider binary from {:?}", provider_path_buf);
 
     let provider_bytes = tokio::fs::read(&provider_path_buf).await?;
 
