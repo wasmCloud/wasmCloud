@@ -1,14 +1,19 @@
 //! Parse wasmcloud.toml files which specify key information for building and signing
 //! WebAssembly modules and native capability provider binaries
 
-use std::{collections::HashSet, fmt::Display, fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    fs,
+    path::PathBuf,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
 use serde::Deserialize;
-use wasmcloud_control_interface::{RegistryCredential, RegistryCredentialMap};
+use wasmcloud_control_interface::RegistryCredential;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -583,8 +588,8 @@ impl ProjectConfig {
                 credentials_file.display()
             ))?;
 
-        let credentials =
-            serde_json::from_str::<RegistryCredentialMap>(&credentials).context(format!(
+        let credentials = serde_json::from_str::<HashMap<String, RegistryCredential>>(&credentials)
+            .context(format!(
                 "Failed to parse registry credentials from file {}",
                 credentials_file.display()
             ))?;

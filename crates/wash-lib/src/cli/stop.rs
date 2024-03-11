@@ -5,7 +5,7 @@ use tokio::time::Duration;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    actor::stop_actor,
+    actor::{scale_actor, ActorScaledInfo, ScaleActorArgs},
     cli::{CliConnectionOpts, CommandOutput},
     common::{
         boxed_err_to_anyhow, find_actor_id, find_host_id, find_provider_id, get_all_inventories,
@@ -14,7 +14,7 @@ use crate::{
     config::WashConnectionOptions,
     context::default_timeout_ms,
     id::{validate_contract_id, ServerId},
-    wait::{wait_for_provider_stop_event, ActorStoppedInfo, FindEventOutcome, ProviderStoppedInfo},
+    wait::{wait_for_provider_stop_event, FindEventOutcome, ProviderStoppedInfo},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -134,18 +134,12 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     };
 
     let ack = client
-        .stop_provider(
-            &host_id,
-            &provider_id,
-            &cmd.link_name,
-            &cmd.contract_id,
-            None,
-        )
+        .stop_provider(&host_id, &provider_id)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.accepted {
-        bail!("Operation failed: {}", ack.error);
+    if !ack.success {
+        bail!("Operation failed: {}", ack.message);
     }
     if cmd.skip_wait {
         let text = format!(
@@ -211,14 +205,19 @@ pub async fn handle_stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
         find_host_with_actor(&actor_id, &client).await?
     };
 
-    let ActorStoppedInfo { actor_id, host_id } = stop_actor(
-        &client,
-        &host_id,
-        &actor_id,
-        None,
-        timeout_ms,
-        cmd.skip_wait,
-    )
+    let ActorScaledInfo {
+        actor_id, host_id, ..
+    } = scale_actor(ScaleActorArgs {
+        client: &client,
+        host_id: &host_id,
+        actor_id: &actor_id,
+        actor_ref: "",
+        max_instances: 0,
+        annotations: None,
+        config: vec![],
+        skip_wait: cmd.skip_wait,
+        timeout_ms: Some(timeout_ms),
+    })
     .await?;
 
     let text = if cmd.skip_wait {
@@ -251,8 +250,8 @@ pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.accepted {
-        bail!("Operation failed: {}", ack.error);
+    if !ack.success {
+        bail!("Operation failed: {}", ack.message);
     }
 
     Ok(CommandOutput::from_key_and_text(
