@@ -6,10 +6,10 @@ use wasmcloud_provider_wit_bindgen::deps::serde::{Deserialize, Serialize};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 
-const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
-const ENV_NATS_URI: &str = "URI";
-const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
-const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
+const CONFIG_NATS_SUBSCRIPTION: &str = "subscriptions";
+const CONFIG_NATS_URI: &str = "cluster_uris";
+const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
+const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
@@ -81,18 +81,18 @@ impl ConnectionConfig {
     pub fn from_map(values: &HashMap<String, String>) -> Result<ConnectionConfig> {
         let mut config = ConnectionConfig::default();
 
-        if let Some(sub) = values.get(ENV_NATS_SUBSCRIPTION) {
+        if let Some(sub) = values.get(CONFIG_NATS_SUBSCRIPTION) {
             config
                 .subscriptions
                 .extend(sub.split(',').map(|s| s.to_string()));
         }
-        if let Some(url) = values.get(ENV_NATS_URI) {
+        if let Some(url) = values.get(CONFIG_NATS_URI) {
             config.cluster_uris = url.split(',').map(String::from).collect();
         }
-        if let Some(jwt) = values.get(ENV_NATS_CLIENT_JWT) {
+        if let Some(jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
             config.auth_jwt = Some(jwt.clone());
         }
-        if let Some(seed) = values.get(ENV_NATS_CLIENT_SEED) {
+        if let Some(seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
             config.auth_seed = Some(seed.clone());
         }
         if config.auth_jwt.is_some() && config.auth_seed.is_none() {

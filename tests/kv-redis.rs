@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -13,6 +15,7 @@ use wasmcloud_compat::keyvalue::GetResponse;
 use wasmcloud_control_interface::ClientBuilder;
 use wasmcloud_test_util::actor::assert_scale_actor;
 use wasmcloud_test_util::host::WasmCloudTestHost;
+use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::lattice::link::assert_advertise_link;
 use wasmcloud_test_util::provider::assert_start_provider;
 
@@ -98,7 +101,7 @@ async fn kv_redis_suite() -> Result<()> {
         provider_key: &messaging_nats_provider_key,
         provider_id: &messaging_nats_provider_key.public_key(),
         url: &messaging_nats_provider_url,
-        configuration: None,
+        config: vec![],
     })
     .await?;
 
@@ -110,8 +113,18 @@ async fn kv_redis_suite() -> Result<()> {
         provider_key: &kv_redis_provider_key,
         provider_id: &kv_redis_provider_key.public_key(),
         url: &kv_redis_provider_url,
-        configuration: None,
+        config: vec![],
     })
+    .await?;
+
+    assert_config_put(
+        &ctl_client,
+        "MESSAGING_NATS",
+        HashMap::from_iter([
+            ("CLUSTER_URI".to_string(), nats_url.to_string()),
+            ("SUBSCRIPTIONS".to_string(), test_subject.clone()),
+        ]),
+    )
     .await?;
 
     // Link messaging-invoker ---[wasmcloud:messaging/message-subscriber]---> messaging provider
@@ -126,13 +139,10 @@ async fn kv_redis_suite() -> Result<()> {
         vec![],
         // NOTE: this should be temporary, rather than using a named config,
         // we are stuffing credentials into the target_config
-        vec![format!(
-            "config_json={}",
-            serde_json::to_string(&json!({
-                "subscriptions": [ test_subject ],
-                "cluster_uris": [ nats_url ],
-            }))?
-        )],
+        vec![
+            format!("subscriptions={test_subject}"),
+            format!("cluster_uris={nats_url}"),
+        ],
     )
     .await
     .context("should advertise link")?;

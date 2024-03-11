@@ -26,7 +26,7 @@ pub struct StartProviderArgs<'a> {
     pub provider_key: &'a KeyPair,
     pub provider_id: &'a str,
     pub url: &'a Url,
-    pub configuration: Option<String>,
+    pub config: Vec<String>,
 }
 
 /// Response expected from a successful healthcheck
@@ -52,7 +52,7 @@ pub async fn assert_start_provider(
         provider_key,
         provider_id,
         url,
-        configuration,
+        config,
     }: StartProviderArgs<'_>,
 ) -> Result<()> {
     let rpc_client = client.nats_client();
@@ -64,7 +64,7 @@ pub async fn assert_start_provider(
             url.as_ref(),
             provider_id,
             None,
-            configuration,
+            config,
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
