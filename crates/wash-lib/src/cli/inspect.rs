@@ -7,14 +7,11 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 use term_table::{row::Row, table_cell::*, Table};
-use wascap::{
-    caps::capability_name,
-    jwt::{Actor, Claims, Token, TokenValidation, WascapEntity},
-};
+use wascap::jwt::{Actor, Claims, Token, TokenValidation, WascapEntity};
 
 #[derive(Debug, Parser, Clone)]
 pub struct InspectCliCommand {
-    /// Path or OCI URL to signed actor module or provider archive
+    /// Path or OCI URL to signed component or provider archive
     pub target: String,
 
     /// Extract the raw JWT from the file and print to stdout
@@ -31,11 +28,11 @@ pub struct InspectCliCommand {
     )]
     pub wit: bool,
 
-    /// Digest to verify artifact against (if OCI URL is provided for <module> or <archive>)
+    /// Digest to verify artifact against (if OCI URL is provided for <target>)
     #[clap(short = 'd', long = "digest")]
     pub digest: Option<String>,
 
-    /// Allow latest artifact tags (if OCI URL is provided for <module> or <archive>)
+    /// Allow latest artifact tags (if OCI URL is provided for <target>)
     #[clap(long = "allow-latest")]
     pub allow_latest: bool,
 
@@ -61,12 +58,12 @@ pub struct InspectCliCommand {
     #[clap(long = "insecure")]
     pub insecure: bool,
 
-    /// skip the local OCI cache
+    /// skip the local OCI cache and pull the artifact from the registry to inspect
     #[clap(long = "no-cache")]
     pub no_cache: bool,
 }
 
-/// Attempts to inspect a provider archive or signed actor module
+/// Attempts to inspect a provider archive or component
 pub async fn handle_command(
     command: impl Into<InspectCliCommand>,
     _output_kind: OutputKind,
@@ -92,7 +89,9 @@ pub async fn handle_command(
         .await?;
     }
 
-    let output = match wasmparser::Parser::new(0).parse_all(&buf).next() {
+    let wit_parsed = wasmparser::Parser::new(0).parse_all(&buf).next();
+
+    let output = match wit_parsed {
         // Inspect the WIT of a Wasm component
         Some(Ok(wasmparser::Payload::Version {
             encoding: wasmparser::Encoding::Component,
@@ -130,11 +129,20 @@ pub async fn handle_command(
                 CommandOutput::from_key_and_text("token", token.jwt)
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                render_actor_claims(token.claims, validation)
+                let is_component = if let Some(Ok(wasmparser::Payload::Version {
+                    encoding: wasmparser::Encoding::Component,
+                    ..
+                })) = wit_parsed
+                {
+                    true
+                } else {
+                    false
+                };
+                render_component_claims(token.claims, validation, is_component)
             }
         }
         //  Fallback to inspecting a provider archive
-        _ => handle_provider_archive(command.clone(), &buf).await?,
+        _ => render_provider_claims(command.clone(), &buf).await?,
     };
     Ok(output)
 }
@@ -147,17 +155,16 @@ async fn get_caps(cmd: InspectCliCommand, artifact_bytes: &[u8]) -> Result<Optio
 }
 
 /// Renders actor claims into provided output format
-pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -> CommandOutput {
+pub fn render_component_claims(
+    claims: Claims<Actor>,
+    validation: TokenValidation,
+    is_component: bool,
+) -> CommandOutput {
     let md = claims.metadata.clone().unwrap();
     let name = md.name();
     let friendly_rev = md.rev.unwrap_or(0);
     let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
     let friendly = format!("{} ({})", friendly_ver, friendly_rev);
-    let provider = if md.provider {
-        "Capability Provider"
-    } else {
-        "Capabilities"
-    };
 
     let tags = if let Some(tags) = &claims.metadata.as_ref().unwrap().tags {
         if tags.is_empty() {
@@ -169,33 +176,11 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
         "None".to_string()
     };
 
-    let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
-        caps.iter().map(|c| capability_name(c)).collect()
-    } else {
-        vec![]
-    };
-
-    let call_alias = claims
-        .metadata
-        .as_ref()
-        .unwrap()
-        .call_alias
-        .clone()
-        .unwrap_or_else(|| "(Not set)".to_string());
-
     let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
     let sub_label = token_label(&claims.subject).to_ascii_lowercase();
-    let provider_json = provider.replace(' ', "_").to_ascii_lowercase();
 
     let mut map = HashMap::new();
     map.insert(iss_label, json!(claims.issuer));
-    // NOTE(brooksmtownsend): This preserves backwards compatibility with any scripts piping JSON
-    // output from `wash inspect` into `jq` or similar for actors. We should consider removing this
-    // once we have a better way to handle this.
-    // The end result of this is that there is an `actor` and `module` key with the public key as a value.
-    if sub_label == "actor" {
-        map.insert("module".to_string(), json!(claims.subject));
-    }
     map.insert(sub_label, json!(claims.subject));
     map.insert("expires".to_string(), json!(validation.expires_human));
     map.insert(
@@ -204,9 +189,7 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
     );
     map.insert("version".to_string(), json!(friendly_ver));
     map.insert("revision".to_string(), json!(friendly_rev));
-    map.insert(provider_json, json!(friendly_caps));
     map.insert("tags".to_string(), json!(tags));
-    map.insert("call_alias".to_string(), json!(call_alias));
     map.insert("name".to_string(), json!(name));
 
     let mut table = render_core(&claims, validation);
@@ -217,21 +200,9 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
     ]));
 
     table.add_row(Row::new(vec![
-        TableCell::new("Call Alias"),
-        TableCell::new_with_alignment(call_alias, 1, Alignment::Right),
+        TableCell::new("Embedded WIT"),
+        TableCell::new_with_alignment(is_component, 1, Alignment::Right),
     ]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        provider,
-        2,
-        Alignment::Center,
-    )]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        friendly_caps.join("\n"),
-        2,
-        Alignment::Left,
-    )]));
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         "Tags",
@@ -249,12 +220,11 @@ pub fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -
 }
 
 // * - we don't need render impls for Operator or Account because those tokens are never embedded into a module,
-// only actors.
-
+// only components.
 fn token_label(pk: &str) -> String {
     match pk.chars().next().unwrap() {
         'A' => "Account".to_string(),
-        'M' => "Actor".to_string(),
+        'M' => "Component".to_string(),
         'O' => "Operator".to_string(),
         'S' => "Server".to_string(),
         'U' => "User".to_string(),
@@ -299,7 +269,7 @@ where
 }
 
 /// Inspects a provider archive
-pub(crate) async fn handle_provider_archive(
+pub(crate) async fn render_provider_claims(
     cmd: InspectCliCommand,
     artifact_bytes: &[u8],
 ) -> Result<CommandOutput> {
