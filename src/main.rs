@@ -212,10 +212,14 @@ struct Args {
     oci_password: Option<String>,
 
     /// Determines whether observability should be enabled.
-    #[clap(long = "enable-observability", env = "WASMCLOUD_OBSERVABILITY_ENABLED")]
+    #[clap(
+        long = "enable-observability",
+        env = "WASMCLOUD_OBSERVABILITY_ENABLED",
+        conflicts_with_all = ["enable_tracing", "enable_metrics", "enable_logs"]
+    )]
     enable_observability: bool,
 
-    /// Determines whether tracing should be enabled, overriding any value set with `--enable-observability`.
+    /// Determines whether tracing should be enabled.
     #[clap(
         long = "enable-tracing",
         env = "WASMCLOUD_TRACING_ENABLED",
@@ -223,7 +227,7 @@ struct Args {
     )]
     enable_tracing: Option<bool>,
 
-    /// Determines whether metrics should be enabled, overriding any value set with `--enable-observability`.
+    /// Determines whether metrics should be enabled.
     #[clap(
         long = "enable-metrics",
         env = "WASMCLOUD_METRICS_ENABLED",
@@ -231,7 +235,7 @@ struct Args {
     )]
     enable_metrics: Option<bool>,
 
-    /// Determines whether logs should be enabled, overriding any value set with `--enable-observability`.
+    /// Determines whether logs should be enabled.
     #[clap(long = "enable-logs", env = "WASMCLOUD_LOGS_ENABLED", hide = true)]
     enable_logs: Option<bool>,
 
