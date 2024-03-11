@@ -3,6 +3,7 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
@@ -13,8 +14,8 @@ use wascap::prelude::KeyPair;
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    wasmcloud_provider_sdk::core::HostData,
-    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
+    wasmcloud_provider_sdk::core::{ComponentId, HostData},
+    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
 };
 
 mod connection;
@@ -56,19 +57,15 @@ pub struct NatsMessagingProvider {
 impl NatsMessagingProvider {
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> NatsMessagingProvider {
-        if host_data.config.is_empty() {
-            NatsMessagingProvider::default()
-        } else {
-            let config = ConnectionConfig::from_map(&host_data.config);
-            if let Ok(config) = config {
-                NatsMessagingProvider {
-                    default_config: config,
-                    ..Default::default()
-                }
-            } else {
-                warn!("Failed to build connection configuration, falling back to default");
-                NatsMessagingProvider::default()
+        let config = ConnectionConfig::from_map(&host_data.config);
+        if let Ok(config) = config {
+            NatsMessagingProvider {
+                default_config: config,
+                ..Default::default()
             }
+        } else {
+            warn!("Failed to build connection configuration, falling back to default");
+            NatsMessagingProvider::default()
         }
     }
 
@@ -76,7 +73,7 @@ impl NatsMessagingProvider {
     async fn connect(
         &self,
         cfg: ConnectionConfig,
-        ld: &InterfaceLinkDefinition,
+        component_id: ComponentId,
     ) -> anyhow::Result<NatsClientBundle> {
         let opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
@@ -110,7 +107,8 @@ impl NatsMessagingProvider {
 
             sub_handles.push((
                 sub.to_string(),
-                self.subscribe(&client, ld, sub.to_string(), queue).await?,
+                self.subscribe(&client, component_id.clone(), sub.to_string(), queue)
+                    .await?,
             ));
         }
 
@@ -124,7 +122,7 @@ impl NatsMessagingProvider {
     async fn subscribe(
         &self,
         client: &async_nats::Client,
-        ld: &InterfaceLinkDefinition,
+        component_id: ComponentId,
         sub: String,
         queue: Option<String>,
     ) -> anyhow::Result<JoinHandle<()>> {
@@ -133,8 +131,7 @@ impl NatsMessagingProvider {
             None => client.subscribe(sub.clone()).await,
         }?;
 
-        let link_def = ld.to_owned();
-        debug!(?link_def, "spawning listener for link def");
+        debug!(?component_id, "spawning listener for component");
 
         // Spawn a thread that listens for messages coming from NATS
         // this thread is expected to run the full duration that the provider is available
@@ -150,9 +147,10 @@ impl NatsMessagingProvider {
 
             // Listen for NATS message(s)
             while let Some(msg) = subscriber.next().await {
-                debug!(?msg, source_id = ?link_def.source_id, "received messsage");
+                let component_id = component_id.clone();
+                debug!(?msg, ?component_id, "received messsage");
                 // Set up tracing context for the NATS message
-                let span = tracing::debug_span!("handle_message", source_id = %link_def.source_id);
+                let span = tracing::debug_span!("handle_message", component_id);
 
                 span.in_scope(|| {
                     attach_span_context(&msg);
@@ -166,7 +164,7 @@ impl NatsMessagingProvider {
                     }
                 };
 
-                tokio::spawn(dispatch_msg(link_def.clone(), msg, permit).instrument(span));
+                tokio::spawn(dispatch_msg(component_id, msg, permit).instrument(span));
             }
         });
 
@@ -174,9 +172,9 @@ impl NatsMessagingProvider {
     }
 }
 
-#[instrument(level = "debug", skip_all, fields(source_id = %link_def.source_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
+#[instrument(level = "debug", skip_all, fields(component_id = %component_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
 async fn dispatch_msg(
-    link_def: InterfaceLinkDefinition,
+    component_id: ComponentId,
     nats_msg: async_nats::Message,
     _permit: OwnedSemaphorePermit,
 ) {
@@ -185,11 +183,11 @@ async fn dispatch_msg(
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
     };
-    let actor = InvocationHandler::new(&link_def);
+    let actor = InvocationHandler::new(component_id.clone());
     debug!(
         subject = msg.subject,
         reply_to = ?msg.reply_to,
-        source_id = actor.ld.source_id,
+        component_id = component_id,
         "sending message to actor",
     );
     if let Err(e) = actor.handle_message(msg).await {
@@ -207,42 +205,44 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let config_values = HashMap::from_iter(
-            ld.extract_provider_config_values()
-                .iter()
-                .map(|(k, v)| (String::from(*k), String::from(*v))),
-        );
+    #[instrument(level = "debug", skip_all, fields(source_id = %link_config.get_source_id()))]
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let source_id = link_config.get_source_id();
+        let config_values = link_config.get_config();
         let config = if config_values.is_empty() {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match ConnectionConfig::from_map(&config_values) {
+            match ConnectionConfig::from_map(config_values) {
                 Ok(cc) => self.default_config.merge(&cc),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
-                    return false;
+                    return Err(anyhow!(e)
+                        .context("failed to build connection config")
+                        .into());
                 }
             }
         };
 
         let mut update_map = self.actors.write().await;
-        let bundle = match self.connect(config, ld).await {
+        let bundle = match self.connect(config, source_id.into()).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
-                return false;
+                return Err(anyhow!(e).context("failed to connect to NATS").into());
             }
         };
-        update_map.insert(ld.source_id.to_string(), bundle);
+        update_map.insert(source_id.into(), bundle);
 
-        true
+        Ok(())
     }
 
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) {
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
 
         if let Some(bundle) = aw.remove(source_id) {
@@ -255,15 +255,17 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
         }
 
         debug!("finished processing delete link for actor [{}]", source_id);
+        Ok(())
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         aw.clear();
         // dropping all connections should send unsubscribes and close the connections, so no need
         // to handle that here
+        Ok(())
     }
 }
 
@@ -409,11 +411,12 @@ fn should_strip_headers(topic: &str) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::{ConnectionConfig, NatsMessagingProvider};
+    use std::collections::HashMap;
+
     use wasmcloud_provider_wit_bindgen::deps::serde_json;
-    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::{
-        InterfaceLinkDefinition, ProviderHandler,
-    };
+    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler;
+
+    use crate::{ConnectionConfig, NatsMessagingProvider};
 
     #[test]
     fn test_default_connection_serialize() {
@@ -468,21 +471,17 @@ mod test {
         assert_eq!(actor_map.len(), 0);
         drop(actor_map);
 
-        // Add a provider
-        let ld = InterfaceLinkDefinition {
-            source_id: String::from("???"),
-            name: String::from("test"),
-            // contract_id: String::from("test"),
-            // values: vec![
-            //     (
-            //         String::from("SUBSCRIPTION"),
-            //         String::from("test.wasmcloud.unlink"),
-            //     ),
-            //     (String::from("URI"), String::from("127.0.0.1:4222")),
-            // ],
-            ..Default::default()
-        };
-        prov.put_link(&ld).await;
+        // Link the provider
+        let link_config = (
+            &String::from("some-source"),
+            &String::from("some-provider"),
+            &String::from("default"),
+            &HashMap::new(),
+        );
+        assert!(prov
+            .receive_link_config_as_target(link_config)
+            .await
+            .is_ok());
 
         // After putting a link there should be one sub
         let actor_map = prov.actors.write().await;
@@ -491,7 +490,7 @@ mod test {
         drop(actor_map);
 
         // Remove link (this should kill the subscription)
-        let _ = prov.delete_link(&ld.source_id).await;
+        let _ = prov.delete_link(link_config.0).await;
 
         // After removing a link there should be no subs
         let actor_map = prov.actors.write().await;
@@ -519,21 +518,20 @@ mod test {
         drop(actor_map);
 
         // Add a provider
-        let ld = InterfaceLinkDefinition {
-            source_id: String::from("???"),
-            name: String::from("test"),
-            target_config: vec![
-                String::from("SUBSCRIPTION=test.wasmcloud.unlink"),
-                String::from("URI=99.99.99.99:4222"),
-            ],
-            ..Default::default()
-        };
-        let link_succeeded = prov.put_link(&ld).await;
-
-        // Expect the result to fail, connecting to an IP that (should) not exist
-        assert!(!link_succeeded, "put_link failed");
-
-        let _ = prov.shutdown().await;
+        let link_config = (
+            &String::from("some-source"),
+            &String::from("some-target"),
+            &String::from("test"),
+            &HashMap::from([
+                ("SUBSCRIPTION".into(), "test.wasmcloud.unlink".into()),
+                ("URI".into(), "99.99.99.99:4222".into()),
+            ]),
+        );
+        assert!(prov
+            .receive_link_config_as_target(link_config)
+            .await
+            .is_ok());
+        assert!(prov.shutdown().await.is_ok());
         Ok(())
     }
 }

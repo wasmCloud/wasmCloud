@@ -3,6 +3,9 @@
 pub type InvocationResult<T> = Result<T, InvocationError>;
 pub type ProviderInitResult<T> = Result<T, ProviderInitError>;
 
+/// Result form for [`ProviderHandler`] trait methods
+pub type ProviderOperationResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 /// All errors that that can be returned by a provider when it is being initialized
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderInitError {

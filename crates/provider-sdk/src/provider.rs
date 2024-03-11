@@ -779,6 +779,11 @@ impl ProviderConnection {
         &self.provider_key
     }
 
+    /// Get a named config for a given link (if present)
+    pub fn config(&self) -> &HashMap<String, String> {
+        &self.host_data.config
+    }
+
     /// Stores actor with link definition
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
         let mut update = self.links.write().await;

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -70,13 +68,27 @@ async fn kv_redis_suite() -> Result<()> {
         .lattice(LATTICE.to_string())
         .build();
 
+    // Generate a random test subject
+    let test_subject = Uuid::new_v4().to_string();
+
     // Build the host
     let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None)
         .await
         .context("failed to start test host")?;
 
-    // Generate a random test subject
-    let test_subject = Uuid::new_v4().to_string();
+    // For messaging invoker -> messaing-nats provider
+    assert_config_put(
+        &ctl_client,
+        "messaging",
+        [
+            ("subscriptions".into(), test_subject.clone()),
+            ("cluster_uris".into(), nats_url.clone().into()),
+        ],
+    )
+    .await?;
+
+    // For messaging invoker -> kv-redis provider
+    assert_config_put(&ctl_client, "kv", [("url".into(), redis_url.to_string())]).await?;
 
     // Scale messaging invoker
     // NOTE: we *must* have ONLY one actor, as we will use operations that ask a specific
@@ -101,7 +113,7 @@ async fn kv_redis_suite() -> Result<()> {
         provider_key: &messaging_nats_provider_key,
         provider_id: &messaging_nats_provider_key.public_key(),
         url: &messaging_nats_provider_url,
-        config: vec![],
+        config: vec!["messaging".into()],
     })
     .await?;
 
@@ -113,18 +125,8 @@ async fn kv_redis_suite() -> Result<()> {
         provider_key: &kv_redis_provider_key,
         provider_id: &kv_redis_provider_key.public_key(),
         url: &kv_redis_provider_url,
-        config: vec![],
+        config: vec!["kv".into()],
     })
-    .await?;
-
-    assert_config_put(
-        &ctl_client,
-        "MESSAGING_NATS",
-        HashMap::from_iter([
-            ("CLUSTER_URI".to_string(), nats_url.to_string()),
-            ("SUBSCRIPTIONS".to_string(), test_subject.clone()),
-        ]),
-    )
     .await?;
 
     // Link messaging-invoker ---[wasmcloud:messaging/message-subscriber]---> messaging provider
@@ -137,12 +139,7 @@ async fn kv_redis_suite() -> Result<()> {
         "messaging",
         vec!["messaging".to_string(), "message-subscriber".to_string()],
         vec![],
-        // NOTE: this should be temporary, rather than using a named config,
-        // we are stuffing credentials into the target_config
-        vec![
-            format!("subscriptions={test_subject}"),
-            format!("cluster_uris={nats_url}"),
-        ],
+        vec![],
     )
     .await
     .context("should advertise link")?;
@@ -157,9 +154,7 @@ async fn kv_redis_suite() -> Result<()> {
         "keyvalue",
         vec!["key-value".to_string()],
         vec![],
-        // NOTE: this should be temporary, rather than using a named config,
-        // we are stuffing credentials into the target_config
-        vec![format!("URL={}", redis_url.to_string())],
+        vec![],
     )
     .await
     .context("should advertise link")?;

@@ -13,6 +13,7 @@ use wasmcloud_compat::keyvalue::GetResponse;
 use wasmcloud_control_interface::ClientBuilder;
 use wasmcloud_test_util::actor::assert_scale_actor;
 use wasmcloud_test_util::host::WasmCloudTestHost;
+use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::lattice::link::assert_advertise_link;
 use wasmcloud_test_util::provider::assert_start_provider;
 
@@ -63,6 +64,28 @@ async fn kv_vault_suite() -> Result<()> {
     // Generate a random test subject
     let test_subject = Uuid::new_v4().to_string();
 
+    // For messaging invoker -> messaing-nats provider
+    assert_config_put(
+        &ctl_client,
+        "messaging",
+        [
+            ("subscriptions".into(), test_subject.clone()),
+            ("cluster_uris".into(), nats_url.clone().into()),
+        ],
+    )
+    .await?;
+
+    // For messaging invoker -> kv-redis provider
+    assert_config_put(
+        &ctl_client,
+        "kv",
+        [
+            ("ADDR".into(), vault_url.to_string()),
+            ("TOKEN".into(), vault_token.to_string()),
+        ],
+    )
+    .await?;
+
     // Scale messaging invoker
     // NOTE: we *must* have ONLY one actor, as we will use operations that ask a specific
     // actor to recall values it has seen
@@ -86,7 +109,7 @@ async fn kv_vault_suite() -> Result<()> {
         provider_key: &messaging_nats_provider_key,
         provider_id: &messaging_nats_provider_key.public_key(),
         url: &messaging_nats_provider_url,
-        config: vec![],
+        config: vec!["messaging".into()],
     })
     .await?;
 
@@ -98,7 +121,7 @@ async fn kv_vault_suite() -> Result<()> {
         provider_key: &kv_vault_provider_key,
         provider_id: &kv_vault_provider_key.public_key(),
         url: &kv_vault_provider_url,
-        config: vec![],
+        config: vec!["kv".into()],
     })
     .await?;
 
@@ -112,12 +135,7 @@ async fn kv_vault_suite() -> Result<()> {
         "messaging",
         vec!["messaging".to_string(), "message-subscriber".to_string()],
         vec![],
-        // NOTE: this should be temporary, rather than using a named config,
-        // we are stuffing credentials into the target_config
-        vec![
-            format!("subscriptions={test_subject}"),
-            format!("cluster_uris={nats_url}"),
-        ],
+        vec![],
     )
     .await
     .context("should advertise link")?;
@@ -132,12 +150,7 @@ async fn kv_vault_suite() -> Result<()> {
         "keyvalue",
         vec!["key-value".to_string()],
         vec![],
-        // NOTE: this should be temporary, rather than using a named config,
-        // we are stuffing credentials into the target_config
-        vec![
-            format!("ADDR={}", vault_url.to_string()),
-            format!("TOKEN={}", vault_token.to_string()),
-        ],
+        vec![],
     )
     .await
     .context("should advertise link")?;

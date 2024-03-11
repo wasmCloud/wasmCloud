@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Context as _;
-use anyhow::Result;
+use anyhow::{anyhow, Context as _, Result};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument};
 
@@ -9,7 +8,7 @@ use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde_json,
     serde_json::Value,
-    wasmcloud_provider_sdk::{Context, InterfaceLinkDefinition},
+    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
 };
 
 pub(crate) mod client;
@@ -66,23 +65,23 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(source_id = %ld.source_id))]
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let config_values = HashMap::from_iter(
-            ld.extract_provider_config_values()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string())),
-        );
-
-        let config = match Config::from_values(&config_values) {
+    #[instrument(level = "debug", skip_all, fields(source_id = %link_config.get_source_id()))]
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let source_id = link_config.get_source_id();
+        let link_name = link_config.get_source_id();
+        let config_values = link_config.get_config();
+        let config = match Config::from_values(config_values) {
             Ok(config) => config,
             Err(e) => {
                 error!(
-                    source_id = %ld.source_id,
-                    link_name = %ld.name,
+                    %source_id,
+                    %link_name,
                     "failed to parse config: {e}",
                 );
-                return false;
+                return Err(anyhow!(e).context("failed to parse config").into());
             }
         };
 
@@ -90,41 +89,46 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
             Ok(client) => client,
             Err(e) => {
                 error!(
-                    source_id = %ld.source_id,
-                    link_name = %ld.name,
+                    %source_id,
+                    %link_name,
                     "failed to create new client config: {e}",
                 );
-                return false;
+                return Err(anyhow!(e)
+                    .context("failed to create new client config")
+                    .into());
             }
         };
 
         let mut update_map = self.actors.write().await;
         info!(
-            source_id = %ld.source_id,
-            link_name = %ld.name,
+           %source_id,
+           %link_name,
             "adding link for actor",
         );
-        update_map.insert(ld.source_id.to_string(), RwLock::new(client));
-        true
+        update_map.insert(source_id.to_string(), RwLock::new(client));
+
+        Ok(())
     }
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, source_id: &str) {
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(source_id) {
             info!("deleting link for actor [{source_id}]");
             drop(client)
         }
+        Ok(())
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         // Empty the actor link data and stop all servers
         for (_, client) in aw.drain() {
             drop(client)
         }
+        Ok(())
     }
 }
 

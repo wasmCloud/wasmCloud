@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 redis = { workspace = true, features = [
     "tokio-comp",
     "aio",
@@ -20,7 +21,6 @@ tracing = { workspace = true }
 wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
 
 [dev-dependencies]
-anyhow = { workspace = true }
 async-nats = { workspace = true }
 nkeys = { workspace = true }
 tempfile = { workspace = true }

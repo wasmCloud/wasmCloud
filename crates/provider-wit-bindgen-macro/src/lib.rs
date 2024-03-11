@@ -462,9 +462,30 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// at least the following members are is supported.
         #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
         trait WasmcloudCapabilityProvider {
-            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::InterfaceLinkDefinition) -> bool;
-            async fn delete_link(&self, actor_id: &str);
-            async fn shutdown(&self);
+            async fn receive_link_config_as_source(
+                &self,
+                link_config: impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::LinkConfig
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                Ok(())
+            }
+
+            async fn receive_link_config_as_target(
+                &self,
+                link_config: impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::LinkConfig
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                Ok(())
+            }
+
+            async fn delete_link(
+                &self,
+                actor_id: &str
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&self) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                Ok(())
+            }
         }
 
         /// ProviderHandler ensures that your provider handles the basic
@@ -473,15 +494,29 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// This implementation is a stub and must be filled out by implementers
         #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
         impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
-            async fn put_link(&self, ld: &::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> bool {
-                WasmcloudCapabilityProvider::put_link(self, ld).await
+            async fn receive_link_config_as_source(
+                &self,
+                link_config: impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::LinkConfig
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                WasmcloudCapabilityProvider::receive_link_config_as_source(self, link_config).await
             }
 
-            async fn delete_link(&self, actor_id: &str) {
+            async fn receive_link_config_as_target(
+                &self,
+                link_config: impl ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::LinkConfig
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
+                WasmcloudCapabilityProvider::receive_link_config_as_target(self, link_config).await
+
+            }
+
+            async fn delete_link(
+                &self,
+                actor_id: &str
+            ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
                 WasmcloudCapabilityProvider::delete_link(self, actor_id).await
             }
 
-            async fn shutdown(&self) {
+            async fn shutdown(&self) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderOperationResult<()> {
                 WasmcloudCapabilityProvider::shutdown(self).await
             }
         }
@@ -494,19 +529,18 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         /// as performed by the host runtime
         ///
         /// Interfaces imported by the provider can use this to send traffic across the lattice
-        pub struct InvocationHandler<'a> {
-            ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::InterfaceLinkDefinition,
+        pub struct InvocationHandler {
             wrpc_client: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::wrpc::Client
         }
 
-        impl<'a> InvocationHandler<'a> {
-            pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> Self {
-                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::get_connection();
+        impl InvocationHandler {
+            pub fn new(target: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::ComponentId) -> Self {
+                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
                 // NOTE: The link definition that is used here is likely (source_id=?, target=<provider>)
                 //
                 // todo(vados-cosmonic): This invocation handler should arguably create a uni-directional
                 // "return" link to anything it wants to call, since links are uni-directional now.
-                Self { ld, wrpc_client: connection.get_wrpc_client(&ld.source_id) }
+                Self { wrpc_client: connection.get_wrpc_client(target) }
             }
 
             #(

@@ -52,7 +52,7 @@ async fn test_client() -> StorageClient {
         tls_use_webpki_roots: None,
     };
 
-    StorageClient::new(conf, Default::default()).await
+    StorageClient::new(conf, &HashMap::new(), Default::default()).await
 }
 
 /// Tests
