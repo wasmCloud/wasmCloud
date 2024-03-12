@@ -17,12 +17,6 @@ use crate::wit::{deserialize_wit_map, serialize_wit_map};
 /// Key of an issuer (nkey)
 pub type ClusterIssuerKey = String;
 
-/// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
-/// - actor public key
-/// - provider public key
-/// - opaque string
-pub type LatticeTargetId = String;
-
 // TODO(thomastaylor312): We should probably make the an enum instead of Actor and Provider, but the
 // current RPC protocol doesn't support that. Before we fully release, we should consider changing
 // this
