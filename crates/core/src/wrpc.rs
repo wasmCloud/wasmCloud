@@ -137,15 +137,12 @@ impl Client {
     /// * `headers` - The headers to include with each outbound invocation.
     pub fn new(
         nats: impl Into<Arc<async_nats::Client>>,
-        lattice: impl AsRef<str>,
-        component_id: impl AsRef<str>,
+        lattice: &str,
+        component_id: &str,
         headers: HeaderMap,
     ) -> Self {
         Self {
-            inner: wrpc_transport_nats::Client::new(
-                nats,
-                format!("{}.{}", lattice.as_ref(), component_id.as_ref()),
-            ),
+            inner: wrpc_transport_nats::Client::new(nats, format!("{lattice}.{component_id}")),
             headers,
         }
     }

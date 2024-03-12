@@ -134,8 +134,7 @@ impl ProviderConnection {
     }
 
     /// Used for fetching the RPC client in order to make RPC calls
-    pub fn get_wrpc_client(&self, target: impl AsRef<str>) -> WrpcNatsClient {
-        let target = target.as_ref();
+    pub fn get_wrpc_client(&self, target: &str) -> WrpcNatsClient {
         let mut headers = HeaderMap::new();
         headers.insert("source-id", self.provider_key());
         headers.insert("target-id", target);
