@@ -1,5 +1,5 @@
 use std::collections::hash_map::{self, Entry};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::future::Future;
@@ -1133,13 +1133,6 @@ impl std::fmt::Debug for InvocationParams {
 }
 
 impl Actor {
-    /// Returns the component specification for this unique actor
-    pub(crate) async fn component_specification(&self) -> ComponentSpecification {
-        let mut spec = ComponentSpecification::new(&self.image_reference);
-        spec.links = self.handler.interface_links.read().await.clone();
-        spec
-    }
-
     /// Handle an incoming wRPC request to invoke an export on this actor instance.
     #[instrument(
         level = "info",
@@ -1323,14 +1316,14 @@ pub struct Host {
     stop_rx: watch::Receiver<Option<Instant>>,
     queue: AbortHandle,
     // Component ID -> All Links
-    links: RwLock<HashMap<String, HashSet<InterfaceLinkDefinition>>>,
+    links: RwLock<HashMap<String, Vec<InterfaceLinkDefinition>>>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     config_data_cache: Arc<RwLock<ConfigCache>>,
     metrics: Arc<HostMetrics>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 /// The specification of a component that is or did run in the lattice. This contains all of the information necessary to
 /// instantiate a component in the lattice (url and digest) as well as configuration and links in order to facilitate
 /// runtime execution of the component. Each `import` in a component's WIT world will need a corresponding link for the
@@ -1339,7 +1332,7 @@ pub struct ComponentSpecification {
     /// The URL of the component, file, OCI, or otherwise
     url: String,
     /// All outbound links from this component to other components, used for routing when calling a component `import`
-    links: HashMap<String, HashMap<String, HashMap<String, String>>>,
+    links: Vec<InterfaceLinkDefinition>,
     ////
     // Possible additions in the future, left in as comments to facilitate discussion
     ////
@@ -1356,7 +1349,7 @@ impl ComponentSpecification {
     pub fn new(url: impl AsRef<str>) -> Self {
         Self {
             url: url.as_ref().to_string(),
-            links: HashMap::new(),
+            links: Vec::new(),
         }
     }
 }
@@ -2270,8 +2263,13 @@ impl Host {
                 .context("failed to store claims")?;
         }
 
-        let component_spec = if let Ok(spec) = self.get_component_spec(&actor_id).await {
-            if spec.url != actor_ref {
+        let component_spec = if let Ok(Some(mut spec)) = self.get_component_spec(&actor_id).await {
+            // If the component didn't start yet, the URL will be empty but the spec may contain links.
+            // Populate the URL and store the updated spec.
+            if spec.url.is_empty() {
+                spec.url = actor_ref.to_string();
+            } else if spec.url != actor_ref {
+                // Ensure another actor isn't already running with the same ID
                 bail!(
                     "component spec URL does not match actor reference: {} != {}",
                     spec.url,
@@ -2280,10 +2278,10 @@ impl Host {
             }
             spec
         } else {
-            let spec = ComponentSpecification::new(&actor_ref);
-            self.store_component_spec(&actor_id, &spec).await?;
-            spec
+            ComponentSpecification::new(&actor_ref)
         };
+        self.store_component_spec(&actor_id, &component_spec)
+            .await?;
 
         let polyfilled_imports = component.polyfilled_imports().clone();
         // Map the imports to pull out the result types of the functions for lookup when invoking them
@@ -2314,7 +2312,7 @@ impl Host {
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
-            interface_links: Arc::new(RwLock::new(component_spec.links)),
+            interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfilled_imports: imports,
         };
 
@@ -2816,20 +2814,26 @@ impl Host {
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
 
-        if let Ok(spec) = self.get_component_spec(provider_id).await {
-            if spec.url != provider_ref {
-                bail!(
-                    "component specification URL does not match provider reference: {} != {}",
-                    spec.url,
-                    provider_ref
-                );
-            }
-            spec
-        } else {
-            let spec = ComponentSpecification::new(provider_ref);
-            self.store_component_spec(&provider_id, &spec).await?;
-            spec
-        };
+        let component_specification =
+            if let Ok(Some(mut spec)) = self.get_component_spec(provider_id).await {
+                // If the component didn't start yet, the URL will be empty but the spec may contain links.
+                // Populate the URL and store the updated spec.
+                if spec.url.is_empty() {
+                    spec.url = provider_ref.to_string();
+                } else if spec.url != provider_ref {
+                    // Ensure there isn't another component already claiming this ID
+                    bail!(
+                        "component specification URL does not match provider reference: {} != {}",
+                        spec.url,
+                        provider_ref
+                    );
+                }
+                spec
+            } else {
+                ComponentSpecification::new(provider_ref)
+            };
+        self.store_component_spec(&provider_id, &component_specification)
+            .await?;
 
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
@@ -2871,8 +2875,29 @@ impl Host {
                 env_values: vec![],
                 instance_id: Uuid::new_v4().to_string(),
                 provider_key: provider_id.to_string(),
-                // TODO(#1548): Providers should receive [wasmcloud_control_interface::InterfaceLinkDefinition]s
-                link_definitions: vec![],
+                link_definitions: self
+                    .links
+                    .read()
+                    .await
+                    .get(provider_id)
+                    .cloned()
+                    .map(|links| {
+                        links
+                            .into_iter()
+                            // TODO(named config): deliver actual source and target config to the provider
+                            .map(|link| wasmcloud_core::InterfaceLinkDefinition {
+                                source_id: link.source_id,
+                                target: link.target,
+                                name: link.name,
+                                wit_namespace: link.wit_namespace,
+                                wit_package: link.wit_package,
+                                interfaces: link.interfaces,
+                                source_config: link.source_config,
+                                target_config: link.target_config,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 config_json: configuration,
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
@@ -3235,6 +3260,9 @@ impl Host {
         Ok(CtlResponse::success())
     }
 
+    /// Handle a new link by modifying the relevant source [ComponentSpeficication]. Once
+    /// the change is written to the LATTICEDATA store, each host in the lattice (including this one)
+    /// will handle the new specification and update their own internal link maps via [process_component_spec_put].
     #[instrument(level = "debug", skip_all)]
     async fn handle_interface_link_put(
         &self,
@@ -3254,79 +3282,48 @@ impl Host {
             target_config: _,
         } = interface_link_definition.clone();
 
-        let actors = self.actors.read().await;
-
-        // TODO(#1548): When providers can handle interface links, don't just assume actors for links.
-        let Ok(actor) = actors.get(&source_id).context("actor not found") else {
-            tracing::error!(source_id, "no actor found for the unique id");
-            return Ok(CtlResponse::error("no actor found for that ID"));
-        };
-
         let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
-
         debug!(
             source_id,
-            target, ns_and_package, name, "handling put wrpc link definition"
+            target,
+            ns_and_package,
+            name,
+            ?interfaces,
+            "handling put wrpc link definition"
         );
 
-        // Write link for each interface in the package
-        actor
-            .handler
-            .interface_links
-            .write()
-            .await
-            .entry(name.clone())
-            .and_modify(|link_for_name| {
-                link_for_name
-                    .entry(ns_and_package.clone())
-                    .and_modify(|package| {
-                        for interface in &interfaces {
-                            package.insert(interface.clone(), target.clone());
-                        }
-                    })
-                    .or_insert({
-                        interfaces
-                            .iter()
-                            .map(|interface| (interface.clone(), target.clone()))
-                            .collect::<HashMap<String, String>>()
-                    });
-            })
-            .or_insert({
-                let interfaces_map = interfaces
-                    .iter()
-                    .map(|interface| (interface.clone(), target.clone()))
-                    .collect::<HashMap<String, String>>();
-                HashMap::from_iter([(ns_and_package.clone(), interfaces_map)])
-            });
+        // Note here that unwrapping to a default is intentional. If the component spec doesn't exist, we want to create it
+        // so that when that component does start it can use pre-existing links.
+        let mut component_spec = self
+            .get_component_spec(&source_id)
+            .await?
+            .unwrap_or_default();
 
-        let spec = actor.component_specification().await;
-        self.store_component_spec(&source_id, &spec).await?;
+        // If we can find an existing link with the same source, target, namespace, package, and name, update it.
+        // Otherwise, add the new link to the component specification.
+        if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
+            link.source_id == source_id
+                && link.target == target
+                && link.wit_namespace == wit_namespace
+                && link.wit_package == wit_package
+                && link.name == name
+        }) {
+            if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
+                *existing_link = interface_link_definition.clone();
+            }
+        } else {
+            component_spec.links.push(interface_link_definition.clone());
+        };
+
+        // Update component specification with the new link
+        self.store_component_spec(&source_id, &component_spec)
+            .await?;
 
         let set_event = event::linkdef_set(&interface_link_definition);
-
-        // Insert link into host map
-        self.links
-            .write()
-            .await
-            .entry(source_id.clone())
-            .and_modify(|links| {
-                links.replace(interface_link_definition.clone());
-            })
-            .or_insert(HashSet::from_iter([interface_link_definition]));
-
         self.publish_event("linkdef_set", set_event).await?;
 
-        self.rpc_nats
-            .publish_with_headers(
-                format!(
-                    "wasmbus.rpc.{}.{target}.linkdefs.put",
-                    self.host_config.lattice
-                ),
-                injector_to_headers(&TraceContextInjector::default_with_span()),
-                Bytes::copy_from_slice(payload),
-            )
-            .await
-            .context("failed to publish link definition put")?;
+        self.put_provider_link(&source_id, &target, payload.as_ref().to_owned().into())
+            .await?;
 
         Ok(CtlResponse::success())
     }
@@ -3346,12 +3343,6 @@ impl Host {
         } = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
 
-        let actors = self.actors.read().await;
-
-        let Ok(actor) = actors.get(&source_id).context("actor not found") else {
-            return Ok(CtlResponse::success());
-        };
-
         let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
 
         debug!(
@@ -3359,49 +3350,42 @@ impl Host {
             ns_and_package, name, "handling del wrpc link definition"
         );
 
-        // Remove the interface links for the given link name and package
-        actor
-            .handler
-            .interface_links
-            .write()
-            .await
-            .entry(name.clone())
-            .and_modify(|link_for_name| {
-                link_for_name.remove(&ns_and_package);
-            });
+        let Some(mut component_spec) = self.get_component_spec(&source_id).await? else {
+            // If the component spec doesn't exist, the link is deleted
+            return Ok(CtlResponse::success());
+        };
 
-        let spec = actor.component_specification().await;
-        self.store_component_spec(&source_id, &spec).await?;
+        // If we can find an existing link with the same source, namespace, package, and name, remove it
+        // and update the component specification.
+        let deleted_link_target = if let Some(existing_link_index) =
+            component_spec.links.iter().position(|link| {
+                link.source_id == source_id
+                    && link.wit_namespace == wit_namespace
+                    && link.wit_package == wit_package
+                    && link.name == name
+            }) {
+            // Sanity safety check since `swap_remove` will panic if the index is out of bounds
+            if existing_link_index < component_spec.links.len() {
+                Some(component_spec.links.swap_remove(existing_link_index).target)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        // Remove link from host map
-        self.links
-            .write()
-            .await
-            .entry(source_id.clone())
-            .and_modify(|links| {
-                // Retain links that don't match the link we're removing
-                links.retain(|interface_link_definition| {
-                    interface_link_definition.wit_namespace != wit_namespace
-                        || interface_link_definition.wit_package != wit_package
-                        || interface_link_definition.name != name
-                });
-            });
+        // Update component specification with the new link
+        self.store_component_spec(&source_id, &component_spec)
+            .await?;
 
         self.publish_event(
             "linkdef_deleted",
-            event::linkdef_deleted(source_id, name, wit_namespace, wit_package),
+            event::linkdef_deleted(&source_id, name, wit_namespace, wit_package),
         )
         .await?;
-        // TODO(#1548): When providers can handle interface links, tell them to set the link.
-        // Alternatively, send them configuration cc @thomastaylor312
-        // self.rpc_nats
-        // .publish_with_headers(
-        //     format!("wasmbus.rpc.{lattice}.{provider_id}.{link_name}.linkdefs.del",),
-        //     injector_to_headers(&TraceContextInjector::default_with_span()),
-        //     msgp.into(),
-        // )
-        // .await
-        // .context("failed to publish link definition deletion")?;
+
+        self.del_provider_link(&source_id, deleted_link_target, payload.to_owned().into())
+            .await?;
 
         Ok(CtlResponse::success())
     }
@@ -3677,8 +3661,85 @@ impl Host {
         }
     }
 
+    /// Publishes a link to the lattice for all instances of a provider to handle
+    /// Right now this is publishing _both_ to the source and the target in order to
+    /// ensure that the provider is aware of the link. This would cause problems if a provider
+    /// is linked to a provider (which it should never be.)
+    ///
+    /// TODO: Instead of delivering the named config, deliver the actual source and target config to the provider
+    #[instrument(level = "debug", skip(self, payload))]
+    async fn put_provider_link(
+        &self,
+        source_id: &str,
+        target: &str,
+        payload: Bytes,
+    ) -> anyhow::Result<()> {
+        let lattice = &self.host_config.lattice;
+        let source_provider = self
+            .rpc_nats
+            .publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{source_id}.linkdefs.put"),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload.clone(),
+            )
+            .await
+            .context("failed to publish provider link definition put");
+        let target_provider = self
+            .rpc_nats
+            .publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{target}.linkdefs.put"),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload,
+            )
+            .await
+            .context("failed to publish provider link definition put");
+        source_provider?;
+        target_provider?;
+        Ok(())
+    }
+
+    /// Publishes a delete link to the lattice for all instances of a provider to handle
+    /// Right now this is publishing _both_ to the source and the target in order to
+    /// ensure that the provider is aware of the link delete. This would cause problems if a provider
+    /// is linked to a provider (which it should never be.)
+    ///
+    /// TODO: Instead of delivering the named config, deliver the actual source and target config to the provider
+    #[instrument(level = "debug", skip(self, payload))]
+    async fn del_provider_link(
+        &self,
+        source_id: &str,
+        target: Option<String>,
+        payload: Bytes,
+    ) -> anyhow::Result<()> {
+        let lattice = &self.host_config.lattice;
+        let source_provider = self
+            .rpc_nats
+            .publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{source_id}.linkdefs.del"),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload.clone(),
+            )
+            .await
+            .context("failed to publish provider link definition del");
+        if let Some(target) = target {
+            self.rpc_nats
+                .publish_with_headers(
+                    format!("wasmbus.rpc.{lattice}.{target}.linkdefs.del"),
+                    injector_to_headers(&TraceContextInjector::default_with_span()),
+                    payload,
+                )
+                .await
+                .context("failed to publish provider link definition del")?;
+        }
+
+        source_provider?;
+        Ok(())
+    }
+
+    /// Retrieve a component specification based on the provided ID. The outer Result is for errors
+    /// accessing the store, and the inner option indicates if the spec exists.
     #[instrument(level = "debug", skip_all)]
-    async fn get_component_spec(&self, id: &str) -> anyhow::Result<ComponentSpecification> {
+    async fn get_component_spec(&self, id: &str) -> anyhow::Result<Option<ComponentSpecification>> {
         let key = format!("COMPONENT_{id}");
         let spec = self
             .data
@@ -3686,7 +3747,10 @@ impl Host {
             .await
             .context("failed to get component spec")?
             .map(|spec_bytes| serde_json::from_slice(&spec_bytes))
-            .ok_or_else(|| anyhow!("component spec not found"))??;
+            .transpose()
+            .context(format!(
+                "failed to deserialize stored component specification for {id}"
+            ))?;
         Ok(spec)
     }
 
@@ -3749,11 +3813,15 @@ impl Host {
 
         let spec: ComponentSpecification = serde_json::from_slice(value.as_ref())
             .context("failed to deserialize component specification")?;
+
+        // If the actor is already running, update the links
         if let Some(actor) = self.actors.write().await.get(id) {
-            // Update links
-            *actor.handler.interface_links.write().await = spec.links;
+            *actor.handler.interface_links.write().await = component_import_links(&spec.links);
             // NOTE(brooksmtownsend): We can consider updating the actor if the image URL changes
         };
+
+        // Insert the links into host map
+        self.links.write().await.insert(id.to_string(), spec.links);
 
         Ok(())
     }
@@ -3896,6 +3964,48 @@ impl Host {
             }
         }
     }
+}
+
+/// Helper function to transform a Vec of [InterfaceLinkDefinition]s into the structure components expect to be able
+/// to quickly look up the desired target for a given interface
+///
+/// # Arguments
+/// - links: A Vec of [InterfaceLinkDefinition]s
+///
+/// # Returns
+/// - A HashMap in the form of link_name -> namespace:package -> interface -> target
+fn component_import_links(
+    links: &[InterfaceLinkDefinition],
+) -> HashMap<String, HashMap<String, HashMap<String, String>>> {
+    links.iter().fold(HashMap::new(), |mut acc, link| {
+        let ns_and_package = format!("{}:{}", link.wit_namespace, link.wit_package);
+
+        acc.entry(link.name.clone())
+            .and_modify(|link_for_name| {
+                link_for_name
+                    .entry(ns_and_package.clone())
+                    .and_modify(|package| {
+                        for interface in &link.interfaces {
+                            package.insert(interface.clone(), link.target.clone());
+                        }
+                    })
+                    .or_insert({
+                        link.interfaces
+                            .iter()
+                            .map(|interface| (interface.clone(), link.target.clone()))
+                            .collect::<HashMap<String, String>>()
+                    });
+            })
+            .or_insert({
+                let interfaces_map = link
+                    .interfaces
+                    .iter()
+                    .map(|interface| (interface.clone(), link.target.clone()))
+                    .collect::<HashMap<String, String>>();
+                HashMap::from_iter([(ns_and_package.clone(), interfaces_map)])
+            });
+        acc
+    })
 }
 
 /// Helper function to serialize CtlResponse<T> into a Vec<u8> if the response is Some
@@ -4171,4 +4281,167 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             Some((name, value))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod test {
+    // Ensure that the helper function to translate a list of links into a map of imports works as expected
+    #[test]
+    fn can_compute_component_links() {
+        use std::collections::HashMap;
+        use wasmcloud_control_interface::InterfaceLinkDefinition;
+
+        let links = vec![
+            InterfaceLinkDefinition {
+                source_id: "source_component".to_string(),
+                target: "kv-redis".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "keyvalue".to_string(),
+                interfaces: vec!["atomic".to_string(), "eventual".to_string()],
+                name: "default".to_string(),
+                source_config: vec![],
+                target_config: vec![],
+            },
+            InterfaceLinkDefinition {
+                source_id: "source_component".to_string(),
+                target: "kv-vault".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "keyvalue".to_string(),
+                interfaces: vec!["atomic".to_string(), "eventual".to_string()],
+                name: "secret".to_string(),
+                source_config: vec![],
+                target_config: vec!["my-secret".to_string()],
+            },
+            InterfaceLinkDefinition {
+                source_id: "source_component".to_string(),
+                target: "kv-vault-offsite".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "keyvalue".to_string(),
+                interfaces: vec!["atomic".to_string()],
+                name: "secret".to_string(),
+                source_config: vec![],
+                target_config: vec!["my-secret".to_string()],
+            },
+            InterfaceLinkDefinition {
+                source_id: "http".to_string(),
+                target: "source_component".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "http".to_string(),
+                interfaces: vec!["incoming-handler".to_string()],
+                name: "default".to_string(),
+                source_config: vec!["some-port".to_string()],
+                target_config: vec![],
+            },
+            InterfaceLinkDefinition {
+                source_id: "source_component".to_string(),
+                target: "httpclient".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "http".to_string(),
+                interfaces: vec!["outgoing-handler".to_string()],
+                name: "default".to_string(),
+                source_config: vec![],
+                target_config: vec!["some-port".to_string()],
+            },
+            InterfaceLinkDefinition {
+                source_id: "source_component".to_string(),
+                target: "other_component".to_string(),
+                wit_namespace: "custom".to_string(),
+                wit_package: "foo".to_string(),
+                interfaces: vec!["bar".to_string(), "baz".to_string()],
+                name: "default".to_string(),
+                source_config: vec![],
+                target_config: vec![],
+            },
+            InterfaceLinkDefinition {
+                source_id: "other_component".to_string(),
+                target: "target".to_string(),
+                wit_namespace: "wit".to_string(),
+                wit_package: "package".to_string(),
+                interfaces: vec!["interface3".to_string()],
+                name: "link2".to_string(),
+                source_config: vec![],
+                target_config: vec![],
+            },
+        ];
+
+        let links_map = super::component_import_links(&links);
+
+        // Expected structure:
+        // {
+        //     "default": {
+        //         "wasi:keyvalue": {
+        //             "atomic": "kv-redis",
+        //             "eventual": "kv-redis"
+        //         },
+        //         "wasi:http": {
+        //             "incoming-handler": "source_component"
+        //         },
+        //         "custom:foo": {
+        //             "bar": "other_component",
+        //             "baz": "other_component"
+        //         }
+        //     },
+        //     "secret": {
+        //         "wasi:keyvalue": {
+        //             "atomic": "kv-vault-offsite",
+        //             "eventual": "kv-vault"
+        //         }
+        //     },
+        //     "link2": {
+        //         "wit:package": {
+        //             "interface3": "target"
+        //         }
+        //     }
+        // }
+        let expected_result = HashMap::from_iter([
+            (
+                "default".to_string(),
+                HashMap::from_iter([
+                    (
+                        "wasi:keyvalue".to_string(),
+                        HashMap::from_iter([
+                            ("atomic".to_string(), "kv-redis".to_string()),
+                            ("eventual".to_string(), "kv-redis".to_string()),
+                        ]),
+                    ),
+                    (
+                        "wasi:http".to_string(),
+                        HashMap::from_iter([
+                            (
+                                "incoming-handler".to_string(),
+                                "source_component".to_string(),
+                            ),
+                            ("outgoing-handler".to_string(), "httpclient".to_string()),
+                        ]),
+                    ),
+                    (
+                        "custom:foo".to_string(),
+                        HashMap::from_iter([
+                            ("bar".to_string(), "other_component".to_string()),
+                            ("baz".to_string(), "other_component".to_string()),
+                        ]),
+                    ),
+                ]),
+            ),
+            (
+                "secret".to_string(),
+                HashMap::from_iter([(
+                    "wasi:keyvalue".to_string(),
+                    HashMap::from_iter([
+                        ("atomic".to_string(), "kv-vault-offsite".to_string()),
+                        ("eventual".to_string(), "kv-vault".to_string()),
+                    ]),
+                )]),
+            ),
+            (
+                "link2".to_string(),
+                HashMap::from_iter([(
+                    "wit:package".to_string(),
+                    HashMap::from_iter([("interface3".to_string(), "target".to_string())]),
+                )]),
+            ),
+        ]);
+
+        assert_eq!(links_map, expected_result);
+    }
 }
