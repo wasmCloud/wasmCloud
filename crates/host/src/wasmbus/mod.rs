@@ -2700,7 +2700,7 @@ impl Host {
     // Should it also update configuration, or is that separate? Should scaling be done via an update?
     #[instrument(level = "debug", skip_all)]
     async fn handle_update_actor(
-        &self,
+        self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
@@ -2719,66 +2719,153 @@ impl Host {
             "handling update actor"
         );
 
-        let actors = self.actors.read().await;
-        let actor = actors.get(&actor_id).context("actor not found")?;
-        let annotations = annotations.unwrap_or_default().into_iter().collect();
-
-        let new_actor = self.fetch_actor(&new_actor_ref).await?;
-        let new_claims = new_actor.claims();
-        if let Some(claims) = new_claims.cloned() {
-            self.store_claims(Claims::Actor(claims))
+        let actor_id = actor_id.to_string();
+        let new_actor_ref = new_actor_ref.to_string();
+        let host_id = host_id.to_string();
+        spawn(async move {
+            if let Err(e) = self
+                .handle_update_actor_task(&actor_id, &new_actor_ref, &host_id, annotations)
                 .await
-                .context("failed to store claims")?;
-        }
+            {
+                error!(%new_actor_ref, %actor_id, err = ?e, "failed to update actor");
+            }
+        });
 
-        let max = actor.max_instances;
-        let Ok(new_actor) = self
-            .instantiate_actor(
-                &annotations,
-                new_actor_ref.clone(),
-                actor_id.clone(),
-                max,
-                new_actor.clone(),
-                actor.handler.clone(),
+        Ok(CtlResponse::success())
+    }
+
+    async fn handle_update_actor_task(
+        &self,
+        actor_id: &str,
+        new_actor_ref: &str,
+        host_id: &str,
+        annotations: Option<HashMap<String, String>>,
+    ) -> anyhow::Result<()> {
+        // NOTE: This block is specifically scoped to ensure we drop the read lock on `self.actors` before
+        // we attempt to grab a write lock.
+        let new_actor = {
+            let actors = self.actors.read().await;
+            let actor = actors.get(actor_id).context("actor not found")?;
+            let annotations = annotations.unwrap_or_default().into_iter().collect();
+
+            let new_actor = self.fetch_actor(new_actor_ref).await?;
+            let new_claims = new_actor.claims();
+            if let Some(claims) = new_claims.cloned() {
+                self.store_claims(Claims::Actor(claims))
+                    .await
+                    .context("failed to store claims")?;
+            }
+
+            let max = actor.max_instances;
+            let Ok(new_actor) = self
+                .instantiate_actor(
+                    &annotations,
+                    new_actor_ref.to_string(),
+                    actor_id.to_string(),
+                    max,
+                    new_actor.clone(),
+                    actor.handler.clone(),
+                )
+                .await
+            else {
+                bail!("failed to instantiate actor from new reference");
+            };
+
+            info!(%new_actor_ref, "actor updated");
+            self.publish_event(
+                "actor_scaled",
+                event::actor_scaled(
+                    new_claims,
+                    &actor.annotations,
+                    host_id,
+                    max,
+                    new_actor_ref,
+                    actor_id,
+                ),
             )
-            .await
-        else {
-            bail!("failed to instantiate actor from new reference");
+            .await?;
+
+            // TODO(#1548): If this errors, we need to rollback
+            self.stop_actor(actor, host_id)
+                .await
+                .context("failed to stop old actor")?;
+            self.publish_event(
+                "actor_scaled",
+                event::actor_scaled(
+                    actor.claims(),
+                    &actor.annotations,
+                    host_id,
+                    0_usize,
+                    &actor.image_reference,
+                    &actor.id,
+                ),
+            )
+            .await?;
+
+            new_actor
         };
 
-        info!(%new_actor_ref, "actor updated");
-        self.publish_event(
-            "actor_scaled",
-            event::actor_scaled(
-                new_claims,
-                &actor.annotations,
-                host_id,
-                max,
-                &new_actor_ref,
-                &actor_id,
-            ),
-        )
-        .await?;
-
-        // TODO(#1548): If this errors, we need to rollback
-        self.stop_actor(actor, host_id)
+        self.actors
+            .write()
             .await
-            .context("failed to stop old actor")?;
-        self.publish_event(
-            "actor_scaled",
-            event::actor_scaled(
-                actor.claims(),
-                &actor.annotations,
-                host_id,
-                0_usize,
-                &actor.image_reference,
-                &actor.id,
-            ),
-        )
-        .await?;
+            .insert(actor_id.to_string(), new_actor);
+        Ok(())
+    }
 
-        self.actors.write().await.insert(actor_id, new_actor);
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_start_provider(
+        self: Arc<Self>,
+        payload: impl AsRef<[u8]>,
+        host_id: &str,
+    ) -> anyhow::Result<CtlResponse<()>> {
+        let StartProviderCommand {
+            config,
+            provider_id,
+            provider_ref,
+            annotations,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize provider start command")?;
 
+        if self.providers.read().await.contains_key(&provider_id) {
+            return Ok(CtlResponse::error(
+                "provider with that ID is already running",
+            ));
+        }
+
+        info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
+
+        let config = self
+            .config_generator
+            .generate(config)
+            .await
+            .context("Unable to fetch requested config")?;
+        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
+
+        let host_id = host_id.to_string();
+        spawn(async move {
+            if let Err(err) = self
+                .handle_start_provider_task(
+                    config,
+                    &provider_id,
+                    &provider_ref,
+                    annotations.unwrap_or_default(),
+                    &host_id,
+                )
+                .await
+            {
+                error!(provider_ref, provider_id, ?err, "failed to start provider");
+                if let Err(err) = self
+                    .publish_event(
+                        "provider_start_failed",
+                        event::provider_start_failed(provider_ref, provider_id, &err),
+                    )
+                    .await
+                {
+                    error!(?err, "failed to publish provider_start_failed event");
+                }
+            }
+        });
         Ok(CtlResponse::success())
     }
 
@@ -3088,63 +3175,6 @@ impl Host {
             bail!("provider is already running with that ID")
         }
         Ok(())
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_start_provider(
-        self: Arc<Self>,
-        payload: impl AsRef<[u8]>,
-        host_id: &str,
-    ) -> anyhow::Result<CtlResponse<()>> {
-        let StartProviderCommand {
-            config,
-            provider_id,
-            provider_ref,
-            annotations,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize provider start command")?;
-
-        if self.providers.read().await.contains_key(&provider_id) {
-            return Ok(CtlResponse::error(
-                "provider with that ID is already running",
-            ));
-        }
-
-        info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
-
-        let config = self
-            .config_generator
-            .generate(config)
-            .await
-            .context("Unable to fetch requested config")?;
-        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
-
-        let host_id = host_id.to_string();
-        spawn(async move {
-            if let Err(err) = self
-                .handle_start_provider_task(
-                    config,
-                    &provider_id,
-                    &provider_ref,
-                    annotations.unwrap_or_default(),
-                    &host_id,
-                )
-                .await
-            {
-                error!(provider_ref, provider_id, ?err, "failed to start provider");
-                if let Err(err) = self
-                    .publish_event(
-                        "provider_start_failed",
-                        event::provider_start_failed(provider_ref, provider_id, &err),
-                    )
-                    .await
-                {
-                    error!(?err, "failed to publish provider_start_failed event");
-                }
-            }
-        });
-        Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3555,7 +3585,7 @@ impl Host {
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),
-            (Some("actor"), Some("update"), Some(host_id), None) => self
+            (Some("actor"), Some("update"), Some(host_id), None) => Arc::clone(&self)
                 .handle_update_actor(message.payload, host_id)
                 .await
                 .map(Some)
