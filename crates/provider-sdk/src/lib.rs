@@ -10,11 +10,9 @@ use tracing::{error, info, warn};
 pub mod error;
 pub mod provider;
 pub mod provider_main;
-pub mod rpc_client;
 
 pub use provider::ProviderConnection;
 pub use provider_main::{load_host_data, run_provider, start_provider};
-pub use rpc_client::RpcClient;
 
 pub use wasmcloud_tracing;
 
