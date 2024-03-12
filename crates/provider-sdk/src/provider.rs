@@ -1,3 +1,4 @@
+use core::fmt;
 use core::fmt::Formatter;
 
 use std::collections::HashMap;
@@ -26,7 +27,10 @@ use wasmcloud_core::TraceContext;
 use wasmcloud_tracing::context::attach_span_context;
 
 use crate::error::{InvocationResult, ProviderInitError, ProviderInitResult};
-use crate::{deserialize, serialize, Context, ProviderHandler, WrpcDispatch, WrpcInvocationLookup};
+use crate::{
+    deserialize, health_subject, link_del_subject, link_put_subject, serialize, shutdown_subject,
+    Context, ProviderHandler, WrpcDispatch, WrpcInvocationLookup,
+};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -101,8 +105,8 @@ pub struct ProviderConnection {
     incoming_invocation_fn_map: Arc<WrpcInvocationLookup>,
 }
 
-impl std::fmt::Debug for ProviderConnection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ProviderConnection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderConnection")
             .field("provider_id", &self.provider_key())
             .field("host_id", &self.host_id)
@@ -385,12 +389,9 @@ impl ProviderConnection {
         provider: impl ProviderHandler + Send + 'static,
         shutdown_tx: broadcast::Sender<()>,
     ) -> ProviderInitResult<JoinHandle<Result<()>>> {
-        let shutdown_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.shutdown",
-            &self.lattice, &self.provider_key, self.link_name
-        );
-        debug!("subscribing for shutdown : {}", &shutdown_topic);
-        let mut sub = self.nats.subscribe(shutdown_topic).await?;
+        let subject = shutdown_subject(&self.lattice, &self.provider_key, &self.link_name);
+        debug!(subject, "subscribing for shutdown");
+        let mut sub = self.nats.subscribe(subject).await?;
         let nats = self.nats.clone();
         let host_id = self.host_id.clone();
         let handle = tokio::spawn(
@@ -440,11 +441,10 @@ impl ProviderConnection {
         provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
     ) -> ProviderInitResult<JoinHandle<Result<()>>> {
-        let ldput_topic = format!(
-            "wasmbus.rpc.{}.{}.linkdefs.put",
-            &self.lattice, &self.provider_key,
-        );
-        let mut sub = self.nats.subscribe(ldput_topic).await?;
+        let mut sub = self
+            .nats
+            .subscribe(link_put_subject(&self.lattice, &self.provider_key))
+            .await?;
         let this = self.clone();
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
@@ -493,16 +493,13 @@ impl ProviderConnection {
         provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
     ) -> ProviderInitResult<JoinHandle<Result<()>>> {
-        let link_del_topic = format!(
-            "wasmbus.rpc.{}.{}.linkdefs.del",
-            &self.lattice, &self.provider_key
-        );
-        debug!(topic = %link_del_topic, "subscribing for link del");
-        let mut sub = self.nats.subscribe(link_del_topic.clone()).await?;
+        let subject = link_del_subject(&self.lattice, &self.provider_key);
+        debug!(%subject, "subscribing for link del");
+        let mut sub = self.nats.subscribe(subject.clone()).await?;
         let this = self.clone();
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
-                let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
+                let span = tracing::trace_span!("subscribe_link_del", %subject);
                 if let Ok(ld) = deserialize::<InterfaceLinkDefinition>(&msg.payload) {
                     this.delete_link(&ld.source_id)
                         .instrument(span.clone())
@@ -522,12 +519,10 @@ impl ProviderConnection {
         provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
     ) -> ProviderInitResult<JoinHandle<Result<()>>> {
-        let topic = format!(
-            "wasmbus.rpc.{}.{}.health",
-            &self.lattice, &self.provider_key,
-        );
-
-        let mut sub = self.nats.subscribe(topic).await?;
+        let mut sub = self
+            .nats
+            .subscribe(health_subject(&self.lattice, &self.provider_key))
+            .await?;
         let this = self.clone();
         let handle = tokio::spawn(
             async move {
