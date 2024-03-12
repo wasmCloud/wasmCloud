@@ -25,10 +25,10 @@ use crate::{
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ClaimsCliCommand {
-    /// Examine the capabilities of a WebAssembly module
+    /// Examine the signing claims information or WIT world from a signed actor component
     #[clap(name = "inspect")]
     Inspect(InspectCommand),
-    /// Sign a WebAssembly module, specifying capabilities and other claims
+    /// Sign a WebAssembly component, specifying capabilities and other claims
     /// including expiration, tags, and additional metadata
     #[clap(name = "sign")]
     Sign(SignCommand),
@@ -39,8 +39,8 @@ pub enum ClaimsCliCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct InspectCommand {
-    /// Path to signed actor module or OCI URL of signed actor module
-    pub module: String,
+    /// Path to signed component or OCI URL of signed component
+    pub component: String,
 
     /// Extract the raw JWT from the file and print to stdout
     #[clap(name = "jwt_only", long = "jwt-only")]
@@ -50,11 +50,11 @@ pub struct InspectCommand {
     #[clap(name = "wit", long = "wit", alias = "world")]
     pub wit: bool,
 
-    /// Digest to verify artifact against (if OCI URL is provided for <module>)
+    /// Digest to verify artifact against (if OCI URL is provided for <component>)
     #[clap(short = 'd', long = "digest")]
     pub(crate) digest: Option<String>,
 
-    /// Allow latest artifact tags (if OCI URL is provided for <module>)
+    /// Allow latest artifact tags (if OCI URL is provided for <component>)
     #[clap(long = "allow-latest")]
     pub(crate) allow_latest: bool,
 
@@ -400,7 +400,7 @@ impl ActorMetadata {
 impl From<InspectCommand> for inspect::InspectCliCommand {
     fn from(cmd: InspectCommand) -> Self {
         inspect::InspectCliCommand {
-            target: cmd.module,
+            target: cmd.component,
             jwt_only: cmd.jwt_only,
             wit: cmd.wit,
             digest: cmd.digest,
@@ -921,7 +921,7 @@ mod test {
 
         match cmd.claims {
             ClaimsCliCommand::Inspect(InspectCommand {
-                module,
+                component: module,
                 jwt_only,
                 digest,
                 allow_latest,
@@ -966,7 +966,7 @@ mod test {
 
         match short_cmd.claims {
             ClaimsCliCommand::Inspect(InspectCommand {
-                module,
+                component: module,
                 jwt_only,
                 digest,
                 allow_latest,

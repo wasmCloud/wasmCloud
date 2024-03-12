@@ -19,44 +19,50 @@ pub struct LinkDelCommand {
     pub link_name: Option<String>,
 
     /// WIT namespace of the link
-    #[clap(short = 'n', long = "wit-namespace")]
+    #[clap(short = 'n', long = "namespace")]
     pub wit_namespace: String,
 
     /// WIT package of the link
-    #[clap(short = 'p', long = "wit-package")]
+    #[clap(short = 'w', long = "package")]
     pub wit_package: String,
 }
 
 #[derive(Parser, Debug, Clone)]
-#[clap(
-    override_usage = "wash ctl link put --link-name <LINK_NAME> [OPTIONS] <actor-id-or-name> <provider-id-or-name> <contract-id> [values]..."
-)]
 pub struct LinkPutCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
+    /// The ID of the component to link from
     #[clap(name = "source-id")]
     pub source_id: String,
 
+    /// The ID of the component to link to
     #[clap(name = "target")]
     pub target: String,
 
+    /// The WIT namespace of the link, e.g. "wasi" in "wasi:http/incoming-handler"
     #[clap(name = "wit-namespace")]
     pub wit_namespace: String,
 
+    /// The WIT package of the link, e.g. "http" in "wasi:http/incoming-handler"
     #[clap(name = "wit-package")]
     pub wit_package: String,
 
-    #[clap(long = "interface")]
+    /// The interface of the link, e.g. "incoming-handler" in "wasi:http/incoming-handler"
+    #[clap(long = "interface", required = true)]
     pub interfaces: Vec<String>,
 
+    /// List of named configuration to make available to the source
     #[clap(long = "source_config")]
     pub source_config: Vec<String>,
 
+    /// List of named configuration to make available to the target
     #[clap(long = "target_config")]
     pub target_config: Vec<String>,
 
-    /// Link name, defaults to "default"
+    /// Link name, defaults to "default". Used for scenarios where a single source
+    /// may have multiple links to the same target, or different targets with the same
+    /// WIT namespace, package, and interface.
     #[clap(short = 'l', long = "link-name")]
     pub link_name: Option<String>,
 }
@@ -69,15 +75,15 @@ pub struct LinkQueryCommand {
 
 #[derive(Debug, Clone, Parser)]
 pub enum LinkCommand {
-    /// Query established links
+    /// Query all links, same as `wash get links`
     #[clap(name = "query")]
     Query(LinkQueryCommand),
 
-    /// Establish a link definition
+    /// Put a link from a source to a target on a given WIT interface
     #[clap(name = "put")]
     Put(LinkPutCommand),
 
-    /// Delete a link definition
+    /// Delete a link
     #[clap(name = "del")]
     Del(LinkDelCommand),
 }

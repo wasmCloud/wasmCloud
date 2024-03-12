@@ -16,6 +16,9 @@ const ECHO_ACTOR_ID: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7H
     not(can_reach_wasmcloud_azurecr_io),
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
+#[ignore]
+// TODO: reenable after #1649 merges and v1.0.0-alpha.2 is released
+// This test's issue was fixed in 019c975ecf5e0dde0e7b392787ff3e89d607770f
 async fn integration_update_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 

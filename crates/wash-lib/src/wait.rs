@@ -3,7 +3,7 @@ use cloudevents::event::{AttributesReader, Event};
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{Duration, Instant};
 
-use crate::actor::ActorScaledInfo;
+use crate::actor::ComponentScaledInfo;
 
 /// Useful parts of a CloudEvent coming in from the wasmbus.
 #[derive(Debug)]
@@ -115,7 +115,7 @@ pub async fn wait_for_actor_scaled_event(
     timeout: Duration,
     host_id: String,
     actor_ref: String,
-) -> Result<FindEventOutcome<ActorScaledInfo>> {
+) -> Result<FindEventOutcome<ComponentScaledInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -129,10 +129,10 @@ pub async fn wait_for_actor_scaled_event(
 
                 if image_ref == actor_ref {
                     let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")?;
-                    return Ok(EventCheckOutcome::Success(ActorScaledInfo {
+                    return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
                         host_id: host_id.as_str().into(),
-                        actor_ref: actor_ref.as_str().into(),
-                        actor_id: actor_id.as_str().into(),
+                        component_ref: actor_ref.as_str().into(),
+                        component_id: actor_id.as_str().into(),
                     }));
                 }
             }

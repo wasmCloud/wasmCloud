@@ -143,7 +143,7 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
         )]));
         if !inv.actors.is_empty() {
             table.add_row(Row::new(vec![
-                TableCell::new_with_alignment("Actor ID", 1, Alignment::Left),
+                TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
             ]));
@@ -171,7 +171,6 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
-                TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
             ]));
             inv.providers.iter().for_each(|p| {

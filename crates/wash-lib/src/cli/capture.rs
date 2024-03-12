@@ -9,13 +9,12 @@ use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
-use wasmcloud_core::Invocation;
+use tracing::debug;
 
 use super::{CliConnectionOpts, CommandOutput};
 use crate::config::WashConnectionOptions;
 use crate::{
     capture::{ReadCapture, WriteCapture},
-    id::{ModuleId, ServiceId},
     spier::{ObservedInvocation, ObservedMessage},
 };
 
@@ -51,17 +50,15 @@ pub enum CaptureSubcommand {
 
 #[derive(Debug, Parser, Clone)]
 pub struct CaptureReplayCommand {
-    /// An actor ID to filter captured invocations by. This will filter anywhere the actor is the
-    /// source or the target of the invocation. If provided with an provider ID, it will filter down
-    /// to interactions only between the actor and provider
-    #[clap(name = "actor_id", long = "actor-id", value_parser)]
-    pub actor_id: Option<ModuleId>,
+    /// A component ID to filter captured invocations by. This will filter anywhere the component is the
+    /// source of the invocation.
+    #[clap(name = "source_id", long = "source-id", value_parser)]
+    pub source_id: Option<String>,
 
-    /// A provider ID to filter captured invocations by. This will filter anywhere the provider is
-    /// the source or the target of the invocation. If provided with an actor ID, it will filter
-    /// down to interactions only between the actor and provider
-    #[clap(name = "provider_id", long = "provider-id", value_parser)]
-    pub provider_id: Option<ServiceId>,
+    /// A component ID to filter captured invocations by. This will filter anywhere the component is the
+    /// target of the invocation.
+    #[clap(name = "target_id", long = "target-id", value_parser)]
+    pub target_id: Option<String>,
 
     /// Whether or not to step through the replay one message at a time
     #[clap(name = "interactive", long = "interactive")]
@@ -76,36 +73,47 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
     let capture = ReadCapture::load(cmd.capture_file_path).await?;
 
     let filtered = capture.messages.into_iter().filter_map(|msg| {
-        let mut inv: Invocation = rmp_serde::from_slice(&msg.payload).ok()?;
+        // lattice.component.wrpc.0.0.1.operation.function
+        let subject_parts = msg.subject.split('.').collect::<Vec<_>>();
+        let component_id = subject_parts.get(1);
+        let operation = subject_parts.get(6);
+        let function = subject_parts.get(7);
 
-        if let Some(actor_id) = &cmd.actor_id {
-            if (inv.origin.is_actor() && inv.origin.public_key != actor_id.as_ref())
-                || (inv.target.is_actor() && inv.target.public_key != actor_id.as_ref())
-            {
+        if component_id.is_none() || operation.is_none() || function.is_none() {
+            debug!("Received invocation with invalid subject: {}", msg.subject);
+            return None;
+        }
+        let target = component_id.unwrap();
+        let operation = format!("{}.{}", operation.unwrap(), function.unwrap());
+
+        let source = msg
+            .headers
+            .and_then(|headers| headers.get("source-id").map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        let from = match cmd.source_id {
+            Some(ref id) if id == source.as_str() => id.to_string(),
+            Some(_) => {
                 return None;
             }
-        }
+            None => source,
+        };
 
-        if let Some(provider_id) = &cmd.provider_id {
-            if (inv.origin.is_provider() && inv.origin.public_key != provider_id.as_ref())
-                || (inv.target.is_provider() && inv.target.public_key != provider_id.as_ref())
-            {
+        let to = match cmd.target_id {
+            Some(ref id) if id == target => id.to_string(),
+            Some(_) => {
                 return None;
             }
-        }
-
-        let body = inv.msg;
-        inv.msg = Vec::new();
-        let from = inv.origin.public_key.clone();
-        let to = inv.target.public_key.clone();
+            None => target.to_string(),
+        };
 
         Some((
             ObservedInvocation {
-                invocation: inv,
                 timestamp: chrono::Local::now(),
                 from,
                 to,
-                message: ObservedMessage::parse(body),
+                operation,
+                message: ObservedMessage::parse(msg.payload.to_vec()),
             },
             msg.published,
         ))
@@ -116,16 +124,11 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
         println!(
             r#"
 [{}]
-From: {}  To: {}  Host: {}
+From: {}  To: {}
 
 Operation: {}
 Message: {}"#,
-            published,
-            msg.from,
-            msg.to,
-            msg.invocation.host_id,
-            msg.invocation.operation,
-            msg.message
+            published, msg.from, msg.to, msg.operation, msg.message
         );
         if cmd.interactive {
             out.write_all(b"Press Enter to continue...").await.unwrap();

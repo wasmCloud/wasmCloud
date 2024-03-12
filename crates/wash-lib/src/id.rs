@@ -17,7 +17,7 @@ pub enum ParseError {
     InvalidLength { found: usize, expected: usize },
 }
 
-/// A module (i.e. Actor) ID
+/// A module (i.e. Component) ID
 pub type ModuleId = Id<'M'>;
 /// A host ID
 pub type ServerId = Id<'N'>;

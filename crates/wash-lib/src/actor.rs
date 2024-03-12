@@ -10,57 +10,57 @@ use crate::{
     wait::{wait_for_actor_scaled_event, FindEventOutcome},
 };
 
-/// Information related to an actor scale
-pub struct ActorScaledInfo {
+/// Information related to a component scale
+pub struct ComponentScaledInfo {
     pub host_id: String,
-    pub actor_ref: String,
-    pub actor_id: String,
+    pub component_ref: String,
+    pub component_id: String,
 }
 
-/// Arguments required when scaling an actor
+/// Arguments required when scaling an component
 ///
 /// # Properties
 /// * `client` - The control interface client
-/// * `host_id` - The ID of the host where the actor is running
-/// * `actor_id` - The ID of the actor to scale
-/// * `actor_ref` - The reference of the actor to scale
+/// * `host_id` - The ID of the host where the component is running
+/// * `component_id` - The ID of the component to scale
+/// * `component_ref` - The reference of the component to scale
 /// * `max_instances` - The maximum number of instances to scale to
-/// * `annotations` - Optional annotations to apply to the actor
-pub struct ScaleActorArgs<'a> {
+/// * `annotations` - Optional annotations to apply to the component
+pub struct ScaleComponentArgs<'a> {
     /// The control interface client
     pub client: &'a CtlClient,
-    /// The ID of the host where the actor is running
+    /// The ID of the host where the component is running
     pub host_id: &'a str,
-    /// The ID of the actor to scale
-    pub actor_id: &'a str,
-    /// The reference of the actor to scale
-    pub actor_ref: &'a str,
+    /// The ID of the component to scale
+    pub component_id: &'a str,
+    /// The reference of the component to scale
+    pub component_ref: &'a str,
     /// The maximum number of instances to scale to
     pub max_instances: u32,
-    /// Optional annotations to apply to the actor
+    /// Optional annotations to apply to the component
     pub annotations: Option<HashMap<String, String>>,
-    /// List of named configuration to apply to the actor, may be empty
+    /// List of named configuration to apply to the component, may be empty
     pub config: Vec<String>,
-    /// Whether to wait for the actor to scale
+    /// Whether to wait for the component to scale
     pub skip_wait: bool,
-    /// The timeout for waiting for the actor to scale
+    /// The timeout for waiting for the component to scale
     pub timeout_ms: Option<u64>,
 }
 
-/// Scale a Wasmcloud actor on a given host
-pub async fn scale_actor(
-    ScaleActorArgs {
+/// Scale a Wasmcloud component on a given host
+pub async fn scale_component(
+    ScaleComponentArgs {
         client,
         host_id,
-        actor_id,
-        actor_ref,
+        component_id,
+        component_ref,
         max_instances,
         annotations,
         config,
         skip_wait,
         timeout_ms,
-    }: ScaleActorArgs<'_>,
-) -> Result<ActorScaledInfo> {
+    }: ScaleComponentArgs<'_>,
+) -> Result<ComponentScaledInfo> {
     // If timeout isn't supplied, override with a longer timeout for starting actor
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_START_ACTOR_TIMEOUT_MS);
 
@@ -77,8 +77,8 @@ pub async fn scale_actor(
     let ack = client
         .scale_actor(
             host_id,
-            actor_ref,
-            actor_id,
+            component_ref,
+            component_id,
             max_instances,
             annotations,
             config,
@@ -92,32 +92,33 @@ pub async fn scale_actor(
 
     // If skip_wait is specified, return incomplete information immediately
     if skip_wait {
-        return Ok(ActorScaledInfo {
+        return Ok(ComponentScaledInfo {
             host_id: host_id.into(),
-            actor_ref: actor_ref.into(),
-            actor_id: actor_id.into(),
+            component_ref: component_ref.into(),
+            component_id: component_id.into(),
         });
     }
 
-    // Wait for the actor to start
+    // Wait for the component to start
     let event = wait_for_actor_scaled_event(
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host_id.into(),
-        actor_ref.into(),
+        component_ref.into(),
     )
     .await
     .with_context(|| {
         format!(
-            "Timed out waiting for start event for actor [{}] on host [{}]",
-            actor_ref, host_id
+            "Timed out waiting for start event for component [{}] on host [{}]",
+            component_ref, host_id
         )
     })?;
 
     match event {
         FindEventOutcome::Success(info) => Ok(info),
-        FindEventOutcome::Failure(err) => Err(err)
-            .with_context(|| format!("Failed to scale actor [{actor_id}] on host [{host_id}]",)),
+        FindEventOutcome::Failure(err) => Err(err).with_context(|| {
+            format!("Failed to scale component [{component_id}] on host [{host_id}]",)
+        }),
     }
 }
 

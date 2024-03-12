@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use wash_lib::cli::{
-    scale::{handle_scale_actor, ScaleCommand},
+    scale::{handle_scale_component, ScaleCommand},
     CommandOutput, OutputKind,
 };
 
@@ -13,17 +13,17 @@ pub async fn handle_command(
 ) -> Result<CommandOutput> {
     let sp: Spinner = Spinner::new(&output_kind)?;
     let out = match command {
-        ScaleCommand::Actor(cmd) => {
+        ScaleCommand::Component(cmd) => {
             let scale_msg = if cmd.max_instances == u32::MAX {
                 "unbounded concurrency".to_string()
             } else {
                 format!("{} max concurrent instances", cmd.max_instances)
             };
             sp.update_spinner_message(format!(
-                " Sending request to scale actor {} to {scale_msg} ... ",
-                cmd.actor_ref
+                " Sending request to scale component {} to {scale_msg} ... ",
+                cmd.component_ref
             ));
-            handle_scale_actor(cmd.clone()).await?
+            handle_scale_component(cmd.clone()).await?
         }
     };
 

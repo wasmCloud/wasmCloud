@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use async_compression::tokio::{bufread::GzipDecoder, write::GzipEncoder};
+use async_nats::HeaderMap;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -25,6 +26,7 @@ pub struct SerializableMessage {
     pub description: Option<String>,
     pub length: usize,
     pub published: time::OffsetDateTime,
+    pub headers: Option<HeaderMap>,
 }
 
 impl TryFrom<async_nats::jetstream::Message> for SerializableMessage {
@@ -38,6 +40,7 @@ impl TryFrom<async_nats::jetstream::Message> for SerializableMessage {
             payload: msg.message.payload,
             description: msg.message.description,
             length: msg.message.length,
+            headers: msg.message.headers,
             published,
         })
     }
@@ -179,6 +182,7 @@ mod test {
                 description: None,
                 length: 5,
                 published: time::OffsetDateTime::now_utc(),
+                headers: None,
             })
             .await
             .expect("Should be able to add a message");
@@ -190,6 +194,7 @@ mod test {
                 description: None,
                 length: 6,
                 published: time::OffsetDateTime::now_utc(),
+                headers: None,
             })
             .await
             .expect("Should be able to add a message");

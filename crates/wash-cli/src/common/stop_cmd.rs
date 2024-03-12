@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::stop::{handle_stop_actor, stop_host, stop_provider, StopCommand};
+use wash_lib::cli::stop::{handle_stop_component, stop_host, stop_provider, StopCommand};
 use wash_lib::cli::{CommandOutput, OutputKind};
 
 use crate::appearance::spinner::Spinner;
@@ -11,10 +11,10 @@ pub async fn handle_command(
 ) -> Result<CommandOutput> {
     let sp: Spinner = Spinner::new(&output_kind)?;
     let out: CommandOutput = match command {
-        StopCommand::Actor(cmd) => {
-            let actor_id = &cmd.actor_id.to_string();
-            sp.update_spinner_message(format!(" Stopping actor {actor_id} ... "));
-            handle_stop_actor(cmd).await?
+        StopCommand::Component(cmd) => {
+            let component_id = &cmd.component_id.to_string();
+            sp.update_spinner_message(format!(" Stopping component {component_id} ... "));
+            handle_stop_component(cmd).await?
         }
         StopCommand::Provider(cmd) => {
             let provider_id = &cmd.provider_id.to_string();
@@ -37,7 +37,7 @@ mod test {
 
     use super::*;
     use clap::Parser;
-    use wash_lib::cli::stop::{StopActorCommand, StopHostCommand, StopProviderCommand};
+    use wash_lib::cli::stop::{StopComponentCommand, StopHostCommand, StopProviderCommand};
 
     #[derive(Parser)]
     struct Cmd {
@@ -96,10 +96,10 @@ mod test {
         ])?;
 
         match stop_actor_all.command {
-            CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
+            CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 opts,
                 host_id,
-                actor_id,
+                component_id: actor_id,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);

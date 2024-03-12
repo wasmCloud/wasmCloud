@@ -179,7 +179,7 @@ enum CliCommand {
     /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]
     Spy(SpyCommand),
-    /// Scale an actor running in a host to a certain level of concurrency
+    /// Scale a component running in a host to a certain level of concurrency
     #[clap(name = "scale", subcommand)]
     Scale(ScaleCommand),
     /// Start a component or capability provider

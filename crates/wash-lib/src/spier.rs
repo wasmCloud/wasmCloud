@@ -1,25 +1,22 @@
-use std::{collections::HashMap, task::Poll};
+use std::task::Poll;
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use futures::{Stream, StreamExt};
+use tracing::debug;
 use wasmcloud_control_interface::ComponentId;
-use wasmcloud_core::Invocation;
-
-use crate::{common::find_actor_id, id::ModuleId};
 
 /// A struct that represents an invocation that was observed by the spier.
 #[derive(Debug)]
 pub struct ObservedInvocation {
-    /// The actual invocation from the wire, but the `.msg` field will always be empty as we are
-    /// consuming it to attempt to parse it.
-    pub invocation: Invocation,
     /// The timestamp when this was received
     pub timestamp: DateTime<Local>,
     /// The name or id of the entity that sent this invocation
     pub from: String,
     /// The name or id of the entity that received this invocation
     pub to: String,
+    /// The operation that was invoked
+    pub operation: String,
     /// The inner message that was received. We will attempt to parse the inner message from CBOR
     /// and JSON into a JSON string and fall back to the raw bytes if we are unable to do so
     pub message: ObservedMessage,
@@ -75,57 +72,50 @@ impl ObservedMessage {
     }
 }
 
-/// A struct that can spy on the RPC messages sent to and from an actor, consumable as a stream
+/// A struct that can spy on the RPC messages sent to and from an component, consumable as a stream
 pub struct Spier {
     stream: futures::stream::SelectAll<async_nats::Subscriber>,
-    actor_id: ModuleId,
+    component_id: ComponentId,
     friendly_name: Option<String>,
-    provider_info: HashMap<String, ProviderDetails>,
 }
 
 impl Spier {
-    /// Creates a new Spier instance for the given actor. Will return an error if the actor cannot
+    /// Creates a new Spier instance for the given component. Will return an error if the component cannot
     /// be found or if there are connection issues
     pub async fn new(
-        actor_id_or_name: &str,
+        component_id: &str,
         ctl_client: &wasmcloud_control_interface::Client,
         nats_client: &async_nats::Client,
     ) -> Result<Self> {
-        let (actor_id, friendly_name) = find_actor_id(actor_id_or_name, ctl_client).await?;
-        let linked_providers = get_linked_providers(&actor_id, ctl_client).await?;
+        let linked_component = get_linked_components(&component_id, ctl_client).await?;
 
-        let rpc_topic_prefix = format!("wasmbus.rpc.{}", ctl_client.lattice);
-        let actor_stream = nats_client
-            .subscribe(format!("{}.{}", rpc_topic_prefix, actor_id.as_ref()))
-            .await?;
+        let lattice = &ctl_client.lattice;
+        let rpc_topic = format!("{lattice}.{component_id}.wrpc.>");
+        let component_stream = nats_client.subscribe(rpc_topic).await?;
 
-        let mut subs = futures::future::join_all(linked_providers.iter().map(|prov| {
-            let topic = format!("{}.{}.default", rpc_topic_prefix, &prov.id);
+        let mut subs = futures::future::join_all(linked_component.iter().map(|prov| {
+            let topic = format!("{lattice}.{}.wrpc.>", &prov.id);
             nats_client.subscribe(topic)
         }))
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
-        subs.push(actor_stream);
+        subs.push(component_stream);
 
         let stream = futures::stream::select_all(subs);
 
         Ok(Self {
             stream,
-            actor_id,
-            friendly_name,
-            provider_info: linked_providers
-                .into_iter()
-                .map(|prov| (prov.id.clone(), prov))
-                .collect(),
+            component_id: component_id.to_string(),
+            friendly_name: None,
         })
     }
 
-    /// Returns the actor name, or id if no name is set, that this spier is spying on
-    pub fn actor_id(&self) -> &str {
+    /// Returns the component name, or id if no name is set, that this spier is spying on
+    pub fn component_id(&self) -> &str {
         self.friendly_name
             .as_deref()
-            .unwrap_or_else(|| self.actor_id.as_ref())
+            .unwrap_or_else(|| self.component_id.as_ref())
     }
 }
 
@@ -138,51 +128,40 @@ impl Stream for Spier {
         match self.stream.poll_next_unpin(cx) {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(msg)) => {
-                // Try to parse the invocation first
-                let mut inv: Invocation = match rmp_serde::from_slice(&msg.payload) {
-                    Ok(inv) => inv,
-                    Err(_e) => {
-                        // TODO: We should probably have some logging here
-                        // Just skip it if we can't parse it. This means we need to tell the executor to automatically wake up and poll immediately if we skip
-                        cx.waker().wake_by_ref();
-                        return Poll::Pending;
-                    }
-                };
-                let body = inv.msg;
-                inv.msg = Vec::new();
+                // lattice.component.wrpc.0.0.1.operation.function
+                let subject_parts = msg.subject.split('.').collect::<Vec<_>>();
+                let component_id = subject_parts.get(1);
+                let operation = subject_parts.get(6);
+                let function = subject_parts.get(7);
 
-                // todo(vados-cosmonic): In the wRPC future, `target.public_key` (i.e. the target ID)
-                // may include the current actor ID, despite note being exactly equal to it
-                // (ex. actor id '1234' may also be addressable under the opaque string 'frontends')
-                if inv.origin.is_provider() && inv.target.public_key != self.actor_id.as_ref() {
-                    // This is a provider invocation that isn't for us, so we should skip it
+                if component_id.is_none() || operation.is_none() || function.is_none() {
+                    debug!("Received invocation with invalid subject: {}", msg.subject);
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
-                let from = if inv.origin.is_actor() {
-                    self.friendly_name
-                        .clone()
-                        .unwrap_or_else(|| inv.origin.public_key.clone())
-                } else {
-                    let pubkey = &inv.origin.public_key;
-                    self.provider_info
-                        .get(pubkey)
-                        .map(|prov| prov.id.clone())
-                        .unwrap_or_else(|| pubkey.clone())
-                };
+                let component_id = component_id.unwrap();
+                let operation = format!("{}.{}", operation.unwrap(), function.unwrap());
 
-                // Determine the to-address address for the invocation
-                let to = inv.target.public_key.clone();
+                let (from, to) = if component_id == &self.component_id {
+                    // Attempt to get the source from the message header
+                    let from = msg
+                        .headers
+                        .and_then(|headers| headers.get("source-id").map(|s| s.to_string()))
+                        .unwrap_or_else(|| "linked component".to_string());
+                    (from, component_id.to_string())
+                } else {
+                    (self.component_id.to_string(), component_id.to_string())
+                };
 
                 // NOTE(thomastaylor312): Ideally we'd consume `msg.payload` above with a
                 // `Cursor` and `from_reader` and then manually reconstruct the acking using the
                 // message context, but I didn't want to waste time optimizing yet
                 Poll::Ready(Some(ObservedInvocation {
-                    invocation: inv,
                     timestamp: Local::now(),
                     from,
                     to,
-                    message: ObservedMessage::parse(body),
+                    operation,
+                    message: ObservedMessage::parse(msg.payload.to_vec()),
                 }))
             }
             Poll::Pending => Poll::Pending,
@@ -195,22 +174,24 @@ struct ProviderDetails {
     id: ComponentId,
 }
 
-/// Fetches all providers linked to the given actor, along with their link names
-async fn get_linked_providers(
-    actor_id: &ModuleId,
+/// Fetches all components linked to the given component
+async fn get_linked_components(
+    component_id: &str,
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<Vec<ProviderDetails>> {
     let details = ctl_client
         .get_links()
         .await
-        .map_err(|e| anyhow::anyhow!("Unable to get linkdefs: {e:?}"))
+        .map_err(|e| anyhow::anyhow!("Unable to get links: {e:?}"))
         .map(|response| response.response)?
         .map(|linkdefs| {
             linkdefs
                 .into_iter()
                 .filter_map(|link| {
-                    if link.source_id == actor_id.as_ref() {
+                    if link.source_id == component_id {
                         Some(ProviderDetails { id: link.target })
+                    } else if link.target == component_id {
+                        Some(ProviderDetails { id: link.source_id })
                     } else {
                         None
                     }
