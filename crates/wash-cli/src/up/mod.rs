@@ -131,7 +131,7 @@ impl From<NatsOpts> for NatsConfig {
 
 #[derive(Parser, Debug, Clone)]
 pub struct WasmcloudOpts {
-    /// wasmCloud host version to download, e.g. `v0.55.0`. See https://github.com/wasmCloud/wasmcloud-otp/releases for releases
+    /// wasmCloud host version to download, e.g. `v0.55.0`. See https://github.com/wasmCloud/wasmcloud/releases for releases
     #[clap(long = "wasmcloud-version", default_value = WASMCLOUD_HOST_VERSION, env = "WASMCLOUD_VERSION")]
     pub wasmcloud_version: String,
 
