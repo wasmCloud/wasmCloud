@@ -165,7 +165,7 @@ impl<'a> Server<'a> {
     }
 
     pub async fn handle_request(&self, req: HttpRequest) -> Result<HttpResponse, InvocationError> {
-        let connection = wasmcloud_provider_sdk::provider_main::get_connection();
+        let connection = wasmcloud_provider_sdk::get_connection();
 
         let client = connection.get_rpc_client();
         let origin = WasmCloudEntity {

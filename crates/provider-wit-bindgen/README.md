@@ -58,8 +58,7 @@ use wasmcloud_provider_wit_bindgen::deps::{
     serde::Deserialize,
     serde_json,
     wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::provider_main::start_provider,
-    wasmcloud_provider_sdk::{load_host_data, Context},
+    wasmcloud_provider_sdk::{load_host_data, start_provider, Context},
 };
 ```
 

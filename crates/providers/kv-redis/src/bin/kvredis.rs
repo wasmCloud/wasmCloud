@@ -25,8 +25,7 @@ use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
     serde::Deserialize,
     serde_json,
-    wasmcloud_provider_sdk::provider_main::start_provider,
-    wasmcloud_provider_sdk::{load_host_data, Context, InterfaceLinkDefinition},
+    wasmcloud_provider_sdk::{load_host_data, start_provider, Context, InterfaceLinkDefinition},
 };
 
 wasmcloud_provider_wit_bindgen::generate!({

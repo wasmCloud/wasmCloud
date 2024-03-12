@@ -501,7 +501,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         impl<'a> InvocationHandler<'a> {
             pub fn new(ld: &'a ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::InterfaceLinkDefinition) -> Self {
-                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::provider_main::get_connection();
+                let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::get_connection();
                 // NOTE: The link definition that is used here is likely (source_id=?, target=<provider>)
                 //
                 // todo(vados-cosmonic): This invocation handler should arguably create a uni-directional
