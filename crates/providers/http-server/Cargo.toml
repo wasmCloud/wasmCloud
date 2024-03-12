@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-provider-httpserver"
-version = "0.18.3"
-description = "Http server for wasmcloud, using warp. This package provides a library, and a capability provider with the 'wasmcloud:httpserver' contract."
+version = "0.19.0"
+description = "Http server for wasmcloud, using Axum. This package provides a library, and a capability provider"
 
 authors.workspace = true
 categories.workspace = true
@@ -13,15 +13,23 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true, features = ["http1", "http2", "tokio", "tracing"] }
+axum-server = { workspace = true, features = ["tls-rustls"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
-flume = { workspace = true, features = ["async"] }
 futures = { workspace = true }
 http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["macros"] }
 toml = { workspace = true, features = ["parse"] }
+tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
-warp = { workspace = true, features = ["tls"] }
-wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+wasmcloud-core = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }

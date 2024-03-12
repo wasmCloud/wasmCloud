@@ -158,8 +158,7 @@ async fn main() -> anyhow::Result<()> {
             // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
             // is implemented for either HashMap or Tuple(T1,T2)
             // "-p=wasmcloud-provider-httpclient",
-            // todo(vados-cosmonic): re-enable once http-server is working
-            // "-p=wasmcloud-provider-httpserver",
+            "-p=wasmcloud-provider-httpserver",
             "-p=wasmcloud-provider-kv-vault",
             "-p=wasmcloud-provider-kvredis",
             "-p=wasmcloud-provider-nats",
@@ -172,8 +171,7 @@ async fn main() -> anyhow::Result<()> {
                 // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
                 // is implemented for either HashMap or Tuple(T1,T2)
                 // "httpclient",
-                // todo(vados-cosmonic): re-enable once http-server is working
-                // "httpserver",
+                "httpserver",
                 "kv-vault",
                 "kvredis",
                 "lattice-controller",
@@ -192,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
         artifacts.next(),
     ) {
         (
@@ -200,8 +199,7 @@ async fn main() -> anyhow::Result<()> {
             // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
             // is implemented for either HashMap or Tuple(T1,T2)
             // Some(("httpclient", [rust_httpclient])),
-            // todo(vados-cosmonic): re-enable once http-server is working
-            // Some(("httpserver", [rust_httpserver])),
+            Some(("httpserver", [rust_httpserver])),
             Some(("kv-vault", [rust_kv_vault])),
             Some(("kvredis", [rust_kvredis])),
             Some(("lattice-controller", [rust_lattice_controller])),
@@ -214,8 +212,7 @@ async fn main() -> anyhow::Result<()> {
                 // todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
                 // is implemented for either HashMap or Tuple(T1,T2)
                 // rust_httpclient_seed,
-                // todo(vados-cosmonic): re-enable once http-server is working
-                // rust_httpserver_seed,
+                rust_httpserver_seed,
                 rust_kvredis_seed,
                 rust_kv_vault_seed,
                 rust_lattice_controller_seed,
@@ -244,14 +241,13 @@ async fn main() -> anyhow::Result<()> {
                 //     "wasmcloud-provider-httpclient",
                 //     rust_httpclient,
                 // ),
-                // todo(vados-cosmonic): re-enable once http-server is working
-                // build_par(
-                //     &issuer,
-                //     out_dir.join("rust-httpserver.par"),
-                //     "wasmcloud:httpserver",
-                //     "wasmcloud-provider-httpserver",
-                //     rust_httpserver,
-                // ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-httpserver.par"),
+                    "wasi:http",
+                    "wasmcloud-provider-httpserver",
+                    rust_httpserver,
+                ),
                 build_par(
                     &issuer,
                     out_dir.join("rust-kvredis.par"),
@@ -284,7 +280,7 @@ async fn main() -> anyhow::Result<()> {
             println!("cargo:rustc-env=RUST_BLOBSTORE_FS_SUBJECT={rust_blobstore_fs_seed}");
             println!("cargo:rustc-env=RUST_BLOBSTORE_S3_SUBJECT={rust_blobstore_s3_seed}");
             // println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
-            // println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
+            println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");
             println!("cargo:rustc-env=RUST_KV_VAULT_SUBJECT={rust_kv_vault_seed}");
             println!(

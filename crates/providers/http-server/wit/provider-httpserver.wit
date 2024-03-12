@@ -1,7 +1,0 @@
-package wasmcloud:provider-http-server;
-
-world provider-http-server {
-    /// todo(vados-cosmonic): bus/host no longer exists, this provider must be rewritten
-    /// to only use wasi:http or some other wasi:http-like contract
-    import wasmcloud:bus/host;
-}

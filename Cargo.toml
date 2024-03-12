@@ -220,7 +220,7 @@ wit-bindgen-go = { version = "0.17", default-features = false }
 wit-component = { version = "0.20", default-features = false }
 wit-parser = { version = "0.13", default-features = false }
 wrpc-interface-blobstore = { version = "0.6", default-features = false }
-wrpc-interface-http = { version = "0.13", default-features = false }
+wrpc-interface-http = { version = "0.13.1", default-features = false }
 wrpc-interface-keyvalue = { version = "0.5", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.7", default-features = false }
 wrpc-transport = { version = "0.16.0", default-features = false }
