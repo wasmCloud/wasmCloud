@@ -1,23 +1,22 @@
-use std::{collections::HashMap, fmt::Formatter, sync::Arc, time::Duration};
+use core::fmt::Formatter;
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_nats::HeaderMap;
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::{
-    sync::{Mutex, RwLock},
-    task::JoinHandle,
-};
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_futures::Instrument;
 use ulid::Ulid;
 use uuid::Uuid;
-use wascap::prelude::KeyPair;
-
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::wrpc::Client as WrpcNatsClient;
+use wasmcloud_core::HealthCheckRequest;
 use wasmcloud_core::InterfaceLinkDefinition;
-use wasmcloud_core::{HealthCheckRequest, HostData};
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
 
 #[cfg(feature = "otel")]
@@ -30,7 +29,6 @@ use wrpc_types::DynamicFunction;
 use crate::{
     deserialize,
     error::{InvocationResult, ProviderInitError, ProviderInitResult},
-    rpc_client::RpcClient,
     serialize, Context, Provider, WrpcInvocationLookup,
 };
 
@@ -43,7 +41,7 @@ const WRPC_HEADER_NAME_HOST_ID: &str = "host-id";
 /// Current version of wRPC supported by this version of the provider-sdk
 pub(crate) const WRPC_VERSION: &str = "0.0.1";
 
-pub type QuitSignal = tokio::sync::broadcast::Receiver<bool>;
+pub type QuitSignal = broadcast::Receiver<()>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct ShutdownMessage {
@@ -90,13 +88,13 @@ pub struct ProviderConnection {
     links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
 
     /// NATS client used for performing RPCs
-    rpc_client: RpcClient,
+    nats: Arc<async_nats::Client>,
 
     /// Lattice name
     lattice: String,
-
-    /// Data received from the host at startup
-    host_data: Arc<HostData>,
+    host_id: String,
+    link_name: String,
+    provider_key: String,
 
     /// Handles for every NATS listener that is created and used by the Provider, kept
     /// around so they can appropriately be `Drop`ed when this `ProviderConnection` is
@@ -110,9 +108,9 @@ pub struct ProviderConnection {
 impl std::fmt::Debug for ProviderConnection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProviderConnection")
-            .field("provider_id", &self.host_data.provider_key)
-            .field("host_id", &self.host_data.host_id)
-            .field("link", &self.host_data.link_name)
+            .field("provider_id", &self.provider_key())
+            .field("host_id", &self.host_id)
+            .field("link", &self.link_name)
             .field("lattice", &self.lattice)
             .finish()
     }
@@ -121,36 +119,22 @@ impl std::fmt::Debug for ProviderConnection {
 impl ProviderConnection {
     pub(crate) fn new(
         nats: async_nats::Client,
-        host_data: &HostData,
+        provider_key: String,
+        lattice: String,
+        host_id: String,
+        link_name: String,
         incoming_invocation_fn_map: WrpcInvocationLookup,
     ) -> ProviderInitResult<ProviderConnection> {
-        let key = Arc::new(
-            KeyPair::from_seed(&host_data.invocation_seed)
-                .map_err(|e| ProviderInitError::Initialization(format!("key failure: {e}")))?,
-        );
-
-        let lattice = host_data.lattice_rpc_prefix.to_owned();
-        let rpc_client = RpcClient::new(
-            nats,
-            host_data.host_id.clone(),
-            host_data.default_rpc_timeout_ms.map(Duration::from_millis),
-            key,
-            &lattice,
-        );
-
         Ok(ProviderConnection {
             links: Arc::new(RwLock::new(HashMap::new())),
-            rpc_client,
+            nats: Arc::new(nats),
             lattice,
-            host_data: Arc::new(host_data.to_owned()),
+            host_id,
+            link_name,
+            provider_key,
             _listener_handles: Default::default(),
             incoming_invocation_fn_map: Arc::new(incoming_invocation_fn_map),
         })
-    }
-
-    /// Used for fetching the RPC client in order to make RPC calls
-    pub fn get_rpc_client(&self) -> RpcClient {
-        self.rpc_client.clone()
     }
 
     /// Used for fetching the RPC client in order to make RPC calls
@@ -159,12 +143,12 @@ impl ProviderConnection {
         let mut headers = HeaderMap::new();
         headers.insert("source-id", self.provider_key());
         headers.insert("target-id", target);
-        WrpcNatsClient::new(self.rpc_client.client(), &self.lattice, target, headers)
+        WrpcNatsClient::new(Arc::clone(&self.nats), &self.lattice, target, headers)
     }
 
     /// Get the provider key that was assigned to this host @ startup
     pub fn provider_key(&self) -> &str {
-        &self.host_data.provider_key
+        &self.provider_key
     }
 
     /// Stores actor with link definition
@@ -189,7 +173,7 @@ impl ProviderConnection {
     pub(crate) async fn connect<P>(
         &self,
         provider: P,
-        shutdown_tx: &tokio::sync::broadcast::Sender<bool>,
+        shutdown_tx: &broadcast::Sender<()>,
         lattice: &str,
     ) -> ProviderInitResult<()>
     where
@@ -202,7 +186,7 @@ impl ProviderConnection {
                 provider.clone(),
                 shutdown_tx.subscribe(),
                 lattice,
-                &self.host_data.provider_key,
+                &self.provider_key,
             )
             .await?,
         );
@@ -229,7 +213,9 @@ impl ProviderConnection {
 
     /// flush nats - called before main process exits
     pub(crate) async fn flush(&self) {
-        self.rpc_client.flush().await
+        if let Err(err) = self.nats.flush().await {
+            error!(%err, "error flushing NATS client");
+        }
     }
 
     /// Subscribe to a nats topic for rpc messages.
@@ -250,7 +236,7 @@ impl ProviderConnection {
 
         // Build a wrpc client that we can use to listen for incoming invocations
         let wrpc_client = self.get_wrpc_client(provider_id);
-        let link_name = self.host_data.link_name.clone();
+        let link_name = self.link_name.clone();
 
         // For every mapping of world key names to dynamic functions to call, spawn a client that will listen
         // forever and process incoming invocations
@@ -412,19 +398,19 @@ impl ProviderConnection {
     async fn subscribe_shutdown<P>(
         &self,
         provider: P,
-        shutdown_tx: tokio::sync::broadcast::Sender<bool>,
+        shutdown_tx: broadcast::Sender<()>,
     ) -> ProviderInitResult<JoinHandle<Result<()>>>
     where
         P: Provider,
     {
         let shutdown_topic = format!(
             "wasmbus.rpc.{}.{}.{}.shutdown",
-            &self.lattice, &self.host_data.provider_key, self.host_data.link_name
+            &self.lattice, &self.provider_key, self.link_name
         );
         debug!("subscribing for shutdown : {}", &shutdown_topic);
-        let mut sub = self.rpc_client.client().subscribe(shutdown_topic).await?;
-        let rpc_client = self.rpc_client.clone();
-        let host_id = self.host_data.host_id.clone();
+        let mut sub = self.nats.subscribe(shutdown_topic).await?;
+        let nats = self.nats.clone();
+        let host_id = self.host_id.clone();
         let handle = tokio::spawn(
             async move {
                 loop {
@@ -443,8 +429,7 @@ impl ProviderConnection {
                             // Tell provider to shutdown - before we shut down nats subscriptions,
                             // in case it needs to do any message passing during shutdown
                             provider.shutdown().await;
-                            let data = b"shutting down".to_vec();
-                            if let Err(err) = rpc_client.publish(reply_to, data).await {
+                            if let Err(err) = nats.publish(reply_to, "shutting down".into()).await {
                                 warn!(%err, "failed to send shutdown ack");
                             }
                             // unsubscribe from shutdown topic
@@ -452,15 +437,12 @@ impl ProviderConnection {
                                 warn!(%err, "failed to unsubscribe from shutdown topic")
                             }
                             // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
-                            if let Err(err) = shutdown_tx.send(true) {
+                            if let Err(err) = shutdown_tx.send(()) {
                                 error!(%err, "Problem shutting down:  failure to send signal");
                             }
                             break;
-                        } else {
-                            trace!(
-                                "Ignoring termination signal (request targeted for different host)"
-                            );
                         }
+                        trace!("Ignoring termination signal (request targeted for different host)");
                     }
                 }
                 Ok(())
@@ -481,9 +463,9 @@ impl ProviderConnection {
     {
         let ldput_topic = format!(
             "wasmbus.rpc.{}.{}.linkdefs.put",
-            &self.lattice, &self.host_data.provider_key,
+            &self.lattice, &self.provider_key,
         );
-        let mut sub = self.rpc_client.client().subscribe(ldput_topic).await?;
+        let mut sub = self.nats.subscribe(ldput_topic).await?;
         let (this, provider) = (self.clone(), provider.clone());
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
@@ -540,14 +522,10 @@ impl ProviderConnection {
     {
         let link_del_topic = format!(
             "wasmbus.rpc.{}.{}.linkdefs.del",
-            &self.lattice, &self.host_data.provider_key
+            &self.lattice, &self.provider_key
         );
         debug!(topic = %link_del_topic, "subscribing for link del");
-        let mut sub = self
-            .rpc_client
-            .client()
-            .subscribe(link_del_topic.clone())
-            .await?;
+        let mut sub = self.nats.subscribe(link_del_topic.clone()).await?;
         let (this, provider) = (self.clone(), provider.clone());
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
@@ -576,10 +554,10 @@ impl ProviderConnection {
     {
         let topic = format!(
             "wasmbus.rpc.{}.{}.health",
-            &self.lattice, &self.host_data.provider_key,
+            &self.lattice, &self.provider_key,
         );
 
-        let mut sub = self.rpc_client.client().subscribe(topic).await?;
+        let mut sub = self.nats.subscribe(topic).await?;
         let this = self.clone();
         let handle = tokio::spawn(
             async move {
@@ -589,7 +567,7 @@ impl ProviderConnection {
                     match buf {
                         Ok(t) => {
                             if let Some(reply_to) = msg.reply {
-                                if let Err(err) = this.rpc_client.publish(reply_to, t).await {
+                                if let Err(err) = this.nats.publish(reply_to, t.into()).await {
                                     error!(%err, "failed sending health check response");
                                 }
                             }

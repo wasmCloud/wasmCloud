@@ -1,18 +1,18 @@
 //! Functions for starting and running a provider
 
 use std::io::BufRead;
-use std::str::FromStr;
+use std::sync::Arc;
 
-use async_nats::{AuthError, ConnectOptions};
 use base64::Engine;
 use once_cell::sync::OnceCell;
-use tracing::{error, info};
+use tokio::sync::broadcast;
+use tokio::task::spawn_blocking;
+use tracing::{error, info, instrument};
+use wasmcloud_core::{HostData, InterfaceLinkDefinition};
 
 use crate::error::{ProviderInitError, ProviderInitResult};
 use crate::provider::ProviderConnection;
-use crate::Provider;
-
-use wasmcloud_core::HostData;
+use crate::{with_connection_event_logging, Provider, DEFAULT_NATS_ADDR};
 
 static HOST_DATA: OnceCell<HostData> = OnceCell::new();
 static CONNECTION: OnceCell<ProviderConnection> = OnceCell::new();
@@ -31,7 +31,7 @@ pub fn get_connection() -> &'static ProviderConnection {
 }
 
 /// Starts a provider, reading all of the host data and starting the process
-pub fn start_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderInitResult<()>
+pub fn start_provider<P>(provider: P, friendly_name: &str) -> ProviderInitResult<()>
 where
     P: Provider + Clone,
 {
@@ -47,72 +47,122 @@ where
     Ok(())
 }
 
-/// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
-/// an async context
-pub async fn run_provider<P>(provider: P, friendly_name: Option<String>) -> ProviderInitResult<()>
-where
-    P: Provider + Clone,
-{
-    let host_data = tokio::task::spawn_blocking(load_host_data)
-        .await
-        .map_err(|e| {
-            ProviderInitError::Initialization(format!("Unable to load host data: {e}"))
-        })??;
-    if let Err(e) = wasmcloud_tracing::configure_observability(
-        &friendly_name.unwrap_or(host_data.provider_key.clone()),
-        &host_data.otel_config,
-        host_data.structured_logging,
-        host_data.log_level.as_ref(),
+/// State of provider initialization
+pub struct ProviderInitState {
+    pub nats: async_nats::Client,
+    pub shutdown_rx: broadcast::Receiver<()>,
+    pub shutdown_tx: broadcast::Sender<()>,
+    pub host_id: String,
+    pub lattice_rpc_prefix: String,
+    pub link_name: String,
+    pub provider_key: String,
+    pub link_definitions: Vec<InterfaceLinkDefinition>,
+}
+
+#[instrument]
+pub async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
+    let HostData {
+        host_id,
+        lattice_rpc_prefix,
+        link_name,
+        lattice_rpc_user_jwt,
+        lattice_rpc_user_seed,
+        lattice_rpc_url,
+        provider_key,
+        invocation_seed: _,
+        env_values: _,
+        instance_id,
+        link_definitions,
+        cluster_issuers: _,
+        config_json: _,
+        default_rpc_timeout_ms: _,
+        structured_logging,
+        log_level,
+        otel_config,
+    } = spawn_blocking(load_host_data).await.map_err(|e| {
+        ProviderInitError::Initialization(format!("failed to load host data: {e}"))
+    })??;
+
+    if let Err(err) = wasmcloud_tracing::configure_observability(
+        name,
+        otel_config,
+        *structured_logging,
+        log_level.as_ref(),
     ) {
-        eprintln!("Failed to configure tracing: {e}");
+        error!(?err, "failed to configure tracing");
     }
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
     info!(
-        "Starting capability provider {} instance {} with nats url {}",
-        &host_data.provider_key, &host_data.instance_id, &host_data.lattice_rpc_url,
+        "Starting capability provider {provider_key} instance {instance_id} with nats url {lattice_rpc_url}"
     );
 
-    let nats_addr = if !host_data.lattice_rpc_url.is_empty() {
-        host_data.lattice_rpc_url.as_str()
+    let nats_addr = if !lattice_rpc_url.is_empty() {
+        lattice_rpc_url.as_str()
     } else {
-        crate::DEFAULT_NATS_ADDR
+        DEFAULT_NATS_ADDR
     };
-    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
-        ProviderInitError::Initialization(format!("Invalid nats server url '{nats_addr}': {e}"))
-    })?;
-
-    let nc = crate::with_connection_event_logging(
-        match (
-            host_data.lattice_rpc_user_jwt.trim(),
-            host_data.lattice_rpc_user_seed.trim(),
-        ) {
-            ("", "") => ConnectOptions::default(),
+    let nats = with_connection_event_logging(
+        match (lattice_rpc_user_jwt.trim(), lattice_rpc_user_seed.trim()) {
+            ("", "") => async_nats::ConnectOptions::default(),
             (rpc_jwt, rpc_seed) => {
-                let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
+                let key_pair = Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
                 let jwt = rpc_jwt.to_owned();
-                ConnectOptions::with_jwt(jwt, move |nonce| {
+                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                     let key_pair = key_pair.clone();
-                    async move { key_pair.sign(&nonce).map_err(AuthError::new) }
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
                 })
             }
         },
     )
-    .connect(nats_server)
+    .connect(nats_addr)
     .await?;
+    Ok(ProviderInitState {
+        nats,
+        shutdown_rx,
+        shutdown_tx,
+        host_id: host_id.clone(),
+        lattice_rpc_prefix: lattice_rpc_prefix.clone(),
+        link_name: link_name.clone(),
+        provider_key: provider_key.clone(),
+        link_definitions: link_definitions.clone(),
+    })
+}
+
+/// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
+/// an async context
+pub async fn run_provider<P>(provider: P, friendly_name: &str) -> ProviderInitResult<()>
+where
+    P: Provider + Clone,
+{
+    let ProviderInitState {
+        nats,
+        mut shutdown_rx,
+        shutdown_tx,
+        host_id,
+        lattice_rpc_prefix,
+        link_name,
+        provider_key,
+        link_definitions,
+    } = init_provider(friendly_name).await?;
+
+    let invocation_map = provider
+        .incoming_wrpc_invocations_by_subject(
+            &lattice_rpc_prefix,
+            &provider_key,
+            crate::provider::WRPC_VERSION,
+        )
+        .await?;
 
     // Initialize host connection to provider, save it as a global
     let connection = ProviderConnection::new(
-        nc,
-        host_data,
-        provider
-            .incoming_wrpc_invocations_by_subject(
-                &host_data.lattice_rpc_prefix,
-                &host_data.provider_key,
-                crate::provider::WRPC_VERSION,
-            )
-            .await?,
+        nats,
+        provider_key,
+        lattice_rpc_prefix.clone(),
+        host_id,
+        link_name,
+        invocation_map,
     )?;
     CONNECTION.set(connection).map_err(|_| {
         ProviderInitError::Initialization("Provider connection was already initialized".to_string())
@@ -121,8 +171,7 @@ where
 
     // pre-populate provider and bridge with initial set of link definitions
     // initialization of any link is fatal for provider startup
-    let initial_links = host_data.link_definitions.clone();
-    for ld in initial_links.into_iter() {
+    for ld in link_definitions {
         if !provider.put_link(&ld).await {
             error!(
                 link_definition = ?ld,
@@ -135,7 +184,7 @@ where
 
     // subscribe to nats topics
     connection
-        .connect(provider, &shutdown_tx, &host_data.lattice_rpc_prefix)
+        .connect(provider, &shutdown_tx, &lattice_rpc_prefix)
         .await?;
 
     // run until we receive a shutdown request from host

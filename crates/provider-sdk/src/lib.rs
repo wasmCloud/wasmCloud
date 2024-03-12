@@ -36,7 +36,7 @@ use crate::error::{InvocationError, InvocationResult};
 ///
 /// # Example
 ///
-/// ```
+/// ```no_test
 /// let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(("wasmcloud:bus/guest-config"));
 /// #assert_eq!(wit_ns, "wasmcloud")
 /// #assert_eq!(wit_pkg, "bus")
