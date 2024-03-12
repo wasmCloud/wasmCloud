@@ -19,7 +19,6 @@ use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use ulid::Ulid;
 use uuid::Uuid;
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
-use wasmcloud_core::wrpc::Client as WrpcNatsClient;
 use wasmcloud_core::{HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition};
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
 use wrpc_types::DynamicFunction;
@@ -591,8 +590,7 @@ where
             }
             req = link_del.recv() => {
                 if let Some((ld, tx)) = req {
-                    connection.delete_link(&ld.source_id)
-                        .await;
+                    connection.delete_link(&ld.source_id).await;
                     // notify provider that link is deleted
                     provider.delete_link(&ld.source_id).await;
                     if tx.send(()).is_err() {
@@ -645,6 +643,19 @@ impl fmt::Debug for ProviderConnection {
     }
 }
 
+/// Returns a provider-specific [`wrpc_transport::Client`]
+pub fn wrpc_client(
+    nats: Arc<async_nats::Client>,
+    lattice: &str,
+    provider_key: &str,
+    target: &str,
+) -> wasmcloud_core::wrpc::Client {
+    let mut headers = HeaderMap::new();
+    headers.insert("source-id", provider_key);
+    headers.insert("target-id", target);
+    wasmcloud_core::wrpc::Client::new(nats, lattice, target, headers)
+}
+
 impl ProviderConnection {
     pub(crate) fn new(
         nats: Arc<async_nats::Client>,
@@ -666,11 +677,13 @@ impl ProviderConnection {
     }
 
     /// Used for fetching the RPC client in order to make RPC calls
-    pub fn get_wrpc_client(&self, target: &str) -> WrpcNatsClient {
-        let mut headers = HeaderMap::new();
-        headers.insert("source-id", self.provider_key());
-        headers.insert("target-id", target);
-        WrpcNatsClient::new(Arc::clone(&self.nats), &self.lattice, target, headers)
+    pub fn get_wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
+        wrpc_client(
+            Arc::clone(&self.nats),
+            &self.lattice,
+            &self.provider_key,
+            target,
+        )
     }
 
     /// Get the provider key that was assigned to this host @ startup
