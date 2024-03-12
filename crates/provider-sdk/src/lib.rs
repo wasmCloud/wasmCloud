@@ -4,10 +4,9 @@ use std::time::Duration;
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-use crate::error::{InvocationError, InvocationResult};
+use crate::error::InvocationResult;
 
 pub mod error;
 pub mod provider;
@@ -75,16 +74,6 @@ pub const URL_SCHEME: &str = "wasmbus";
 pub(crate) const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 /// The default timeout for a request to the lattice, in milliseconds
 pub const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
-
-/// Helper method for deserializing contents
-pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> InvocationResult<T> {
-    serde_json::from_slice(buf).map_err(InvocationError::from)
-}
-
-/// Helper method for serializing contents
-pub fn serialize<T: Serialize>(data: &T) -> InvocationResult<Vec<u8>> {
-    serde_json::to_vec(data).map_err(InvocationError::from)
-}
 
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
 /// A provider entity must have the public_key and link_name fields filled in.
