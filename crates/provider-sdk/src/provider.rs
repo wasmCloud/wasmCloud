@@ -18,19 +18,15 @@ use wasmcloud_core::wrpc::Client as WrpcNatsClient;
 use wasmcloud_core::HealthCheckRequest;
 use wasmcloud_core::InterfaceLinkDefinition;
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
+use wrpc_types::DynamicFunction;
 
 #[cfg(feature = "otel")]
 use wasmcloud_core::TraceContext;
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::attach_span_context;
 
-use wrpc_types::DynamicFunction;
-
-use crate::{
-    deserialize,
-    error::{InvocationResult, ProviderInitError, ProviderInitResult},
-    serialize, Context, Provider, WrpcInvocationLookup,
-};
+use crate::error::{InvocationResult, ProviderInitError, ProviderInitResult};
+use crate::{deserialize, serialize, Context, ProviderHandler, WrpcDispatch, WrpcInvocationLookup};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -174,12 +170,11 @@ impl ProviderConnection {
         &self,
         provider: P,
         shutdown_tx: &broadcast::Sender<()>,
-        lattice: &str,
+        lattice: String,
     ) -> ProviderInitResult<()>
     where
-        P: Provider + Clone,
+        P: ProviderHandler + WrpcDispatch + Clone + Send + 'static,
     {
-        let lattice = lattice.to_string();
         let mut handles = Vec::new();
         handles.extend(
             self.subscribe_rpc(
@@ -221,16 +216,13 @@ impl ProviderConnection {
     /// Subscribe to a nats topic for rpc messages.
     /// This method starts a separate async task and returns immediately.
     /// It will exit if the nats client disconnects, or if a signal is received on the quit channel.
-    pub async fn subscribe_rpc<P>(
+    pub async fn subscribe_rpc(
         &self,
-        provider: P,
+        provider: impl WrpcDispatch + Clone + Send + 'static,
         quit: QuitSignal,
         lattice: String,
         provider_id: impl AsRef<str>,
-    ) -> ProviderInitResult<Vec<JoinHandle<Result<()>>>>
-    where
-        P: Provider + Clone,
-    {
+    ) -> ProviderInitResult<Vec<JoinHandle<Result<()>>>> {
         let mut handles = Vec::new();
         let provider_id = provider_id.as_ref();
 
@@ -329,7 +321,7 @@ impl ProviderConnection {
                             current.record("link_name", &tracing::field::display(&link_name));
 
                             // Perform RPC
-                            match this.handle_wrpc(provider.clone(), &operation, source_id, params, context).in_current_span().await {
+                            match this.handle_wrpc(provider.clone(), operation.clone(), source_id, params, context).in_current_span().await {
                                 Ok(bytes) => {
                                     // Assuming that the provider has processed the request and produced objects
                                     // that conform to wrpc, transmit the response that were returned by the invocation
@@ -366,43 +358,34 @@ impl ProviderConnection {
     /// * `operation` - The operation being performed (of the form `<ns>:<pkg>/<interface>.<function>`)
     /// * `source_id` - The ID of the origin which might represent one or more components/providers (ex. an actor public key)
     /// * `wrpc_invocation` - Details of the wRPC invocation
-    async fn handle_wrpc<P>(
+    async fn handle_wrpc(
         &self,
-        provider: P,
-        operation: impl AsRef<str>,
-        source_id: impl AsRef<str>,
+        provider: impl WrpcDispatch + 'static,
+        operation: String,
+        source_id: String,
         invocation_params: Vec<wrpc_transport::Value>,
         context: HeaderMap,
-    ) -> InvocationResult<Vec<u8>>
-    where
-        P: Provider + Clone,
-    {
-        let operation = operation.as_ref();
-        let source_id = source_id.as_ref();
-
+    ) -> InvocationResult<Vec<u8>> {
         // Dispatch the invocation to the provider
         let span = tracing::debug_span!("dispatch", %source_id, %operation);
         provider
             .dispatch_wrpc_dynamic(
                 Context {
-                    actor: Some(source_id.into()),
+                    actor: Some(source_id),
                     tracing: convert_header_map_to_hashmap(&context),
                 },
-                operation.to_string(),
+                operation,
                 invocation_params,
             )
             .instrument(span)
             .await
     }
 
-    async fn subscribe_shutdown<P>(
+    async fn subscribe_shutdown(
         &self,
-        provider: P,
+        provider: impl ProviderHandler + Send + 'static,
         shutdown_tx: broadcast::Sender<()>,
-    ) -> ProviderInitResult<JoinHandle<Result<()>>>
-    where
-        P: Provider,
-    {
+    ) -> ProviderInitResult<JoinHandle<Result<()>>> {
         let shutdown_topic = format!(
             "wasmbus.rpc.{}.{}.{}.shutdown",
             &self.lattice, &self.provider_key, self.link_name
@@ -453,20 +436,17 @@ impl ProviderConnection {
         Ok(handle)
     }
 
-    async fn subscribe_link_put<P>(
+    async fn subscribe_link_put(
         &self,
-        provider: P,
+        provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<Result<()>>>
-    where
-        P: Provider + Clone,
-    {
+    ) -> ProviderInitResult<JoinHandle<Result<()>>> {
         let ldput_topic = format!(
             "wasmbus.rpc.{}.{}.linkdefs.put",
             &self.lattice, &self.provider_key,
         );
         let mut sub = self.nats.subscribe(ldput_topic).await?;
-        let (this, provider) = (self.clone(), provider.clone());
+        let this = self.clone();
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
                 this.handle_link_put(msg, &provider).await
@@ -477,10 +457,7 @@ impl ProviderConnection {
     }
 
     #[instrument(level = "debug", skip_all, fields(actor_id = tracing::field::Empty, provider_id = tracing::field::Empty, contract_id = tracing::field::Empty, link_name = tracing::field::Empty))]
-    async fn handle_link_put<P>(&self, msg: async_nats::Message, provider: &P)
-    where
-        P: Provider,
-    {
+    async fn handle_link_put(&self, msg: async_nats::Message, provider: &impl ProviderHandler) {
         match deserialize::<InterfaceLinkDefinition>(&msg.payload) {
             Ok(ld) => {
                 let span = tracing::Span::current();
@@ -512,21 +489,18 @@ impl ProviderConnection {
         }
     }
 
-    async fn subscribe_link_del<P>(
+    async fn subscribe_link_del(
         &self,
-        provider: P,
+        provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<Result<()>>>
-    where
-        P: Provider + Clone,
-    {
+    ) -> ProviderInitResult<JoinHandle<Result<()>>> {
         let link_del_topic = format!(
             "wasmbus.rpc.{}.{}.linkdefs.del",
             &self.lattice, &self.provider_key
         );
         debug!(topic = %link_del_topic, "subscribing for link del");
         let mut sub = self.nats.subscribe(link_del_topic.clone()).await?;
-        let (this, provider) = (self.clone(), provider.clone());
+        let this = self.clone();
         let handle = tokio::spawn(async move {
             process_until_quit!(sub, quit, msg, {
                 let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
@@ -544,14 +518,11 @@ impl ProviderConnection {
         Ok(handle)
     }
 
-    async fn subscribe_health<P>(
+    async fn subscribe_health(
         &self,
-        provider: P,
+        provider: impl ProviderHandler + Send + 'static,
         mut quit: QuitSignal,
-    ) -> ProviderInitResult<JoinHandle<Result<()>>>
-    where
-        P: Provider,
-    {
+    ) -> ProviderInitResult<JoinHandle<Result<()>>> {
         let topic = format!(
             "wasmbus.rpc.{}.{}.health",
             &self.lattice, &self.provider_key,
