@@ -7,7 +7,7 @@ use wasmcloud_provider_kafka::KafkaMessagingProvider;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     wasmcloud_provider_sdk::start_provider(
         KafkaMessagingProvider::default(),
-        Some("kafka-messaging-provider".to_string()),
+        "kafka-messaging-provider",
     )?;
 
     eprintln!("Kafka messaging provider exiting");
