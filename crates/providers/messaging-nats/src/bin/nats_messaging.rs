@@ -7,7 +7,7 @@ use wasmcloud_provider_nats::NatsMessagingProvider;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     wasmcloud_provider_sdk::start_provider(
         NatsMessagingProvider::from_host_data(wasmcloud_provider_sdk::load_host_data()?),
-        Some("nats-messaging-provider".to_string()),
+        "nats-messaging-provider",
     )?;
 
     eprintln!("NATS messaging provider exiting");
