@@ -7,23 +7,19 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
+use crate::error::{InvocationError, InvocationResult};
+
 pub mod error;
 pub mod provider;
-pub mod provider_main;
-
-pub use provider::ProviderConnection;
-pub use provider_main::{load_host_data, run_provider, start_provider};
-
-pub use wasmcloud_tracing;
 
 /// Re-export of types from [`wasmcloud_core`]
 pub use core::{
     HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WasmCloudEntity, WitFunction,
     WitInterface, WitNamespace, WitPackage,
 };
+pub use provider::*;
 pub use wasmcloud_core as core;
-
-use crate::error::{InvocationError, InvocationResult};
+pub use wasmcloud_tracing;
 
 pub fn link_put_subject(lattice: &str, provider_key: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.put")
