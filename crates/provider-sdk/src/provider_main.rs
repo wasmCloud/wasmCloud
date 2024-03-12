@@ -184,7 +184,7 @@ where
 
     // subscribe to nats topics
     connection
-        .connect(provider, &shutdown_tx, &lattice_rpc_prefix)
+        .connect(provider, &shutdown_tx, lattice_rpc_prefix)
         .await?;
 
     // run until we receive a shutdown request from host
