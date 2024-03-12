@@ -1,2 +1,0 @@
-httpserver = "../../../../wit/wasmcloud/httpserver"
-bus = "../../../../wit"

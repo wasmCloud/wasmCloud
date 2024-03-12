@@ -18,7 +18,7 @@ members = [
 # is implemented for either HashMap or Tuple(T1,T2)
 #    "http-client",
 # todo(vados-cosmonic): re-enable once http-server is working
-#    "http-server",
+    "http-server",
     "kv-redis",
     "kv-vault",
     "lattice-controller",
@@ -34,15 +34,15 @@ async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.0", default-features = false }
 aws-sdk-s3 = { version = "1.4", default-features = false }
 aws-smithy-runtime = { version = "1.1", default-features = false }
+axum = { version = "0.7", default-features = false }
+axum-server = { version = "0.6", default-features = false }
 base64 = { version = "0.21", default-features = false }
 bytes = { version = "1", default-features = false }
 chrono = { version = "0.4", default-features = false }
 dashmap = { version = "5", default-features = false }
-flume = { version = "0.11", default-features = false }
 futures = { version = "0.3", default-features = false }
-http = { version = "0.2", default-features = false }
+http = { version = "1", default-features = false }
 hyper-rustls = { version = "0.24", default-features = false }
-nkeys = { version = "0.3", default-features = false }
 opentelemetry = { version = "0.21", default-features = false }
 opentelemetry-nats = { path = "../opentelemetry-nats" }
 path-clean = { version = "1", default-features = false }
@@ -56,6 +56,7 @@ tempfile = { version = "3", default-features = false }
 thiserror = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 toml = { version = "0.8", default-features = false }
+tower-http = { version = "0.5", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.21", default-features = false }
@@ -63,7 +64,6 @@ tracing-subscriber = { version = "0.3", default-features = false }
 url = { version = "2.4", default-features = false }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-warp = { version = "0.3", default-features = false }
 wascap = { version = "*", path = "../wascap" }
 wasmcloud-compat = { path = "../compat", default-features = false }
 wasmcloud-control-interface = { path = "../control-interface" }
@@ -72,4 +72,4 @@ wasmcloud-interface-httpclient = { version = "0.11" }
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
 wasmcloud-test-util = { path = "../test-util", default-features = false }
-wrpc-transport-nats = { version = "0.11.6", default-features = false }
+wrpc-interface-http = { version = "0.13.1", default-features = false }

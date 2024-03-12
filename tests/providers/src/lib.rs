@@ -11,9 +11,8 @@ pub const RUST_BLOBSTORE_S3_SUBJECT: &str = env!("RUST_BLOBSTORE_S3_SUBJECT");
 // pub const RUST_HTTPCLIENT: &str = concat!(env!("OUT_DIR"), "/rust-httpclient.par");
 // pub const RUST_HTTPCLIENT_SUBJECT: &str = env!("RUST_HTTPCLIENT_SUBJECT");
 
-// todo(vados-cosmonic): re-enable once http-server is working
-// pub const RUST_HTTPSERVER: &str = concat!(env!("OUT_DIR"), "/rust-httpserver.par");
-// pub const RUST_HTTPSERVER_SUBJECT: &str = env!("RUST_HTTPSERVER_SUBJECT");
+pub const RUST_HTTPSERVER: &str = concat!(env!("OUT_DIR"), "/rust-httpserver.par");
+pub const RUST_HTTPSERVER_SUBJECT: &str = env!("RUST_HTTPSERVER_SUBJECT");
 
 pub const RUST_KVREDIS: &str = concat!(env!("OUT_DIR"), "/rust-kvredis.par");
 pub const RUST_KVREDIS_SUBJECT: &str = env!("RUST_KVREDIS_SUBJECT");

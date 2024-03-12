@@ -15,15 +15,20 @@
 ///   (see constants below).
 /// - Default listener is bound to 127.0.0.1 port 8000.
 ///
-use base64::{engine::Engine as _, prelude::BASE64_STANDARD_NO_PAD};
-use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
-use std::{collections::HashMap, fmt, io::ErrorKind, net::SocketAddr, ops::Deref, str::FromStr};
+use core::fmt;
+use core::ops::Deref;
+use core::str::FromStr;
 
-use wasmcloud_provider_wit_bindgen::deps::serde::{
-    de, de::Deserializer, de::Visitor, Deserialize, Serialize,
-};
-use wasmcloud_provider_wit_bindgen::deps::serde_json;
+use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
+
+use base64::engine::Engine as _;
+use base64::prelude::BASE64_STANDARD_NO_PAD;
+use http::Uri;
+use serde::{de, de::Deserializer, de::Visitor, Deserialize, Serialize};
+use tracing::{instrument, trace};
 
 use crate::HttpServerError;
 
@@ -49,7 +54,6 @@ pub const DEFAULT_MAX_CONTENT_LEN: u64 = 100 * 1024 * 1024;
 pub const CONTENT_LEN_LIMIT: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct ServiceSettings {
     /// Bind address
     #[serde(default)]
@@ -231,10 +235,12 @@ impl ServiceSettings {
 /// If more than one key is provided, they are processed in the order above.
 ///   (later names override earlier names in the list)
 ///
-pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, HttpServerError> {
+#[instrument]
+pub fn load_settings(values: &HashMap<&str, &str>) -> Result<ServiceSettings, HttpServerError> {
+    trace!("load settings");
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
-    let values: HashMap<String, &String> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
+    let values: HashMap<String, &str> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
         "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
             .to_string(),
     ))?;
@@ -291,7 +297,6 @@ pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Htt
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct Tls {
     /// path to server X.509 cert chain file. Must be PEM-encoded
     pub cert_file: Option<String>,
@@ -312,7 +317,6 @@ impl Tls {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct Cors {
     pub allowed_origins: Option<AllowedOrigins>,
 
@@ -353,23 +357,18 @@ impl Cors {
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct CorsOrigin(String);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct AllowedOrigins(Vec<CorsOrigin>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct AllowedHeaders(Vec<String>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct AllowedMethods(Vec<String>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct ExposedHeaders(Vec<String>);
 
 /*
@@ -411,7 +410,7 @@ impl FromStr for CorsOrigin {
     type Err = std::io::Error;
 
     fn from_str(origin: &str) -> Result<Self, Self::Err> {
-        let uri = warp::http::uri::Uri::from_str(origin).map_err(|invalid_uri| {
+        let uri = Uri::from_str(origin).map_err(|invalid_uri| {
             std::io::Error::new(
                 ErrorKind::InvalidInput,
                 format!("Invalid uri: {}.\n{}", origin, invalid_uri),
@@ -519,7 +518,6 @@ impl Default for ExposedHeaders {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Disabled,
@@ -531,7 +529,6 @@ pub enum LogLevel {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 pub struct Log {
     log_level: Option<LogLevel>,
 }
@@ -583,7 +580,6 @@ impl Log {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
     Get,
@@ -632,7 +628,7 @@ where
 mod test {
     use std::str::FromStr;
 
-    use crate::settings::{serde_json, CorsOrigin, ServiceSettings};
+    use crate::settings::{CorsOrigin, ServiceSettings};
 
     const GOOD_ORIGINS: &[&str] = &[
         // origins that should be parsed correctly
