@@ -1,5 +1,6 @@
 use core::fmt;
 use core::fmt::Formatter;
+use core::future::Future;
 
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -31,8 +32,8 @@ use wasmcloud_tracing::context::attach_span_context;
 use crate::error::{InvocationResult, ProviderInitError, ProviderInitResult};
 use crate::{
     health_subject, link_del_subject, link_put_subject, shutdown_subject,
-    with_connection_event_logging, Context, Provider, WrpcDispatch, WrpcInvocationLookup,
-    DEFAULT_NATS_ADDR,
+    with_connection_event_logging, Context, Provider, ProviderHandler, WrpcDispatch,
+    WrpcInvocationLookup, DEFAULT_NATS_ADDR,
 };
 
 /// Name of the header that should be passed for invocations that identifies the source
@@ -322,6 +323,13 @@ async fn subscribe_link_del(
     Ok(link_del_rx)
 }
 
+pub struct ProviderCommands {
+    pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
+    pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
+    pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+    pub link_del: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+}
+
 /// State of provider initialization
 pub struct ProviderInitState {
     pub nats: Arc<async_nats::Client>,
@@ -332,10 +340,7 @@ pub struct ProviderInitState {
     pub link_name: String,
     pub provider_key: String,
     pub link_definitions: Vec<InterfaceLinkDefinition>,
-    pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
-    pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
-    pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
-    pub link_del: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+    pub commands: ProviderCommands,
 }
 
 #[instrument]
@@ -435,18 +440,20 @@ pub async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> 
         link_name: link_name.clone(),
         provider_key: provider_key.clone(),
         link_definitions: link_definitions.clone(),
-        health,
-        shutdown,
-        link_put,
-        link_del,
+        commands: ProviderCommands {
+            health,
+            shutdown,
+            link_put,
+            link_del,
+        },
     })
 }
 
 /// Starts a provider, reading all of the host data and starting the process
-pub fn start_provider<P>(provider: P, friendly_name: &str) -> ProviderInitResult<()>
-where
-    P: Provider + Clone,
-{
+pub fn start_provider(
+    provider: impl Provider + Clone,
+    friendly_name: &str,
+) -> ProviderInitResult<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -459,25 +466,174 @@ where
     Ok(())
 }
 
-/// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
-/// an async context
-pub async fn run_provider<P>(provider: P, friendly_name: &str) -> ProviderInitResult<()>
-where
-    P: Provider + Clone,
-{
+/// Handle provider commands in a loop.
+pub async fn handle_provider_commands(
+    provider: impl ProviderHandler,
+    connection: &ProviderConnection,
+    mut quit_rx: broadcast::Receiver<()>,
+    quit_tx: broadcast::Sender<()>,
+    ProviderCommands {
+        mut health,
+        mut shutdown,
+        mut link_put,
+        mut link_del,
+    }: ProviderCommands,
+) {
+    loop {
+        select! {
+            // run until we receive a shutdown request from host
+            _ = quit_rx.recv() => {
+                // flush async_nats client
+                connection.flush().await;
+                return
+            }
+            req = health.recv() => {
+                if let Some((req, tx)) = req {
+                    let res = provider.health_request(&req).await;
+                    if tx.send(res).is_err() {
+                        error!("failed to send health check response")
+                    }
+                } else {
+                    error!("failed to handle health check, shutdown");
+                    provider.shutdown().await;
+                    if quit_tx.send(()).is_err() {
+                        error!("failed to send quit")
+                    };
+                    return
+                };
+            }
+            req = shutdown.recv() => {
+                if let Some(tx) = req {
+                    provider.shutdown().await;
+                    if tx.send(()).is_err() {
+                        error!("failed to send shutdown response")
+                    }
+                } else {
+                    error!("failed to handle shutdown, shutdown");
+                    provider.shutdown().await;
+                    if quit_tx.send(()).is_err() {
+                        error!("failed to send quit")
+                    };
+                    return
+                };
+            }
+            req = link_put.recv() => {
+                if let Some((ld, tx)) = req {
+                    // If the link has already been put, return early
+                    if connection.is_linked(&ld.source_id).await {
+                        warn!("Ignoring duplicate link put");
+                    } else {
+                        info!("Linking actor with provider");
+                        if provider.put_link(&ld).await {
+                            connection.put_link(ld).await;
+                        } else {
+                            warn!("put_link failed");
+                        }
+                    }
+                    if tx.send(()).is_err() {
+                        error!("failed to send link put response")
+                    }
+                } else {
+                    error!("failed to handle link put, shutdown");
+                    provider.shutdown().await;
+                    if quit_tx.send(()).is_err() {
+                        error!("failed to send quit")
+                    };
+                    return
+                };
+            }
+            req = link_del.recv() => {
+                if let Some((ld, tx)) = req {
+                    connection.delete_link(&ld.source_id).await;
+                    // notify provider that link is deleted
+                    provider.delete_link(&ld.source_id).await;
+                    if tx.send(()).is_err() {
+                        error!("failed to send link del response")
+                    }
+                } else {
+                    error!("failed to handle link del, shutdown");
+                    provider.shutdown().await;
+                    if quit_tx.send(()).is_err() {
+                        error!("failed to send quit")
+                    };
+                    return
+                };
+            }
+        }
+    }
+}
+
+/// Runs the provider handler. You can use this method instead of [`start_provider`] if you are already in
+/// an async context and want to manually manage RPC serving functionality.
+pub async fn run_provider_handler(
+    provider: impl ProviderHandler,
+    friendly_name: &str,
+) -> ProviderInitResult<(wasmcloud_core::wrpc::Client, impl Future<Output = ()>)> {
     let ProviderInitState {
         nats,
-        mut quit_rx,
+        quit_rx,
         quit_tx,
         host_id,
         lattice_rpc_prefix,
         link_name,
         provider_key,
         link_definitions,
-        mut health,
-        mut shutdown,
-        mut link_put,
-        mut link_del,
+        commands,
+    } = init_provider(friendly_name).await?;
+
+    let wrpc = wrpc_client(
+        Arc::clone(&nats),
+        &lattice_rpc_prefix,
+        &provider_key,
+        &link_name,
+    );
+    let connection = ProviderConnection::new(
+        Arc::clone(&nats),
+        provider_key,
+        lattice_rpc_prefix.clone(),
+        host_id,
+        link_name,
+        WrpcInvocationLookup::default(),
+    )?;
+    CONNECTION.set(connection).map_err(|_| {
+        ProviderInitError::Initialization("Provider connection was already initialized".to_string())
+    })?;
+    let connection = get_connection();
+
+    // pre-populate provider and bridge with initial set of link definitions
+    // initialization of any link is fatal for provider startup
+    for ld in link_definitions {
+        if !provider.put_link(&ld).await {
+            error!(
+                link_definition = ?ld,
+                "Failed to initialize link during provider startup",
+            );
+        } else {
+            connection.put_link(ld).await;
+        }
+    }
+    Ok((
+        wrpc,
+        handle_provider_commands(provider, connection, quit_rx, quit_tx, commands),
+    ))
+}
+
+/// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
+/// an async context
+pub async fn run_provider(
+    provider: impl Provider + Clone,
+    friendly_name: &str,
+) -> ProviderInitResult<()> {
+    let ProviderInitState {
+        nats,
+        quit_rx,
+        quit_tx,
+        host_id,
+        lattice_rpc_prefix,
+        link_name,
+        provider_key,
+        link_definitions,
+        commands,
     } = init_provider(friendly_name).await?;
 
     let invocation_map = provider
@@ -523,91 +679,8 @@ where
         )
         .await?;
 
-    loop {
-        select! {
-            // run until we receive a shutdown request from host
-            _ = quit_rx.recv() => {
-                // flush async_nats client
-                connection.flush().await;
-
-                return Ok(())
-            }
-            req = health.recv() => {
-                if let Some((req, tx)) = req {
-                    let res = provider.health_request(&req).await;
-                    if tx.send(res).is_err() {
-                        error!("failed to send health check response")
-                    }
-                } else {
-                    error!("failed to handle health check, shutdown");
-                    provider.shutdown().await;
-                    if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
-                    };
-                    return Ok(())
-                };
-            }
-            req = shutdown.recv() => {
-                if let Some(tx) = req {
-                    provider.shutdown().await;
-                    if tx.send(()).is_err() {
-                        error!("failed to send shutdown response")
-                    }
-                } else {
-                    error!("failed to handle shutdown, shutdown");
-                    provider.shutdown().await;
-                    if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
-                    };
-                    return Ok(())
-                };
-            }
-            req = link_put.recv() => {
-                if let Some((ld, tx)) = req {
-                    // If the link has already been put, return early
-                    if connection.is_linked(&ld.source_id).await {
-                        warn!("Ignoring duplicate link put");
-                    } else {
-                        info!("Linking actor with provider");
-                        if provider.put_link(&ld).await {
-                            connection.put_link(ld).await;
-                        } else {
-                            warn!("put_link failed");
-                        }
-                    }
-                    if tx.send(()).is_err() {
-                        error!("failed to send link put response")
-                    }
-
-                } else {
-                    error!("failed to handle link put, shutdown");
-                    provider.shutdown().await;
-                    if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
-                    };
-                    return Ok(())
-                };
-            }
-            req = link_del.recv() => {
-                if let Some((ld, tx)) = req {
-                    connection.delete_link(&ld.source_id).await;
-                    // notify provider that link is deleted
-                    provider.delete_link(&ld.source_id).await;
-                    if tx.send(()).is_err() {
-                        error!("failed to send link del response")
-                    }
-
-                } else {
-                    error!("failed to handle link del, shutdown");
-                    provider.shutdown().await;
-                    if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
-                    };
-                    return Ok(())
-                };
-            }
-        }
-    }
+    handle_provider_commands(provider, connection, quit_rx, quit_tx, commands).await;
+    Ok(())
 }
 
 /// Source ID for a link
