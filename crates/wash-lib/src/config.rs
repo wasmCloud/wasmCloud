@@ -1,7 +1,7 @@
 //! Common config constants and functions for loading, finding, and consuming configuration data
 use std::{fs, path::PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use async_nats::Client;
 use tokio::io::AsyncReadExt;
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
@@ -31,11 +31,6 @@ pub fn cfg_dir() -> Result<PathBuf> {
     }
 
     Ok(wash)
-}
-
-/// Returns the path to the caching directory for smithy files
-pub fn model_cache_dir() -> Result<PathBuf> {
-    weld_codegen::weld_cache_dir().map_err(|e| anyhow!(e))
 }
 
 /// The path to the downloads directory for wash

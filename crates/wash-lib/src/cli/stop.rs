@@ -1,15 +1,15 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
 use tokio::time::Duration;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    actor::{scale_actor, ActorScaledInfo, ScaleActorArgs},
+    actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{CliConnectionOpts, CommandOutput},
     common::{
-        boxed_err_to_anyhow, find_actor_id, find_host_id, find_provider_id, get_all_inventories,
-        FindIdError, Match,
+        boxed_err_to_anyhow, find_host_id, find_provider_id, get_all_inventories, FindIdError,
+        Match,
     },
     config::WashConnectionOptions,
     context::default_timeout_ms,
@@ -19,9 +19,9 @@ use crate::{
 
 #[derive(Debug, Clone, Parser)]
 pub enum StopCommand {
-    /// Stop an actor running in a host
-    #[clap(name = "actor")]
-    Actor(StopActorCommand),
+    /// Stop a component running in a host
+    #[clap(name = "component", alias = "actor")]
+    Component(StopComponentCommand),
 
     /// Stop a provider running in a host
     #[clap(name = "provider")]
@@ -33,26 +33,25 @@ pub enum StopCommand {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub struct StopActorCommand {
+pub struct StopComponentCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host to stop actor on. If a non-ID is provided, the host will be selected based
+    /// Id of host to stop component on. If a non-ID is provided, the host will be selected based
     /// on matching the prefix of the ID or the friendly name and will return an error if more than
     /// one host matches. If no host ID is passed, a host will be selected based on whether or not
-    /// the actor is running on it. If more than 1 host is running this actor, an error will be
-    /// returned with a list of hosts running the actor
+    /// the component is running on it. If more than 1 host is running this component, an error will be
+    /// returned with a list of hosts running the component
     #[clap(long = "host-id")]
     pub host_id: Option<String>,
 
-    /// Actor Id (e.g. the public key for the actor) or a string to match on the prefix of the ID,
-    /// or friendly name, or call alias of the actor. If multiple actors are matched, then an error
+    /// Unique component Id or a string to match on the prefix of the ID. If multiple components are matched, then an error
     /// will be returned with a list of all matching options
-    #[clap(name = "actor-id")]
-    pub actor_id: String,
+    #[clap(name = "component-id")]
+    pub component_id: String,
 
-    /// By default, the command will wait until the actor has been stopped.
-    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the actor to stp[].
+    /// By default, the command will wait until the component has been stopped.
+    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the component to stp[].
     #[clap(long = "skip-wait")]
     pub skip_wait: bool,
 }
@@ -65,8 +64,8 @@ pub struct StopProviderCommand {
     /// Id of host to stop provider on. If a non-ID is provided, the host will be selected based on
     /// matching the prefix of the ID or the friendly name and will return an error if more than one
     /// host matches. If no host ID is passed, a host will be selected based on whether or not the
-    /// actor is running on it. If more than 1 host is running this actor, an error will be returned
-    /// with a list of hosts running the actor
+    /// provider is running on it. If more than 1 host is running this provider, an error will be returned
+    /// with a list of hosts running the provider
     #[clap(long = "host-id")]
     pub host_id: Option<String>,
 
@@ -192,26 +191,49 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     }
 }
 
-pub async fn handle_stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
+pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandOutput> {
     let timeout_ms = cmd.opts.timeout_ms;
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
-    let (actor_id, friendly_name) = find_actor_id(&cmd.actor_id, &client).await?;
+    let component_id = cmd.component_id;
 
-    let host_id = if let Some(host_id) = cmd.host_id {
-        find_host_id(&host_id, &client).await?.0
+    let inventory = if let Some(host_id) = cmd.host_id {
+        client
+            .get_host_inventory(&host_id)
+            .await
+            .map(|inventory| inventory.response)
+            .map_err(boxed_err_to_anyhow)?
+            .context("Supplied host did not respond to inventory query")?
     } else {
-        find_host_with_actor(&actor_id, &client).await?
+        let inventories = get_all_inventories(&client).await?;
+        inventories
+            .into_iter()
+            .find(|inv| inv.actors.iter().any(|actor| actor.id == component_id))
+            .ok_or_else(|| anyhow::anyhow!("No host found running component [{}]", component_id))?
     };
 
-    let ActorScaledInfo {
-        actor_id, host_id, ..
-    } = scale_actor(ScaleActorArgs {
+    let Some((host_id, component_ref)) = inventory
+        .actors
+        .iter()
+        .find(|actor| actor.id == component_id)
+        .map(|actor| (inventory.host_id.clone(), actor.image_ref.clone()))
+    else {
+        bail!(
+            "No component with id [{component_id}] found on host [{}]",
+            inventory.host_id
+        );
+    };
+
+    let ComponentScaledInfo {
+        component_id,
+        host_id,
+        ..
+    } = scale_component(ScaleComponentArgs {
         client: &client,
         host_id: &host_id,
-        actor_id: &actor_id,
-        actor_ref: "",
+        component_id: &component_id,
+        component_ref: &component_ref,
         max_instances: 0,
         annotations: None,
         config: vec![],
@@ -221,22 +243,16 @@ pub async fn handle_stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
     .await?;
 
     let text = if cmd.skip_wait {
-        format!(
-            "Request to stop actor {} received",
-            friendly_name.as_deref().unwrap_or(actor_id.as_ref())
-        )
+        format!("Request to stop component [{component_id}] received",)
     } else {
-        format!(
-            "Actor [{}] stopped",
-            friendly_name.as_deref().unwrap_or(actor_id.as_ref())
-        )
+        format!("Component [{component_id}] stopped")
     };
 
     Ok(CommandOutput::new(
         text.clone(),
         HashMap::from([
             ("result".into(), text.into()),
-            ("actor_id".into(), actor_id.into()),
+            ("component_id".into(), component_id.into()),
             ("host_id".into(), host_id.into()),
         ]),
     ))
@@ -268,20 +284,6 @@ async fn find_host_with_provider(
         inv.providers
             .into_iter()
             .any(|prov| prov.id == provider_id)
-            .then_some((inv.host_id, inv.friendly_name))
-            .and_then(|(id, friendly_name)| id.parse().ok().map(|i| (i, friendly_name)))
-    })
-    .await
-}
-
-pub(crate) async fn find_host_with_actor(
-    actor_id: &str,
-    ctl_client: &wasmcloud_control_interface::Client,
-) -> Result<ServerId, FindIdError> {
-    find_host_with_filter(ctl_client, |inv| {
-        inv.actors
-            .into_iter()
-            .any(|actor| actor.id == actor_id)
             .then_some((inv.host_id, inv.friendly_name))
             .and_then(|(id, friendly_name)| id.parse().ok().map(|i| (i, friendly_name)))
     })

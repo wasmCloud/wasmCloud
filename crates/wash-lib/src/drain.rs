@@ -2,7 +2,7 @@
 
 use std::{env, fs, io::Result, path::PathBuf};
 
-use crate::config::{downloads_dir, model_cache_dir};
+use crate::config::downloads_dir;
 
 /// A type that allows you to clean up (i.e. drain) a set of caches and folders used by wasmcloud
 #[derive(Debug, Clone)]
@@ -14,8 +14,6 @@ pub enum Drain {
     Oci,
     /// Remove cached binaries extracted from provider archives
     Lib,
-    /// Remove cached smithy files downloaded from model urls
-    Smithy,
     /// Remove downloaded and generated files from launching wasmCloud hosts
     Downloads,
 }
@@ -29,12 +27,10 @@ impl IntoIterator for &Drain {
             Drain::All => vec![
                 /* Lib    */ env::temp_dir().join("wasmcloudcache"),
                 /* Oci    */ env::temp_dir().join("wasmcloud_ocicache"),
-                /* Smithy */ model_cache_dir().unwrap_or_default(),
                 /* Downloads */ downloads_dir().unwrap_or_default(),
             ],
             Drain::Lib => vec![env::temp_dir().join("wasmcloudcache")],
             Drain::Oci => vec![env::temp_dir().join("wasmcloud_ocicache")],
-            Drain::Smithy => vec![model_cache_dir().unwrap_or_default()],
             Drain::Downloads => vec![downloads_dir().unwrap_or_default()],
         };
         paths.into_iter()

@@ -13,10 +13,10 @@ pub async fn handle_command(
 ) -> Result<CommandOutput> {
     let sp: Spinner = Spinner::new(&output_kind)?;
     let out = match command {
-        UpdateCommand::Actor(cmd) => {
+        UpdateCommand::Component(cmd) => {
             sp.update_spinner_message(format!(
-                " Updating Actor {} to {} ... ",
-                cmd.actor_id, cmd.new_actor_ref
+                " Updating Component {} to {} ... ",
+                cmd.component_id, cmd.new_component_ref
             ));
 
             handle_update_actor(cmd).await?

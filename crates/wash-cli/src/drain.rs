@@ -45,10 +45,5 @@ mod test {
             Drain::Oci => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let smithy: Cmd = Parser::try_parse_from(["drain", "smithy"]).unwrap();
-        match smithy.drain {
-            Drain::Smithy => {}
-            _ => panic!("drain constructed incorrect command"),
-        }
     }
 }

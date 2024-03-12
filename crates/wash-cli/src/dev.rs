@@ -10,10 +10,10 @@ use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
-use wash_lib::actor::ScaleActorArgs;
+use wash_lib::actor::ScaleComponentArgs;
 use wash_lib::generate::emoji;
 use wash_lib::{
-    actor::scale_actor,
+    actor::scale_component,
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::CommandOutput,
@@ -288,11 +288,11 @@ pub async fn handle_command(
     let actor_id = artifact_path.display().to_string();
 
     // Scale the actor to one max replica
-    scale_actor(ScaleActorArgs {
+    scale_component(ScaleComponentArgs {
         client: &ctl_client,
         host_id: &host.id,
-        actor_id: &actor_id,
-        actor_ref: &actor_ref,
+        component_id: &actor_id,
+        component_ref: &actor_ref,
         max_instances: 1,
         annotations: Some(HashMap::from_iter(vec![(
             "wash_dev".to_string(),

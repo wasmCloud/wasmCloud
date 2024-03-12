@@ -5,7 +5,7 @@ use clap::Parser;
 use tokio::time::Duration;
 
 use crate::{
-    actor::{scale_actor, ActorScaledInfo, ScaleActorArgs},
+    actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
@@ -18,9 +18,9 @@ use crate::{
 
 #[derive(Debug, Clone, Parser)]
 pub enum StartCommand {
-    /// Launch an actor in a host
-    #[clap(name = "actor")]
-    Actor(StartActorCommand),
+    /// Launch a component in a host
+    #[clap(name = "component", alias = "actor")]
+    Component(StartComponentCommand),
 
     /// Launch a provider in a host
     #[clap(name = "provider")]
@@ -28,7 +28,7 @@ pub enum StartCommand {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub struct StartActorCommand {
+pub struct StartComponentCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
@@ -39,15 +39,15 @@ pub struct StartActorCommand {
     #[clap(long = "host-id")]
     pub host_id: Option<String>,
 
-    /// Actor reference, e.g. the OCI URL for the actor.
-    #[clap(name = "actor-ref")]
-    pub actor_ref: String,
+    /// Component reference, e.g. the absolute file path or OCI URL.
+    #[clap(name = "component-ref")]
+    pub component_ref: String,
 
-    /// Unique actor ID to use for the actor
-    #[clap(name = "actor-id")]
-    pub actor_id: String,
+    /// Unique ID to use for the component
+    #[clap(name = "component-id")]
+    pub component_id: String,
 
-    /// Maximum number of instances this actor can run concurrently.
+    /// Maximum number of instances this component can run concurrently.
     #[clap(
         long = "max-instances",
         alias = "max-concurrent",
@@ -57,7 +57,7 @@ pub struct StartActorCommand {
     )]
     pub max_instances: u32,
 
-    /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
+    /// Constraints for component auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[clap(short = 'c', long = "constraint", name = "constraints")]
     pub constraints: Option<Vec<String>>,
 
@@ -65,15 +65,15 @@ pub struct StartActorCommand {
     #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
     pub auction_timeout_ms: u64,
 
-    /// By default, the command will wait until the actor has been started.
-    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the actor to start.
-    /// If this flag is omitted, the timeout will be adjusted to 5 seconds to account for actor download times
+    /// By default, the command will wait until the component has been started.
+    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the component to start.
+    /// If this flag is omitted, the timeout will be adjusted to 5 seconds to account for component download times
     #[clap(long = "skip-wait")]
     pub skip_wait: bool,
 }
 
-pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
-    // If timeout isn't supplied, override with a longer timeout for starting actor
+pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
+    // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_ACTOR_TIMEOUT_MS
     } else {
@@ -84,10 +84,10 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         .await?;
 
     // TODO: absolutize the path if it's a relative file
-    let actor_ref = if cmd.actor_ref.starts_with('/') {
-        format!("file://{}", &cmd.actor_ref) // prefix with file:// if it's an absolute path
+    let component_ref = if cmd.component_ref.starts_with('/') {
+        format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
     } else {
-        cmd.actor_ref.to_string()
+        cmd.component_ref.to_string()
     };
 
     let host = match cmd.host_id {
@@ -95,17 +95,20 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         None => {
             let suitable_hosts = client
                 .perform_actor_auction(
-                    &actor_ref,
-                    &cmd.actor_id,
+                    &component_ref,
+                    &cmd.component_id,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
                 .with_context(|| {
-                    format!("Failed to auction actor {} to hosts in lattice", &actor_ref)
+                    format!(
+                        "Failed to auction actor {} to hosts in lattice",
+                        &component_ref
+                    )
                 })?;
             if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for actor {}", actor_ref);
+                bail!("No suitable hosts found for actor {}", component_ref);
             } else {
                 let acks = suitable_hosts
                     .into_iter()
@@ -119,16 +122,16 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         }
     };
 
-    // Start the actor
-    let ActorScaledInfo {
+    // Start the component
+    let ComponentScaledInfo {
         host_id,
-        actor_ref,
-        actor_id,
-    } = scale_actor(ScaleActorArgs {
+        component_ref,
+        component_id,
+    } = scale_component(ScaleComponentArgs {
         client: &client,
         host_id: &host,
-        actor_ref: &cmd.actor_ref,
-        actor_id: &cmd.actor_id,
+        component_ref: &cmd.component_ref,
+        component_id: &cmd.component_id,
         max_instances: cmd.max_instances,
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
@@ -139,17 +142,17 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
     .await?;
 
     let text = if cmd.skip_wait {
-        format!("Start actor [{actor_ref}] request received on host [{host_id}]",)
+        format!("Start component [{component_ref}] request received on host [{host_id}]",)
     } else {
-        format!("Actor [{actor_id}] (ref: [{actor_ref}]) started on host [{host_id}]",)
+        format!("Component [{component_id}] (ref: [{component_ref}]) started on host [{host_id}]",)
     };
 
     Ok(CommandOutput::new(
         text.clone(),
         HashMap::from([
             ("result".into(), text.into()),
-            ("actor_ref".into(), actor_ref.into()),
-            ("actor_id".into(), actor_id.into()),
+            ("component_ref".into(), component_ref.into()),
+            ("component_id".into(), component_id.into()),
             ("host_id".into(), host_id.into()),
         ]),
     ))
@@ -257,14 +260,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .context("Failed to get lattice event channel")?;
 
     let ack = client
-        .start_provider(
-            &host,
-            &provider_ref,
-            &cmd.provider_id,
-            None,
-            None,
-            // TODO: use cmd.config
-        )
+        .start_provider(&host, &provider_ref, &cmd.provider_id, None, cmd.config)
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {

@@ -59,13 +59,13 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
     match keytype.to_lowercase().as_str() {
         "account" => Ok(KeyPairType::Account),
         "user" => Ok(KeyPairType::User),
-        "module" | "actor" => Ok(KeyPairType::Module),
+        "module" | "actor" | "component" => Ok(KeyPairType::Module),
         "service" | "provider" => Ok(KeyPairType::Service),
         "server" | "host" => Ok(KeyPairType::Server),
         "operator" => Ok(KeyPairType::Operator),
         "cluster" => Ok(KeyPairType::Cluster),
         _ => Err(anyhow::anyhow!(
-            "Invalid key type. Must be one of Account, User, Module (or Actor), Service (or Provider), Server (or Host), Operator, Cluster"
+            "Invalid key type. Must be one of Account, User, Module (or Component), Service (or Provider), Server (or Host), Operator, Cluster"
         )),
     }
 }

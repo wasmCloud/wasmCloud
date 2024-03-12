@@ -59,9 +59,9 @@ mod test {
 
     use wash_lib::cli::{
         get::GetHostsCommand,
-        scale::ScaleActorCommand,
-        stop::{StopActorCommand, StopProviderCommand},
-        update::UpdateActorCommand,
+        scale::ScaleComponentCommand,
+        stop::{StopComponentCommand, StopProviderCommand},
+        update::UpdateComponentCommand,
     };
 
     use super::*;
@@ -103,10 +103,10 @@ mod test {
             ACTOR_ID,
         ])?;
         match stop_actor_all.command {
-            CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
+            CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 opts,
                 host_id,
-                actor_id,
+                component_id: actor_id,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -121,8 +121,10 @@ mod test {
         }
         let stop_actor_minimal: Cmd = Parser::try_parse_from(["ctl", "stop", "actor", "foobar"])?;
         match stop_actor_minimal.command {
-            CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
-                host_id, actor_id, ..
+            CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
+                host_id,
+                component_id: actor_id,
+                ..
             })) => {
                 assert_eq!(host_id, None);
                 assert_eq!(actor_id, "foobar");
@@ -326,19 +328,22 @@ mod test {
             "wasmcloud.azurecr.io/actor:v2",
         ])?;
         match update_all.command {
-            CtlCliCommand::Update(UpdateCommand::Actor(UpdateActorCommand {
+            CtlCliCommand::Update(UpdateCommand::Component(UpdateComponentCommand {
                 opts,
                 host_id,
-                actor_id,
-                new_actor_ref,
+                component_id,
+                new_component_ref,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
-                assert_eq!(actor_id, ACTOR_ID);
-                assert_eq!(new_actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
+                assert_eq!(component_id, ACTOR_ID);
+                assert_eq!(
+                    new_component_ref,
+                    "wasmcloud.azurecr.io/actor:v2".to_string()
+                );
             }
             cmd => panic!("ctl get claims constructed incorrect command {cmd:?}"),
         }
@@ -365,11 +370,11 @@ mod test {
         ])?;
 
         match scale_actor_all.command {
-            CtlCliCommand::Scale(ScaleCommand::Actor(ScaleActorCommand {
+            CtlCliCommand::Scale(ScaleCommand::Component(ScaleComponentCommand {
                 opts,
                 host_id,
-                actor_ref,
-                actor_id,
+                component_ref: actor_ref,
+                component_id: actor_id,
                 max_instances,
                 annotations,
             })) => {
