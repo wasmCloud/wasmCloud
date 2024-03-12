@@ -17,25 +17,12 @@ pub use core::{
     HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WasmCloudEntity, WitFunction,
     WitInterface, WitNamespace, WitPackage,
 };
-pub use provider::*;
+pub use provider::{
+    get_connection, load_host_data, run_provider, run_provider_handler, start_provider,
+    ProviderConnection,
+};
 pub use wasmcloud_core as core;
 pub use wasmcloud_tracing;
-
-pub fn link_put_subject(lattice: &str, provider_key: &str) -> String {
-    format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.put")
-}
-
-pub fn link_del_subject(lattice: &str, provider_key: &str) -> String {
-    format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.del")
-}
-
-pub fn health_subject(lattice: &str, provider_key: &str) -> String {
-    format!("wasmbus.rpc.{lattice}.{provider_key}.health")
-}
-
-pub fn shutdown_subject(lattice: &str, provider_key: &str, link_name: &str) -> String {
-    format!("wasmbus.rpc.{lattice}.{provider_key}.{link_name}.shutdown")
-}
 
 /// Parse an sufficiently specified WIT operation/method into constituent parts.
 ///
