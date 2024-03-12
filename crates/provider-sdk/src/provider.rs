@@ -31,7 +31,6 @@ use wasmcloud_tracing::context::attach_span_context;
 
 use crate::error::{InvocationResult, ProviderInitError, ProviderInitResult};
 use crate::{
-    health_subject, link_del_subject, link_put_subject, shutdown_subject,
     with_connection_event_logging, Context, Provider, ProviderHandler, WrpcDispatch,
     WrpcInvocationLookup, DEFAULT_NATS_ADDR,
 };
@@ -44,6 +43,22 @@ const WRPC_HEADER_NAME_HOST_ID: &str = "host-id";
 
 static HOST_DATA: OnceCell<HostData> = OnceCell::new();
 static CONNECTION: OnceCell<ProviderConnection> = OnceCell::new();
+
+fn link_put_subject(lattice: &str, provider_key: &str) -> String {
+    format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.put")
+}
+
+fn link_del_subject(lattice: &str, provider_key: &str) -> String {
+    format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.del")
+}
+
+fn health_subject(lattice: &str, provider_key: &str) -> String {
+    format!("wasmbus.rpc.{lattice}.{provider_key}.health")
+}
+
+fn shutdown_subject(lattice: &str, provider_key: &str, link_name: &str) -> String {
+    format!("wasmbus.rpc.{lattice}.{provider_key}.{link_name}.shutdown")
+}
 
 /// Retrieves the currently configured connection to the lattice. DO NOT call this method until
 /// after the provider is running (meaning [`start_provider`] or [`run_provider`] have been called)
@@ -323,7 +338,7 @@ async fn subscribe_link_del(
     Ok(link_del_rx)
 }
 
-pub struct ProviderCommands {
+struct ProviderCommandReceivers {
     pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
     pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
     pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
@@ -331,7 +346,7 @@ pub struct ProviderCommands {
 }
 
 /// State of provider initialization
-pub struct ProviderInitState {
+struct ProviderInitState {
     pub nats: Arc<async_nats::Client>,
     pub quit_rx: broadcast::Receiver<()>,
     pub quit_tx: broadcast::Sender<()>,
@@ -340,11 +355,11 @@ pub struct ProviderInitState {
     pub link_name: String,
     pub provider_key: String,
     pub link_definitions: Vec<InterfaceLinkDefinition>,
-    pub commands: ProviderCommands,
+    pub commands: ProviderCommandReceivers,
 }
 
 #[instrument]
-pub async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
+async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
     let HostData {
         host_id,
         lattice_rpc_prefix,
@@ -440,7 +455,7 @@ pub async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> 
         link_name: link_name.clone(),
         provider_key: provider_key.clone(),
         link_definitions: link_definitions.clone(),
-        commands: ProviderCommands {
+        commands: ProviderCommandReceivers {
             health,
             shutdown,
             link_put,
@@ -467,17 +482,17 @@ pub fn start_provider(
 }
 
 /// Handle provider commands in a loop.
-pub async fn handle_provider_commands(
+async fn handle_provider_commands(
     provider: impl ProviderHandler,
     connection: &ProviderConnection,
     mut quit_rx: broadcast::Receiver<()>,
     quit_tx: broadcast::Sender<()>,
-    ProviderCommands {
+    ProviderCommandReceivers {
         mut health,
         mut shutdown,
         mut link_put,
         mut link_del,
-    }: ProviderCommands,
+    }: ProviderCommandReceivers,
 ) {
     loop {
         select! {
@@ -717,7 +732,7 @@ impl fmt::Debug for ProviderConnection {
 }
 
 /// Returns a provider-specific [`wrpc_transport::Client`]
-pub fn wrpc_client(
+fn wrpc_client(
     nats: Arc<async_nats::Client>,
     lattice: &str,
     provider_key: &str,
