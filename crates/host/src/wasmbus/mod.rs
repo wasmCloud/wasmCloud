@@ -640,7 +640,7 @@ impl Bus for Handler {
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
             let (results, tx) =
-                wasmcloud_core::wrpc::Client::new(self.nats.clone(), &self.lattice, id, headers)
+                wasmcloud_core::wrpc::Client::new(self.nats.clone(), &self.lattice, &id, headers)
                     .invoke_dynamic(instance, name, DynamicTuple(params), results)
                     .await?;
             tx.await.context("failed to transmit parameters")?;
