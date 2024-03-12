@@ -36,10 +36,10 @@ use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, GetClaimsResponse, HostInventory, HostLabel,
-    InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription,
-    RegistryCredential, ScaleActorCommand, StartProviderCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand, WitInterface,
+    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, InterfaceLinkDefinition,
+    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
+    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, LinkName, OtelConfig};
 use wasmcloud_runtime::capability::logging::logging;
@@ -3216,7 +3216,7 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_claims(&self) -> anyhow::Result<CtlResponse<GetClaimsResponse>> {
+    async fn handle_claims(&self) -> anyhow::Result<CtlResponse<Vec<HashMap<String, String>>>> {
         trace!("handling claims");
 
         let (actor_claims, provider_claims) =
@@ -3228,9 +3228,9 @@ impl Host {
             .flat_map(TryFrom::try_from)
             .collect();
 
-        Ok(CtlResponse::ok(GetClaimsResponse {
-            claims: claims.into_iter().map(std::convert::Into::into).collect(),
-        }))
+        Ok(CtlResponse::ok(
+            claims.into_iter().map(std::convert::Into::into).collect(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]

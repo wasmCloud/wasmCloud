@@ -37,12 +37,6 @@ pub struct ActorAuctionRequest {
     pub constraints: HashMap<String, String>,
 }
 
-/// A response containing the full list of known claims within the lattice
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GetClaimsResponse {
-    pub claims: Vec<HashMap<String, String>>,
-}
-
 /// A host response to a request to start a provider, confirming the host
 /// has enough capacity to start the provider and that the provider is
 /// not already running on the host
