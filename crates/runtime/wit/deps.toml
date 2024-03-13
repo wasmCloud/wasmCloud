@@ -1,7 +1,14 @@
 blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
-io = "../../../wit/deps/io"
+io = "https://github.com/WebAssembly/wasi-io/archive/v0.2.0.tar.gz"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 messaging = "https://github.com/wasmCloud/messaging/archive/main.tar.gz"
-wasmcloud = "../../../wit"
+wasmcloud = "../wit"
+
+# resolution for transitive dependency conflict for `cli`, `clocks`, `sockets` and `random`
+cli = "https://github.com/WebAssembly/wasi-cli/archive/main.tar.gz"
+clocks = "https://github.com/WebAssembly/wasi-clocks/archive/main.tar.gz"
+random = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
+sockets = "https://github.com/WebAssembly/wasi-sockets/archive/main.tar.gz"
+filesystem = "https://github.com/WebAssembly/wasi-filesystem/archive/main.tar.gz"

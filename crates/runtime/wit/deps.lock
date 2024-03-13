@@ -1,17 +1,20 @@
 [blobstore]
 url = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
-sha256 = "f1829eeab5bf721b5e922b894de30d91ac6badeb1b64d6ce239353fe39c21556"
-sha512 = "e34daf3ea4fbc3d9b7a6ba4399fdbf384254b309f0eacf39a7b685ef7e77ac0e26934f911c713089a9d19a2b6bd93f6eb95ca09239dc18becba7bba3fb794fd7"
+sha256 = "de66da7a8d0c536edc095a5db06125f4a57d45c1fef479b8d56b8ceb4aa69902"
+sha512 = "f5d16fcbf3582d70de334ceb142f142355be6782a6d1abec5c251baddd4256254914596c11af73395c09f7b39250cd264979893d7f19c45778343ab00d9983ab"
 
 [cli]
+url = "https://github.com/WebAssembly/wasi-cli/archive/main.tar.gz"
 sha256 = "285865a31d777181b075f39e92bcfe59c89cd6bacce660be1b9a627646956258"
 sha512 = "da2622210a9e3eea82b99f1a5b8a44ce5443d009cb943f7bca0bf9cf4360829b289913d7ee727c011f0f72994ea7dc8e661ebcc0a6b34b587297d80cd9b3f7e8"
 
 [clocks]
+url = "https://github.com/WebAssembly/wasi-clocks/archive/main.tar.gz"
 sha256 = "468b4d12892fe926b8eb5d398dbf579d566c93231fa44f415440572c695b7613"
 sha512 = "e6b53a07221f1413953c9797c68f08b815fdaebf66419bbc1ea3e8b7dece73731062693634731f311a03957b268cf9cc509c518bd15e513c318aa04a8459b93a"
 
 [filesystem]
+url = "https://github.com/WebAssembly/wasi-filesystem/archive/main.tar.gz"
 sha256 = "498c465cfd04587db40f970fff2185daa597d074c20b68a8bcbae558f261499b"
 sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00230d730873361567cc209ec218c41fb4e95bad194268592c49e7964347"
 
@@ -19,17 +22,16 @@ sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00
 url = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
 sha512 = "760695f9a25c25bf75a25b731cb21c3bda9e288e450edda823324ecbc73d5d798bbb5de2edad999566980836f037463ee9e57d61789d04b3f3e381475b1a9a0f"
-deps = ["cli", "clocks", "filesystem", "random", "sockets"]
 
 [io]
-path = "../../../wit/deps/io"
+url = "https://github.com/WebAssembly/wasi-io/archive/v0.2.0.tar.gz"
 sha256 = "7210e5653539a15478f894d4da24cc69d61924cbcba21d2804d69314a88e5a4c"
 sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee0977ad2291126a37631c0d86eeea75d822fa8af224c422134500bf9f0f2bb"
 
 [keyvalue]
 url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
-sha256 = "4ee1524f28b599c92ff9d6fae2a265d44e4e2ab41e9ac0dc3cbff1111008a4ce"
-sha512 = "bf6a6628978e56e94307ef8a67546ed381343e07992419084400ee64d351c3eedaac6cf0d9889c96f22d32076b1c070d1547161787c218fcee4ff8ae08535a13"
+sha256 = "4724712166fe3475591c085ec06f2e27e1dd564b71f0fe181175098621fbfe03"
+sha512 = "88e0c0e48e5e169726419a7467092d555326a483f0cb616bc896d4853d511989074907750aad36c06f258fa050ebf030cc3566ec01b6f05612bba3c6e8f2690d"
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
@@ -42,14 +44,16 @@ sha256 = "1e9cc47fa657689876d5c9a6472cb4482274c0a2f34a498f2ecf1efdc0d1ffc4"
 sha512 = "d2be471fd9f938aa7e74daacd3967149b21682023a04fd77b54f7a981d5c5a69408177490a11bfe5c315bb69d8c9348502b8a75567d8f7a3f9f00dd1929d381d"
 
 [random]
+url = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
 sha256 = "7371d03c037d924caba2587fb2e7c5773a0d3c5fcecbf7971e0e0ba57973c53d"
 sha512 = "964c4e8925a53078e4d94ba907b54f89a0b7e154f46823a505391471466c17f53c8692682e5c85771712acd88b348686173fc07c53a3cfe3d301b8cd8ddd0de4"
 
 [sockets]
+url = "https://github.com/WebAssembly/wasi-sockets/archive/main.tar.gz"
 sha256 = "622bd28bbeb43736375dc02bd003fd3a016ff8ee91e14bab488325c6b38bf966"
 sha512 = "5a63c1f36de0c4548e1d2297bdbededb28721cbad94ef7825c469eae29d7451c97e00b4c1d6730ee1ec0c4a5aac922961a2795762d4a0c3bb54e30a391a84bae"
 
 [wasmcloud]
-path = "../../../wit"
-sha256 = "d420b4677e9dd5edef72fd54b10678aa052ec179401d73e27a6e6b413f07f3c2"
-sha512 = "09ed31b8392d949aefed1f8b858aa6e87fd34733b5027c8a8aaefe47f1cbd9a7784c7656630b2bcc429a9e62a1449a291c5dcad649a6aa5fdd7ac4ce01e6c01f"
+path = "../wit"
+sha256 = "6a24b3c0b5c9e89d798496546cdc7f1ed2a88f9abf397f3ec34a3de278e945d4"
+sha512 = "8a59ad0ee44ff18c83b4cee3687ed6d17af2b57e720c8996fd44c051e116e6f7f2bf45fe9e6c963c0805eef492226520a58dcd9ec5dd34d5e709e5b9bcb9c9e5"

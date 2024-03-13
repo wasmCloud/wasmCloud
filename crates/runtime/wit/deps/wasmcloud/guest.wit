@@ -1,0 +1,9 @@
+package wasmcloud:host;
+
+world logging {
+    export wasi:logging/logging;
+}
+
+world incoming-http {
+    export wasi:http/incoming-handler@0.2.0;
+}
