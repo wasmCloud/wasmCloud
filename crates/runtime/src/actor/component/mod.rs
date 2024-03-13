@@ -272,7 +272,13 @@ where
             | "wasi:io/poll@0.2.0"
             | "wasi:io/streams@0.2.0"
             | "wasi:logging/logging"
+            | "wasi:random/random@0.2.0"
+            | "wasi:sockets/instance-network@0.2.0"
+            | "wasi:sockets/network@0.2.0"
+            | "wasi:sockets/tcp-create-socket@0.2.0"
             | "wasi:sockets/tcp@0.2.0"
+            | "wasi:sockets/udp-create-socket@0.2.0"
+            | "wasi:sockets/udp@0.2.0"
             | "wasmcloud:bus/lattice"
             | "wasmcloud:bus/guest-config" => continue,
             _ => {}
