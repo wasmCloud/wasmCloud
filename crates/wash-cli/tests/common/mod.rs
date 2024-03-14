@@ -28,7 +28,7 @@ use wasmcloud_control_interface::Host;
 pub const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[allow(unused)]
-pub const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.8";
+pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.1";
 
 #[allow(unused)]
 pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.19.1";
@@ -288,12 +288,17 @@ impl TestWashInstance {
     }
 
     /// Trigger the equivalent of `wash start actor` on a [`TestWashInstance`]
-    pub(crate) async fn start_actor(&self, oci_ref: impl AsRef<str>) -> Result<StartCommandOutput> {
+    pub(crate) async fn start_actor(
+        &self,
+        oci_ref: impl AsRef<str>,
+        component_id: impl AsRef<str>,
+    ) -> Result<StartCommandOutput> {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
                 "actor",
                 oci_ref.as_ref(),
+                component_id.as_ref(),
                 "--output",
                 "json",
                 "--timeout-ms",
@@ -313,12 +318,14 @@ impl TestWashInstance {
     pub(crate) async fn start_provider(
         &self,
         oci_ref: impl AsRef<str>,
+        component_id: impl AsRef<str>,
     ) -> Result<StartCommandOutput> {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
                 "provider",
                 oci_ref.as_ref(),
+                component_id.as_ref(),
                 "--output",
                 "json",
                 "--timeout-ms",
@@ -330,6 +337,7 @@ impl TestWashInstance {
             .output()
             .await
             .context("failed to start provider")?;
+
         serde_json::from_slice(&output.stdout)
             .context("failed to parse output of `wash start provider`")
     }
@@ -427,19 +435,13 @@ impl TestWashInstance {
     pub(crate) async fn stop_provider(
         &self,
         provider_id: impl AsRef<str>,
-        contract: impl AsRef<str>,
         host_id: Option<String>,
-        link_name: Option<String>,
     ) -> Result<StopCommandOutput> {
         // Dynamically build arg list to `wash stop provider`
-        let mut args: Vec<String> = ["stop", "provider", provider_id.as_ref(), contract.as_ref()]
+        let mut args: Vec<String> = ["stop", "provider", provider_id.as_ref()]
             .iter()
             .map(ToString::to_string)
             .collect();
-        // Add positional link name if provided (similarly to how a human might)
-        if let Some(link_name) = link_name {
-            args.push(link_name);
-        }
 
         // Add the rest of the arguments
         args.extend(
@@ -527,7 +529,7 @@ pub async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
     })
 }
 
-/// Initializes a new actor from a wasmCloud template, and sets the environment to use the created actor's directory.
+/// Initializes a new actor from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created actor's directory.
 #[allow(dead_code)]
 pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -535,10 +537,8 @@ pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> 
             "new",
             "actor",
             actor_name,
-            "--git",
-            "wasmcloud/project-templates",
-            "--subfolder",
-            &format!("actor/{template_name}"),
+            "--template-name",
+            template_name,
             "--silent",
             "--no-git-init",
         ])
@@ -646,7 +646,7 @@ pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup
 
     let project_dirs: Vec<_> =
         futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
-            let project_dir = init_actor_from_template(actor_name, "hello").await?;
+            let project_dir = init_actor_from_template(actor_name, "hello-world-rust").await?;
             Result::<PathBuf>::Ok(project_dir)
         }))
         .await?;

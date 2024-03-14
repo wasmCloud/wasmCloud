@@ -129,15 +129,13 @@ pub async fn handle_command(
                 CommandOutput::from_key_and_text("token", token.jwt)
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                let is_component = if let Some(Ok(wasmparser::Payload::Version {
-                    encoding: wasmparser::Encoding::Component,
-                    ..
-                })) = wit_parsed
-                {
-                    true
-                } else {
-                    false
-                };
+                let is_component = matches!(
+                    wit_parsed,
+                    Some(Ok(wasmparser::Payload::Version {
+                        encoding: wasmparser::Encoding::Component,
+                        ..
+                    }))
+                );
                 render_component_claims(token.claims, validation, is_component)
             }
         }

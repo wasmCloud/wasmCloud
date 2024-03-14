@@ -2,10 +2,6 @@ mod common;
 
 use common::{get_json_output, test_dir_file, test_dir_with_subfolder, wash};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::fs::create_dir_all;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::path::PathBuf;
 use std::{
     fs::{remove_dir_all, File},
     io::prelude::*,
@@ -25,9 +21,6 @@ const OCI: &str = "wasmcloud_ocicache";
 fn integration_drain_comprehensive() {
     integration_drain_lib();
     integration_drain_oci();
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    test_smithy_cache_drain();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     integration_drain_all();
@@ -126,8 +119,6 @@ fn integration_drain_all() {
     let lib_subdir = &format!("drain_all/{LIB}");
     let lib_dir = test_dir_with_subfolder(lib_subdir);
 
-    let (_sys_tmp_cache, smithy_cache) = set_smithy_cache_dir();
-
     let _nested_dir = test_dir_with_subfolder(&format!("{oci_subdir}/a/b/c/d/e"));
     let _nested_dir = test_dir_with_subfolder(&format!("{lib_subdir}/a/b/c/d/e"));
 
@@ -152,7 +143,7 @@ fn integration_drain_all() {
 
     let drain_output = get_json_output(drain_basic).unwrap();
     let expected_output = json!({
-        "drained": [ lib_dir.to_str().unwrap(), oci_dir.to_str().unwrap(), smithy_cache ],
+        "drained": [ lib_dir.to_str().unwrap(), oci_dir.to_str().unwrap() ],
     });
     assert_json_include!(actual: drain_output, expected: expected_output);
 
@@ -161,53 +152,4 @@ fn integration_drain_all() {
     assert!(oci_dir.read_dir().unwrap().next().is_none());
 
     remove_dir_all(test_dir).unwrap();
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn path_to_test_file(smithy_cache_dir: &str) -> PathBuf {
-    PathBuf::from(&format!("{}/junk.txt", &smithy_cache_dir))
-}
-
-#[cfg(target_os = "linux")]
-fn set_smithy_cache_dir() -> (PathBuf, String) {
-    let tmp_dir = test_dir_with_subfolder("drain_smithy");
-    std::env::set_var("XDG_CACHE_HOME", format!("{}", &tmp_dir.display()));
-    let smithy_cache = format!("{}/smithy", &tmp_dir.display());
-    create_dir_all(PathBuf::from(&smithy_cache)).unwrap();
-    // write a dummy file inside the smithy cache folder
-    std::fs::write(path_to_test_file(&smithy_cache), b"junk").unwrap();
-    (tmp_dir, smithy_cache)
-}
-
-#[cfg(target_os = "macos")]
-fn set_smithy_cache_dir() -> (PathBuf, String) {
-    let tmp_dir = test_dir_with_subfolder("drain_smithy");
-    std::env::set_var("HOME", format!("{}", &tmp_dir.display()));
-    let smithy_cache = format!("{}/Library/Caches/smithy", &tmp_dir.display());
-    create_dir_all(PathBuf::from(&smithy_cache)).unwrap();
-    // write a dummy file inside the smithy cache folder
-    std::fs::write(path_to_test_file(&smithy_cache), b"junk").unwrap();
-    (tmp_dir, smithy_cache)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn test_smithy_cache_drain() {
-    let (_sys_tmp_cache, smithy_cache) = set_smithy_cache_dir();
-    let drain_basic = wash()
-        .args(["drain", "smithy", "-o", "json"])
-        .output()
-        .unwrap_or_else(|_| panic!("failed to drain {:?}", &smithy_cache));
-    assert!(drain_basic.status.success());
-
-    let drain_output = get_json_output(drain_basic).unwrap();
-    let expected_output = json!({
-        "drained": [ &smithy_cache ],
-    });
-    assert_json_include!(actual: drain_output, expected: expected_output);
-
-    // check that junk file is gone
-    assert!(
-        !path_to_test_file(&smithy_cache).exists(),
-        "contents of smithy cache folder should be removed"
-    );
 }

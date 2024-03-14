@@ -1,0 +1,10 @@
+name = "KV Redis"
+language = "rust"
+type = "provider"
+
+[rust]
+target_path = "../target"
+
+[provider]
+bin_name = "kvredis"
+vendor = "wasmCloud"

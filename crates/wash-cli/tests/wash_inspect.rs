@@ -22,24 +22,12 @@ fn integration_inspect_actor() {
     // Pull the echo module and push to local registry to test local inspect
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
-        .args([
-            "reg",
-            "pull",
-            ECHO_OCI,
-            "--destination",
-            echo.to_str().unwrap(),
-        ])
+        .args(["pull", ECHO_OCI, "--destination", echo.to_str().unwrap()])
         .output()
         .expect("failed to pull echo for claims sign test");
     assert!(get_hello_wasm.status.success());
     let push_echo = wash()
-        .args([
-            "reg",
-            "push",
-            echo_inspect,
-            echo.to_str().unwrap(),
-            "--insecure",
-        ])
+        .args(["push", echo_inspect, echo.to_str().unwrap(), "--insecure"])
         .output()
         .expect("failed to push echo.wasm to local registry");
     assert!(push_echo.status.success());
@@ -54,14 +42,12 @@ fn integration_inspect_actor() {
     let local_inspect_output = get_json_output(local_inspect).unwrap();
 
     let expected_inspect_output = json!({
-            "account": ECHO_ACC,
-            "module": ECHO_MOD,
-            "can_be_used": "immediately",
-            "capabilities": ["HTTP Server"],
-            "expires": "never",
-            "tags": "None",
-            "version": "0.2.1"
-
+        "account": ECHO_ACC,
+        "component": ECHO_MOD,
+        "can_be_used": "immediately",
+        "expires": "never",
+        "tags": "None",
+        "version": "0.2.1"
     });
 
     assert_json_include!(
@@ -116,7 +102,6 @@ fn integration_inspect_provider() {
     let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
     let get_http_client = wash()
         .args([
-            "reg",
             "pull",
             HTTP_OCI,
             "--destination",
@@ -127,7 +112,6 @@ fn integration_inspect_provider() {
     assert!(get_http_client.status.success());
     let push_http_client = wash()
         .args([
-            "reg",
             "push",
             httpclient_inspect,
             local_http_client_path.to_str().unwrap(),
@@ -192,7 +176,6 @@ fn integration_inspect_cached() {
 
     let get_http_client = wash()
         .args([
-            "reg",
             "pull",
             HTTP_OCI,
             "--destination",

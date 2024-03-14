@@ -146,7 +146,6 @@ mod test {
             "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            "wasmcloud:provider",
             "blahblah",
         ])?;
         match stop_provider_all.command {
@@ -155,7 +154,6 @@ mod test {
                 host_id,
                 provider_id,
                 link_name,
-                contract_id,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -165,25 +163,22 @@ mod test {
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(provider_id, PROVIDER_ID);
                 assert_eq!(link_name, "blahblah");
-                assert_eq!(contract_id, "wasmcloud:provider".to_string());
                 assert!(!skip_wait);
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }
         let stop_provider_minimal: Cmd =
-            Parser::try_parse_from(["ctl", "stop", "provider", "foobar", "wasmcloud:provider"])?;
+            Parser::try_parse_from(["ctl", "stop", "provider", "foobar"])?;
         match stop_provider_minimal.command {
             CtlCliCommand::Stop(StopCommand::Provider(StopProviderCommand {
                 host_id,
                 provider_id,
                 link_name,
-                contract_id,
                 ..
             })) => {
                 assert_eq!(host_id, None);
                 assert_eq!(provider_id, "foobar");
                 assert_eq!(link_name, "default");
-                assert_eq!(contract_id, "wasmcloud:provider");
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }

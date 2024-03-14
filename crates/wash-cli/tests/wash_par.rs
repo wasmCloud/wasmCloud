@@ -40,7 +40,6 @@ fn integration_par_inspect() {
     let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
     let get_http_client = wash()
         .args([
-            "reg",
             "pull",
             HTTP_OCI,
             "--destination",
@@ -51,7 +50,6 @@ fn integration_par_inspect() {
     assert!(get_http_client.status.success());
     let push_echo = wash()
         .args([
-            "reg",
             "push",
             httpclient_parinspect,
             local_http_client_path.to_str().unwrap(),
@@ -124,7 +122,6 @@ fn integration_par_inspect_cached() {
 
     let get_http_client = wash()
         .args([
-            "reg",
             "pull",
             HTTP_OCI,
             "--destination",

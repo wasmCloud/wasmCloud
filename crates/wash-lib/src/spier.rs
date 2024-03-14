@@ -87,7 +87,7 @@ impl Spier {
         ctl_client: &wasmcloud_control_interface::Client,
         nats_client: &async_nats::Client,
     ) -> Result<Self> {
-        let linked_component = get_linked_components(&component_id, ctl_client).await?;
+        let linked_component = get_linked_components(component_id, ctl_client).await?;
 
         let lattice = &ctl_client.lattice;
         let rpc_topic = format!("{lattice}.{component_id}.wrpc.>");

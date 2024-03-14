@@ -30,7 +30,6 @@ fn integration_claims_sign() {
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
         .args([
-            "reg",
             "pull",
             "wasmcloud.azurecr.io/echo:0.2.1",
             "--destination",
@@ -167,24 +166,12 @@ fn integration_claims_inspect() {
     // Pull the echo module and push to local registry to test local inspect
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
-        .args([
-            "reg",
-            "pull",
-            ECHO_OCI,
-            "--destination",
-            echo.to_str().unwrap(),
-        ])
+        .args(["pull", ECHO_OCI, "--destination", echo.to_str().unwrap()])
         .output()
         .expect("failed to pull echo for claims sign test");
     assert!(get_hello_wasm.status.success());
     let push_echo = wash()
-        .args([
-            "reg",
-            "push",
-            echo_claims,
-            echo.to_str().unwrap(),
-            "--insecure",
-        ])
+        .args(["push", echo_claims, echo.to_str().unwrap(), "--insecure"])
         .output()
         .expect("failed to push echo.wasm to local registry");
     assert!(push_echo.status.success());
@@ -205,14 +192,12 @@ fn integration_claims_inspect() {
     let local_inspect_output = get_json_output(local_inspect).unwrap();
 
     let expected_inspect_output = json!({
-            "account": ECHO_ACC,
-            "module": ECHO_MOD,
-            "can_be_used": "immediately",
-            "capabilities": ["HTTP Server"],
-            "expires": "never",
-            "tags": "None",
-            "version": "0.2.1"
-
+        "account": ECHO_ACC,
+        "component": ECHO_MOD,
+        "can_be_used": "immediately",
+        "expires": "never",
+        "tags": "None",
+        "version": "0.2.1"
     });
 
     assert_json_include!(
@@ -273,7 +258,6 @@ fn integration_claims_inspect_cached() {
 
     let get_hello_wasm = wash()
         .args([
-            "reg",
             "pull",
             ECHO_OCI,
             "--destination",
@@ -299,9 +283,8 @@ fn integration_claims_inspect_cached() {
     let remote_inspect_output = get_json_output(remote_inspect).unwrap();
     let expected_inspect_output = json!({
         "account": ECHO_ACC,
-        "module": ECHO_MOD,
+        "component": ECHO_MOD,
         "can_be_used": "immediately",
-        "capabilities": ["HTTP Server"],
         "expires": "never",
         "tags": "None",
         "version": "0.2.1"
@@ -329,99 +312,4 @@ fn integration_claims_inspect_cached() {
     assert!(!remote_inspect_no_cache.status.success());
 
     remove_file(echo_cache_path).unwrap();
-}
-
-#[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
-fn integration_claims_call_alias() {
-    const SUBFOLDER: &str = "call_alias";
-    let call_alias_dir = test_dir_with_subfolder(SUBFOLDER);
-    const ISSUER: &str = "SAADMA65NBETHOHQTXKV7XKQMXYDUS65JOWQORDR3IOMOB3UFZSDOU7TAA";
-    const ACC_PKEY: &str = "AALSO6EPE54BWUHXTVJLDIABLYOTXMCOTK52THAIKMKHD32YYWWGQQPW";
-    const SUBJECT: &str = "SMAABZ62LGU4SLS4SFK3MD463TRC7ZWMZLYPSVH2AOL3WRZXPBIGZG66JE";
-    const MOD_PKEY: &str = "MCLFG44AN6RKNORIDSN5JACURXNEIP5Q6CH2BOG5FCTDF7HE6ES3MCQB";
-
-    // Pull the logger module to test signing
-    // During the process of signing a module, the previous "jwt" section
-    // is cleared from a signed module, so this is just as effective
-    // as signing an unsigned wasm
-    let logger = test_dir_file(SUBFOLDER, "logger.wasm");
-    let get_wasm = wash()
-        .args([
-            "reg",
-            "pull",
-            "wasmcloud.azurecr.io/logger:0.1.0",
-            "--destination",
-            logger.to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to pull logger for call alias test");
-    assert!(get_wasm.status.success());
-
-    let signed_wasm_path = test_dir_file(SUBFOLDER, "logger_signed.wasm");
-    let sign_logger = wash()
-        .args([
-            "claims",
-            "sign",
-            logger.to_str().unwrap(),
-            "--name",
-            "Logger",
-            "-v",
-            "0.1.0",
-            "-r",
-            "1",
-            "-l",
-            "-q",
-            "--issuer",
-            ISSUER,
-            "--subject",
-            SUBJECT,
-            "--disable-keygen",
-            "--destination",
-            signed_wasm_path.to_str().unwrap(),
-            "--call-alias",
-            "wasmcloud/logger_onedotzero",
-        ])
-        .output()
-        .expect("failed to sign logger module");
-    assert!(sign_logger.status.success());
-    assert_eq!(
-        output_to_string(sign_logger).unwrap(),
-        format!(
-            "\nSuccessfully signed {} with capabilities: wasmcloud:httpserver,wasmcloud:builtin:logging\n",
-            signed_wasm_path.to_str().unwrap()
-        )
-    );
-
-    // inspect actor
-    let local_inspect = wash()
-        .args([
-            "claims",
-            "inspect",
-            signed_wasm_path.to_str().unwrap(),
-            "--output",
-            "json",
-        ])
-        .output()
-        .expect("failed to inspect local wasm");
-    assert!(local_inspect.status.success());
-    let local_inspect_output = get_json_output(local_inspect).unwrap();
-    let expected_json = json!({
-        "account": ACC_PKEY,
-        "module": MOD_PKEY,
-        "can_be_used": "immediately",
-        "capabilities": ["HTTP Server", "Logging"],
-        "expires": "never",
-        "tags": "None",
-        "version": "0.1.0",
-        "revision": 1,
-        "call_alias": "wasmcloud/logger_onedotzero"
-    });
-
-    assert_json_include!(actual: local_inspect_output, expected: expected_json);
-
-    remove_dir_all(call_alias_dir).unwrap();
 }

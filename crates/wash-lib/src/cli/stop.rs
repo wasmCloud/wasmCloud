@@ -7,13 +7,10 @@ use wasmcloud_control_interface::HostInventory;
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{CliConnectionOpts, CommandOutput},
-    common::{
-        boxed_err_to_anyhow, find_host_id, find_provider_id, get_all_inventories, FindIdError,
-        Match,
-    },
+    common::{boxed_err_to_anyhow, find_host_id, get_all_inventories, FindIdError, Match},
     config::WashConnectionOptions,
     context::default_timeout_ms,
-    id::{validate_contract_id, ServerId},
+    id::ServerId,
     wait::{wait_for_provider_stop_event, FindEventOutcome, ProviderStoppedInfo},
 };
 
@@ -75,10 +72,6 @@ pub struct StopProviderCommand {
     #[clap(name = "provider-id")]
     pub provider_id: String,
 
-    /// Capability contract Id of provider.
-    #[clap(name = "contract-id")]
-    pub contract_id: String,
-
     // NOTE(thomastaylor312): Since this is a positional argument and is optional, it has to be the
     // last one
     /// Link name of provider. If none is provided, it will default to "default"
@@ -112,7 +105,6 @@ pub struct StopHostCommand {
 }
 
 pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
-    validate_contract_id(&cmd.contract_id)?;
     let timeout_ms = cmd.opts.timeout_ms;
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
@@ -125,15 +117,14 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    let (provider_id, friendly_name) = find_provider_id(&cmd.provider_id, &client).await?;
     let host_id = if let Some(host_id) = cmd.host_id {
         find_host_id(&host_id, &client).await?.0
     } else {
-        find_host_with_provider(&provider_id, &client).await?
+        find_host_with_provider(&cmd.provider_id, &client).await?
     };
 
     let ack = client
-        .stop_provider(&host_id, &provider_id)
+        .stop_provider(&host_id, &cmd.provider_id)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
@@ -141,17 +132,13 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         bail!("Operation failed: {}", ack.message);
     }
     if cmd.skip_wait {
-        let text = format!(
-            "Provider {} stop request received",
-            friendly_name.as_deref().unwrap_or(provider_id.as_ref())
-        );
+        let text = format!("Provider {} stop request received", cmd.provider_id);
         return Ok(CommandOutput::new(
             text.clone(),
             HashMap::from([
                 ("result".into(), text.into()),
-                ("provider_id".into(), provider_id.to_string().into()),
+                ("provider_id".into(), cmd.provider_id.to_string().into()),
                 ("link_name".into(), cmd.link_name.into()),
-                ("contract_id".into(), cmd.contract_id.into()),
                 ("host_id".into(), host_id.to_string().into()),
             ]),
         ));
@@ -161,7 +148,7 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host_id.to_string(),
-        provider_id.to_string(),
+        cmd.provider_id.to_string(),
     )
     .await?;
 
@@ -172,10 +159,7 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
             link_name,
             contract_id,
         }) => {
-            let text = format!(
-                "Provider [{}] stopped successfully",
-                friendly_name.as_deref().unwrap_or(provider_id.as_ref())
-            );
+            let text = format!("Provider [{}] stopped successfully", &cmd.provider_id);
             Ok(CommandOutput::new(
                 text.clone(),
                 HashMap::from([

@@ -52,7 +52,6 @@ mod test {
     const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
     const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
     const PROVIDER_ID: &str = "VBKTSBG2WKP6RJWLQ5O7RDVIIB4LMW6U5R67A7QMIDBZDGZWYTUE3TSI";
-    const CONTRACT_ID: &str = "wasmcloud:httpserver";
     const CONTEXT_PATH: &str = "/tmp/fake/context";
     const CTL_JWT: &str = "not-a-jwt";
     const CTL_SEED: &str = "not-a-seed";
@@ -127,7 +126,6 @@ mod test {
             "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            CONTRACT_ID,
             LINK_NAME,
             "--ctl-host",
             CTL_HOST,
@@ -156,7 +154,6 @@ mod test {
                 provider_id,
                 link_name,
                 skip_wait,
-                contract_id,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
@@ -164,7 +161,6 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(host_id.unwrap(), HOST_ID);
-                assert_eq!(contract_id, CONTRACT_ID);
                 assert_eq!(link_name, LINK_NAME);
                 assert_eq!(provider_id.to_string(), PROVIDER_ID);
                 assert!(skip_wait);

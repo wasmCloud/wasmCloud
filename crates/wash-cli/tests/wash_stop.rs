@@ -1,6 +1,6 @@
 mod common;
 
-use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
+use common::{TestWashInstance, HELLO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 use anyhow::Result;
 use serial_test::serial;
@@ -16,17 +16,19 @@ async fn integration_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let StartCommandOutput {
-        actor_id,
-        actor_ref,
+        component_id,
+        component_ref,
         host_id,
         success,
         ..
-    } = wash_instance.start_actor(ECHO_OCI_REF).await?;
+    } = wash_instance
+        .start_actor(HELLO_OCI_REF, "hello_actor_id_from_start")
+        .await?;
     assert!(success, "start command returned success");
 
-    let actor_id = actor_id.expect("missing actor_id from start command output");
-    let actor_ref = actor_ref.expect("missing actor_ref from start command output");
-    assert_eq!(actor_ref, ECHO_OCI_REF, "actor ref matches");
+    let actor_id = component_id.expect("missing actor_id from start command output");
+    let actor_ref = component_ref.expect("missing actor_ref from start command output");
+    assert_eq!(actor_ref, HELLO_OCI_REF, "actor ref matches");
 
     let host_id = host_id.expect("missing host_id from start command output");
     assert_eq!(host_id, wash_instance.host_id, "host_id matches");
@@ -46,12 +48,10 @@ async fn integration_stop_provider_serial() -> Result<()> {
         provider_id,
         provider_ref,
         host_id,
-        link_name,
-        contract_id,
         success,
         ..
     } = wash_instance
-        .start_provider(PROVIDER_HTTPSERVER_OCI_REF)
+        .start_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_stop")
         .await?;
     assert!(success, "start command returned success");
 
@@ -65,11 +65,8 @@ async fn integration_stop_provider_serial() -> Result<()> {
     let host_id = host_id.expect("missing host_id from start command output");
     assert_eq!(host_id, wash_instance.host_id, "host_id matches");
 
-    let link_name = link_name.expect("missing link_name from start command output");
-    let contract_id = contract_id.expect("missing contract_id from start command output");
-
     wash_instance
-        .stop_provider(&provider_id, &contract_id, Some(host_id), Some(link_name))
+        .stop_provider(&provider_id, Some(host_id))
         .await?;
 
     Ok(())
