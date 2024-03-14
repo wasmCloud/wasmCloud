@@ -1,6 +1,7 @@
 use core::str::{self, FromStr as _};
 use core::time::Duration;
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use tracing::info;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::provider::assert_start_provider;
 use wasmcloud_test_util::{
     actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
@@ -237,10 +239,18 @@ async fn wrpc() -> anyhow::Result<()> {
     .await?;
 
     let component_http_port = free_port().await?;
+    let http_config_name = "http-default-address".to_string();
 
-    // NOTE: Links are advertised before the provider is started to prevent race condition, which
-    // occurs if link is established after the providers starts, but before it subscribes to NATS
-    // topics
+    // Create configuration for the HTTP provider
+    assert_config_put(
+        &ctl_client,
+        &http_config_name,
+        HashMap::from_iter([(
+            "ADDRESS".to_string(),
+            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
+        )]),
+    )
+    .await?;
 
     try_join!(assert_advertise_link(
         &ctl_client,
@@ -250,11 +260,8 @@ async fn wrpc() -> anyhow::Result<()> {
         "wasi",
         "http",
         vec!["incoming-handler".to_string()],
+        vec![http_config_name],
         vec![],
-        vec![format!(
-            r#"ADDRESS={}:{component_http_port}"#,
-            Ipv4Addr::LOCALHOST
-        )],
     ),)
     .context("failed to advertise links")?;
 
