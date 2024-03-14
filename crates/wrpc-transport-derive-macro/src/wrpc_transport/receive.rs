@@ -203,7 +203,8 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
             where
                 T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
             {
-                let (discriminant, payload) = wrpc_transport_derive::deps::wrpc_transport::receive_discriminant(payload, rx)
+                use #crate_path::deps::anyhow::Context as _;
+                let (discriminant, payload) = #crate_path::deps::wrpc_transport::receive_discriminant(payload, rx)
                     .await
                     .context("failed to receive enum discriminant")?;
                 match discriminant {
