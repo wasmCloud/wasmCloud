@@ -104,20 +104,19 @@ impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
     async fn handle(
         &self,
         request: http::Request<HyperIncomingBody>,
-    ) -> anyhow::Result<Result<http::Response<HyperOutgoingBody>, types::ErrorCode>> {
+        response: oneshot::Sender<Result<http::Response<HyperOutgoingBody>, types::ErrorCode>>,
+    ) -> anyhow::Result<()> {
         let mut store = self.store.lock().await;
         let ctx = store.data_mut();
         let request = ctx
             .new_incoming_request(request)
             .context("failed to create incoming request")?;
-        let (response_tx, mut response_rx) = oneshot::channel();
         let response = ctx
-            .new_response_outparam(response_tx)
+            .new_response_outparam(response)
             .context("failed to create response")?;
         self.bindings
             .wasi_http_incoming_handler()
             .call_handle(&mut *store, request, response)
-            .await?;
-        response_rx.try_recv().context("a response was not set")
+            .await
     }
 }

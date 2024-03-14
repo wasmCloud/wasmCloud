@@ -6,10 +6,8 @@ pub const RUST_BLOBSTORE_FS_SUBJECT: &str = env!("RUST_BLOBSTORE_FS_SUBJECT");
 pub const RUST_BLOBSTORE_S3: &str = concat!(env!("OUT_DIR"), "/rust-blobstore-s3.par");
 pub const RUST_BLOBSTORE_S3_SUBJECT: &str = env!("RUST_BLOBSTORE_S3_SUBJECT");
 
-// todo(vados-cosmonic): re-enable once wrpc_transport::{Encode,Receive}
-// is implemented for either HashMap or Tuple(T1,T2)
-// pub const RUST_HTTPCLIENT: &str = concat!(env!("OUT_DIR"), "/rust-httpclient.par");
-// pub const RUST_HTTPCLIENT_SUBJECT: &str = env!("RUST_HTTPCLIENT_SUBJECT");
+pub const RUST_HTTPCLIENT: &str = concat!(env!("OUT_DIR"), "/rust-httpclient.par");
+pub const RUST_HTTPCLIENT_SUBJECT: &str = env!("RUST_HTTPCLIENT_SUBJECT");
 
 pub const RUST_HTTPSERVER: &str = concat!(env!("OUT_DIR"), "/rust-httpserver.par");
 pub const RUST_HTTPSERVER_SUBJECT: &str = env!("RUST_HTTPSERVER_SUBJECT");

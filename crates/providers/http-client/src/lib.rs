@@ -1,177 +1,117 @@
-use std::collections::HashMap;
-use std::str::FromStr;
+use core::future::Future;
+use core::pin::pin;
 
 use anyhow::Context as _;
-use anyhow::Result;
-use http::{HeaderMap, HeaderName, HeaderValue};
-use tracing::{error, instrument, trace, warn};
+use futures::StreamExt;
+use hyper_util::rt::TokioExecutor;
+use tokio::{select, spawn};
+use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::{get_connection, ProviderHandler};
+use wrpc_interface_http::try_http_to_outgoing_response;
+use wrpc_transport::AcceptedInvocation;
 
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::Context,
-};
-
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: HttpClientProvider,
-    contract: "wasmcloud:httpclient",
-    replace_witified_maps: true,
-    wit_bindgen_cfg: "provider-http-client"
-});
+#[instrument(level = "trace", skip_all)]
+pub async fn serve_handle<Ctx, Tx, C>(
+    client: hyper_util::client::legacy::Client<
+        C,
+        wrpc_interface_http::IncomingBody<
+            wrpc_transport::IncomingInputStream,
+            wrpc_interface_http::IncomingFields,
+        >,
+    >,
+    AcceptedInvocation {
+        params: (wrpc_interface_http::IncomingRequestHttp(req), opts),
+        result_subject,
+        transmitter,
+        ..
+    }: AcceptedInvocation<
+        Ctx,
+        (
+            wrpc_interface_http::IncomingRequestHttp,
+            Option<wrpc_interface_http::RequestOptions>,
+        ),
+        Tx,
+    >,
+) where
+    Tx: wrpc_transport::Transmitter,
+    C: hyper_util::client::legacy::connect::Connect + Clone + Send + Sync + 'static,
+{
+    // TODO: Use opts
+    let _ = opts;
+    debug!(uri = ?req.uri(), "send HTTP request");
+    let res = match client.request(req).await.map(try_http_to_outgoing_response) {
+        Ok(Ok((res, errors))) => {
+            debug!("received HTTP response");
+            // TODO: Handle body errors better
+            spawn(errors.for_each(|err| async move { error!(?err, "body error encountered") }));
+            Ok(res)
+        }
+        Ok(Err(err)) => {
+            error!(
+                ?err,
+                "failed to convert `http` response to `wrpc:http` response"
+            );
+            return;
+        }
+        Err(err) => {
+            debug!(?err, "failed to send HTTP request");
+            Err(wrpc_interface_http::ErrorCode::InternalError(Some(
+                err.to_string(),
+            )))
+        }
+    };
+    if let Err(err) = transmitter.transmit_static(result_subject, res).await {
+        error!(?err, "failed to transmit response");
+    }
+}
 
 /// HTTP client capability provider implementation struct
 #[derive(Default, Clone)]
 pub struct HttpClientProvider;
 
-/// Implement the [httpclient contract](https://github.com/wasmCloud/interfaces/blob/main/httpclient)
-/// represented by the WIT interface @ `wit/provider-httpclient.wit`
-#[async_trait]
-impl WasmcloudHttpclientHttpClient for HttpClientProvider {
-    /// Accepts a request from an actor and forwards it to a remote http server.
-    ///
-    /// This function returns an RpcError if there was a network-related
-    /// error sending the request. If the remote server returned an http
-    /// error (status other than 2xx), returns Ok with the status code and
-    /// body returned from the remote server.
-    #[instrument(level = "debug", skip(self, _ctx, req), fields(actor_id = ?_ctx.actor, method = %req.method, url = %req.url))]
-    async fn request(&self, _ctx: Context, req: HttpRequest) -> HttpResponse {
-        let headers: HeaderMap = match build_http_header_map(&req.headers) {
-            Ok(headers) => headers,
-            Err(e) => {
-                error!("failed to build header map from request headers: {e}");
-                return HttpResponse {
-                    body: Vec::new(),
-                    header: HashMap::new(),
-                    status_code: 500,
-                };
-            }
-        };
-
-        let method = match reqwest::Method::from_str(&req.method) {
-            Ok(method) => method,
-            Err(e) => {
-                error!("failed to convert method: {}:{e}", &req.method);
-                return HttpResponse {
-                    body: Vec::new(),
-                    header: HashMap::new(),
-                    status_code: 500,
-                };
-            }
-        };
-
-        trace!("forwarding {} request to {}", &req.method, &req.url);
-        // Perform request to upstream server that was requested by the actor
-        let response = match reqwest::Client::new()
-            .request(method, &req.url)
-            .headers(headers)
-            .body(req.body)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => {
-                // send() can fail if there was an error while sending request,
-                // a redirect loop was detected, or redirect limit was exhausted.
-                // For now, we'll return an error (not HttpResponse with error
-                // status) and the caller should receive an error
-                // (needs to be tested).
-                error!(
-                    error = %e,
-                    "httpclient network error attempting to send"
-                );
-                return HttpResponse {
-                    body: Vec::new(),
-                    header: HashMap::new(),
-                    status_code: 500,
-                };
-            }
-        };
-
-        // Read information from the upstream server response to send back to the actor
-        let resp_status_code = response.status().as_u16();
-        let resp_headers = convert_header_map_to_hashmap(response.headers());
-        let resp_body = match response.bytes().await {
-            Ok(resp_body) => resp_body,
-            Err(e) => {
-                error!("failed reading response body bytes: {e}");
-                return HttpResponse {
-                    body: Vec::new(),
-                    header: HashMap::new(),
-                    status_code: 500,
-                };
-            }
-        };
-
-        // Log request status
-        if (200..300).contains(&(resp_status_code as usize)) {
-            trace!(
-                %resp_status_code,
-                "http request completed",
-            );
-        } else {
-            warn!(
-                %resp_status_code,
-                "http request completed with non-200 status"
-            );
-        }
-
-        HttpResponse {
-            body: Vec::from(resp_body),
-            header: resp_headers,
-            status_code: resp_status_code,
-        }
-    }
-}
-
 /// Handle provider control commands
-#[async_trait]
-impl WasmcloudCapabilityProvider for HttpClientProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        // Accept all links that are put without saving any information
-        true
-    }
+impl ProviderHandler for HttpClientProvider {}
 
-    /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, actor_id: &str) {
-        // Deleting links is a no-op since no link information was saved
+#[instrument(level = "trace", skip_all)]
+pub async fn serve(commands: impl Future<Output = ()>) -> anyhow::Result<()> {
+    let connection = get_connection();
+    let wrpc = connection.get_wrpc_client(connection.provider_key());
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(
+        hyper_rustls::HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_all_versions()
+            .build(),
+    );
+    let mut commands = pin!(commands);
+    'outer: loop {
+        use wrpc_interface_http::OutgoingHandler as _;
+        let handle_invocations = wrpc
+            .serve_handle_http()
+            .await
+            .context("failed to serve `wrpc:http/outgoing-handler.handle` invocations")?;
+        let mut handle_invocations = pin!(handle_invocations);
+        loop {
+            select! {
+                invocation = handle_invocations.next() => {
+                    match invocation {
+                        Some(Ok(invocation)) => {
+                            spawn(serve_handle(http_client.clone(), invocation));
+                        },
+                        Some(Err(err)) => {
+                            error!(?err, "failed to accept `wrpc:http/outgoing-handler.handle` invocation")
+                        },
+                        None => {
+                            warn!("`wrpc:http/outgoing-handler.handle` stream unexpectedly finished, resubscribe");
+                            continue 'outer
+                        }
+                    }
+                }
+                _ = &mut commands => {
+                    debug!("shutdown command received");
+                    return Ok(())
+                }
+            }
+        }
     }
-
-    /// Handle shutdown request by closing all connections
-    #[instrument(level = "debug", skip(self))]
-    async fn shutdown(&self) {
-        // Shutting down is a no-op since no link information was saved
-    }
-}
-
-/// Build a [`http::Headermap`] from the [`std::collections::HashMap`]
-/// that an incoming WIT HTTP request would produce
-fn build_http_header_map(input: &HashMap<String, Vec<String>>) -> Result<HeaderMap> {
-    let mut headers = HeaderMap::new();
-    for (k, v) in input.iter() {
-        headers.append(
-            HeaderName::from_str(k.as_str()).context("failed to convert header name: {e}")?,
-            // Multiple values in a header string should be joined by comma
-            HeaderValue::from_str(&v.join(",")).context("failed to convert header value: {e}")?,
-        );
-    }
-    Ok(headers)
-}
-
-/// Convert a [`http::HeaderMap`] to a HashMap of the kind that is used in the smithy contract
-fn convert_header_map_to_hashmap(map: &HeaderMap) -> HashMap<String, Vec<String>> {
-    map.iter().fold(HashMap::new(), |mut headers, (k, v)| {
-        headers.entry(k.to_string()).or_default().extend(
-            String::from_utf8_lossy(v.as_bytes())
-                // Multiple values for a given header should be separated by ','
-                // https://www.rfc-editor.org/rfc/rfc9110.html#name-field-lines-and-combined-fi
-                .split(',')
-                .map(String::from)
-                .collect::<Vec<String>>(),
-        );
-        headers
-    })
 }

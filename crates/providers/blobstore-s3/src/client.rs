@@ -78,8 +78,7 @@ impl StorageClient {
             let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
                 .with_webpki_roots()
                 .https_or_http()
-                .enable_http1()
-                .enable_http2()
+                .enable_all_versions()
                 .build();
             let http_client = HyperClientBuilder::new().build(https_connector);
             s3_config = s3_config.http_client(http_client);

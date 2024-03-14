@@ -1,8 +1,8 @@
 [package]
 name = "wasmcloud-provider-httpclient"
-version = "0.8.0"
+version = "0.9.0"
 description = """
-HTTP client for wasmCloud, using reqwest. This package provides a capability provider that satisfies the 'wasmcloud:httpclient' contract.
+HTTP client for wasmCloud, using reqwest. This package provides a capability provider that satisfies the 'wrpc:http/outgoing-handler' contract.
 """
 
 authors.workspace = true
@@ -16,7 +16,15 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-http = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+futures = { workspace = true }
+hyper-util = { workspace = true, features = ["client-legacy"] }
+hyper-rustls = { workspace = true, features = [
+    "http2",
+    "ring",
+    "webpki-tokio",
+] }
+tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
-wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+wasmcloud-provider-sdk = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
+wrpc-transport = { workspace = true }

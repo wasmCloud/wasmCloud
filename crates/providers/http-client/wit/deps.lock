@@ -1,4 +1,0 @@
-[httpclient]
-path = "../../../../wit/wasmcloud/httpclient"
-sha256 = "e620be786eae31a3ac75403fd834d1c2de0dbac55148f42fa8b0e27b5ab09cd1"
-sha512 = "f212217d8c0f5e4a8f5732e3473ae6196f9f6a989af21700f02ea259f4212377970fca9a01c6f9db4b79f63bdc56137c3ddca79404c1f147b97987a51066b260"

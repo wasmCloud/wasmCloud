@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::io::stderr;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
@@ -306,13 +306,15 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .header("test-header", "test-value")
             .body(body)
             .expect("failed to construct request");
+        let (tx, rx) = oneshot::channel();
         actor
             .into_incoming_http()
             .await
             .context("failed to instantiate `wasi:http/incoming-handler`")?
-            .handle(req)
+            .handle(req, tx)
             .await
-            .context("failed to call `wasi:http/incoming-handler.handle`")?
+            .context("failed to call `wasi:http/incoming-handler.handle`")?;
+        rx.await.context("response not set")?
     };
     let res = res.context("request failed")?;
     let (

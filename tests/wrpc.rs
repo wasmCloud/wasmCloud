@@ -3,16 +3,11 @@ use core::time::Duration;
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 
 use anyhow::{ensure, Context as _};
-use futures::stream;
-use futures::TryStreamExt;
 use nkeys::KeyPair;
 use serde::Deserialize;
 use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT_PREVIEW2};
-use tokio::try_join;
-use tracing::info;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
@@ -21,7 +16,6 @@ use wasmcloud_test_util::provider::assert_start_provider;
 use wasmcloud_test_util::{
     actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
 };
-use wrpc_transport::{AcceptedInvocation, Transmitter as _};
 
 pub mod common;
 use common::free_port;
@@ -31,100 +25,9 @@ const LATTICE: &str = "default";
 const PINGER_COMPONENT_ID: &str = "wrpc_pinger_component";
 const PONGER_COMPONENT_ID: &str = "wrpc_ponger_component";
 
-async fn serve_outgoing_http(
-    mut invocations: <wrpc_transport_nats::Client as wrpc_transport::Client>::InvocationStream<(
-        wrpc_interface_http::IncomingRequest,
-        Option<wrpc_interface_http::RequestOptions>,
-    )>,
-) -> anyhow::Result<()> {
-    let AcceptedInvocation {
-        params:
-            (
-                wrpc_interface_http::Request {
-                    mut body,
-                    trailers,
-                    method,
-                    path_with_query,
-                    scheme,
-                    authority,
-                    headers,
-                },
-                opts,
-            ),
-        result_subject,
-        transmitter,
-        ..
-    } = invocations
-        .try_next()
-        .await
-        .context("failed to accept `wrpc:http/outgoing-handler.handle` invocation")?
-        .context("invocation stream unexpectedly finished")?;
-    assert_eq!(method, wrpc_interface_http::Method::Put);
-    assert_eq!(path_with_query.as_deref(), Some("/test"));
-    assert_eq!(scheme, Some(wrpc_interface_http::Scheme::HTTPS));
-    assert_eq!(authority.as_deref(), Some("localhost:4242"));
-    assert_eq!(
-        headers,
-        vec![("host".into(), vec!["localhost:4242".into()])],
-    );
-    // wasmtime defaults
-    assert_eq!(
-        opts,
-        Some(wrpc_interface_http::RequestOptions {
-            connect_timeout: Some(Duration::from_secs(600)),
-            first_byte_timeout: Some(Duration::from_secs(600)),
-            between_bytes_timeout: Some(Duration::from_secs(600)),
-        })
-    );
-    try_join!(
-        async {
-            info!("transmit response");
-            transmitter
-                .transmit_static(
-                    result_subject,
-                    Ok::<_, wrpc_interface_http::ErrorCode>(wrpc_interface_http::Response {
-                        body: stream::iter([("test".into())]),
-                        trailers: async { None },
-                        status: 200,
-                        headers: Vec::default(),
-                    }),
-                )
-                .await
-                .context("failed to transmit response")?;
-            info!("response transmitted");
-            anyhow::Ok(())
-        },
-        async {
-            info!("await request body element");
-            let item = body
-                .try_next()
-                .await
-                .context("failed to receive body item")?
-                .context("unexpected end of body stream")?;
-            assert_eq!(str::from_utf8(&item).unwrap(), "test");
-            info!("await request body end");
-            let item = body
-                .try_next()
-                .await
-                .context("failed to receive end item")?;
-            assert_eq!(item, None);
-            info!("request body verified");
-            Ok(())
-        },
-        async {
-            info!("await request trailers");
-            let trailers = trailers.await.context("failed to receive trailers")?;
-            assert_eq!(trailers, None);
-            info!("request trailers verified");
-            Ok(())
-        }
-    )?;
-    Ok(())
-}
-
 async fn assert_incoming_http(port: u16) -> anyhow::Result<()> {
     let body = format!(
-        r#"{{"min":42,"max":4242,"port":4242,"config_key":"test-config-data","authority":"localhost:{port}"}}"#,
+        r#"{{"min":42,"max":4242,"config_key":"test-config-data","authority":"localhost:{port}"}}"#,
     );
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -212,15 +115,15 @@ async fn wrpc() -> anyhow::Result<()> {
     let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
         .lattice(LATTICE.to_string())
         .build();
-    let wrpc_client = wrpc_transport_nats::Client::new(
-        nats_client.clone(),
-        format!("{LATTICE}.{PINGER_COMPONENT_ID}"),
-    );
-    let wrpc_client = Arc::new(wrpc_client);
     // Build the host
     let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None)
         .await
         .context("failed to start test host")?;
+
+    let httpclient_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPCLIENT_SUBJECT)
+        .context("failed to parse `rust-httpclient` provider key")?;
+    let httpclient_provider_url = Url::from_file_path(test_providers::RUST_HTTPCLIENT)
+        .expect("failed to construct provider ref");
 
     let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
@@ -238,32 +141,16 @@ async fn wrpc() -> anyhow::Result<()> {
     })
     .await?;
 
-    let component_http_port = free_port().await?;
-    let http_config_name = "http-default-address".to_string();
-
-    // Create configuration for the HTTP provider
-    assert_config_put(
-        &ctl_client,
-        &http_config_name,
-        HashMap::from_iter([(
-            "ADDRESS".to_string(),
-            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
-        )]),
-    )
+    assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
+        client: &ctl_client,
+        lattice: LATTICE,
+        host_key: &host.host_key(),
+        provider_key: &httpclient_provider_key,
+        provider_id: &httpclient_provider_key.public_key(),
+        url: &httpclient_provider_url,
+        config: vec![],
+    })
     .await?;
-
-    try_join!(assert_advertise_link(
-        &ctl_client,
-        httpserver_provider_key.public_key(),
-        PINGER_COMPONENT_ID,
-        "default",
-        "wasi",
-        "http",
-        vec!["incoming-handler".to_string()],
-        vec![http_config_name],
-        vec![],
-    ),)
-    .context("failed to advertise links")?;
 
     // Scale pinger
     assert_scale_actor(
@@ -291,6 +178,34 @@ async fn wrpc() -> anyhow::Result<()> {
     .await
     .expect("should've scaled actor");
 
+    let component_http_port = free_port().await?;
+    let http_config_name = "http-default-address".to_string();
+
+    // Create configuration for the HTTP provider
+    assert_config_put(
+        &ctl_client,
+        &http_config_name,
+        HashMap::from_iter([(
+            "ADDRESS".to_string(),
+            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
+        )]),
+    )
+    .await?;
+
+    assert_advertise_link(
+        &ctl_client,
+        httpserver_provider_key.public_key(),
+        PINGER_COMPONENT_ID,
+        "default",
+        "wasi",
+        "http",
+        vec!["incoming-handler".to_string()],
+        vec![http_config_name],
+        vec![],
+    )
+    .await
+    .context("failed to advertise link")?;
+
     // Link pinger --wrpc:testing/pingpong--> ponger
     assert_advertise_link(
         &ctl_client,
@@ -304,13 +219,12 @@ async fn wrpc() -> anyhow::Result<()> {
         vec![],
     )
     .await
-    .expect("should advertise link");
+    .context("failed to advertise link")?;
 
-    // Link pinger --wasi:http/outgoing-handler--> pinger
     assert_advertise_link(
         &ctl_client,
         PINGER_COMPONENT_ID,
-        PINGER_COMPONENT_ID,
+        httpclient_provider_key.public_key(),
         "default",
         "wasi",
         "http",
@@ -319,16 +233,9 @@ async fn wrpc() -> anyhow::Result<()> {
         vec![],
     )
     .await
-    .expect("should advertise link");
+    .context("failed to advertise link")?;
 
-    let outgoing_http_invocations =
-        wrpc_interface_http::OutgoingHandler::serve_handle(wrpc_client.as_ref())
-            .await
-            .context("failed to serve `wrpc:http/outgoing-handler` invocations")?;
-    try_join!(
-        assert_incoming_http(component_http_port),
-        serve_outgoing_http(outgoing_http_invocations)
-    )?;
+    assert_incoming_http(component_http_port).await?;
 
     nats_server
         .stop()
