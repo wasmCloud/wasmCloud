@@ -68,13 +68,13 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
         #[#crate_path::deps::async_trait::async_trait]
         impl #crate_path::deps::wrpc_transport::Receive for #struct_name
         {
-            async fn receive<T>(
-                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'static,
+            async fn receive<'a, T>(
+                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>>  + Send + Sync + Unpin),
                 _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,
-            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send>)>
+            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send + 'a>)>
             where
-                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
+                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + 'static
             {
                 use #crate_path::deps::anyhow::Context as _;
                 #( #receive_lines );*
@@ -195,13 +195,13 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
         #[#crate_path::deps::async_trait::async_trait]
         impl #crate_path::deps::wrpc_transport::Receive for #enum_name
         {
-            async fn receive<T>(
-                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'static,
+            async fn receive<'a, T>(
+                payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin),
                 _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,
-            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send>)>
+            ) -> #crate_path::deps::anyhow::Result<(Self, Box<dyn #crate_path::deps::bytes::buf::Buf + Send + 'a>)>
             where
-                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin + 'static
+                T: #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + 'static
             {
                 let (discriminant, payload) = wrpc_transport_derive::deps::wrpc_transport::receive_discriminant(payload, rx)
                     .await
