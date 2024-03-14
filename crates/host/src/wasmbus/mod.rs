@@ -2897,11 +2897,7 @@ impl Host {
                     });
 
             let link_definitions = if let Some(links) = link_definitions {
-                links
-                    .await
-                    .into_iter()
-                    .filter_map(|link| link)
-                    .collect::<Vec<_>>()
+                links.await.into_iter().flatten().collect::<Vec<_>>()
             } else {
                 vec![]
             };
