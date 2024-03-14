@@ -214,8 +214,8 @@ impl BundleGenerator {
 
         // We need to actually try and fetch the config here. If we don't do this, then a watch will
         // just blindly watch even if the key doesn't exist. We should return an error if the config
-        // doesn't exist or has data issues
-        let _config: HashMap<String, String> = match self.store.get(&name).await {
+        // doesn't exist or has data issues. It also allows us to set the intitial value
+        let config: HashMap<String, String> = match self.store.get(&name).await {
             Ok(Some(data)) => serde_json::from_slice(&data)
                 .context("Data corruption error, unable to decode data from store")?,
             Ok(None) => return Err(anyhow::anyhow!("Config {} does not exist", name)),
@@ -224,7 +224,7 @@ impl BundleGenerator {
 
         // Otherwise we need to setup the watcher. We start by setting up the watch so we don't miss
         // any events after we query the initial config
-        let (tx, rx) = watch::channel(HashMap::new());
+        let (tx, rx) = watch::channel(config);
         let (done, wait) = tokio::sync::oneshot::channel();
         let (handle, reg) = AbortHandle::new_pair();
         tokio::task::spawn(Abortable::new(
@@ -258,7 +258,7 @@ async fn watcher_loop(
     done: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
 ) {
     // We need to watch with history so we can get the initial config.
-    let mut watcher = match store.watch_with_history(&name).await {
+    let mut watcher = match store.watch(&name).await {
         Ok(watcher) => {
             done.send(Ok(())).expect(
                 "Receiver for watcher setup should not have been dropped. This is programmer error",
