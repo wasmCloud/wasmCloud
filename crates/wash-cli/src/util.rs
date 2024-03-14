@@ -119,7 +119,7 @@ mod test {
             "config_b64".to_string(),
             "eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string(),
         );
-        let output = wash_lib::cli::labels_vec_to_hashmap(vec![base64_option]).unwrap();
+        let output = wash_lib::cli::input_vec_to_hashmap(vec![base64_option]).unwrap();
         assert_eq!(expected, output);
     }
 }

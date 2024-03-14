@@ -16,7 +16,7 @@ use wash_lib::registry::{
 };
 use wash_lib::{
     cli::{
-        labels_vec_to_hashmap,
+        input_vec_to_hashmap,
         registry::{RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
         CommandOutput, OutputKind,
     },
@@ -150,7 +150,7 @@ pub async fn registry_push(
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
-    let annotations = labels_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
+    let annotations = input_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
 
     push_oci_artifact(
         artifact_url.clone(),

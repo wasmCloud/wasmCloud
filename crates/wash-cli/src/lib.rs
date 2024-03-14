@@ -4,6 +4,7 @@ pub mod build;
 pub mod call;
 pub mod common;
 pub mod completions;
+pub mod config;
 pub mod ctl;
 pub mod ctx;
 pub mod dev;
