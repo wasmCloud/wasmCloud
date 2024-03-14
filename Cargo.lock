@@ -5457,6 +5457,7 @@ dependencies = [
  "serde_bytes",
  "sha2",
  "tokio",
+ "tower",
  "tracing",
  "ulid",
  "uuid 1.7.0",
@@ -6505,9 +6506,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.6.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8791953bd06b5c3715d64a45ae8476017da781332fde77cbd846c1d025c62a4"
+checksum = "3eaf2261ae5ad6118060029a8e91f484c4d42ca3c620c993d4632a894b95ef53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6519,9 +6520,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-http"
-version = "0.13.1"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d16eb1e3efa28c30c28d1e9b7ba48346de37761bba4487bad37bdad9652239"
+checksum = "3346add55a5bcdb8669d2e720806660cd93150c06040ede3322662498e8e953a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6540,9 +6541,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-keyvalue"
-version = "0.5.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c63d6ec17d25c36f8d3ef212522932e8448e7cd9db8eab3f02c0c1fbaa7dd04"
+checksum = "1f3d0ed83240590ef1d23fb611040d39b207334e0a222cd9e2899345dbb18f52"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6553,9 +6554,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.7.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e16348df4514c00fac93c74986424c199337a74303d50d957346d21b15ccf6a"
+checksum = "7d2d451fbdd6c1406e1237dafae9a4d3a0d8fa92cd53ecf33b39dfbfccb3e1fd"
 dependencies = [
  "anyhow",
  "futures",
@@ -6567,9 +6568,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.16.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef00ef79f1939e1760ce6f450eba8b8eb48868b8f8d01de68f26ecb37616f849"
+checksum = "f7abefdaa6b9ecb989d91ab0d7025545fe6db4dcfd58d293097bda5eb621fde9"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6579,6 +6580,7 @@ dependencies = [
  "leb128",
  "tokio",
  "tokio-stream",
+ "tower",
  "tracing",
  "wrpc-types",
 ]
@@ -6613,16 +6615,16 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.13.0"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c7d55dad878d2d366e6d41a6cdde198cdea600d61b29e94d179940724a86278"
+checksum = "7cadea0b8ab4462476ac98381a9a18749f1b40c331972234ab1d9ebe26e3c35f"
 dependencies = [
  "anyhow",
  "async-nats",
- "async-trait",
  "bytes",
  "futures",
  "tokio",
+ "tower",
  "tracing",
  "wrpc-transport",
 ]

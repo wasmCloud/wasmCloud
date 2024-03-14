@@ -25,6 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
 tokio = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
 uuid = { workspace = true, features = ["serde"] }

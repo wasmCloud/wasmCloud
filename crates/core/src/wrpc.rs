@@ -9,15 +9,16 @@
 //! Most logic is delegated to the underlying `wrpc_transport_nats` client, which provides the
 //! actual NATS-based transport implementation.
 
-use std::{pin::Pin, sync::Arc};
+use core::pin::Pin;
+
+use std::sync::Arc;
 
 use async_nats::HeaderMap;
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Future, Stream, StreamExt};
 use tracing::instrument;
-use wrpc_transport::{Encode, IncomingInvocation, OutgoingInvocation};
-use wrpc_transport_nats::{Subject, Subscriber, Transmission};
+use wrpc_transport::{AcceptedInvocation, Encode, IncomingInvocation, OutgoingInvocation};
+use wrpc_transport_nats::{InvocationSubscription, Subject, Subscriber, Transmission};
 
 /// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
@@ -35,7 +36,6 @@ impl TransmitterWithHeaders {
     }
 }
 
-#[async_trait]
 impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     type Subject = Subject;
     type PublishError = wrpc_transport_nats::PublishError;
@@ -148,50 +148,78 @@ impl Client {
     }
 }
 
-#[async_trait]
 impl wrpc_transport::Client for Client {
     type Context = Option<HeaderMap>;
     type Subject = Subject;
     type Subscriber = Subscriber;
     type Transmission = Transmission;
     type Acceptor = AcceptorWithHeaders;
-    type InvocationStream = Pin<
+    type Invocation = InvocationWithHeaders;
+    type InvocationStream<T> = Pin<
         Box<
             dyn Stream<
                     Item = anyhow::Result<
-                        IncomingInvocation<
-                            Self::Context,
-                            Self::Subject,
-                            Self::Subscriber,
-                            Self::Acceptor,
-                        >,
+                        AcceptedInvocation<Option<HeaderMap>, T, TransmitterWithHeaders>,
                     >,
                 > + Send,
         >,
     >;
-    type Invocation = InvocationWithHeaders;
 
-    #[instrument(level = "trace", skip(self))]
-    async fn serve(&self, instance: &str, func: &str) -> anyhow::Result<Self::InvocationStream> {
-        let inner_stream = self.inner.serve(instance, func).await?;
-
+    #[instrument(level = "trace", skip(self, svc))]
+    async fn serve<T, S, Fut>(
+        &self,
+        instance: &str,
+        name: &str,
+        svc: S,
+    ) -> anyhow::Result<Self::InvocationStream<T>>
+    where
+        S: tower::Service<
+                IncomingInvocation<Option<HeaderMap>, Subscriber, AcceptorWithHeaders>,
+                Future = Fut,
+            > + Send
+            + Clone
+            + 'static,
+        Fut: Future<
+                Output = anyhow::Result<
+                    AcceptedInvocation<Option<HeaderMap>, T, TransmitterWithHeaders>,
+                >,
+            > + Send,
+    {
         // Map invocations in the stream to construct an `IncomingInvocation` and `Acceptor` with headers.
-        Ok(inner_stream
-            .map(|result_invocation| {
-                result_invocation.map(|invocation| IncomingInvocation {
-                    context: invocation.context.clone(),
-                    payload: invocation.payload,
-                    param_subject: invocation.param_subject,
-                    error_subject: invocation.error_subject,
-                    handshake_subject: invocation.handshake_subject,
-                    subscriber: invocation.subscriber,
-                    acceptor: AcceptorWithHeaders {
-                        inner: invocation.acceptor,
-                        headers: invocation.context.unwrap_or_default(),
-                    },
-                })
-            })
-            .boxed())
+        let invocations = self
+            .inner
+            .subscribe(instance, name)
+            .await
+            .map(InvocationSubscription::into_invocations)?;
+        Ok(Box::pin(invocations.then({
+            move |invocation| {
+                let mut svc = svc.clone();
+                async move {
+                    let IncomingInvocation {
+                        context,
+                        payload,
+                        param_subject,
+                        error_subject,
+                        handshake_subject,
+                        subscriber,
+                        acceptor,
+                    } = invocation?;
+                    svc.call(IncomingInvocation {
+                        context: context.clone(),
+                        payload,
+                        param_subject,
+                        error_subject,
+                        handshake_subject,
+                        subscriber,
+                        acceptor: AcceptorWithHeaders {
+                            inner: acceptor,
+                            headers: context.unwrap_or_default(),
+                        },
+                    })
+                    .await
+                }
+            }
+        })))
     }
 
     fn new_invocation(

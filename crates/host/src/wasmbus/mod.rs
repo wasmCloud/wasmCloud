@@ -914,13 +914,13 @@ impl Subscribe for BrokerMessage {
 
 #[async_trait]
 impl Receive for BrokerMessage {
-    async fn receive<T>(
-        payload: impl Buf + Send + 'static,
+    async fn receive<'a, T>(
+        payload: impl Buf + Send + 'a,
         rx: &mut (impl Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin),
         _sub: Option<AsyncSubscription<T>>,
-    ) -> anyhow::Result<(Self, Box<dyn Buf + Send>)>
+    ) -> anyhow::Result<(Self, Box<dyn Buf + Send + 'a>)>
     where
-        T: Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin + 'static,
+        T: Stream<Item = anyhow::Result<Bytes>> + Send + Sync + 'static,
     {
         let (subject, payload) = Receive::receive_sync(payload, rx)
             .await
@@ -2132,7 +2132,7 @@ impl Host {
             metrics: Arc::clone(&self.metrics),
         });
 
-        let mut exports: Vec<Box<dyn Stream<Item = _> + Send + Unpin>> = Vec::new();
+        let mut exports: Vec<Pin<Box<dyn Stream<Item = _> + Send>>> = Vec::new();
         for (instance, functions) in component.exports().iter() {
             match instance.as_str() {
                 "wasi:http/incoming-handler@0.2.0" => {
@@ -2142,7 +2142,7 @@ impl Host {
                         .serve_handle_wasmtime()
                         .await
                         .context("failed to serve `wrpc:http/incoming-handler.handle`")?;
-                    exports.push(Box::new(invocations.map(move |invocation| {
+                    exports.push(Box::pin(invocations.map(move |invocation| {
                         invocation.map(
                             |AcceptedInvocation {
                                  context,
@@ -2152,7 +2152,7 @@ impl Host {
                                  transmitter,
                              }| AcceptedInvocation {
                                 context,
-                                params: InvocationParams::IncomingHttpHandle(params),
+                                params: InvocationParams::IncomingHttpHandle(params.0),
                                 result_subject,
                                 error_subject,
                                 transmitter,
@@ -2174,7 +2174,7 @@ impl Host {
                                 .context("failed to serve custom function export")?;
                             let name = Arc::new(name.to_string());
                             let instance = Arc::clone(&instance);
-                            exports.push(Box::new(invocations.map(move |invocation| {
+                            exports.push(Box::pin(invocations.map(move |invocation| {
                                 invocation.map(
                                     |AcceptedInvocation {
                                          context,
