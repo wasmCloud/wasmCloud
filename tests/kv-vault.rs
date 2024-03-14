@@ -121,7 +121,7 @@ async fn kv_vault_suite() -> Result<()> {
         provider_key: &kv_vault_provider_key,
         provider_id: &kv_vault_provider_key.public_key(),
         url: &kv_vault_provider_url,
-        config: vec!["kv".into()],
+        config: vec![],
     })
     .await?;
 
@@ -150,7 +150,7 @@ async fn kv_vault_suite() -> Result<()> {
         "keyvalue",
         vec!["key-value".to_string()],
         vec![],
-        vec![],
+        vec!["kv".to_string()],
     )
     .await
     .context("should advertise link")?;
