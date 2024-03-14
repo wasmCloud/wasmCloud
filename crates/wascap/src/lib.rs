@@ -20,13 +20,12 @@
 //! let issuer = KeyPair::new_account(); // Create an Ed25519 key pair to sign the module
 //! let module = KeyPair::new_module(); // Create a key pair for the module itself
 //!
-//! // Grant the module some basic capabilities, with no date limits
-//! let claims = ClaimsBuilder::<Actor>::new()
+//! // Set the name on the component
+//! let claims = ClaimsBuilder::<Component>::new()
 //!     .issuer(&issuer.public_key())
 //!     .subject(&module.public_key())
 //!     .with_metadata(Actor{
 //!         name: Some("test".to_string()),
-//!         caps: Some(vec![caps::MESSAGING.to_string(), caps::KEY_VALUE.to_string()]),
 //!         .. Default::default()
 //!      })
 //!     .build();
@@ -57,7 +56,6 @@
 pub type Result<T> = std::result::Result<T, errors::Error>;
 pub use errors::Error;
 
-pub mod caps;
 mod errors;
 pub mod jwt;
 pub mod wasm;
@@ -66,8 +64,7 @@ pub mod prelude {
     //! Public re-exports of the most commonly used wascap types
     pub use super::{Error as WascapError, Result as WascapResult};
     pub use crate::{
-        caps,
-        jwt::{validate_token, Account, Actor, Claims, ClaimsBuilder, Invocation, Operator},
+        jwt::{validate_token, Account, Claims, ClaimsBuilder, Component, Invocation, Operator},
         wasm,
     };
     pub use nkeys::KeyPair;

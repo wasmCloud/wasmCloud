@@ -2,7 +2,7 @@
 
 use crate::{
     errors::{self, ErrorKind},
-    jwt::{Actor, Claims, Token, MIN_WASCAP_INTERNAL_REVISION},
+    jwt::{Claims, Component, Token, MIN_WASCAP_INTERNAL_REVISION},
     Result,
 };
 use data_encoding::HEXUPPER;
@@ -29,7 +29,7 @@ const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 /// # Errors
 /// Will return an error if hash computation fails or it can't read the JWT from inside
 /// a section's data, etc
-pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
+pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Component>>> {
     use wasmparser::Payload::{ComponentSection, CustomSection, End, ModuleSection};
 
     let target_hash = compute_hash(&strip_custom_section(contents.as_ref())?)?;
@@ -44,7 +44,7 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
                 if (c.name() == SECTION_JWT) || (c.name() == SECTION_WC_JWT) && depth == 0 =>
             {
                 let jwt = String::from_utf8(c.data().to_vec())?;
-                let claims: Claims<Actor> = Claims::decode(&jwt)?;
+                let claims: Claims<Component> = Claims::decode(&jwt)?;
                 let Some(ref meta) = claims.metadata else {
                     return Err(errors::new(ErrorKind::InvalidAlgorithm));
                 };
@@ -68,13 +68,17 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
 /// parsers or interpreters. Returns a vector of bytes representing the new WebAssembly module which can
 /// be saved to a `.wasm` file
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
-pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) -> Result<Vec<u8>> {
+pub fn embed_claims(
+    orig_bytecode: &[u8],
+    claims: &Claims<Component>,
+    kp: &KeyPair,
+) -> Result<Vec<u8>> {
     let mut bytes = orig_bytecode.to_vec();
     bytes = strip_custom_section(&bytes)?;
 
     let hash = compute_hash(&bytes)?;
     let mut claims = (*claims).clone();
-    let meta = claims.metadata.map(|md| Actor {
+    let meta = claims.metadata.map(|md| Component {
         module_hash: hash,
         ..md
     });
@@ -87,6 +91,8 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) 
     Ok(bytes)
 }
 
+/// Sign a buffer containing bytes for a WebAssembly component
+/// with provided claims
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::missing_errors_doc)] // TODO: document
 pub fn sign_buffer_with_claims(
@@ -96,18 +102,16 @@ pub fn sign_buffer_with_claims(
     acct_kp: &KeyPair,
     expires_in_days: Option<u64>,
     not_before_days: Option<u64>,
-    caps: Vec<String>,
     tags: Vec<String>,
     provider: bool,
     rev: Option<i32>,
     ver: Option<String>,
     call_alias: Option<String>,
 ) -> Result<Vec<u8>> {
-    let claims = Claims::<Actor>::with_dates(
+    let claims = Claims::<Component>::with_dates(
         name,
         acct_kp.public_key(),
         mod_kp.public_key(),
-        Some(caps),
         Some(tags),
         days_from_now_to_jwt_time(not_before_days),
         days_from_now_to_jwt_time(expires_in_days),
@@ -214,11 +218,7 @@ mod test {
     use std::fs::File;
 
     use super::*;
-    use crate::{
-        caps::capability_name,
-        caps::{KEY_VALUE, LOGGING, MESSAGING},
-        jwt::{Actor, Claims, WASCAP_INTERNAL_REVISION},
-    };
+    use crate::jwt::{Claims, Component, WASCAP_INTERNAL_REVISION};
     use data_encoding::BASE64;
 
     const WASM_BASE64: &str =
@@ -236,9 +236,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "testing".to_string(),
-                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -278,9 +277,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "testing".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -299,10 +297,6 @@ mod test {
 
         if let Some(token) = extract_claims(modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
-            assert_eq!(
-                claims.metadata.as_ref().unwrap().caps,
-                token.claims.metadata.as_ref().unwrap().caps
-            );
         } else {
             unreachable!()
         }
@@ -316,9 +310,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "testing".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -337,10 +330,6 @@ mod test {
 
         if let Some(token) = extract_claims(modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
-            assert_eq!(
-                claims.metadata.as_ref().unwrap().caps,
-                token.claims.metadata.as_ref().unwrap().caps
-            );
         } else {
             unreachable!()
         }
@@ -354,9 +343,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "testing".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -396,9 +384,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "testing".to_string(),
-                Some(vec![capability_name(MESSAGING), capability_name(LOGGING)]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -422,7 +409,6 @@ mod test {
             let claims_met = claims.metadata.as_ref().unwrap();
             let token_met = token.claims.metadata.as_ref().unwrap();
 
-            assert_eq!(claims_met.caps, token_met.caps);
             assert_eq!(claims_met.call_alias, token_met.call_alias);
         } else {
             unreachable!()
