@@ -10,7 +10,8 @@ use tokio::process::Command;
 #[tokio::test]
 async fn integration_build_rust_actor_unsigned() -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "hello", /* template_name= */ "hello",
+        /* actor_name= */ "hello-unsigned",
+        /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -22,9 +23,9 @@ async fn integration_build_rust_actor_unsigned() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/hello.wasm");
+    let unsigned_file = project_dir.join("build/http_hello_world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/hello_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
         !signed_file.exists(),
         "signed file should not exist when using --build-only!"
@@ -35,7 +36,8 @@ async fn integration_build_rust_actor_unsigned() -> Result<()> {
 #[tokio::test]
 async fn integration_build_rust_actor_signed() -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "hello", /* template_name= */ "hello",
+        /* actor_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -48,9 +50,9 @@ async fn integration_build_rust_actor_signed() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/hello.wasm");
+    let unsigned_file = project_dir.join("build/http_hello_world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/hello_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(signed_file.exists(), "signed file not found!");
     Ok(())
 }
@@ -59,7 +61,8 @@ async fn integration_build_rust_actor_signed() -> Result<()> {
 async fn integration_build_rust_actor_signed_with_signing_keys_directory_configuration(
 ) -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "hello", /* template_name= */ "hello",
+        /* actor_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -82,7 +85,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains("hello/keys/hello_module.nk"));
+    assert!(output.contains("hello/keys/http_hello_world_module.nk"));
 
     // case: keys directory configured via cli arg --keys-directory
     let key_directory = project_dir.join("batmankeys").to_string_lossy().to_string();
@@ -101,7 +104,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
 
     // case: keys directory configured via cli arg --keys-directory and --disable-keygen=true
     let key_directory = project_dir
@@ -149,7 +152,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
 
     // case: keys directory configured via wasmcloud.toml. The config that is written to file does affect all the remaining test cases.
     let key_directory = project_dir
@@ -187,7 +190,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
 
     // case when keys directory is configured via cli arg --keys-directory and wasmcloud.toml. cli arg should take precedence
     let key_directory = project_dir
@@ -210,7 +213,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
 
     // case when keys directory is configured via env var $WASH_KEYS, cli arg --keys-directory and wasmcloud.toml. cli arg should take precedence
     let env_key_directory = project_dir.join("flashkeys").to_string_lossy().to_string();
@@ -236,7 +239,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
 
     // case when keys directory is configured via env var $WASH_KEYS and wasmcloud.toml. env var should take precedence
     let env_key_directory = project_dir.join("orionkeys").to_string_lossy().to_string();
@@ -256,7 +259,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/hello_module.nk", env_key_directory).as_str()));
+    assert!(output.contains(format!("{}/http_hello_world_module.nk", env_key_directory).as_str()));
 
     Ok(())
 }
@@ -275,9 +278,9 @@ async fn integration_build_rust_actor_in_workspace_unsigned() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/hello_1.wasm");
+    let unsigned_file = project_dir.join("build/http_hello_world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/hello_1_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
         !signed_file.exists(),
         "signed file should not exist when using --build-only!"
@@ -288,8 +291,8 @@ async fn integration_build_rust_actor_in_workspace_unsigned() -> Result<()> {
 #[tokio::test]
 async fn integration_build_tinygo_actor_unsigned() -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "echo",
-        /* template_name= */ "echo-tinygo",
+        /* actor_name= */ "hello-world-tinygo",
+        /* template_name= */ "hello-world-tinygo",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -302,9 +305,9 @@ async fn integration_build_tinygo_actor_unsigned() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/echo.wasm");
+    let unsigned_file = project_dir.join("build/http-hello-world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/echo_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(
         !signed_file.exists(),
         "signed file should not exist when using --build-only!"
@@ -315,8 +318,8 @@ async fn integration_build_tinygo_actor_unsigned() -> Result<()> {
 #[tokio::test]
 async fn integration_build_tinygo_actor_signed() -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "echo",
-        /* template_name= */ "echo-tinygo",
+        /* actor_name= */ "hello-world-tinygo",
+        /* template_name= */ "hello-world-tinygo",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -329,9 +332,9 @@ async fn integration_build_tinygo_actor_signed() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/echo.wasm");
+    let unsigned_file = project_dir.join("build/http-hello-world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/echo_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(signed_file.exists(), "signed file not found!");
     Ok(())
 }

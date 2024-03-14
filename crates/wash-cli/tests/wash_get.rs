@@ -137,6 +137,9 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+// TODO: reenable after #1649 merges and v1.0.0-alpha.2 is released
+// This issue was fixed in 08bb43a8ae90dc83db653ed78b039479ffe1dd2e
+#[ignore]
 async fn integration_get_claims_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 

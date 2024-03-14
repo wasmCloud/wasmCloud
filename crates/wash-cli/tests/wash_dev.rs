@@ -17,7 +17,8 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 #[cfg(target_family = "unix")]
 async fn integration_dev_hello_actor_serial() -> Result<()> {
     let test_setup = init(
-        /* actor_name= */ "hello", /* template_name= */ "hello",
+        /* actor_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -49,7 +50,7 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
-    let signed_file_path = Arc::new(project_dir.join("build/hello_s.wasm"));
+    let signed_file_path = Arc::new(project_dir.join("build/http_hello_world_s.wasm"));
     let expected_path = signed_file_path.clone();
 
     // Wait until the signed file is there (this means dev succeeded)

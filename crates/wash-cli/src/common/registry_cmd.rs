@@ -256,7 +256,6 @@ mod tests {
             Parser::try_parse_from(["reg", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
                 .unwrap();
         let pull_all_options: Cmd = Parser::try_parse_from([
-            "reg",
             "pull",
             ECHO_WASM,
             "--destination",
@@ -322,7 +321,6 @@ mod tests {
         // Push echo.wasm and pull from local registry
         let echo_push_basic = &format!("{LOCAL_REGISTRY}/echo:pushbasic");
         let push_basic: Cmd = Parser::try_parse_from([
-            "reg",
             "push",
             echo_push_basic,
             &format!("{TESTDIR}/echopush.wasm"),
@@ -346,7 +344,6 @@ mod tests {
         // Push logging.par.gz and pull from local registry
         let logging_push_all_flags = &format!("{LOCAL_REGISTRY}/logging:allflags");
         let push_all_flags: Cmd = Parser::try_parse_from([
-            "reg",
             "push",
             logging_push_all_flags,
             &format!("{TESTDIR}/logging.par.gz"),
@@ -373,7 +370,6 @@ mod tests {
         // Push logging.par.gz to different tag and pull to confirm successful push
         let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
         let push_all_options: Cmd = Parser::try_parse_from([
-            "reg",
             "push",
             logging_push_all_options,
             &format!("{TESTDIR}/logging.par.gz"),

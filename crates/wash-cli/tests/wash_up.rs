@@ -8,10 +8,10 @@ use tokio::{process::Command, time::Duration};
 mod common;
 use common::{
     find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
-    wait_for_single_host, TestWashInstance,
+    wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
 
-const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
+const RGX_ACTOR_START_MSG: &str = r"Component \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
 #[tokio::test]
 #[serial]
@@ -69,7 +69,8 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         .args([
             "start",
             "actor",
-            "wasmcloud.azurecr.io/echo:0.3.4",
+            HELLO_OCI_REF,
+            "hello_actor_id",
             "--ctl-port",
             nats_port.to_string().as_ref(),
             "--timeout-ms",
@@ -78,7 +79,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         .output()
         .await
         .context(format!(
-            "could not start echo actor on new host [{}]",
+            "could not start hello component on new host [{}]",
             host.id
         ))?;
 

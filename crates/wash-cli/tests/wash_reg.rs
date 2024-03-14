@@ -134,7 +134,6 @@ fn integration_reg_push_basic() {
     let localregistry_echo_wasm = test_dir_file(SUBFOLDER, "echo_local.wasm");
     let push_echo = wash()
         .args([
-            "reg",
             "push",
             echo_push_basic,
             pull_echo_wasm.to_str().unwrap(),
@@ -151,7 +150,6 @@ fn integration_reg_push_basic() {
 
     let pull_local_registry_echo = wash()
         .args([
-            "reg",
             "pull",
             echo_push_basic,
             "--insecure",
@@ -196,7 +194,6 @@ fn integration_reg_push_comprehensive() {
         .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
     wash()
         .args([
-            "reg",
             "pull",
             LOGGING_PAR,
             "--destination",
@@ -248,7 +245,8 @@ fn integration_reg_push_comprehensive() {
 async fn integration_reg_config() -> Result<()> {
     //===== Inital project setup and build actor artifact
     let test_setup = init(
-        /* actor_name= */ "hello", /* template_name= */ "hello",
+        /* actor_name= */ "hello",
+        /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
@@ -262,9 +260,9 @@ async fn integration_reg_config() -> Result<()> {
         .context("Failed to build project")?;
 
     assert!(status.success());
-    let unsigned_file = project_dir.join("build/hello.wasm");
+    let unsigned_file = project_dir.join("build/http_hello_world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
-    let signed_file = project_dir.join("build/hello_s.wasm");
+    let signed_file = project_dir.join("build/http_hello_world_s.wasm");
     assert!(signed_file.exists(), "signed file not found!");
 
     //===== Setup registry config

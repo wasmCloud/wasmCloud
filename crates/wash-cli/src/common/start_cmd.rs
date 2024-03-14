@@ -74,12 +74,14 @@ mod test {
             "--host-id",
             HOST_ID,
             "wasmcloud.azurecr.io/actor:v1",
+            "myactor",
         ])?;
         match start_component_all.command {
             CtlCliCommand::Start(StartCommand::Component(StartComponentCommand {
                 opts,
                 host_id,
                 component_ref,
+                component_id,
                 constraints,
                 auction_timeout_ms,
                 ..
@@ -90,6 +92,7 @@ mod test {
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(component_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
+                assert_eq!(component_id, "myactor".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
             }
             cmd => panic!("ctl start component constructed incorrect command {cmd:?}"),

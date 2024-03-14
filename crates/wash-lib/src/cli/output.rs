@@ -7,13 +7,11 @@ use wasmcloud_core::{InterfaceLinkDefinition, LinkName};
 /// JSON Output of the `wash start` command
 #[derive(Debug, Deserialize)]
 pub struct StartCommandOutput {
-    pub actor_id: Option<String>,
-    pub actor_ref: Option<String>,
+    pub component_id: Option<String>,
+    pub component_ref: Option<String>,
 
     pub provider_id: Option<String>,
     pub provider_ref: Option<String>,
-    pub contract_id: Option<String>,
-    pub link_name: Option<String>,
 
     pub host_id: Option<String>,
     pub success: bool,
@@ -29,8 +27,6 @@ pub struct StopCommandOutput {
     pub actor_id: Option<String>,
 
     pub provider_id: Option<String>,
-    pub link_name: Option<String>,
-    pub contract_id: Option<String>,
     pub provider_ref: Option<String>,
 
     pub success: bool,

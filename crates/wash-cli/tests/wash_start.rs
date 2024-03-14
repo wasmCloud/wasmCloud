@@ -2,7 +2,7 @@ use anyhow::Result;
 use serial_test::serial;
 
 mod common;
-use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
+use common::{TestWashInstance, HELLO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 #[tokio::test]
 #[serial]
@@ -14,11 +14,11 @@ async fn integration_start_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     // Start the actor via OCI ref
-    wash_instance.start_actor(ECHO_OCI_REF).await?;
+    wash_instance
+        .start_actor(HELLO_OCI_REF, "hello_actor_id")
+        .await?;
 
-    // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
-    // code
-    wash_instance.stop_actor("echo", None).await?;
+    wash_instance.stop_actor("hello_actor_id", None).await?;
 
     Ok(())
 }
@@ -29,13 +29,13 @@ async fn integration_start_stop_provider_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     wash_instance
-        .start_provider(PROVIDER_HTTPSERVER_OCI_REF)
+        .start_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
         .await?;
 
     // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
     // code
     wash_instance
-        .stop_provider("server", "wasmcloud:httpserver", None, None)
+        .stop_provider("httpserver_start_stop", None)
         .await?;
 
     Ok(())

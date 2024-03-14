@@ -1,14 +1,13 @@
 mod common;
 
-use common::{TestWashInstance, ECHO_OCI_REF};
+use common::{TestWashInstance, HELLO_OCI_REF};
 
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::{GetHostInventoriesCommandOutput, StartCommandOutput};
 
-const OLD_ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.4";
-const ECHO_ACTOR_ID: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
+const OLD_HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0";
 
 #[tokio::test]
 #[serial]
@@ -25,8 +24,9 @@ async fn integration_update_actor_serial() -> Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
-            "actor",
-            OLD_ECHO_OCI_REF,
+            "component",
+            OLD_HELLO_OCI_REF,
+            "hello",
             "--output",
             "json",
             "--timeout-ms",
@@ -81,7 +81,7 @@ async fn integration_update_actor_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            assert!(actors[0].image_ref == OLD_ECHO_OCI_REF);
+            assert!(actors[0].image_ref == OLD_HELLO_OCI_REF);
             break;
         }
     }
@@ -89,11 +89,11 @@ async fn integration_update_actor_serial() -> Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "update",
-            "actor",
+            "component",
             "--host-id",
             wash_instance.host_id.as_str(),
-            ECHO_ACTOR_ID,
-            ECHO_OCI_REF,
+            "hello",
+            HELLO_OCI_REF,
             "--output",
             "json",
             "--timeout-ms",
@@ -104,9 +104,9 @@ async fn integration_update_actor_serial() -> Result<()> {
         .kill_on_drop(true)
         .output()
         .await
-        .context("failed to start actor")?;
+        .context("failed to update actor")?;
 
-    assert!(output.status.success(), "executed start");
+    assert!(output.status.success(), "executed update");
 
     let cmd_output: StartCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
@@ -144,14 +144,14 @@ async fn integration_update_actor_serial() -> Result<()> {
             .next()
             .map(|i| i.actors)
             .unwrap_or_default();
-        if actors[0].image_ref != ECHO_OCI_REF && retries > 4 {
+        if actors[0].image_ref != HELLO_OCI_REF && retries > 4 {
             panic!("Should have started the actor")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
             assert_eq!(actors.len(), 1);
-            assert!(actors[0].image_ref == ECHO_OCI_REF);
+            assert!(actors[0].image_ref == HELLO_OCI_REF);
             break;
         }
     }
