@@ -48,7 +48,7 @@ use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_core::LatticeTarget;
 use wasmcloud_provider_sdk::{
-    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult
+    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
 use wrpc_interface_http::IncomingHandler as _;
 
@@ -71,16 +71,31 @@ pub struct HttpServerProvider {
 impl ProviderHandler for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
-    async fn receive_link_config_as_source(&self, 
+    async fn receive_link_config_as_source(
+        &self,
         link_config: impl LinkConfig,
-) -> ProviderOperationResult<()> {
-        let settings = load_settings(link_config.get_config()).context("httpserver failed to load settings for actor")?;
+    ) -> ProviderOperationResult<()> {
+        let settings = match load_settings(link_config.get_config())
+            .context("httpserver failed to load settings for actor")
+        {
+            Ok(settings) => settings,
+            Err(e) => {
+                error!(
+                    config = ?link_config.get_config(),
+                    "httpserver failed to load settings for actor: {}", e.to_string()
+                );
+                return Err(e.into());
+            }
+        };
 
         // Start a server instance that calls the given actor
-        let http_server = HttpServerCore::new(Arc::new(settings), link_config.get_target_id()).await.context("httpserver failed to start listener for actor")?;
+        let http_server = HttpServerCore::new(Arc::new(settings), link_config.get_target_id())
+            .await
+            .context("httpserver failed to start listener for actor")?;
 
         // Save the actor and server instance locally
-        self.actors.insert(link_config.get_target_id().to_string(), http_server);
+        self.actors
+            .insert(link_config.get_target_id().to_string(), http_server);
 
         Ok(())
     }
