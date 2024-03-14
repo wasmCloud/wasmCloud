@@ -10,14 +10,13 @@ use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
-use wash_lib::actor::ScaleComponentArgs;
-use wash_lib::generate::emoji;
 use wash_lib::{
-    actor::scale_component,
+    actor::{scale_component, ScaleComponentArgs},
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::{sanitize_component_id, CommandOutput},
     config::downloads_dir,
+    generate::emoji,
     id::{ModuleId, ServerId},
     parser::get_config,
 };
@@ -25,7 +24,7 @@ use wasmcloud_control_interface::Host;
 
 use crate::{
     down::{handle_down, DownCommand},
-    up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts, DOWNLOADS_DIR},
+    up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -94,7 +93,7 @@ pub async fn handle_command(
     output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
     // Check if host is running
-    let pid_file = downloads_dir()?.join(DOWNLOADS_DIR);
+    let pid_file = downloads_dir()?;
     let existing_instance = tokio::fs::metadata(pid_file).await.is_ok();
 
     let mut host_subprocess: Option<HostSubprocess> = None;

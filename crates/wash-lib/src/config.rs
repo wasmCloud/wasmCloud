@@ -10,7 +10,8 @@ use crate::context::WashContext;
 
 pub const WASH_DIR: &str = ".wash";
 
-const DOWNLOADS_DIR: &str = "downloads";
+pub const DOWNLOADS_DIR: &str = "downloads";
+pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE: &str = "default";
