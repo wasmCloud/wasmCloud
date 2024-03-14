@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
 use serde_json::json;
@@ -254,6 +254,10 @@ pub struct WasmcloudOpts {
     /// If enabled, wasmCloud will not be downloaded if it's not installed
     #[clap(long = "wasmcloud-start-only")]
     pub start_only: bool,
+
+    /// If enabled, start an additional wasmCloud host
+    #[clap(long = "scale")]
+    pub scale: bool,
 }
 
 impl WasmcloudOpts {
@@ -384,9 +388,14 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Based on the options provided for wasmCloud, form a client connection to NATS.
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
-    nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
+    let nats_client = nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
     let lattice = wasmcloud_opts.lattice.context("missing lattice prefix")?;
+    let running_hosts = running_host_count(nats_client, &lattice).await?;
+    if running_hosts > 0 && !cmd.wasmcloud_opts.scale {
+        bail!("There are still hosts running, please stop them before starting new ones or use --scale to start more");
+    }
+
     let wadm_process = if !cmd.wadm_opts.disable_wadm
         && !is_wadm_running(
             &nats_host,
@@ -702,6 +711,20 @@ async fn nats_client_from_wasmcloud_opts(wasmcloud_opts: &WasmcloudOpts) -> Resu
         wasmcloud_opts.ctl_credsfile.clone(),
     )
     .await
+}
+
+async fn running_host_count(nats_client: Client, lattice: &str) -> Result<usize> {
+    // Get hosts. Only start a host if there are no hosts running or if the user has passed --scale
+    let client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
+        .lattice(lattice)
+        .auction_timeout(std::time::Duration::from_secs(2))
+        .build();
+
+    client
+        .get_hosts()
+        .await
+        .map_err(|e| anyhow!("Failed to get hosts: {:?}", e))
+        .map(|hosts| hosts.len())
 }
 
 #[cfg(test)]
