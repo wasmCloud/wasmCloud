@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
 use serde_json::json;
@@ -21,19 +20,14 @@ use tokio::{
 };
 use tracing::warn;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::create_nats_client_from_opts;
-use wash_lib::config::downloads_dir;
-use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
+use wash_lib::config::{
+    create_nats_client_from_opts, downloads_dir, DEFAULT_NATS_TIMEOUT_MS, WASMCLOUD_PID_FILE,
+};
 use wash_lib::context::fs::ContextDir;
 use wash_lib::context::ContextManager;
-use wash_lib::start::ensure_wadm;
-use wash_lib::start::find_wasmcloud_binary;
-use wash_lib::start::nats_pid_path;
-use wash_lib::start::start_wadm;
-use wash_lib::start::WadmConfig;
 use wash_lib::start::{
-    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
-    WADM_PID,
+    ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
+    start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig, WADM_PID,
 };
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -255,9 +249,9 @@ pub struct WasmcloudOpts {
     #[clap(long = "wasmcloud-start-only")]
     pub start_only: bool,
 
-    /// If enabled, start an additional wasmCloud host
-    #[clap(long = "scale")]
-    pub scale: bool,
+    /// If enabled, allows starting additional wasmCloud hosts on this machine
+    #[clap(long = "multi-local")]
+    pub multi_local: bool,
 }
 
 impl WasmcloudOpts {
@@ -388,14 +382,18 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Based on the options provided for wasmCloud, form a client connection to NATS.
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
-    let nats_client = nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
+    nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
-    let lattice = wasmcloud_opts.lattice.context("missing lattice prefix")?;
-    let running_hosts = running_host_count(nats_client, &lattice).await?;
-    if running_hosts > 0 && !cmd.wasmcloud_opts.scale {
-        bail!("There are still hosts running, please stop them before starting new ones or use --scale to start more");
+    if tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE))
+        .await
+        .is_ok_and(|exists| exists)
+        && !cmd.wasmcloud_opts.multi_local
+    {
+        bail!("Pid file {:?} exists. There are still hosts running, please stop them before starting new ones or use --multi-local to start more",
+            install_dir.join(WASMCLOUD_PID_FILE));
     }
 
+    let lattice = wasmcloud_opts.lattice.context("missing lattice prefix")?;
     let wadm_process = if !cmd.wadm_opts.disable_wadm
         && !is_wadm_running(
             &nats_host,
@@ -495,6 +493,9 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
 
     spinner.finish_and_clear();
+
+    // Write the pid file with the selected version
+    tokio::fs::write(install_dir.join(WASMCLOUD_PID_FILE), version).await?;
     if !cmd.detached {
         run_wasmcloud_interactive(&mut wasmcloud_child, output_kind).await?;
 
@@ -505,6 +506,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         );
 
         stop_wasmcloud(wasmcloud_child).await?;
+        tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
 
         if wadm_process.is_some() {
             // remove wadm pidfile, the process is stopped automatically by CTRL+c
@@ -521,8 +523,6 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     out_text.push_str("🛁 wash up completed successfully");
 
     if cmd.detached {
-        // Write the pid file with the selected version
-        tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
@@ -711,20 +711,6 @@ async fn nats_client_from_wasmcloud_opts(wasmcloud_opts: &WasmcloudOpts) -> Resu
         wasmcloud_opts.ctl_credsfile.clone(),
     )
     .await
-}
-
-async fn running_host_count(nats_client: Client, lattice: &str) -> Result<usize> {
-    // Get hosts. Only start a host if there are no hosts running or if the user has passed --scale
-    let client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
-        .lattice(lattice)
-        .auction_timeout(std::time::Duration::from_secs(2))
-        .build();
-
-    client
-        .get_hosts()
-        .await
-        .map_err(|e| anyhow!("Failed to get hosts: {:?}", e))
-        .map(|hosts| hosts.len())
 }
 
 #[cfg(test)]

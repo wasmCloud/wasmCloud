@@ -21,6 +21,7 @@ use tokio::{
 use wash_lib::cli::output::{
     CallCommandOutput, GetHostsCommandOutput, StartCommandOutput, StopCommandOutput,
 };
+use wash_lib::config::{downloads_dir, WASMCLOUD_PID_FILE};
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
 use wasmcloud_control_interface::Host;
 
@@ -490,6 +491,15 @@ impl TestWashInstance {
             .output()
             .await
             .context("failed to stop host")?;
+        let install_dir = downloads_dir()?;
+        let lock_file_exists = tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+        if lock_file_exists {
+            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+        }
+        assert!(
+            !lock_file_exists,
+            "wasmcloud lock file still exists after stopping host"
+        );
         serde_json::from_slice(&output.stdout).context("failed to parse output of `wash stop host`")
     }
 }
@@ -684,7 +694,23 @@ pub async fn wait_for_no_hosts() -> Result<()> {
         Duration::from_millis(250),
     )
     .await
-    .context("number of hosts running is still non-zero")
+    .context("number of hosts running is still non-zero")?;
+    let install_dir = downloads_dir()?;
+    wait_for_file_to_be_removed(&install_dir.join(WASMCLOUD_PID_FILE)).await
+}
+
+/// Wait for a file to be removed.
+pub async fn wait_for_file_to_be_removed(file_path: &PathBuf) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if !file_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .context("file was not removed")
 }
 
 /// Wait for NATS to start running by checking for process names.
