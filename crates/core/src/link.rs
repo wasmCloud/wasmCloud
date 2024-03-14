@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     wit::{deserialize_wit_map, serialize_wit_map, WitMap},
-    ComponentId, KnownConfigName, LatticeTarget, WitInterface, WitNamespace, WitPackage,
+    ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage,
 };
 
 /// Name of a link on the wasmCloud lattice
@@ -41,7 +41,7 @@ pub struct LinkDefinition {
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, Hash)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InterfaceLinkDefinition {
     /// Source identifier for the link
     pub source_id: ComponentId,
@@ -56,26 +56,12 @@ pub struct InterfaceLinkDefinition {
     pub wit_package: WitPackage,
     /// WIT Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc.
     pub interfaces: Vec<WitInterface>,
-    /// List of named configurations to provide to the source upon request
+    /// The configuration to give to the source for this link
     #[serde(default)]
-    pub source_config: Vec<KnownConfigName>,
-    /// List of named configurations to provide to the target upon request
+    pub source_config: HashMap<String, String>,
+    /// The configuration to give to the target for this link
     #[serde(default)]
-    pub target_config: Vec<KnownConfigName>,
-}
-
-impl InterfaceLinkDefinition {
-    /// This function is here temporarily to allow pulling a map of configuration out of
-    /// [`InterfaceLinkDefinition`]s that are fed to providers.
-    ///
-    /// The configuration is expected to be extracted from target_config (i.e. upon initial `put_link` to the provider).
-    /// This utility function should be removed in the near future, and provider named configuration should be used.
-    pub fn extract_provider_config_values(&self) -> HashMap<&str, &str> {
-        self.target_config
-            .iter()
-            .flat_map(|v| v.split_once('='))
-            .collect::<HashMap<&str, &str>>()
-    }
+    pub target_config: HashMap<String, String>,
 }
 
 /// Helper function to provide a default link name
