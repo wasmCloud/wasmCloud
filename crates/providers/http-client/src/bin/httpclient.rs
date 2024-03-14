@@ -1,13 +1,15 @@
-use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk;
+use anyhow::Context as _;
+use wasmcloud_provider_httpclient::{serve, HttpClientProvider};
 
-use wasmcloud_provider_httpclient::HttpClientProvider;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // start_provider initializes the threaded tokio executor,
-    // listens to lattice rpcs, handles actor links,
-    // and returns only when it receives a shutdown message
-    wasmcloud_provider_sdk::start_provider(HttpClientProvider {}, "http-client-provider")?;
-
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let fut = wasmcloud_provider_sdk::run_provider_handler(
+        HttpClientProvider,
+        "http-client-provider",
+    )
+    .await
+    .context("failed to run provider")?;
+    serve(fut).await?;
     eprintln!("HttpClient provider exiting");
     Ok(())
 }

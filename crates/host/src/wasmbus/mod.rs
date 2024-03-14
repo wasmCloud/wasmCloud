@@ -26,7 +26,7 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
@@ -51,7 +51,7 @@ use wasmcloud_runtime::capability::{
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
-use wasmtime_wasi_http::body::HyperIncomingBody;
+use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::{
     AcceptedInvocation, Client, DynamicTuple, EncodeSync, IncomingInputStream, Transmitter,
 };
@@ -1217,7 +1217,7 @@ impl Actor {
         ];
 
         let start_at = Instant::now();
-        let tx: Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> = match params {
+        match params {
             InvocationParams::Custom {
                 instance,
                 name,
@@ -1231,22 +1231,49 @@ impl Actor {
                 attributes.push(KeyValue::new("operation", format!("{instance}/{name}")));
                 self.metrics
                     .record_component_invocation(elapsed, &attributes, res.is_err());
-                Box::pin(async {
-                    let results = res?;
-                    transmitter
-                        .transmit_tuple_dynamic(result_subject, results)
-                        .await
-                })
+                let results = res?;
+                transmitter
+                    .transmit_tuple_dynamic(result_subject, results)
+                    .await
             }
             InvocationParams::IncomingHttpHandle(request) => {
                 let actor = actor
                     .into_incoming_http()
                     .await
                     .context("failed to instantiate `wasi:http/incoming-handler`")?;
-                let res = actor
-                    .handle(request)
-                    .await
-                    .context("failed to call `wasi:http/incoming-handler.handle`");
+                let (response_tx, response_rx) = oneshot::channel::<
+                    Result<
+                        http::Response<HyperOutgoingBody>,
+                        wasmtime_wasi_http::bindings::http::types::ErrorCode,
+                    >,
+                >();
+                let res = try_join!(
+                    async {
+                        actor
+                            .handle(request, response_tx)
+                            .await
+                            .context("failed to call `wasi:http/incoming-handler.handle`")
+                    },
+                    async {
+                        let res = match response_rx.await.context("failed to receive response")? {
+                            Ok(resp) => {
+                                let (resp, errors) =
+                                    wrpc_interface_http::try_http_to_outgoing_response(resp)
+                                        .context("failed to convert response")?;
+                                // TODO: Handle body errors better
+                                spawn(errors.for_each(|err| async move {
+                                    error!(?err, "body error encountered")
+                                }));
+                                Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
+                            }
+                            Err(err) => Err(err.into()),
+                        };
+                        transmitter
+                            .transmit_static(result_subject, res)
+                            .await
+                            .context("failed to transmit response")
+                    }
+                );
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
                 attributes.push(KeyValue::new(
                     "operation",
@@ -1254,23 +1281,10 @@ impl Actor {
                 ));
                 self.metrics
                     .record_component_invocation(elapsed, &attributes, res.is_err());
-                Box::pin(async {
-                    let res = match res? {
-                        Ok(resp) => {
-                            let (resp, _errors) =
-                                wrpc_interface_http::try_http_to_outgoing_response(resp)
-                                    .context("failed to convert response")?;
-                            // TODO: Consider handling body errors here
-                            Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
-                        }
-                        Err(err) => Err(err.into()),
-                    };
-                    transmitter.transmit_static(result_subject, res).await
-                })
+                res?;
+                Ok(())
             }
-        };
-
-        tx.await
+        }
     }
 }
 

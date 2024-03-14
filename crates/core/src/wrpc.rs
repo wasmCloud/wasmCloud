@@ -22,6 +22,7 @@ use wrpc_transport_nats::{InvocationSubscription, Subject, Subscriber, Transmiss
 
 /// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
+#[derive(Clone, Debug)]
 pub struct TransmitterWithHeaders {
     inner: wrpc_transport_nats::Transmitter,
     headers: HeaderMap,

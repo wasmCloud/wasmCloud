@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
+use tokio::sync::oneshot;
 use tracing::{error, instrument, trace};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::IncomingInputStream;
@@ -356,12 +357,13 @@ pub trait IncomingHttp {
     async fn handle(
         &self,
         request: ::http::Request<HyperIncomingBody>,
-    ) -> anyhow::Result<
-        Result<
-            http::Response<HyperOutgoingBody>,
-            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        response: oneshot::Sender<
+            Result<
+                http::Response<HyperOutgoingBody>,
+                wasmtime_wasi_http::bindings::http::types::ErrorCode,
+            >,
         >,
-    >;
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -700,18 +702,19 @@ impl IncomingHttp for Handler {
     async fn handle(
         &self,
         request: ::http::Request<HyperIncomingBody>,
-    ) -> anyhow::Result<
-        Result<
-            ::http::Response<HyperOutgoingBody>,
-            wasmtime_wasi_http::bindings::http::types::ErrorCode,
+        response: oneshot::Sender<
+            Result<
+                http::Response<HyperOutgoingBody>,
+                wasmtime_wasi_http::bindings::http::types::ErrorCode,
+            >,
         >,
-    > {
+    ) -> anyhow::Result<()> {
         proxy(
             &self.incoming_http,
             "IncomingHttp",
             "wasi:http/incoming-handler.handle",
         )?
-        .handle(request)
+        .handle(request, response)
         .await
     }
 }

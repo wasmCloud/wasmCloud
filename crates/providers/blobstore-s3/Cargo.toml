@@ -19,13 +19,18 @@ anyhow = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true, features = ["rustls", "rt-tokio"] }
 aws-smithy-runtime = { workspace = true, features = ["client", "tls-rustls"] }
-hyper-rustls = { workspace = true, features = ["webpki-tokio"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
-simple_env_load = "0.2.0"
+hyper-rustls = { version = "0.25", features = [
+    "http2",
+    "ring",
+    "webpki-tokio",
+], default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
+simple_env_load = { workspace = true }
 tokio = { workspace = true }
+tower-service = { workspace = true }
 tracing = { workspace = true }
-wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+wasmcloud-provider-wit-bindgen = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
 crc32fast = "1.3.2"

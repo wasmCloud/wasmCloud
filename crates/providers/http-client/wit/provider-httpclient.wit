@@ -1,5 +1,0 @@
-package wasmcloud:provider-http-client;
-
-world provider-http-client {
-    export wasmcloud:httpclient/http-client;
-}

@@ -638,7 +638,7 @@ async fn handle_provider_commands(
 pub async fn run_provider_handler(
     provider: impl ProviderHandler,
     friendly_name: &str,
-) -> ProviderInitResult<(wasmcloud_core::wrpc::Client, impl Future<Output = ()>)> {
+) -> ProviderInitResult<impl Future<Output = ()>> {
     let ProviderInitState {
         nats,
         quit_rx,
@@ -652,12 +652,6 @@ pub async fn run_provider_handler(
         config,
     } = init_provider(friendly_name).await?;
 
-    let wrpc = wrpc_client(
-        Arc::clone(&nats),
-        &lattice_rpc_prefix,
-        &provider_key,
-        &link_name,
-    );
     let connection = ProviderConnection::new(
         Arc::clone(&nats),
         provider_key,
@@ -682,10 +676,8 @@ pub async fn run_provider_handler(
             );
         }
     }
-
-    Ok((
-        wrpc,
-        handle_provider_commands(provider, connection, quit_rx, quit_tx, commands),
+    Ok(handle_provider_commands(
+        provider, connection, quit_rx, quit_tx, commands,
     ))
 }
 
