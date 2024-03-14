@@ -271,3 +271,19 @@ async fn integration_up_works_with_labels() -> Result<()> {
 
     Ok(())
 }
+
+/// Cannot start a host when one is already running
+#[tokio::test]
+#[serial]
+async fn integration_up_cannot_start_multiple_hosts() -> Result<()> {
+    TestWashInstance::create().await?;
+    let instance1 = TestWashInstance::create().await;
+    assert!(
+        instance1.is_err(),
+        "should not be able to start a second host"
+    );
+    // Second instance should start with --scale
+    TestWashInstance::create_with_extra_args(vec!["--scale"]).await?;
+
+    Ok(())
+}
