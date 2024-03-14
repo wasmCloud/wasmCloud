@@ -339,7 +339,7 @@ async fn subscribe_link_del(
     Ok(link_del_rx)
 }
 
-struct ProviderCommandReceivers {
+pub(crate) struct ProviderCommandReceivers {
     pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
     pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
     pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
@@ -347,7 +347,7 @@ struct ProviderCommandReceivers {
 }
 
 /// State of provider initialization
-struct ProviderInitState {
+pub(crate) struct ProviderInitState {
     pub nats: Arc<async_nats::Client>,
     pub quit_rx: broadcast::Receiver<()>,
     pub quit_tx: broadcast::Sender<()>,
@@ -640,6 +640,15 @@ pub async fn run_provider_handler(
     provider: impl ProviderHandler,
     friendly_name: &str,
 ) -> ProviderInitResult<impl Future<Output = ()>> {
+    let init_state = init_provider(friendly_name).await?;
+
+    // Run user-implemented provider-internal specific initialization
+    if let Err(e) = provider.init(&init_state).await {
+        return Err(ProviderInitError::Initialization(format!(
+            "provider init failed: {e}"
+        )));
+    }
+
     let ProviderInitState {
         nats,
         quit_rx,
@@ -651,7 +660,7 @@ pub async fn run_provider_handler(
         link_definitions,
         commands,
         config,
-    } = init_provider(friendly_name).await?;
+    } = init_state;
 
     let connection = ProviderConnection::new(
         Arc::clone(&nats),
@@ -688,6 +697,15 @@ pub async fn run_provider(
     provider: impl Provider + Clone,
     friendly_name: &str,
 ) -> ProviderInitResult<()> {
+    let init_state = init_provider(friendly_name).await?;
+
+    // Run user-implemented provider-internal specific initialization
+    if let Err(e) = provider.init(&init_state).await {
+        return Err(ProviderInitError::Initialization(format!(
+            "provider init failed: {e}"
+        )));
+    }
+
     let ProviderInitState {
         nats,
         quit_rx,
@@ -699,7 +717,7 @@ pub async fn run_provider(
         link_definitions,
         commands,
         config,
-    } = init_provider(friendly_name).await?;
+    } = init_state;
 
     let invocation_map = provider
         .incoming_wrpc_invocations_by_subject(
