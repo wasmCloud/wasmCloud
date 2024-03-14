@@ -4,8 +4,6 @@ use anyhow::{anyhow, Result};
 
 use crate::up::{credsfile::parse_credsfile, WasmcloudOpts};
 
-pub const DOWNLOADS_DIR: &str = "downloads";
-pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
 // NATS configuration values
 pub const NATS_SERVER_VERSION: &str = "v2.10.7";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
