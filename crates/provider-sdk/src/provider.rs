@@ -497,14 +497,14 @@ where
             &ld.source_id,
             &ld.target,
             &ld.name,
-            &connection.config,
+            &ld.source_config,
         ))
     } else if ld.target == connection.provider_key {
         provider.receive_link_config_as_target((
             &ld.source_id,
             &ld.target,
             &ld.name,
-            &connection.config,
+            &ld.target_config,
         ))
     } else {
         bail!("received link put where provider was neither source nor target");
@@ -771,6 +771,8 @@ pub struct ProviderConnection {
     link_name: String,
     provider_key: String,
 
+    // TODO: Reference this field to get static config
+    #[allow(unused)]
     config: HashMap<String, String>,
 
     /// Mapping of NATS subjects to dynamic function information for incoming invocations

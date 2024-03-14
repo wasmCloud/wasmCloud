@@ -2865,6 +2865,47 @@ impl Host {
                 metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
             };
+            let config_generator = self.config_generator.clone();
+            // Prepare startup links by generating the source and target configs
+            let link_definitions =
+                self.links
+                    .read()
+                    .await
+                    .get(provider_id)
+                    .cloned()
+                    .map(|links| async {
+                        futures::future::join_all(links.into_iter().map(|link| async {
+                            // Taking the penalty to clone two strings here with the benefit of a much
+                            // better error message if the link fails to resolve
+                            let source_id = link.source_id.clone();
+                            let target = link.target.clone();
+                            if let Ok(provider_link) =
+                                resolve_link_config(&config_generator, link).await
+                            {
+                                Some(provider_link)
+                            } else {
+                                error!(
+                                    provider_id,
+                                    source_id,
+                                    target,
+                                    "failed to resolve link config, skipping link"
+                                );
+                                None
+                            }
+                        }))
+                        .await
+                    });
+
+            let link_definitions = if let Some(links) = link_definitions {
+                links
+                    .await
+                    .into_iter()
+                    .filter_map(|link| link)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            };
+
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice.clone(),
@@ -2875,29 +2916,7 @@ impl Host {
                 env_values: vec![],
                 instance_id: Uuid::new_v4().to_string(),
                 provider_key: provider_id.to_string(),
-                link_definitions: self
-                    .links
-                    .read()
-                    .await
-                    .get(provider_id)
-                    .cloned()
-                    .map(|links| {
-                        links
-                            .into_iter()
-                            // TODO(named config): deliver actual source and target config to the provider
-                            .map(|link| wasmcloud_core::InterfaceLinkDefinition {
-                                source_id: link.source_id,
-                                target: link.target,
-                                name: link.name,
-                                wit_namespace: link.wit_namespace,
-                                wit_package: link.wit_package,
-                                interfaces: link.interfaces,
-                                source_config: link.source_config,
-                                target_config: link.target_config,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                link_definitions,
                 config: config.get_config().await.clone(),
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
@@ -3299,6 +3318,12 @@ impl Host {
             "handling put wrpc link definition"
         );
 
+        // Before we store the link, we need to ensure the configuration is resolvable
+        let provider_link =
+            resolve_link_config(&self.config_generator, interface_link_definition.clone())
+                .await
+                .context("failed to resolve link config for provider")?;
+
         // Note here that unwrapping to a default is intentional. If the component spec doesn't exist, we want to create it
         // so that when that component does start it can use pre-existing links.
         let mut component_spec = self
@@ -3329,7 +3354,7 @@ impl Host {
         let set_event = event::linkdef_set(&interface_link_definition);
         self.publish_event("linkdef_set", set_event).await?;
 
-        self.put_provider_link(&source_id, &target, payload.as_ref().to_owned().into())
+        self.put_provider_link(&source_id, &target, provider_link)
             .await?;
 
         Ok(CtlResponse::success())
@@ -3672,16 +3697,17 @@ impl Host {
     /// Right now this is publishing _both_ to the source and the target in order to
     /// ensure that the provider is aware of the link. This would cause problems if a provider
     /// is linked to a provider (which it should never be.)
-    ///
-    /// TODO: Instead of delivering the named config, deliver the actual source and target config to the provider
-    #[instrument(level = "debug", skip(self, payload))]
+    #[instrument(level = "debug", skip(self, provider_link))]
     async fn put_provider_link(
         &self,
         source_id: &str,
         target: &str,
-        payload: Bytes,
+        provider_link: wasmcloud_core::InterfaceLinkDefinition,
     ) -> anyhow::Result<()> {
         let lattice = &self.host_config.lattice;
+        let payload: Bytes = serde_json::to_vec(&provider_link)
+            .context("failed to serialize provider link definition")?
+            .into();
         let source_provider = self
             .rpc_nats
             .publish_with_headers(
@@ -3971,6 +3997,29 @@ impl Host {
             }
         }
     }
+}
+
+/// Transform a [wasmcloud_control_interface::InterfaceLinkDefinition] into a [wasmcloud_core::InterfaceLinkDefinition]
+/// by generating the source and target config for the link
+async fn resolve_link_config(
+    config_generator: &BundleGenerator,
+    link: wasmcloud_control_interface::InterfaceLinkDefinition,
+) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
+    let source_bundle = config_generator.generate(link.source_config).await?;
+    let target_bundle = config_generator.generate(link.target_config).await?;
+
+    let source_config = source_bundle.get_config().await;
+    let target_config = target_bundle.get_config().await;
+    Ok(wasmcloud_core::InterfaceLinkDefinition {
+        source_id: link.source_id,
+        target: link.target,
+        name: link.name,
+        wit_namespace: link.wit_namespace,
+        wit_package: link.wit_package,
+        interfaces: link.interfaces,
+        source_config: source_config.clone(),
+        target_config: target_config.clone(),
+    })
 }
 
 /// Helper function to transform a Vec of [InterfaceLinkDefinition]s into the structure components expect to be able
