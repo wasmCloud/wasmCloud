@@ -5,6 +5,7 @@ use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
 use async_trait::async_trait;
 use core::{ComponentId, LatticeTarget, LinkName};
+use provider::ProviderInitState;
 use tracing::{error, info, warn};
 
 pub mod error;
@@ -203,9 +204,45 @@ impl LinkConfig
     }
 }
 
+/// Configuration object is made available when a provider is started, to assist in init
+///
+/// This trait exists to both obscure the underlying implementation and control what information
+/// is made available
+pub trait ProviderInitConfig: Send + Sync {
+    /// Get host-configured provider ID.
+    ///
+    /// This value may not be knowable to the provider at build time but must be known by runtime.
+    fn get_provider_id(&self) -> &str;
+
+    /// Retrieve the configuration for the provider available at initialization time.
+    ///
+    /// This normally consists of named configuration that were set for the provider,
+    /// merged, and received from the host *before* the provider has started initialization.
+    fn get_config(&self) -> &HashMap<String, String>;
+}
+
+impl ProviderInitConfig for &ProviderInitState {
+    fn get_provider_id(&self) -> &str {
+        &self.provider_key
+    }
+
+    fn get_config(&self) -> &HashMap<String, String> {
+        &self.config
+    }
+}
+
 /// CapabilityProvider handling of messages from host
 #[async_trait]
 pub trait ProviderHandler: Sync {
+    /// Initialize the provider
+    ///
+    /// # Arguments
+    ///
+    /// * `static_config` - Merged named configuration attached to the provider *prior* to startup
+    async fn init(&self, _init_config: impl ProviderInitConfig) -> ProviderOperationResult<()> {
+        Ok(())
+    }
+
     /// Receive and handle a link that has been established on the lattice where this provider is the source.
     ///
     /// Implement this when your provider needs to call other components.
