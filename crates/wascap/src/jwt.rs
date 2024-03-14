@@ -82,8 +82,6 @@ pub struct Component {
 pub struct CapabilityProvider {
     /// A descriptive name for the capability provider
     pub name: Option<String>,
-    /// The capability contract ID this provider supports
-    pub capid: String,
     /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
     pub vendor: String,
     /// Indicates a monotonically increasing revision number.  Optional.
@@ -334,14 +332,13 @@ impl Claims<CapabilityProvider> {
         name: String,
         issuer: String,
         subject: String,
-        capid: String,
         vendor: String,
         rev: Option<i32>,
         ver: Option<String>,
         hashes: HashMap<String, String>,
     ) -> Claims<CapabilityProvider> {
         Self::with_dates(
-            name, issuer, subject, capid, vendor, rev, ver, hashes, None, None,
+            name, issuer, subject, vendor, rev, ver, hashes, None, None,
         )
     }
 
@@ -373,7 +370,6 @@ impl Claims<CapabilityProvider> {
         name: String,
         issuer: String,
         subject: String,
-        capid: String,
         vendor: String,
         rev: Option<i32>,
         ver: Option<String>,
@@ -384,7 +380,6 @@ impl Claims<CapabilityProvider> {
         Claims {
             metadata: Some(CapabilityProvider {
                 name: Some(name),
-                capid,
                 rev,
                 ver,
                 target_hashes: hashes,
@@ -801,7 +796,6 @@ impl CapabilityProvider {
     #[must_use]
     pub fn new(
         name: String,
-        capid: String,
         vendor: String,
         rev: Option<i32>,
         ver: Option<String>,
@@ -810,7 +804,6 @@ impl CapabilityProvider {
         CapabilityProvider {
             target_hashes: hashes,
             name: Some(name),
-            capid,
             vendor,
             rev,
             ver,
@@ -1082,10 +1075,6 @@ mod test {
             decoded.metadata.as_ref().unwrap().vendor,
             "wasmCloud Internal"
         );
-        assert_eq!(
-            decoded.metadata.as_ref().unwrap().capid,
-            "wasmcloud:testing"
-        );
     }
 
     #[test]
@@ -1128,7 +1117,6 @@ mod test {
             .issuer(&account.public_key())
             .with_metadata(CapabilityProvider {
                 name: Some("Test Provider".to_string()),
-                capid: "wasmcloud:testing".to_string(),
                 vendor: "wasmCloud Internal".to_string(),
                 rev: Some(1),
                 ver: Some("v0.0.1".to_string()),

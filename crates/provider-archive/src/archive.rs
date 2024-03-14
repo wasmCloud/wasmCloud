@@ -30,7 +30,6 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 /// target architecture and OS combination
 pub struct ProviderArchive {
     libraries: HashMap<String, Vec<u8>>,
-    capid: String,
     name: String,
     vendor: String,
     rev: Option<i32>,
@@ -41,16 +40,9 @@ pub struct ProviderArchive {
 
 impl ProviderArchive {
     /// Creates a new provider archive in memory, to which native library files can be added.
-    pub fn new(
-        capid: &str,
-        name: &str,
-        vendor: &str,
-        rev: Option<i32>,
-        ver: Option<String>,
-    ) -> ProviderArchive {
+    pub fn new(name: &str, vendor: &str, rev: Option<i32>, ver: Option<String>) -> ProviderArchive {
         ProviderArchive {
             libraries: HashMap::new(),
-            capid: capid.to_string(),
             name: name.to_string(),
             vendor: vendor.to_string(),
             rev,
@@ -239,7 +231,6 @@ impl ProviderArchive {
         if let Some(ref cl) = c {
             let metadata = cl.metadata.as_ref().unwrap();
             let name = cl.name();
-            let capid = metadata.capid.to_string();
             let vendor = metadata.vendor.to_string();
             let rev = metadata.rev;
             let ver = metadata.ver.clone();
@@ -249,7 +240,6 @@ impl ProviderArchive {
 
             Ok(ProviderArchive {
                 libraries,
-                capid,
                 name,
                 vendor,
                 rev,
@@ -296,7 +286,6 @@ impl ProviderArchive {
             self.name.to_string(),
             issuer.public_key(),
             subject.public_key(),
-            self.capid.to_string(),
             self.vendor.to_string(),
             self.rev,
             self.ver.clone(),
@@ -391,13 +380,8 @@ mod test {
     #[tokio::test]
     async fn write_par() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(1),
-            Some("0.0.1".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(1), Some("0.0.1".to_string()));
         arch.add_library("aarch64-linux", b"blahblah")?;
 
         let issuer = KeyPair::new_account();
@@ -414,13 +398,8 @@ mod test {
 
     #[tokio::test]
     async fn error_on_no_providers() -> Result<()> {
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(2),
-            Some("0.0.2".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(2), Some("0.0.2".to_string()));
 
         let tempdir = tempfile::tempdir()?;
 
@@ -447,13 +426,8 @@ mod test {
     #[tokio::test]
     async fn round_trip() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(3),
-            Some("0.0.3".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(3), Some("0.0.3".to_string()));
         arch.add_library("aarch64-linux", b"blahblah")?;
         arch.add_library("x86_64-linux", b"bloobloo")?;
         arch.add_library("x86_64-macos", b"blarblar")?;
@@ -472,7 +446,6 @@ mod test {
 
         // Try loading from file
         let arch2 = ProviderArchive::try_load_file(&firstpath).await?;
-        assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries.get("aarch64-linux"),
             arch2.libraries.get("aarch64-linux")
@@ -514,7 +487,6 @@ mod test {
 
         // Make sure the file we wrote can be read back in with no data loss
         let mut arch2 = ProviderArchive::try_load(&buf2).await?;
-        assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries.get("aarch64-linux"),
             arch2.libraries.get("aarch64-linux")
@@ -531,7 +503,6 @@ mod test {
 
         // Make sure the re-written/modified archive looks the way we expect
         let arch3 = ProviderArchive::try_load(&buf3).await?;
-        assert_eq!(arch3.capid, arch2.capid);
         assert_eq!(
             arch3.libraries[&"aarch64-linux".to_string()],
             arch2.libraries[&"aarch64-linux".to_string()]
@@ -544,13 +515,8 @@ mod test {
 
     #[tokio::test]
     async fn compression_roundtrip() -> Result<()> {
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(4),
-            Some("0.0.4".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(4), Some("0.0.4".to_string()));
         arch.add_library("aarch64-linux", b"heylookimaraspberrypi")?;
         arch.add_library("x86_64-linux", b"system76")?;
         arch.add_library("x86_64-macos", b"16inchmacbookpro")?;
@@ -578,7 +544,6 @@ mod test {
 
         // Make sure the file we wrote compressed can be read back in with no data loss
         let arch2 = ProviderArchive::try_load(&buf3).await?;
-        assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries[&"aarch64-linux".to_string()],
             arch2.libraries[&"aarch64-linux".to_string()]
@@ -587,7 +552,6 @@ mod test {
 
         // Try loading from file as well
         let arch2 = ProviderArchive::try_load_file(&cheezypath).await?;
-        assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries.get("aarch64-linux"),
             arch2.libraries.get("aarch64-linux")
@@ -599,13 +563,8 @@ mod test {
 
     #[tokio::test]
     async fn valid_write_compressed() -> Result<()> {
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(6),
-            Some("0.0.6".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(6), Some("0.0.6".to_string()));
         arch.add_library("x86_64-linux", b"linux")?;
         arch.add_library("arm-macos", b"macos")?;
         arch.add_library("mips64-freebsd", b"freebsd")?;
@@ -648,13 +607,8 @@ mod test {
 
     #[tokio::test]
     async fn valid_write_compressed_with_suffix() -> Result<()> {
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(7),
-            Some("0.0.7".to_string()),
-        );
+        let mut arch =
+            ProviderArchive::new("Testing", "wasmCloud", Some(7), Some("0.0.7".to_string()));
         arch.add_library("x86_64-linux", b"linux")?;
         arch.add_library("arm-macos", b"macos")?;
         arch.add_library("mips64-freebsd", b"freebsd")?;
@@ -696,12 +650,11 @@ mod test {
     #[tokio::test]
     async fn preserved_claims() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
-        let capid = "wasmcloud:testing";
         let name = "Testing";
         let vendor = "wasmCloud";
         let rev = 8;
         let ver = "0.0.8".to_string();
-        let mut arch = ProviderArchive::new(capid, name, vendor, Some(rev), Some(ver.clone()));
+        let mut arch = ProviderArchive::new(name, vendor, Some(rev), Some(ver.clone()));
         arch.add_library("aarch64-linux", b"blahblah")?;
         arch.add_library("x86_64-linux", b"bloobloo")?;
         arch.add_library("x86_64-macos", b"blarblar")?;
@@ -718,7 +671,6 @@ mod test {
         // Make sure the file we wrote can be read back in with no claims loss
         let mut arch2 = ProviderArchive::try_load_file(&originalpath).await?;
 
-        assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries[&"aarch64-linux".to_string()],
             arch2.libraries[&"aarch64-linux".to_string()]
@@ -729,7 +681,6 @@ mod test {
         assert_eq!(arch2.claims().unwrap().metadata.unwrap().ver.unwrap(), ver);
         assert_eq!(arch2.claims().unwrap().metadata.unwrap().rev.unwrap(), rev);
         assert_eq!(arch2.claims().unwrap().metadata.unwrap().vendor, vendor);
-        assert_eq!(arch2.claims().unwrap().metadata.unwrap().capid, capid);
 
         // Another common task - read an existing archive and add another library file to it
         arch2.add_library("mips-linux", b"bluhbluh")?;
@@ -737,7 +688,6 @@ mod test {
 
         // Make sure the re-written/modified archive looks the way we expect
         let arch3 = ProviderArchive::try_load_file(&addedpath).await?;
-        assert_eq!(arch3.capid, arch2.capid);
         assert_eq!(
             arch3.libraries[&"aarch64-linux".to_string()],
             arch2.libraries[&"aarch64-linux".to_string()]
@@ -748,7 +698,6 @@ mod test {
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().ver.unwrap(), ver);
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().rev.unwrap(), rev);
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().vendor, vendor);
-        assert_eq!(arch3.claims().unwrap().metadata.unwrap().capid, capid);
         assert_eq!(arch3.targets().len(), 4);
 
         Ok(())
