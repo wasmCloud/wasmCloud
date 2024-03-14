@@ -43,9 +43,9 @@ pub trait WascapEntity: Clone {
     fn name(&self) -> String;
 }
 
-/// The metadata that corresponds to an actor module
+/// The metadata that corresponds to a component
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
-pub struct Actor {
+pub struct Component {
     /// A descriptive name for this actor, should not include version information or public key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -58,10 +58,6 @@ pub struct Actor {
     /// List of arbitrary string tags associated with the claims
     #[serde(rename = "tags", skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-
-    /// List of capability attestations. Can be standard wascap capabilities or custom namespace capabilities
-    #[serde(rename = "caps", skip_serializing_if = "Option::is_none")]
-    pub caps: Option<Vec<String>>,
 
     /// Indicates a monotonically increasing revision number.  Optional.
     #[serde(rename = "rev", skip_serializing_if = "Option::is_none")]
@@ -242,7 +238,7 @@ where
     }
 }
 
-impl WascapEntity for Actor {
+impl WascapEntity for Component {
     fn name(&self) -> String {
         self.name
             .as_ref()
@@ -482,7 +478,7 @@ impl Claims<Cluster> {
     }
 }
 
-impl Claims<Actor> {
+impl Claims<Component> {
     /// Creates a new non-expiring Claims wrapper for metadata representing an actor
     #[allow(clippy::too_many_arguments)]
     #[must_use]
@@ -490,15 +486,14 @@ impl Claims<Actor> {
         name: String,
         issuer: String,
         subject: String,
-        caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
         call_alias: Option<String>,
-    ) -> Claims<Actor> {
+    ) -> Self {
         Self::with_dates(
-            name, issuer, subject, caps, tags, None, None, provider, rev, ver, call_alias,
+            name, issuer, subject, tags, None, None, provider, rev, ver, call_alias,
         )
     }
 
@@ -509,7 +504,6 @@ impl Claims<Actor> {
         name: String,
         issuer: String,
         subject: String,
-        caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         not_before: Option<u64>,
         expires: Option<u64>,
@@ -517,9 +511,9 @@ impl Claims<Actor> {
         rev: Option<i32>,
         ver: Option<String>,
         call_alias: Option<String>,
-    ) -> Claims<Actor> {
+    ) -> Claims<Component> {
         Claims {
-            metadata: Some(Actor::new(name, caps, tags, provider, rev, ver, call_alias)),
+            metadata: Some(Component::new(name, tags, provider, rev, ver, call_alias)),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -611,7 +605,7 @@ where
         self
     }
 
-    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, `Invocation`, `CapabilityProvider` or `Account`)
+    /// Sets the appropriate metadata for this claims type (e.g. `Component`, `Operator`, `Invocation`, `CapabilityProvider` or `Account`)
     pub fn with_metadata(&mut self, metadata: T) -> &mut Self {
         self.claims.metadata = Some(metadata);
         self
@@ -781,22 +775,20 @@ fn normalize_call_alias(alias: Option<String>) -> Option<String> {
     })
 }
 
-impl Actor {
+impl Component {
     #[must_use]
     pub fn new(
         name: String,
-        caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
         call_alias: Option<String>,
-    ) -> Actor {
-        Actor {
+    ) -> Self {
+        Self {
             name: Some(name),
             module_hash: String::new(),
             tags,
-            caps,
             provider,
             rev,
             ver,
@@ -870,13 +862,10 @@ impl Invocation {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Actor, Claims, ErrorKind, KeyPair, Operator};
-    use crate::{
-        caps::{KEY_VALUE, LOGGING, MESSAGING},
-        jwt::{
-            since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster,
-            WASCAP_INTERNAL_REVISION,
-        },
+    use super::{Account, Claims, Component, ErrorKind, KeyPair, Operator};
+    use crate::jwt::{
+        since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster,
+        WASCAP_INTERNAL_REVISION,
     };
     use std::collections::HashMap;
     use std::io::Read;
@@ -885,9 +874,8 @@ mod test {
     fn full_validation_nbf() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(0),
@@ -904,7 +892,7 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token::<Actor>(&encoded);
+        let vres = validate_token::<Component>(&encoded);
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert!(!v.expired);
@@ -917,9 +905,8 @@ mod test {
     fn full_validation_expires() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -936,7 +923,7 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token::<Actor>(&encoded);
+        let vres = validate_token::<Component>(&encoded);
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert!(v.expired);
@@ -972,9 +959,8 @@ mod test {
     fn full_validation() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -991,7 +977,7 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token::<Actor>(&encoded);
+        let vres = validate_token::<Component>(&encoded);
         assert!(vres.is_ok());
     }
 
@@ -1009,7 +995,7 @@ mod test {
             wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let encoded = claims.encode(&issuer).unwrap();
-        let decoded = Claims::<Actor>::decode(&encoded);
+        let decoded = Claims::<Component>::decode(&encoded);
         assert!(decoded.is_err());
     }
 
@@ -1017,9 +1003,8 @@ mod test {
     fn decode_actor_as_operator() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1044,9 +1029,8 @@ mod test {
     fn encode_decode_roundtrip() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1065,7 +1049,7 @@ mod test {
         let encoded = claims.encode(&kp).unwrap();
 
         let decoded = Claims::decode(&encoded).unwrap();
-        assert!(validate_token::<Actor>(&encoded).is_ok());
+        assert!(validate_token::<Component>(&encoded).is_ok());
 
         assert_eq!(claims, decoded);
     }
@@ -1082,7 +1066,6 @@ mod test {
             .issuer(&account.public_key())
             .with_metadata(CapabilityProvider::new(
                 "Test Provider".to_string(),
-                "wasmcloud:testing".to_string(),
                 "wasmCloud Internal".to_string(),
                 Some(1),
                 Some("v0.0.1".to_string()),
@@ -1175,9 +1158,8 @@ mod test {
     fn encode_decode_logging_roundtrip() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1196,7 +1178,7 @@ mod test {
         let encoded = claims.encode(&kp).unwrap();
 
         let decoded = Claims::decode(&encoded).unwrap();
-        assert!(validate_token::<Actor>(&encoded).is_ok());
+        assert!(validate_token::<Component>(&encoded).is_ok());
 
         assert_eq!(claims, decoded);
     }
@@ -1240,9 +1222,8 @@ mod test {
     fn encode_decode_bad_token() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1276,9 +1257,8 @@ mod test {
     fn ensure_issuer_on_token() {
         let kp = KeyPair::new_account();
         let mut claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1314,9 +1294,8 @@ mod test {
     fn ensure_subject_on_token() {
         let kp = KeyPair::new_account();
         let mut claims = Claims {
-            metadata: Some(Actor::new(
+            metadata: Some(Component::new(
                 "test".to_string(),
-                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),
@@ -1355,7 +1334,7 @@ mod test {
             .unwrap()
             .unwrap();
 
-        let vres = validate_token::<Actor>(&extracted.jwt);
+        let vres = validate_token::<Component>(&extracted.jwt);
         assert!(vres.is_ok());
     }
 
@@ -1366,16 +1345,18 @@ mod test {
         let too_many = "asd.123.abc.easy";
         let correct_but_wrong = "ddd.123.notajwt";
 
-        assert!(validate_token::<Actor>(valid).is_ok());
-        assert!(validate_token::<Actor>(too_few)
+        assert!(validate_token::<Component>(valid).is_ok());
+        assert!(validate_token::<Component>(too_few)
             .is_err_and(|e| e.to_string()
                 == "JWT error: invalid token format, expected 3 segments, found 2"));
-        assert!(validate_token::<Actor>(too_many)
+        assert!(validate_token::<Component>(too_many)
             .is_err_and(|e| e.to_string()
                 == "JWT error: invalid token format, expected 3 segments, found 4"));
         // Should be an error, but not because of the segment validation
-        assert!(validate_token::<Actor>(correct_but_wrong).is_err_and(|e| !e
-            .to_string()
-            .contains("invalid token format, expected 3 segments")));
+        assert!(
+            validate_token::<Component>(correct_but_wrong).is_err_and(|e| !e
+                .to_string()
+                .contains("invalid token format, expected 3 segments"))
+        );
     }
 }
