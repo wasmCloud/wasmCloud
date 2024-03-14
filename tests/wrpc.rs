@@ -30,7 +30,10 @@ const PINGER_COMPONENT_ID: &str = "wrpc_pinger_component";
 const PONGER_COMPONENT_ID: &str = "wrpc_ponger_component";
 
 async fn serve_outgoing_http(
-    mut invocations: <wrpc_transport_nats::Client as wrpc_interface_http::OutgoingHandler>::HandleInvocationStream,
+    mut invocations: <wrpc_transport_nats::Client as wrpc_transport::Client>::InvocationStream<(
+        wrpc_interface_http::IncomingRequest,
+        Option<wrpc_interface_http::RequestOptions>,
+    )>,
 ) -> anyhow::Result<()> {
     let AcceptedInvocation {
         params:
@@ -229,7 +232,7 @@ async fn wrpc() -> anyhow::Result<()> {
         provider_key: &httpserver_provider_key,
         provider_id: &httpserver_provider_key.public_key(),
         url: &httpserver_provider_url,
-        configuration: None,
+        config: vec![],
     })
     .await?;
 

@@ -72,4 +72,4 @@ wasmcloud-interface-httpclient = { version = "0.11" }
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
 wasmcloud-test-util = { path = "../test-util", default-features = false }
-wrpc-interface-http = { version = "0.13.1", default-features = false }
+wrpc-interface-http = { version = "0.16", default-features = false }
