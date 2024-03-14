@@ -6,7 +6,7 @@ use tokio::time::Duration;
 
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
+    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
@@ -99,7 +99,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 .perform_actor_auction(
                     &component_ref,
                     &cmd.component_id,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
@@ -227,7 +227,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
                 .perform_provider_auction(
                     &provider_ref,
                     &cmd.link_name,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)

@@ -329,16 +329,16 @@ pub fn extract_keypair(
     }
 }
 
-/// Transforms a list of labels in the form of (label=value) to a hashmap
-pub fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<String, String>> {
+/// Transforms a list of key in the form of (key=value) to a hashmap
+pub fn input_vec_to_hashmap(values: Vec<String>) -> Result<HashMap<String, String>> {
     let mut hm: HashMap<String, String> = HashMap::new();
-    for constraint in constraints {
+    for constraint in values {
         match constraint.split_once('=') {
             Some((key, value)) => {
                 hm.insert(key.to_string(), value.to_string());
             }
             None => {
-                anyhow::bail!("Constraints were not properly formatted. Ensure they are formatted as label=value")
+                anyhow::bail!("Input values were not properly formatted. Ensure they are formatted as key=value")
             }
         };
     }

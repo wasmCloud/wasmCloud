@@ -9,6 +9,7 @@ use wash_cli::build::{self, BuildCommand};
 use wash_cli::call::{self, CallCli};
 use wash_cli::common;
 use wash_cli::completions::{self, CompletionOpts};
+use wash_cli::config::{self, ConfigCliCommand};
 use wash_cli::ctx::{self, CtxCommand};
 use wash_cli::dev::{self, DevCommand};
 use wash_cli::down::{self, DownCommand};
@@ -139,7 +140,9 @@ enum CliCommand {
     /// Generate and manage JWTs for wasmCloud components and capability providers
     #[clap(name = "claims", subcommand)]
     Claims(ClaimsCliCommand),
-    // TODO: Config(ConfigCliCommand),
+    /// Create configuration for components, capability providers and links
+    #[clap(name = "config", subcommand)]
+    Config(ConfigCliCommand),
     /// Manage wasmCloud host configuration contexts
     #[clap(name = "ctx", alias = "context", alias = "contexts", subcommand)]
     Ctx(CtxCommand),
@@ -214,6 +217,11 @@ async fn main() {
 
     let output_kind = cli.output;
 
+    // Whether or not to append `success: true` to the output JSON. For now, we only omit it for `wash config get`.
+    let append_json_success = !matches!(
+        cli.command,
+        CliCommand::Config(ConfigCliCommand::GetCommand { .. }),
+    );
     let res: anyhow::Result<CommandOutput> = match cli.command {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
         CliCommand::Build(build_cli) => build::handle_command(build_cli).await,
@@ -233,6 +241,7 @@ async fn main() {
         CliCommand::Completions(completions_cli) => {
             completions::handle_command(completions_cli, Cli::command())
         }
+        CliCommand::Config(config_cli) => config::handle_command(config_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
         CliCommand::Dev(dev_cli) => dev::handle_command(dev_cli, output_kind).await,
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
@@ -280,7 +289,11 @@ async fn main() {
             match output_kind {
                 OutputKind::Json => {
                     let mut map = out.map;
-                    map.insert("success".to_string(), json!(true));
+                    // When we fetch configuration, we don't want to arbitrarily insert a key into the map.
+                    // There may be other commands we do this in the future, but for now the special check is fine.
+                    if append_json_success {
+                        map.insert("success".to_string(), json!(true));
+                    }
                     println!("\n{}", serde_json::to_string_pretty(&map).unwrap());
                     0
                 }

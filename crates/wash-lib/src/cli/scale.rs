@@ -3,7 +3,7 @@ use clap::Parser;
 
 use crate::{
     actor::{scale_component, ScaleComponentArgs},
-    cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
+    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::find_host_id,
     config::WashConnectionOptions,
 };
@@ -49,7 +49,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
-    let annotations = labels_vec_to_hashmap(cmd.annotations)?;
+    let annotations = input_vec_to_hashmap(cmd.annotations)?;
 
     scale_component(ScaleComponentArgs {
         client: &client,
