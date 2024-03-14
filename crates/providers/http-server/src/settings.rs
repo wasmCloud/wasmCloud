@@ -236,11 +236,11 @@ impl ServiceSettings {
 ///   (later names override earlier names in the list)
 ///
 #[instrument]
-pub fn load_settings(values: &HashMap<&str, &str>) -> Result<ServiceSettings, HttpServerError> {
+pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, HttpServerError> {
     trace!("load settings");
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
-    let values: HashMap<String, &str> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
+    let values: HashMap<String, String> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
         "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
             .to_string(),
     ))?;

@@ -46,7 +46,10 @@ use axum_server::tls_rustls::RustlsConfig;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
-use wasmcloud_provider_sdk::{get_connection, InterfaceLinkDefinition, ProviderHandler};
+use wasmcloud_core::LatticeTarget;
+use wasmcloud_provider_sdk::{
+    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult
+};
 use wrpc_interface_http::IncomingHandler as _;
 
 mod hashmap_ci;
@@ -68,43 +71,34 @@ pub struct HttpServerProvider {
 impl ProviderHandler for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
-    /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn put_link(&self, ld: &InterfaceLinkDefinition) -> bool {
-        let settings = match load_settings(&ld.extract_provider_config_values()) {
-            Ok(s) => s,
-            Err(e) => {
-                error!(%e, ?ld, "httpserver failed to load settings for actor");
-                return false;
-            }
-        };
+    async fn receive_link_config_as_source(&self, 
+        link_config: impl LinkConfig,
+) -> ProviderOperationResult<()> {
+        let settings = load_settings(link_config.get_config()).context("httpserver failed to load settings for actor")?;
 
         // Start a server instance that calls the given actor
-        let http_server = match HttpServerCore::new(Arc::new(settings), ld).await {
-            Ok(http_server) => http_server,
-            Err(e) => {
-                error!(%e, ?ld, "httpserver failed to start listener for actor");
-                return false;
-            }
-        };
+        let http_server = HttpServerCore::new(Arc::new(settings), link_config.get_target_id()).await.context("httpserver failed to start listener for actor")?;
 
         // Save the actor and server instance locally
-        self.actors.insert(ld.target.to_string(), http_server);
+        self.actors.insert(link_config.get_target_id().to_string(), http_server);
 
-        true
+        Ok(())
     }
 
     /// Handle notification that a link is dropped - stop the http listener
-    async fn delete_link(&self, actor_id: &str) {
+    async fn delete_link(&self, actor_id: &str) -> ProviderOperationResult<()> {
         if let Some((_, server)) = self.actors.remove(actor_id) {
             info!(%actor_id, "httpserver stopping listener for actor");
             server.handle.shutdown();
         }
+        Ok(())
     }
 
     /// Handle shutdown request by shutting down all the http server threads
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
         // empty the actor link data and stop all servers
         self.actors.clear();
+        Ok(())
     }
 }
 
@@ -192,8 +186,10 @@ async fn handle_request(
         .build()
         .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     let mut req = http::Request::builder();
-    *req.headers_mut()
-        .ok_or((http::StatusCode::INTERNAL_SERVER_ERROR, "invalid request generated"))? = headers;
+    *req.headers_mut().ok_or((
+        http::StatusCode::INTERNAL_SERVER_ERROR,
+        "invalid request generated",
+    ))? = headers;
     let req = req
         .uri(uri)
         .method(method)
@@ -234,14 +230,14 @@ impl HttpServerCore {
     #[instrument]
     pub async fn new(
         settings: Arc<ServiceSettings>,
-        ld: &InterfaceLinkDefinition,
+        target: &LatticeTarget,
     ) -> anyhow::Result<Self> {
         let addr = settings
             .address
             .unwrap_or_else(|| (Ipv4Addr::UNSPECIFIED, 8000).into());
         info!(
             %addr,
-            target = %ld.target,
+            %target,
             "httpserver starting listener for target",
         );
 
@@ -323,7 +319,7 @@ impl HttpServerCore {
         }
         let service = handle_request.layer(cors);
 
-        let wrpc = Arc::new(get_connection().get_wrpc_client(&ld.target));
+        let wrpc = Arc::new(get_connection().get_wrpc_client(target));
         let settings = Arc::clone(&settings);
         let handle = axum_server::Handle::new();
         if let Tls {
