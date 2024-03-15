@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.3.3"
+version = "0.4.0"
 description = """
 Blobstore for wasmCloud, leveraging the filesystem. This package provides a capability provider that satisfies the 'wasmcloud:blobstore' contract.
 """
@@ -16,7 +16,16 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
 path-clean = { workspace = true }
-tokio = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros"] }
+tokio-stream = { workspace = true, features = ["fs"] }
+tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
-wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wrpc-interface-blobstore = { workspace = true }
+wrpc-transport = { workspace = true }

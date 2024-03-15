@@ -25,6 +25,6 @@ hyper-rustls = { workspace = true, features = [
 ] }
 tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }

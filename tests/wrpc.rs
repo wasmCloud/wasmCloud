@@ -8,6 +8,7 @@ use anyhow::{ensure, Context as _};
 use nkeys::KeyPair;
 use redis::AsyncCommands as _;
 use serde::Deserialize;
+use tempfile::tempdir;
 use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT_PREVIEW2};
 use tokio::try_join;
 use tracing_subscriber::prelude::*;
@@ -162,6 +163,11 @@ async fn wrpc() -> anyhow::Result<()> {
         .await
         .context("failed to start test host")?;
 
+    let blobstore_fs_provider_key = KeyPair::from_seed(test_providers::RUST_BLOBSTORE_FS_SUBJECT)
+        .context("failed to parse `rust-blobstore-fs` provider key")?;
+    let blobstore_fs_provider_url = Url::from_file_path(test_providers::RUST_BLOBSTORE_FS)
+        .expect("failed to construct provider ref");
+
     let httpclient_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPCLIENT_SUBJECT)
         .context("failed to parse `rust-httpclient` provider key")?;
     let httpclient_provider_url = Url::from_file_path(test_providers::RUST_HTTPCLIENT)
@@ -177,8 +183,10 @@ async fn wrpc() -> anyhow::Result<()> {
     let kvredis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
         .expect("failed to construct provider ref");
 
-    let component_http_port = free_port().await?;
+    let blobstore_dir = tempdir()?;
+    let http_port = free_port().await?;
 
+    let blobstore_fs_config_name = "blobstore-fs-root".to_string();
     let http_config_name = "http-default-address".to_string();
     let kvredis_config_name = "kvredis-url".to_string();
 
@@ -188,7 +196,7 @@ async fn wrpc() -> anyhow::Result<()> {
         &http_config_name,
         HashMap::from_iter([(
             "ADDRESS".to_string(),
-            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
+            format!("{}:{http_port}", Ipv4Addr::LOCALHOST),
         )]),
     )
     .await?;
@@ -199,6 +207,28 @@ async fn wrpc() -> anyhow::Result<()> {
         &kvredis_config_name,
         HashMap::from_iter([("URL".to_string(), redis_url.to_string())]),
     )
+    .await?;
+
+    // Create configuration for the blobstore-fs provider
+    assert_config_put(
+        &ctl_client,
+        &blobstore_fs_config_name,
+        HashMap::from_iter([(
+            "ROOT".to_string(),
+            blobstore_dir.path().to_string_lossy().into(),
+        )]),
+    )
+    .await?;
+
+    assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
+        client: &ctl_client,
+        lattice: LATTICE,
+        host_key: &host.host_key(),
+        provider_key: &blobstore_fs_provider_key,
+        provider_id: &blobstore_fs_provider_key.public_key(),
+        url: &blobstore_fs_provider_url,
+        config: vec![],
+    })
     .await?;
 
     assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
@@ -317,7 +347,21 @@ async fn wrpc() -> anyhow::Result<()> {
     .await
     .context("failed to advertise link")?;
 
-    assert_incoming_http(component_http_port, &mut redis_conn).await?;
+    assert_advertise_link(
+        &ctl_client,
+        PINGER_COMPONENT_ID,
+        blobstore_fs_provider_key.public_key(),
+        "default",
+        "wasi",
+        "blobstore",
+        vec!["blobstore".to_string()],
+        vec![],
+        vec![blobstore_fs_config_name],
+    )
+    .await
+    .context("failed to advertise link")?;
+
+    assert_incoming_http(http_port, &mut redis_conn).await?;
 
     try_join!(
         async { nats_server.stop().await.context("failed to stop NATS") },

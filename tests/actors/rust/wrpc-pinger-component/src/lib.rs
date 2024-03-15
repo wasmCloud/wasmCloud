@@ -15,8 +15,8 @@ use serde_json::json;
 use test_actors::testing::*;
 use wasi::http;
 use wasi::io::poll::poll;
-use wasi::keyvalue;
 use wasi::sockets::{instance_network, network, tcp_create_socket, udp_create_socket};
+use wasi::{blobstore, keyvalue};
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::{
@@ -536,6 +536,75 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 4242, 42)
                 .expect("failed to compare and swap")
         );
+
+        let container_name = String::from("container");
+        eprintln!("call `wasi:blobstore/blobstore.container-exists`...");
+        assert!(!blobstore::blobstore::container_exists(&container_name)
+            .expect("failed to check whether container exists"));
+        eprintln!("call `wasi:blobstore/blobstore.create-container`...");
+        let created_container = blobstore::blobstore::create_container(&container_name)
+            .expect("failed to create container");
+        eprintln!("call `wasi:blobstore/blobstore.container-exists`...");
+        assert!(blobstore::blobstore::container_exists(&container_name)
+            .expect("failed to check whether container exists"));
+        {
+            eprintln!("call `wasi:blobstore/blobstore.get-container`...");
+            let got_container = blobstore::blobstore::get_container(&container_name)
+                .expect("failed to get container");
+
+            eprintln!("call `wasi:blobstore/container.container.info`...");
+            let blobstore::container::ContainerMetadata { name, created_at } = created_container
+                .info()
+                .expect("failed to get info of created container");
+            assert_eq!(name, "container");
+            assert!(created_at > 0);
+
+            eprintln!("call `wasi:blobstore/container.container.info`...");
+            let got_info = got_container
+                .info()
+                .expect("failed to get info of got container");
+            assert_eq!(got_info.name, "container");
+            assert_eq!(got_info.created_at, created_at);
+        }
+        // NOTE: At this point we should be able to assume that created container and got container are
+        // indeed the same container
+
+        eprintln!("call `wasi:blobstore/container.container.name`...");
+        assert_eq!(
+            created_container
+                .name()
+                .expect("failed to get container name"),
+            "container"
+        );
+
+        eprintln!("call `wasi:blobstore/container.container.has-object`...");
+        assert!(!created_container
+            .has_object(&result_key)
+            .expect("failed to check whether `result` object exists"));
+        eprintln!("call `wasi:blobstore/container.container.delete-object`...");
+        created_container
+            .delete_object(&result_key)
+            .expect("failed to delete object");
+
+        let result_value = blobstore::types::OutgoingValue::new_outgoing_value();
+        let mut result_stream = result_value
+            .outgoing_value_write_body()
+            .expect("failed to get outgoing value output stream");
+        let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
+        eprintln!("write body to outgoing blobstore stream...");
+        result_stream_writer
+            .write_all(&body)
+            .expect("failed to write result to blobstore output stream");
+        eprintln!("flush outgoing blobstore stream...");
+        result_stream_writer
+            .flush()
+            .expect("failed to flush blobstore output stream");
+        eprintln!("call `wasi:blobstore/container.container.write-data`...");
+        created_container
+            .write_data(&result_key, &result_value)
+            .expect("failed to write `result`");
+
+        // TODO: Expand blobstore testing procedure
 
         http::types::ResponseOutparam::set(response_out, Ok(response));
     }

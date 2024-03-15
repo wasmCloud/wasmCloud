@@ -66,9 +66,9 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
     Ok(quote::quote!(
         #[automatically_derived]
         #[#crate_path::deps::async_trait::async_trait]
-        impl #crate_path::deps::wrpc_transport::Receive for #struct_name
+        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #struct_name
         {
-            async fn receive<'a, T>(
+            async fn receive<T>(
                 payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>>  + Send + Sync + Unpin),
                 _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,
@@ -193,9 +193,9 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 
     Ok(quote::quote!(
         #[#crate_path::deps::async_trait::async_trait]
-        impl #crate_path::deps::wrpc_transport::Receive for #enum_name
+        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #enum_name
         {
-            async fn receive<'a, T>(
+            async fn receive<T>(
                 payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin),
                 _sub: Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T>>,

@@ -55,6 +55,8 @@ simple_env_load = { version = "0.2", default-features = false }
 tempfile = { version = "3", default-features = false }
 thiserror = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
+tokio-stream = { version = "0.1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.8", default-features = false }
 tower-http = { version = "0.5", default-features = false }
 tower-service = { version = "0.3", default-features = false }
@@ -71,6 +73,7 @@ wasmcloud-core = { path = "../core", default-features = false }
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
 wasmcloud-test-util = { path = "../test-util", default-features = false }
-wrpc-transport = { version = "0.19", default-features = false }
-wrpc-interface-keyvalue = { version = "0.8", default-features = false }
-wrpc-interface-http = { version = "0.16", default-features = false }
+wrpc-transport = { version = "0.20", default-features = false }
+wrpc-interface-blobstore = { version = "0.12", default-features = false }
+wrpc-interface-keyvalue = { version = "0.9", default-features = false }
+wrpc-interface-http = { version = "0.17", default-features = false }
