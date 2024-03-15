@@ -50,7 +50,6 @@ ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
-wasmcloud-compat = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-runtime = { workspace = true }

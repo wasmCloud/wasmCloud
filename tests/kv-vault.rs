@@ -9,7 +9,6 @@ use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
-use wasmcloud_compat::keyvalue::GetResponse;
 use wasmcloud_control_interface::ClientBuilder;
 use wasmcloud_test_util::actor::assert_scale_actor;
 use wasmcloud_test_util::host::WasmCloudTestHost;
@@ -223,6 +222,17 @@ async fn kv_vault_suite() -> Result<()> {
         )
         .await
         .context("failed to publish invoke triggering message")?;
+
+    /// Response to get request
+    #[derive(serde::Deserialize)]
+    struct GetResponse {
+        /// the value, if it existed
+        #[serde(default)]
+        value: String,
+        /// whether or not the value existed
+        #[serde(default)]
+        exists: bool,
+    }
 
     // Check the response from the get
     let get_resp = serde_json::from_slice::<GetResponse>(&get_resp.payload)

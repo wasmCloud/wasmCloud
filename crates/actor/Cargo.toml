@@ -24,5 +24,4 @@ serde = { workspace = true, features = ["derive"] } # TODO: Make optional once `
 serde_bytes = { workspace = true, features = ["std"] } # TODO: Make optional once `wasi-http` integrated
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
-wasmcloud-compat = { workspace = true } # TODO: Make optional once `wasi-http` integrated
 wit-bindgen = { workspace = true, features = ["macros"] }

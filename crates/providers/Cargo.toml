@@ -65,7 +65,6 @@ url = { version = "2.4", default-features = false }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
 wascap = { version = "*", path = "../wascap" }
-wasmcloud-compat = { path = "../compat", default-features = false }
 wasmcloud-control-interface = { path = "../control-interface" }
 wasmcloud-core = { path = "../core", default-features = false }
 wasmcloud-interface-httpclient = { version = "0.11" }

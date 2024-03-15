@@ -5323,7 +5323,6 @@ dependencies = [
  "uuid 1.7.0",
  "vaultrs",
  "wascap",
- "wasmcloud-compat",
  "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-host",
@@ -5346,19 +5345,7 @@ dependencies = [
  "serde_bytes",
  "tokio",
  "uuid 1.7.0",
- "wasmcloud-compat",
  "wit-bindgen",
-]
-
-[[package]]
-name = "wasmcloud-compat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "http 1.1.0",
- "serde",
- "serde_bytes",
- "tokio",
 ]
 
 [[package]]
@@ -5500,7 +5487,6 @@ dependencies = [
  "url",
  "uuid 1.7.0",
  "wascap",
- "wasmcloud-compat",
  "wasmcloud-control-interface 0.33.0",
  "wasmcloud-core",
  "wasmcloud-runtime",
@@ -5616,7 +5602,6 @@ dependencies = [
  "wascap",
  "wasi-common",
  "wasmcloud-actor",
- "wasmcloud-compat",
  "wasmcloud-component-adapters",
  "wasmcloud-core",
  "wasmparser",

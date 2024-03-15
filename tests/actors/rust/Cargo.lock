@@ -120,7 +120,7 @@ dependencies = [
  "base64 0.21.7",
  "bytes",
  "futures",
- "http 0.2.12",
+ "http",
  "itoa",
  "memchr",
  "nkeys",
@@ -795,7 +795,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "http 0.2.12",
+ "http",
  "indexmap 2.2.5",
  "slab",
  "tokio",
@@ -874,24 +874,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "http"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b9ddb458710bc376481b842f5da65cdf31522de232c1ca8146abce2a358258"
-dependencies = [
- "bytes",
- "fnv",
- "itoa",
-]
-
-[[package]]
 name = "http-body"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ceab25649e9960c0311ea418d17bee82c0dcec1bd053b5f9a66e265a693bed2"
 dependencies = [
  "bytes",
- "http 0.2.12",
+ "http",
  "pin-project-lite",
 ]
 
@@ -924,7 +913,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http 0.2.12",
+ "http",
  "http-body",
  "httparse",
  "httpdate",
@@ -944,7 +933,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
 dependencies = [
  "futures-util",
- "http 0.2.12",
+ "http",
  "hyper",
  "rustls",
  "tokio",
@@ -1653,7 +1642,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "h2",
- "http 0.2.12",
+ "http",
  "http-body",
  "hyper",
  "hyper-rustls",
@@ -2731,19 +2720,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "uuid",
- "wasmcloud-compat",
  "wit-bindgen 0.17.0",
-]
-
-[[package]]
-name = "wasmcloud-compat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "http 1.1.0",
- "serde",
- "serde_bytes",
- "tokio",
 ]
 
 [[package]]
