@@ -2,14 +2,14 @@ use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 
-use super::{CliConnectionOpts, CommandOutput};
+use super::{validate_component_id, CliConnectionOpts, CommandOutput};
 use crate::{config::WashConnectionOptions, spier::Spier};
 
 #[derive(Debug, Parser, Clone)]
 pub struct SpyCommand {
     /// Component ID to spy on, component or capability provider. This is the unique identifier supplied
     /// to the component at startup.
-    #[clap(name = "component_id")]
+    #[clap(name = "component_id", value_parser = validate_component_id)]
     pub component_id: String,
 
     #[clap(flatten)]

@@ -4,14 +4,15 @@ use wasmcloud_control_interface::{CtlResponse, InterfaceLinkDefinition};
 
 use crate::{cli::CliConnectionOpts, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
+use super::validate_component_id;
+
 #[derive(Parser, Debug, Clone)]
 pub struct LinkDelCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Public key ID or name of actor to match on. If an actor name is given and matches multiple
-    /// actors, an error will be returned with a list of matching actors and their IDs.
-    #[clap(name = "source-id")]
+    /// Component ID or name of the source of the link.
+    #[clap(name = "source-id", value_parser = validate_component_id)]
     pub source_id: String,
 
     /// Link name, defaults to "default"
@@ -33,11 +34,11 @@ pub struct LinkPutCommand {
     pub opts: CliConnectionOpts,
 
     /// The ID of the component to link from
-    #[clap(name = "source-id")]
+    #[clap(name = "source-id", value_parser = validate_component_id)]
     pub source_id: String,
 
     /// The ID of the component to link to
-    #[clap(name = "target")]
+    #[clap(name = "target", value_parser = validate_component_id)]
     pub target: String,
 
     /// The WIT namespace of the link, e.g. "wasi" in "wasi:http/incoming-handler"
@@ -53,11 +54,11 @@ pub struct LinkPutCommand {
     pub interfaces: Vec<String>,
 
     /// List of named configuration to make available to the source
-    #[clap(long = "source_config")]
+    #[clap(long = "source-config")]
     pub source_config: Vec<String>,
 
     /// List of named configuration to make available to the target
-    #[clap(long = "target_config")]
+    #[clap(long = "target-config")]
     pub target_config: Vec<String>,
 
     /// Link name, defaults to "default". Used for scenarios where a single source

@@ -8,7 +8,7 @@ use clap::Args;
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::debug;
-use wash_lib::cli::CommandOutput;
+use wash_lib::cli::{validate_component_id, CommandOutput};
 use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE};
 use wasmcloud_core::parse_wit_meta_from_operation;
 use wrpc_transport::Client;
@@ -176,7 +176,7 @@ pub struct CallCommand {
     opts: ConnectionOpts,
 
     /// The unique component identifier of the component to invoke
-    #[clap(name = "component-id")]
+    #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// Fully qualified WIT export to invoke on the component, e.g. `wasi:cli/run.run`

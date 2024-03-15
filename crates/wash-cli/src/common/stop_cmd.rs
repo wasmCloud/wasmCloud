@@ -59,7 +59,6 @@ mod test {
     const JS_DOMAIN: &str = "js";
     const TIMEOUT_MS: u64 = 2001;
     const HOST_TIMEOUT_MS: u64 = 3001;
-    const LINK_NAME: &str = "default";
 
     #[test]
     /// Enumerates multiple options of the `stop actor` subcommand to ensure API doesn't
@@ -126,7 +125,6 @@ mod test {
             "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            LINK_NAME,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
@@ -152,16 +150,13 @@ mod test {
                 opts,
                 host_id,
                 provider_id,
-                link_name,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(link_name, "default".to_string());
                 assert_eq!(host_id.unwrap(), HOST_ID);
-                assert_eq!(link_name, LINK_NAME);
                 assert_eq!(provider_id.to_string(), PROVIDER_ID);
                 assert!(skip_wait);
             }

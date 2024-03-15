@@ -7,7 +7,7 @@ use crate::{
     config::WashConnectionOptions,
 };
 
-use super::{CliConnectionOpts, CommandOutput};
+use super::{validate_component_id, CliConnectionOpts, CommandOutput};
 
 #[derive(Debug, Clone, Parser)]
 pub enum UpdateCommand {
@@ -30,7 +30,7 @@ pub struct UpdateComponentCommand {
     pub host_id: Option<String>,
 
     /// Unique ID of the component to update
-    #[clap(name = "component-id")]
+    #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// Component reference to replace the current running comonent with, e.g. the absolute file path or OCI URL.
