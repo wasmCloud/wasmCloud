@@ -234,7 +234,7 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_create_container(name.to_string())
+            .invoke_create_container(name)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.create-container`")?;
         // TODO: return a result directly
@@ -258,7 +258,7 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_container_exists(name.to_string())
+            .invoke_container_exists(name)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.container-exists`")?;
         // TODO: return a result directly
@@ -282,7 +282,7 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_delete_container(name.to_string())
+            .invoke_delete_container(name)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.delete-container`")?;
         // TODO: return a result directly
@@ -309,14 +309,17 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_get_container_info(name.to_string())
+            .invoke_get_container_info(name)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.get-container-info`")?;
         // TODO: return a result directly
-        let ContainerMetadata { name, created_at } =
+        let ContainerMetadata { created_at } =
             res.map_err(|err| anyhow!(err).context("function failed"))?;
         tx.await.context("failed to transmit parameters")?;
-        Ok(blobstore::container::ContainerMetadata { name, created_at })
+        Ok(blobstore::container::ContainerMetadata {
+            name: name.to_string(),
+            created_at,
+        })
     }
 
     #[instrument]
@@ -340,7 +343,7 @@ impl Blobstore for Handler {
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_get_container_data(
-                ObjectId {
+                &ObjectId {
                     container: container.to_string(),
                     object: name,
                 },
@@ -370,7 +373,7 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_has_object(ObjectId {
+            .invoke_has_object(&ObjectId {
                 container: container.to_string(),
                 object: name,
             })
@@ -408,7 +411,7 @@ impl Blobstore for Handler {
             .context("failed to read value")?;
         let (res, tx) = wrpc
             .invoke_write_container_data(
-                ObjectId {
+                &ObjectId {
                     container: container.to_string(),
                     object: name,
                 },
@@ -436,9 +439,8 @@ impl Blobstore for Handler {
             .await
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
-        let container = container.to_string();
         let (res, tx) = wrpc
-            .invoke_delete_objects(container.to_string(), names)
+            .invoke_delete_objects(container, names.iter().map(String::as_str))
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.write-container-data`")?;
         // TODO: return a result directly
@@ -467,7 +469,7 @@ impl Blobstore for Handler {
         let wrpc = self.wrpc_client(&id);
         // TODO: implement a stream with limit and offset
         let (res, tx) = wrpc
-            .invoke_list_container_objects(container.to_string(), None, None)
+            .invoke_list_container_objects(container, None, None)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.list-container-objects`")?;
         let names = res.map_err(|err| anyhow!(err).context("function failed"))?;
@@ -494,23 +496,19 @@ impl Blobstore for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_get_object_info(ObjectId {
+            .invoke_get_object_info(&ObjectId {
                 container: container.to_string(),
-                object: name,
+                object: name.to_string(),
             })
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.get-object-info`")?;
         // TODO: return a result directly
-        let ObjectMetadata {
-            name,
-            container,
-            created_at,
-            size,
-        } = res.map_err(|err| anyhow!(err).context("function failed"))?;
+        let ObjectMetadata { created_at, size } =
+            res.map_err(|err| anyhow!(err).context("function failed"))?;
         tx.await.context("failed to transmit parameters")?;
         Ok(blobstore::container::ObjectMetadata {
             name,
-            container,
+            container: container.to_string(),
             created_at,
             size,
         })
@@ -530,9 +528,8 @@ impl Blobstore for Handler {
             .await
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
-        let container = container.to_string();
         let (res, tx) = wrpc
-            .invoke_clear_container(container.to_string())
+            .invoke_clear_container(container)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.clear-container`")?;
         // TODO: return a result directly
@@ -671,7 +668,7 @@ impl KeyValueAtomic for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_increment(bucket.to_string(), key, delta)
+            .invoke_increment(bucket, &key, delta)
             .await
             .context("failed to invoke `wrpc:keyvalue/atomic.increment`")?;
         // TODO: return a result directly
@@ -699,7 +696,7 @@ impl KeyValueAtomic for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_compare_and_swap(bucket.to_string(), key, old, new)
+            .invoke_compare_and_swap(bucket, &key, old, new)
             .await
             .context("failed to invoke `wrpc:keyvalue/atomic.compare-and-swap`")?;
         // TODO: return a result directly
@@ -723,7 +720,7 @@ impl KeyValueEventual for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_get(bucket.to_string(), key)
+            .invoke_get(bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/eventual.get`")?;
         // TODO: return a result directly
@@ -755,7 +752,7 @@ impl KeyValueEventual for Handler {
             .await
             .context("failed to read value")?;
         let (res, tx) = wrpc
-            .invoke_set(bucket.to_string(), key, stream::iter([buf.into()]))
+            .invoke_set(bucket, &key, stream::iter([buf.into()]))
             .await
             .context("failed to invoke `wrpc:keyvalue/eventual.set`")?;
         // TODO: return a result directly
@@ -777,7 +774,7 @@ impl KeyValueEventual for Handler {
         let wrpc = self.wrpc_client(&id);
         // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
         let (res, tx) = wrpc
-            .invoke_delete(bucket.to_string(), key)
+            .invoke_delete(bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/eventual.delete`")?;
         // TODO: return a result directly
@@ -798,7 +795,7 @@ impl KeyValueEventual for Handler {
             .context("unknown target")?;
         let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
-            .invoke_exists(bucket.to_string(), key)
+            .invoke_exists(bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/eventual.exists`")?;
         // TODO: return a result directly
@@ -913,8 +910,8 @@ impl Subscribe for BrokerMessage {
 }
 
 #[async_trait]
-impl Receive for BrokerMessage {
-    async fn receive<'a, T>(
+impl<'a> Receive<'a> for BrokerMessage {
+    async fn receive<T>(
         payload: impl Buf + Send + 'a,
         rx: &mut (impl Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin),
         _sub: Option<AsyncSubscription<T>>,

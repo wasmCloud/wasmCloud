@@ -2,35 +2,36 @@
 //!
 //!
 
+use core::future::Future;
+use core::pin::pin;
+
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use std::io::SeekFrom;
+use std::os::unix::prelude::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _};
+use async_nats::HeaderMap;
+use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
-use tokio::fs::{
-    create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File, OpenOptions,
-};
-use tokio::io::AsyncWriteExt;
+use serde::Deserialize;
+use tokio::fs::{self, create_dir_all, File};
+use tokio::io::AsyncSeekExt as _;
 use tokio::sync::RwLock;
-use tracing::{error, info};
-
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    serde::Deserialize,
-    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
+use tokio::{select, spawn};
+use tokio_stream::wrappers::ReadDirStream;
+use tokio_util::io::ReaderStream;
+use tracing::{debug, error, info, instrument, warn};
+use wasmcloud_provider_sdk::provider::invocation_context;
+use wasmcloud_provider_sdk::{
+    get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
-
-mod fs_utils;
-use fs_utils::all_dirs;
-
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: FsProvider,
-    contract: "wasmcloud:blobstore",
-    wit_bindgen_cfg: "provider-blobstore"
-});
+use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 #[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:blobstore";
@@ -40,209 +41,945 @@ const FIRST_SEQ_NBR: u64 = 0;
 pub type ChunkOffsetKey = (String, usize);
 
 #[derive(Default, Debug, Clone, Deserialize)]
-#[serde(crate = "wasmcloud_provider_wit_bindgen::deps::serde")]
 struct FsProviderConfig {
-    root: PathBuf,
+    root: Arc<PathBuf>,
 }
 
 /// fs capability provider implementation
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct FsProvider {
     config: Arc<RwLock<HashMap<String, FsProviderConfig>>>,
-    upload_chunks: Arc<RwLock<HashMap<String, u64>>>, // keep track of the next offset for chunks to be uploaded
-    download_chunks: Arc<RwLock<HashMap<ChunkOffsetKey, Chunk>>>,
+}
+
+/// Resolve a path with two components (base & root),
+/// ensuring that the path is below the given root.
+fn resolve_subpath(root: &Path, path: impl AsRef<Path>) -> Result<PathBuf, std::io::Error> {
+    let joined = root.join(&path);
+    let joined = joined.clean();
+
+    // Check components of either path
+    let mut joined_abs_iter = joined.components();
+    for root_part in root.components() {
+        let joined_part = joined_abs_iter.next();
+
+        // If the joined path is shorter or doesn't match
+        // for the duration of the root, path is suspect
+        if joined_part.is_none() || joined_part != Some(root_part) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "Invalid path [{}], is not contained by root path [{}]",
+                    path.as_ref().display(),
+                    root.display(),
+                ),
+            ));
+        }
+    }
+
+    // At this point, the root iterator has ben exhausted
+    // and the remaining components are the paths beneath the root
+    Ok(joined)
 }
 
 impl FsProvider {
-    /// Resolve a path with two components (base & root),
-    /// ensuring that the path is below the given root.
-    async fn resolve_subpath<P: AsRef<Path>>(
+    async fn get_root(&self, headers: Option<&HeaderMap>) -> anyhow::Result<Arc<PathBuf>> {
+        if let Some(ref source_id) = headers
+            .map(invocation_context)
+            .and_then(|Context { actor, .. }| actor)
+        {
+            self.config
+                .read()
+                .await
+                .get(source_id)
+                .with_context(|| format!("failed to lookup {source_id} configuration"))
+                .map(|FsProviderConfig { root }| Arc::clone(root))
+        } else {
+            // TODO: Support a default here
+            bail!("failed to lookup invocation source ID")
+        }
+    }
+
+    async fn get_container(
         &self,
-        root: &Path,
-        path: P,
-    ) -> Result<PathBuf, IoError> {
-        let joined = root.join(&path);
-        let joined = joined.clean();
+        headers: Option<&HeaderMap>,
+        container: impl AsRef<Path>,
+    ) -> anyhow::Result<PathBuf> {
+        let root = self
+            .get_root(headers)
+            .await
+            .context("failed to get container root")?;
+        resolve_subpath(&root, container).context("failed to resolve subpath")
+    }
 
-        // Check components of either path
-        let mut joined_abs_iter = joined.components();
-        for root_part in root.components() {
-            let joined_part = joined_abs_iter.next();
+    async fn get_object(
+        &self,
+        headers: Option<&HeaderMap>,
+        wrpc_interface_blobstore::ObjectId { container, object }: wrpc_interface_blobstore::ObjectId,
+    ) -> anyhow::Result<PathBuf> {
+        let container = self
+            .get_container(headers, container)
+            .await
+            .context("failed to get container")?;
+        resolve_subpath(&container, object).context("failed to resolve subpath")
+    }
 
-            // If the joined path is shorter or doesn't match
-            // for the duration of the root, path is suspect
-            if joined_part.is_none() || joined_part != Some(root_part) {
-                return Err(IoError::new(
-                    IoErrorKind::PermissionDenied,
-                    format!(
-                        "Invalid path [{}], is not contained by root path [{}]",
-                        path.as_ref().display(),
-                        root.display(),
-                    ),
-                ));
+    #[instrument(level = "trace", skip_all)]
+    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
+        let connection = get_connection();
+        let wrpc = connection.get_wrpc_client(connection.provider_key());
+        let mut commands = pin!(commands);
+        'outer: loop {
+            use wrpc_interface_blobstore::Blobstore as _;
+            let clear_container_invocations = wrpc.serve_clear_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.clear-container` invocations",
+            )?;
+            let mut clear_container_invocations = pin!(clear_container_invocations);
+
+            let container_exists_invocations = wrpc.serve_container_exists().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.container-exists` invocations",
+            )?;
+            let mut container_exists_invocations = pin!(container_exists_invocations);
+
+            let create_container_invocations = wrpc.serve_create_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.create-container` invocations",
+            )?;
+            let mut create_container_invocations = pin!(create_container_invocations);
+
+            let delete_container_invocations = wrpc.serve_delete_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.delete-container` invocations",
+            )?;
+            let mut delete_container_invocations = pin!(delete_container_invocations);
+
+            let get_container_info_invocations = wrpc.serve_get_container_info().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-container-info` invocations",
+            )?;
+            let mut get_container_info_invocations = pin!(get_container_info_invocations);
+
+            let list_container_objects_invocations =
+                wrpc.serve_list_container_objects().await.context(
+                    "failed to serve `wrpc:blobstore/blobstore.list-container-objects` invocations",
+                )?;
+            let mut list_container_objects_invocations = pin!(list_container_objects_invocations);
+
+            let copy_object_invocations = wrpc
+                .serve_copy_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.copy-object` invocations")?;
+            let mut copy_object_invocations = pin!(copy_object_invocations);
+
+            let delete_object_invocations = wrpc
+                .serve_delete_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.delete-object` invocations")?;
+            let mut delete_object_invocations = pin!(delete_object_invocations);
+
+            let delete_objects_invocations = wrpc
+                .serve_delete_objects()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.delete-objects` invocations")?;
+            let mut delete_objects_invocations = pin!(delete_objects_invocations);
+
+            let get_container_data_invocations = wrpc.serve_get_container_data().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-container-data` invocations",
+            )?;
+            let mut get_container_data_invocations = pin!(get_container_data_invocations);
+
+            let get_object_info_invocations = wrpc.serve_get_object_info().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-object-info` invocations",
+            )?;
+            let mut get_object_info_invocations = pin!(get_object_info_invocations);
+
+            let has_object_invocations = wrpc
+                .serve_has_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.has-object` invocations")?;
+            let mut has_object_invocations = pin!(has_object_invocations);
+
+            let move_object_invocations = wrpc
+                .serve_move_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.move-object` invocations")?;
+            let mut move_object_invocations = pin!(move_object_invocations);
+
+            let write_container_data_invocations =
+                wrpc.serve_write_container_data().await.context(
+                    "failed to serve `wrpc:blobstore/blobstore.write-container-data` invocations",
+                )?;
+            let mut write_container_data_invocations = pin!(write_container_data_invocations);
+
+            loop {
+                select! {
+                    invocation = clear_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_clear_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.clear-container` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.clear-container` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    },
+                    invocation = container_exists_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_container_exists(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = create_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_create_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-container` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-container` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_container_info_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_container_info(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-info` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-container-info` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = list_container_objects_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_list_container_objects(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.list-container-objects` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.list-container-objects` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = copy_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_copy_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.copy-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.copy-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_objects_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_objects(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-objects` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-objects` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_container_data_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_container_data(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-data` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-container-data` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_object_info_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_object_info(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-object-info` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-object-info` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = has_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_has_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.has-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.has-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = move_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_move_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.move-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.move-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = write_container_data_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_write_container_data(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.write-container-data` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.write-container-data` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    _ = &mut commands => {
+                        debug!("shutdown command received");
+                        return Ok(())
+                    }
+                }
             }
         }
-
-        // At this point, the root iterator has ben exhausted
-        // and the remaining components are the paths beneath the root
-        Ok(joined)
-    }
-}
-
-impl Default for FsProvider {
-    fn default() -> Self {
-        FsProvider {
-            config: Arc::new(RwLock::new(HashMap::new())),
-            upload_chunks: Arc::new(RwLock::new(HashMap::new())),
-            download_chunks: Arc::new(RwLock::new(HashMap::new())),
-        }
     }
 }
 
 impl FsProvider {
-    /// Get source ID string based on context value
-    async fn get_source_id(&self, ctx: &Context) -> Result<String> {
-        ctx.actor.clone().context("no actor ID found on context")
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_clear_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    debug!("read directory at `{}`", path.display());
+                    let dir = fs::read_dir(path).await.context("failed to read path")?;
+                    ReadDirStream::new(dir)
+                        .map(|entry| entry.context("failed to lookup directory entry"))
+                        .try_for_each_concurrent(None, |entry| async move {
+                            let ty = entry
+                                .file_type()
+                                .await
+                                .context("failed to lookup directory entry type")?;
+                            let path = entry.path();
+                            if ty.is_dir() {
+                                fs::remove_dir_all(&path).await.with_context(|| {
+                                    format!("failed to remove directory at `{}`", path.display())
+                                })?
+                            } else {
+                                fs::remove_file(&path).await.with_context(|| {
+                                    format!("failed to remove file at `{}`", path.display())
+                                })?
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .context("failed to remove directory contents")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
     }
 
-    async fn get_root(&self, ctx: &Context) -> Result<PathBuf> {
-        let source_id = self.get_source_id(ctx).await?;
-        let conf_map = self.config.read().await;
-        let mut root = match conf_map.get(&source_id) {
-            Some(config) => config.root.clone(),
-            None => {
-                bail!("No root configuration found")
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_container_exists<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    fs::try_exists(path)
+                        .await
+                        .context("failed to check if path exists")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_create_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    fs::create_dir_all(path)
+                        .await
+                        .context("failed to create path")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    fs::remove_dir_all(path)
+                        .await
+                        .context("failed to remove path")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_container_info<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    let md = fs::metadata(path)
+                        .await
+                        .context("failed to lookup directory metadata")?;
+                    let created_at = md.created().context("failed to lookup creation date")?;
+                    let created_at = created_at
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .context("creation time before Unix epoch")?;
+                    // NOTE: The `created_at` format is currently undefined
+                    // https://github.com/WebAssembly/wasi-blobstore/issues/7
+                    anyhow::Ok(wrpc_interface_blobstore::ContainerMetadata {
+                        created_at: created_at.as_secs(),
+                    })
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_list_container_objects<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (container, limit, offset),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, Option<u64>, Option<u64>), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_container(context.as_ref(), container).await?;
+                    let dir = fs::read_dir(path).await.context("failed to read path")?;
+                    let names = ReadDirStream::new(dir)
+                        .skip(offset.unwrap_or_default().try_into().unwrap_or(usize::MAX))
+                        .take(limit.unwrap_or_default().try_into().unwrap_or(usize::MAX))
+                        .then(|entry| async move {
+                            let entry = entry.context("failed to lookup directory entry")?;
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            // TODO: Remove the need for this wrapping
+                            Ok(vec![Some(wrpc_transport::Value::String(name))])
+                        });
+                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(names)))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_copy_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (src, dest),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                wrpc_interface_blobstore::ObjectId,
+            ),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let root = self
+                        .get_root(context.as_ref())
+                        .await
+                        .context("failed to get root")?;
+                    let src_container = resolve_subpath(&root, src.container)
+                        .context("failed to resolve source container path")?;
+                    let src = resolve_subpath(&src_container, src.object)
+                        .context("failed to resolve source object path")?;
+
+                    let dest_container = resolve_subpath(&root, dest.container)
+                        .context("failed to resolve destination container path")?;
+                    let dest = resolve_subpath(&dest_container, dest.object)
+                        .context("failed to resolve destination object path")?;
+                    debug!("copy `{}` to `{}`", src.display(), dest.display());
+                    fs::copy(src, dest).await.context("failed to copy")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_object(context.as_ref(), id).await?;
+                    debug!("remove file at `{}`", path.display());
+                    match fs::remove_file(&path).await {
+                        Ok(()) => Ok(()),
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(err) => Err(anyhow!(err)
+                            .context(format!("failed to remove file at `{}`", path.display()))),
+                    }
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_objects<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (container, objects),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, Vec<String>), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let container = self.get_container(context.as_ref(), container).await?;
+                    for name in objects {
+                        let path = resolve_subpath(&container, name)
+                            .context("failed to resolve object path")?;
+                        debug!("remove file at `{}`", path.display());
+                        match fs::remove_file(&path).await {
+                            Ok(()) => Ok(()),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                            Err(err) => Err(anyhow!(err)
+                                .context(format!("failed to remove file at `{}`", path.display()))),
+                        }?;
+                    }
+                    anyhow::Ok(())
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_container_data<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (id, start, end),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (wrpc_interface_blobstore::ObjectId, u64, u64),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let limit = end
+                        .checked_sub(start)
+                        .context("`end` must be greater than `start`")?;
+                    let limit = Arc::new(AtomicUsize::new(limit.try_into().unwrap_or(usize::MAX)));
+                    let path = self.get_object(context.as_ref(), id).await?;
+                    let mut object = File::open(path).await.context("failed to open file")?;
+                    object
+                        .seek(SeekFrom::Start(start))
+                        .await
+                        .context("failed to seek from start")?;
+                    let data = ReaderStream::new(object)
+                        .take_while({
+                            let limit = Arc::clone(&limit);
+                            move |_| {
+                                let limit = Arc::clone(&limit);
+                                async move { limit.load(Ordering::Relaxed) > 0 }
+                            }
+                        })
+                        .map(move |buf| {
+                            // TODO: Remove the need for this wrapping
+                            let mut buf = buf.context("failed to read file")?;
+                            let n = limit.load(Ordering::Relaxed);
+                            if buf.len() > n {
+                                buf.truncate(n);
+                                limit.store(0, Ordering::Relaxed);
+                            } else {
+                                limit.fetch_sub(buf.len(), Ordering::Relaxed);
+                            }
+                            Ok(vec![Some(wrpc_transport::Value::List(
+                                buf.into_iter().map(wrpc_transport::Value::U8).collect(),
+                            ))])
+                        });
+                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_object_info<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_object(context.as_ref(), id).await?;
+                    let md = fs::metadata(path)
+                        .await
+                        .context("failed to lookup file metadata")?;
+                    let created_at = md.created().context("failed to lookup creation date")?;
+                    let created_at = created_at
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .context("creation time before Unix epoch")?;
+                    // NOTE: The `created_at` format is currently undefined
+                    // https://github.com/WebAssembly/wasi-blobstore/issues/7
+                    anyhow::Ok(wrpc_interface_blobstore::ObjectMetadata {
+                        created_at: created_at.as_secs(),
+                        size: md.size(),
+                    })
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_has_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_object(context.as_ref(), id).await?;
+                    fs::try_exists(path)
+                        .await
+                        .context("failed to check if path exists")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_move_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (src, dest),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                wrpc_interface_blobstore::ObjectId,
+            ),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let root = self
+                        .get_root(context.as_ref())
+                        .await
+                        .context("failed to get root")?;
+                    let src_container = resolve_subpath(&root, src.container)
+                        .context("failed to resolve source container path")?;
+                    let src = resolve_subpath(&src_container, src.object)
+                        .context("failed to resolve source object path")?;
+
+                    let dest_container = resolve_subpath(&root, dest.container)
+                        .context("failed to resolve destination container path")?;
+                    let dest = resolve_subpath(&dest_container, dest.object)
+                        .context("failed to resolve destination object path")?;
+                    fs::copy(&src, dest).await.context("failed to copy")?;
+                    fs::remove_file(src)
+                        .await
+                        .context("failed to remove source")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(
+        level = "trace",
+        skip(self, result_subject, error_subject, transmitter, data)
+    )]
+    async fn serve_write_container_data<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (id, data),
+            result_subject,
+            error_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                impl Stream<Item = anyhow::Result<Bytes>> + Send,
+            ),
+            Tx,
+        >,
+    ) {
+        // TODO: Consider streaming to FS
+        let data: BytesMut = match data.try_collect().await {
+            Ok(data) => data,
+            Err(err) => {
+                error!(?err, "failed to receive value");
+                if let Err(err) = transmitter
+                    .transmit_static(error_subject, err.to_string())
+                    .await
+                {
+                    error!(?err, "failed to transmit error")
+                }
+                return;
             }
         };
-        root.push(source_id.clone());
-        Ok(root)
-    }
-
-    /// Stores a file chunk in right order.
-    async fn store_chunk(
-        &self,
-        ctx: &Context,
-        chunk: &Chunk,
-        stream_id: &Option<String>,
-    ) -> Result<()> {
-        let root = self.get_root(ctx).await?;
-
-        let container_dir = self.resolve_subpath(&root, &chunk.container_id).await?;
-        let binary_file = self
-            .resolve_subpath(&container_dir, &chunk.object_id)
-            .await?;
-
-        // create an empty file if it's the first chunk
-        if chunk.offset == 0 {
-            let resp = File::create(&binary_file);
-            if resp.await.is_err() {
-                let error_string = format!("Could not create file: {:?}", binary_file);
-                error!("{:?}", &error_string);
-                bail!(error_string);
-            }
-            if let Some(s_id) = stream_id {
-                let mut upload_chunks = self.upload_chunks.write().await;
-                let next_offset: u64 = 0;
-                upload_chunks.insert(s_id.clone(), next_offset);
-            } else if !chunk.is_last {
-                bail!("Chunked storage is missing stream id")
-            }
-        }
-
-        // for continuing chunk storage, check that the chunk's offset matches the expected next one
-        // which it should as theput_object calls are generated by an actor.
-        if let Some(s_id) = stream_id {
-            let mut upload_chunks = self.upload_chunks.write().await;
-            let expected_offset = upload_chunks.get(s_id).unwrap();
-            if *expected_offset != chunk.offset {
-                bail!(
-                    "Chunk offset {} not the same as the expected offset: {}",
-                    chunk.offset,
-                    *expected_offset
-                );
-            }
-
-            // Update the next expected offset
-            let next_offset = if chunk.is_last {
-                0u64
-            } else {
-                chunk.offset + chunk.bytes.len() as u64
-            };
-            upload_chunks.insert(s_id.clone(), next_offset);
-        }
-
-        let chunk_obj_subpath = Path::new(&chunk.container_id).join(&chunk.object_id);
-        let chunk_obj_path = self.resolve_subpath(&root, &chunk_obj_subpath).await?;
-
-        let mut file = OpenOptions::new()
-            .create(false)
-            .append(true)
-            .open(chunk_obj_path)
-            .await?;
-        info!(
-            "Receiving file chunk offset {} for {}/{}, size {}",
-            chunk.offset,
-            chunk.container_id,
-            chunk.object_id,
-            chunk.bytes.len()
-        );
-
-        let count = file.write(chunk.bytes.as_ref()).await?;
-        if count != chunk.bytes.len() {
-            let msg = format!(
-                "Failed to fully write chunk: {} of {} bytes",
-                count,
-                chunk.bytes.len()
-            );
-            error!("{}", &msg);
-            bail!(msg);
-        }
-
-        Ok(())
-    }
-
-    /// Sends bytes to actor in a single rpc message.
-    /// If successful, returns number of bytes sent (same as chunk.content_length)
-    #[allow(unused)]
-    async fn send_chunk(&self, ctx: Context, chunk: Chunk) -> Result<u64> {
-        info!(
-            "Send chunk: container = {:?}, object = {:?}",
-            chunk.container_id, chunk.object_id
-        );
-
-        // Get the target component on which we will invoke chunk receiving methods
-        // to "push" a chunk
-        let target = self
-            .get_source_id(&ctx)
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let path = self.get_object(context.as_ref(), id).await?;
+                    fs::write(path, data).await.context("failed to write file")
+                }
+                .await,
+            )
             .await
-            .context("failed to get source ID")?;
-
-        // NOTE: InvocationHandler is generated by bindgen
-        let receiver = InvocationHandler::new(target.clone());
-
-        let container_id = chunk.container_id.clone();
-        let object_id = chunk.object_id.clone();
-        let chunk_len_bytes: u64 = chunk
-            .bytes
-            .len()
-            .try_into()
-            .context("failed to get chunk len")?;
-
-        let cr = receiver.receive_chunk(chunk).await
-            .with_context(|| format!(
-                "sending chunk error: Container({container_id}) Object({object_id}) to Actor({target})",
-                ))?;
-
-        Ok(if cr.cancel_download {
-            0
-        } else {
-            chunk_len_bytes
-        })
+        {
+            error!(?err, "failed to transmit result")
+        }
     }
 }
 
 #[async_trait]
-impl WasmcloudCapabilityProvider for FsProvider {
+impl ProviderHandler for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
     async fn receive_link_config_as_target(
         &self,
@@ -262,7 +999,7 @@ impl WasmcloudCapabilityProvider for FsProvider {
 
         // Build configuration for FS Provider to use later
         let config = FsProviderConfig {
-            root: root_val.clean(),
+            root: Arc::new(root_val.clean()),
         };
 
         info!("Saved FsProviderConfig: {:#?}", config);
@@ -278,7 +1015,7 @@ impl WasmcloudCapabilityProvider for FsProvider {
             .insert(source_id.into(), config.clone());
 
         // Resolve the subpath from the root to the actor ID, carefully
-        let actor_dir = match self.resolve_subpath(&config.root, source_id).await {
+        let actor_dir = match resolve_subpath(&config.root, source_id) {
             Ok(path) => path,
             Err(e) => {
                 error!("Failed to resolve subpath to actor directory: {e}");
@@ -310,669 +1047,22 @@ impl WasmcloudCapabilityProvider for FsProvider {
     }
 }
 
-/// Handle Factorial methods
-#[async_trait]
-impl WasmcloudBlobstoreBlobstore for FsProvider {
-    /// Returns whether the container exists
-    #[allow(unused)]
-    async fn container_exists(&self, ctx: Context, container_id: ContainerId) -> bool {
-        info!("Called container_exists({:?})", container_id);
-
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return false;
-            }
-        };
-
-        let chunk_dir = match self.resolve_subpath(&root, &container_id).await {
-            Ok(chunk_dir) => chunk_dir,
-            Err(e) => {
-                error!("failed to resolve subpath: {e}");
-                return false;
-            }
-        };
-
-        read_dir(&chunk_dir).await.is_ok()
-    }
-
-    /// Creates a container by name, returning success if it worked
-    /// Note that container names may not be globally unique - just unique within the
-    /// "namespace" of the connecting actor and linkdef
-    async fn create_container(&self, ctx: Context, container_id: ContainerId) -> () {
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return;
-            }
-        };
-
-        let chunk_dir = match self.resolve_subpath(&root, &container_id).await {
-            Ok(chunk_dir) => chunk_dir,
-            Err(e) => {
-                error!("failed to resolve subpath: {e}");
-                return;
-            }
-        };
-
-        info!("create dir: {:?}", chunk_dir);
-
-        if let Err(e) = create_dir_all(chunk_dir).await {
-            error!("could not create container: {e:?}");
-        }
-    }
-
-    /// Retrieves information about the container.
-    /// Returns error if the container id is invalid or not found.
-    #[allow(unused)]
-    async fn get_container_info(
-        &self,
-        ctx: Context,
-        container_id: ContainerId,
-    ) -> ContainerMetadata {
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                };
-            }
-        };
-
-        let dir_path = match self.resolve_subpath(&root, &container_id).await {
-            Ok(dir_path) => dir_path,
-            Err(e) => {
-                error!("failed to resolve dir_path: {e}");
-                return ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                };
-            }
-        };
-
-        let dir_info = match metadata(dir_path).await {
-            Ok(dir_info) => dir_info,
-            Err(e) => {
-                error!("failed to get dir info: {e}");
-                return ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                };
-            }
-        };
-
-        let modified = match dir_info.modified() {
-            Err(e) => {
-                error!("failed to get file metadata: {e}");
-                return ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                };
-            }
-            Ok(v) => match v.duration_since(SystemTime::UNIX_EPOCH) {
-                Ok(s) => Timestamp {
-                    sec: s.as_secs(),
-                    nsec: 0u32,
-                },
-                Err(e) => {
-                    error!("{e}");
-                    return ContainerMetadata {
-                        container_id: String::default(),
-                        created_at: None,
-                    };
-                }
-            },
-        };
-
-        ContainerMetadata {
-            container_id: container_id.clone(),
-            created_at: Some(modified),
-        }
-    }
-
-    /// Returns list of container ids
-    #[allow(unused)]
-    async fn list_containers(&self, ctx: Context) -> Vec<ContainerMetadata> {
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return Vec::new();
-            }
-        };
-
-        all_dirs(&root, &root, 0)
-            .iter()
-            .map(|c| ContainerMetadata {
-                container_id: c.as_path().display().to_string(),
-                created_at: None,
-            })
-            .collect()
-    }
-
-    /// Empty and remove the container(s)
-    /// The Vec<OperationResult> list contains one entry for each container
-    /// that was not successfully removed, with the 'key' value representing the container name.
-    /// If the Vec<OperationResult> list is empty, all container removals succeeded.
-    #[allow(unused)]
-    async fn remove_containers(&self, ctx: Context, arg: Vec<ContainerId>) -> Vec<OperationResult> {
-        info!("Called remove_containers({:?})", arg);
-
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return Vec::new();
-            }
-        };
-
-        let mut results = vec![];
-
-        for cid in arg {
-            let mut croot = root.clone();
-            croot.push(&cid);
-
-            if let Err(e) = remove_dir_all(&croot.as_path()).await {
-                if read_dir(&croot.as_path()).await.is_ok() {
-                    results.push(OperationResult {
-                        error: Some(format!("{:?}", e.into_inner())),
-                        key: cid.clone(),
-                        success: true,
-                    });
-                }
-            }
-        }
-
-        results
-    }
-
-    /// Returns whether the object exists
-    #[allow(unused)]
-    async fn object_exists(&self, ctx: Context, container: ContainerObjectSelector) -> bool {
-        info!("Called object_exists({:?})", container);
-
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return false;
-            }
-        };
-
-        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
-
-        let file_path = match self.resolve_subpath(&root, &file_subpath).await {
-            Ok(file_path) => file_path,
-            Err(e) => {
-                error!("failed to resolve file subpath: {e}");
-                return false;
-            }
-        };
-
-        File::open(file_path).await.is_ok()
-    }
-
-    /// Retrieves information about the object.
-    /// Returns error if the object id is invalid or not found.
-    #[allow(unused)]
-    async fn get_object_info(
-        &self,
-        ctx: Context,
-        container: ContainerObjectSelector,
-    ) -> ObjectMetadata {
-        info!("Called get_object_info({:?})", container);
-
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                };
-            }
-        };
-
-        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
-        let file_path = match self.resolve_subpath(&root, &file_subpath).await {
-            Ok(file_path) => file_path,
-            Err(e) => {
-                error!("failed to resolve file subpath: {e}");
-                return ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                };
-            }
-        };
-
-        let metadata = match metadata(file_path).await {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                error!("failed to get file metadata: {e}");
-                return ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                };
-            }
-        };
-
-        let modified = match metadata.modified() {
-            Err(e) => {
-                error!("failed to get file modification information: {e}");
-                return ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                };
-            }
-            Ok(v) => match v.duration_since(SystemTime::UNIX_EPOCH) {
-                Ok(s) => Timestamp {
-                    sec: s.as_secs(),
-                    nsec: 0u32,
-                },
-                Err(e) => {
-                    error!("{e}");
-                    return ObjectMetadata {
-                        container_id: String::default(),
-                        content_encoding: None,
-                        content_length: 0,
-                        content_type: None,
-                        last_modified: None,
-                        object_id: String::default(),
-                    };
-                }
-            },
-        };
-
-        ObjectMetadata {
-            container_id: container.container_id.clone(),
-            content_encoding: None,
-            content_length: metadata.len(),
-            content_type: None,
-            last_modified: Some(modified),
-            object_id: container.object_id.clone(),
-        }
-    }
-
-    /// Lists the objects in the container.
-    /// If the container exists and is empty, the returned `objects` list is empty.
-    /// Parameters of the request may be used to limit the object names returned
-    /// with an optional start value, end value, and maximum number of items.
-    /// The provider may limit the number of items returned. If the list is truncated,
-    /// the response contains a `continuation` token that may be submitted in
-    /// a subsequent ListObjects request.
-    ///
-    /// Optional object metadata fields (i.e., `contentType` and `contentEncoding`) may not be
-    /// filled in for ListObjects response. To get complete object metadata, use GetObjectInfo.
-    /// Currently ignoring need for pagination
-    #[allow(unused)]
-    async fn list_objects(&self, ctx: Context, req: ListObjectsRequest) -> ListObjectsResponse {
-        info!("Called list_objects({:?})", req);
-
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return ListObjectsResponse {
-                    continuation: None,
-                    is_last: true,
-                    objects: vec![],
-                };
-            }
-        };
-
-        let chunk_dir = match self.resolve_subpath(&root, &req.container_id).await {
-            Ok(chunk_dir) => chunk_dir,
-            Err(e) => {
-                error!("failed to resolve subpath: {e}");
-                return ListObjectsResponse {
-                    continuation: None,
-                    is_last: true,
-                    objects: vec![],
-                };
-            }
-        };
-
-        let mut objects = Vec::new();
-
-        let mut entries = match read_dir(&chunk_dir).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                error!("failed to read dir: {e}");
-                return ListObjectsResponse {
-                    continuation: None,
-                    is_last: true,
-                    objects: vec![],
-                };
-            }
-        };
-
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-
-            if !path.is_dir() {
-                let file_name = match entry.file_name().into_string() {
-                    Ok(name) => name,
-                    Err(_) => {
-                        return ListObjectsResponse {
-                            continuation: None,
-                            is_last: true,
-                            objects: vec![],
-                        };
-                    }
-                };
-
-                let (content_len, modified) = match entry.metadata().await {
-                    Err(e) => {
-                        error!("failed to get file metadata: {e}");
-                        return ListObjectsResponse {
-                            continuation: None,
-                            is_last: true,
-                            objects: Vec::new(),
-                        };
-                    }
-                    Ok(metadata) => match metadata.modified() {
-                        Err(e) => {
-                            error!("failed to get file modification information: {e}");
-                            return ListObjectsResponse {
-                                continuation: None,
-                                is_last: true,
-                                objects: Vec::new(),
-                            };
-                        }
-                        Ok(modified) => match modified.duration_since(SystemTime::UNIX_EPOCH) {
-                            Ok(s) => (
-                                metadata.len(),
-                                Timestamp {
-                                    sec: s.as_secs(),
-                                    nsec: 0u32,
-                                },
-                            ),
-                            Err(e) => {
-                                error!("{e}");
-                                return ListObjectsResponse {
-                                    continuation: None,
-                                    is_last: true,
-                                    objects: Vec::new(),
-                                };
-                            }
-                        },
-                    },
-                };
-
-                objects.push(ObjectMetadata {
-                    container_id: req.container_id.clone(),
-                    content_encoding: None,
-                    content_length: content_len,
-                    content_type: None,
-                    last_modified: Some(modified),
-                    object_id: file_name,
-                });
-            }
-        }
-
-        ListObjectsResponse {
-            continuation: None,
-            is_last: true,
-            objects,
-        }
-    }
-
-    /// Removes the objects. In the event any of the objects cannot be removed,
-    /// the operation continues until all requested deletions have been attempted.
-    /// The MultiRequest includes a list of errors, one for each deletion request
-    /// that did not succeed. If the list is empty, all removals succeeded.
-    #[allow(unused)]
-    async fn remove_objects(
-        &self,
-        ctx: Context,
-        arg: RemoveObjectsRequest,
-    ) -> Vec<OperationResult> {
-        info!("Invoked remove objects: {:?}", arg);
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return Vec::new();
-            }
-        };
-
-        let mut results = Vec::new();
-
-        for object in &arg.objects {
-            let object_subpath = Path::new(&arg.container_id).join(object);
-
-            let object_path = match self.resolve_subpath(&root, object_subpath).await {
-                Ok(object_path) => object_path,
-                Err(e) => {
-                    error!("failed to resolve subpath: {e}");
-                    return results;
-                }
-            };
-
-            if let Err(e) = remove_file(object_path.as_path()).await {
-                results.push(OperationResult {
-                    error: Some(format!("{:?}", e)),
-                    key: format!("{:?}", object_path),
-                    success: false,
-                })
-            }
-        }
-
-        results
-    }
-
-    /// Requests to start upload of a file/blob to the Blobstore.
-    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size
-    #[allow(unused)]
-    async fn put_object(&self, ctx: Context, arg: PutObjectRequest) -> PutObjectResponse {
-        info!(
-            "Called put_object(): container={:?}, object={:?}",
-            arg.chunk.container_id, arg.chunk.object_id
-        );
-
-        if arg.chunk.bytes.is_empty() {
-            error!("put_object with zero bytes");
-            return PutObjectResponse { stream_id: None };
-        }
-
-        let stream_id = if arg.chunk.is_last {
-            None
-        } else {
-            let source_id = match self.get_source_id(&ctx).await {
-                Ok(source_id) => source_id,
-                Err(e) => {
-                    error!("failed to get actor ID: {e}");
-                    return PutObjectResponse { stream_id: None };
-                }
-            };
-
-            Some(format!(
-                "{}+{}+{}",
-                source_id, arg.chunk.container_id, arg.chunk.object_id
-            ))
-        };
-
-        // store the chunks in order
-        if let Err(e) = self.store_chunk(&ctx, &arg.chunk, &stream_id).await {
-            error!("failed to store chunk: {e}");
-        };
-
-        PutObjectResponse { stream_id }
-    }
-
-    /// Uploads a file chunk to a blobstore. This must be called AFTER PutObject
-    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size
-    #[allow(unused)]
-    async fn put_chunk(&self, ctx: Context, arg: PutChunkRequest) -> () {
-        info!("Called put_chunk: {:?}", arg);
-
-        // In the simplest case we can simply store the chunk (happy path)
-        if !arg.cancel_and_remove {
-            if let Err(e) = self.store_chunk(&ctx, &arg.chunk, &arg.stream_id).await {
-                error!("failed to store chunk: {e}");
-            }
-            return;
-        }
-
-        // Determine the path to the file
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return;
-            }
-        };
-
-        let file_subpath = Path::new(&arg.chunk.container_id).join(&arg.chunk.object_id);
-        let file_path = match self.resolve_subpath(&root, &file_subpath).await {
-            Ok(file_path) => file_path,
-            Err(e) => {
-                error!("failed to resolve file subpath: {e}");
-                return;
-            }
-        };
-
-        // Remove the file
-        if let Err(e) = remove_file(file_path.as_path()).await {
-            error!("failed to remove file [{file_path:?}]: {e}");
-        }
-    }
-
-    /// Requests to retrieve an object. If the object is large, the provider
-    /// may split the response into multiple parts
-    /// It is recommended to keep chunks under 1MB to avoid exceeding nats default message size
-    async fn get_object(&self, ctx: Context, req: GetObjectRequest) -> GetObjectResponse {
-        info!("Called get_object: {:?}", req);
-
-        // Determine path to object file
-        let root = match self.get_root(&ctx).await {
-            Ok(root) => root,
-            Err(e) => {
-                error!("failed to get container root: {e}");
-                return GetObjectResponse {
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    error: Some("failed to resolve file subpath".into()),
-                    initial_chunk: None,
-                    success: false,
-                };
-            }
-        };
-
-        let object_subpath = Path::new(&req.container_id).join(&req.object_id);
-        let file_path = match self.resolve_subpath(&root, &object_subpath).await {
-            Ok(file_path) => file_path,
-            Err(e) => {
-                error!("failed to resolve file subpath: {e}");
-                return GetObjectResponse {
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    error: Some("failed to resolve file subpath".into()),
-                    initial_chunk: None,
-                    success: false,
-                };
-            }
-        };
-
-        // Read the file in
-        let file = match read(file_path).await {
-            Ok(file) => file,
-            Err(e) => {
-                error!("failed to read file: {e}");
-                return GetObjectResponse {
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    error: Some("failed to read file".into()),
-                    initial_chunk: None,
-                    success: false,
-                };
-            }
-        };
-
-        let start_offset = match req.range_start {
-            Some(o) => o as usize,
-            None => 0,
-        };
-
-        let end_offset = match req.range_end {
-            Some(o) => std::cmp::min(o as usize + 1, file.len()),
-            None => file.len(),
-        };
-
-        let mut _dcm = self.download_chunks.write().await;
-        let slice = &file[start_offset..end_offset];
-
-        info!(
-            "Retriving chunk start offset: {}, end offset: {} (exclusive)",
-            start_offset, end_offset
-        );
-
-        let chunk = Chunk {
-            object_id: req.object_id.clone(),
-            container_id: req.container_id.clone(),
-            bytes: slice.to_vec(),
-            offset: start_offset as u64,
-            is_last: end_offset >= file.len(),
-        };
-
-        GetObjectResponse {
-            content_encoding: None,
-            content_length: chunk.bytes.len() as u64,
-            content_type: None,
-            error: None,
-            initial_chunk: Some(chunk),
-            success: true,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::FsProvider;
-    use std::io::ErrorKind as IoErrorKind;
+    use super::resolve_subpath;
+
     use std::path::PathBuf;
 
     /// Ensure that only safe subpaths are resolved
     #[tokio::test]
     async fn resolve_safe_samepath() {
-        let provider = FsProvider::default();
-        assert!(provider
-            .resolve_subpath(&PathBuf::from("./"), "./././")
-            .await
-            .is_ok());
+        assert!(resolve_subpath(&PathBuf::from("./"), "./././").is_ok());
     }
 
     /// Ensure that ancestor paths are not allowed to be resolved as subpaths
     #[tokio::test]
     async fn resolve_fail_ancestor() {
-        let provider = FsProvider::default();
-        let res = provider
-            .resolve_subpath(&PathBuf::from("./"), "../")
-            .await
-            .unwrap_err();
-        assert_eq!(res.kind(), IoErrorKind::PermissionDenied);
+        let res = resolve_subpath(&PathBuf::from("./"), "../").unwrap_err();
+        assert_eq!(res.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }

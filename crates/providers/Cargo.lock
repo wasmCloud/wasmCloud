@@ -4308,13 +4308,22 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
  "path-clean",
+ "serde",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
- "wasmcloud-provider-wit-bindgen",
+ "wasmcloud-provider-sdk",
+ "wrpc-interface-blobstore",
+ "wrpc-transport",
 ]
 
 [[package]]
@@ -5295,9 +5304,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.9.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf2261ae5ad6118060029a8e91f484c4d42ca3c620c993d4632a894b95ef53"
+checksum = "320f2501f5175859ad435eb98c99f0493ceb75f90be91bf51ab07f90df2f930b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5309,9 +5318,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-http"
-version = "0.16.5"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "067a5757f51ee625d164abe4a59ddd2a1b6b9d68dfacf2e077a3ab1a19c77b63"
+checksum = "78c8186f6a0abbb891a027e25be1db13dc2d3f2f049b636bddc11bd342583848"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5329,9 +5338,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-keyvalue"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3d0ed83240590ef1d23fb611040d39b207334e0a222cd9e2899345dbb18f52"
+checksum = "460805a10cb2488079fc5df7ea153c065534c4e5127ae77b9d8fb4a699fb2a23"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5342,9 +5351,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d2d451fbdd6c1406e1237dafae9a4d3a0d8fa92cd53ecf33b39dfbfccb3e1fd"
+checksum = "7f3e3182bb632ea8a5321824bbd63098bb7656cad957dc99ab0f6b96d4b587e6"
 dependencies = [
  "anyhow",
  "futures",
@@ -5356,9 +5365,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.19.1"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a94cdeb50f8390af30b963c1e81353793740b2370794eb479eee1cea7089b988"
+checksum = "a0c3897be835c44d57872874835dbb530e460dbdd15460012cc7e0cd4e8ca64f"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5402,9 +5411,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.16.2"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cadea0b8ab4462476ac98381a9a18749f1b40c331972234ab1d9ebe26e3c35f"
+checksum = "e00d53cdb4ddf5b797725db0303ba74af2641de46ad288a30f149226f8eb3e58"
 dependencies = [
  "anyhow",
  "async-nats",
