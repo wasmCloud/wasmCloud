@@ -1258,7 +1258,7 @@ impl Actor {
                     let res = match res? {
                         Ok(resp) => {
                             let (resp, _errors) =
-                                wrpc_interface_http::try_wasmtime_to_outgoing_response(resp)
+                                wrpc_interface_http::try_http_to_outgoing_response(resp)
                                     .context("failed to convert response")?;
                             // TODO: Consider handling body errors here
                             Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
