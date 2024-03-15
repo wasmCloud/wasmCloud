@@ -22,7 +22,7 @@ pub async fn start_nats() -> Result<(BackgroundServer, Url, NatsClient)> {
         )
         .args([
             "-js",
-            "-V",
+            "-D",
             "-T=false",
             "-p",
             &port.to_string(),

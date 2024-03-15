@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use clap::Args;
@@ -205,7 +206,14 @@ pub async fn handle_call(
     let mut headers = async_nats::HeaderMap::new();
     headers.insert("source-id", "wash");
     let lattice = opts.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
-    let wrpc_client = wasmcloud_core::wrpc::Client::new(nc, &lattice, &component_id, headers);
+    // TODO: Configure invocation timeouts
+    let wrpc_client = wasmcloud_core::wrpc::Client::new(
+        nc,
+        &lattice,
+        &component_id,
+        headers,
+        Duration::from_secs(10),
+    );
 
     let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
         "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",

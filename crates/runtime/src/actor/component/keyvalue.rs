@@ -146,16 +146,7 @@ impl eventual::Host for Ctx {
     ) -> anyhow::Result<Result<bool>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match self.handler.exists(bucket, key).await {
-            Ok(true) => Ok(Ok(true)),
-            Ok(false) => {
-                // NOTE: This is required until
-                // https://github.com/WebAssembly/wasi-keyvalue/pull/18 is merged
-                let err = self
-                    .table
-                    .push(anyhow!("key does not exist"))
-                    .context("failed to push error")?;
-                Ok(Err(err))
-            }
+            Ok(exists) => Ok(Ok(exists)),
             Err(err) => {
                 let err = self.table.push(err).context("failed to push error")?;
                 Ok(Err(err))

@@ -10,9 +10,11 @@
 //! actual NATS-based transport implementation.
 
 use core::pin::Pin;
+use core::time::Duration;
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use async_nats::HeaderMap;
 use bytes::Bytes;
 use futures::{Future, Stream, StreamExt};
@@ -58,6 +60,7 @@ impl wrpc_transport::Transmitter for TransmitterWithHeaders {
 pub struct InvocationWithHeaders {
     inner: wrpc_transport_nats::Invocation,
     headers: HeaderMap,
+    timeout: Duration,
 }
 
 impl InvocationWithHeaders {
@@ -66,11 +69,11 @@ impl InvocationWithHeaders {
     pub(crate) async fn begin(
         self,
         params: impl wrpc_transport::Encode,
-    ) -> anyhow::Result<(wrpc_transport_nats::InvocationPre, HeaderMap)> {
+    ) -> anyhow::Result<(wrpc_transport_nats::InvocationPre, HeaderMap, Duration)> {
         self.inner
             .begin(params)
             .await
-            .map(|inv| (inv, self.headers))
+            .map(|inv| (inv, self.headers, self.timeout))
     }
 }
 
@@ -85,9 +88,12 @@ impl wrpc_transport::Invocation for InvocationWithHeaders {
         params: impl Encode,
     ) -> anyhow::Result<(Self::Transmission, Self::TransmissionFailed)> {
         let subject = self.inner.client().static_subject(instance, name);
-        let (inv, headers) = self.begin(params).await?;
+        let (inv, headers, timeout) = self.begin(params).await?;
 
-        let (tx, tx_failed) = inv.invoke_with_headers(subject, headers).await?;
+        let (tx, tx_failed) =
+            tokio::time::timeout(timeout, inv.invoke_with_headers(subject, headers))
+                .await
+                .context("invocation timed out")??;
         Ok((tx, Box::new(tx_failed)))
     }
 }
@@ -126,6 +132,7 @@ impl wrpc_transport::Acceptor for AcceptorWithHeaders {
 pub struct Client {
     inner: wrpc_transport_nats::Client,
     headers: HeaderMap,
+    timeout: Duration,
 }
 
 impl Client {
@@ -141,10 +148,12 @@ impl Client {
         lattice: &str,
         component_id: &str,
         headers: HeaderMap,
+        timeout: Duration,
     ) -> Self {
         Self {
             inner: wrpc_transport_nats::Client::new(nats, format!("{lattice}.{component_id}")),
             headers,
+            timeout,
         }
     }
 }
@@ -230,6 +239,7 @@ impl wrpc_transport::Client for Client {
         let invocation_with_headers = InvocationWithHeaders {
             inner: transport_invocation.invocation,
             headers: self.headers.clone(),
+            timeout: self.timeout,
         };
         OutgoingInvocation {
             invocation: invocation_with_headers,

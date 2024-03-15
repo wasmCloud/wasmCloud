@@ -3,6 +3,8 @@ package test-wrpc:pinger;
 world actor {
   import wasi:http/outgoing-handler@0.2.0;
   import wasi:io/poll@0.2.0;
+  import wasi:keyvalue/atomic@0.2.0-draft;
+  import wasi:keyvalue/eventual@0.2.0-draft;
   import wasi:sockets/instance-network@0.2.0;
   import wasi:sockets/tcp-create-socket@0.2.0;
   import wasi:sockets/tcp@0.2.0;

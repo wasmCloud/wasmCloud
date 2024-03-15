@@ -12,28 +12,32 @@
 //! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
 //!
 //!
+use core::future::Future;
+use core::ops::{Deref as _, DerefMut as _};
+use core::pin::pin;
+
 use std::collections::HashMap;
-use std::ops::DerefMut;
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail, Context as _};
+use async_nats::HeaderMap;
+use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, StreamExt, TryStreamExt};
+use once_cell::sync::Lazy;
 use redis::aio::ConnectionManager;
-use redis::FromRedisValue;
-use tokio::sync::RwLock;
-use tracing::{error, info, instrument, warn};
+use redis::{Cmd, FromRedisValue, Script, ScriptInvocation};
+use tokio::spawn;
+use tokio::{select, sync::RwLock};
+use tracing::{debug, error, info, instrument, warn};
 
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::{
-        load_host_data, start_provider, Context, LinkConfig, ProviderOperationResult,
-    },
+use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::provider::invocation_context;
+use wasmcloud_provider_sdk::{
+    get_connection, load_host_data, run_provider_handler, Context, LinkConfig, ProviderHandler,
+    ProviderOperationResult,
 };
-
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: KvRedisProvider,
-    contract: "wasmcloud:keyvalue",
-    wit_bindgen_cfg: "provider-kvredis"
-});
+use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -41,40 +45,453 @@ const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 /// Configuration key that will be used to search for Redis config
 const CONFIG_REDIS_URL_KEY: &str = "URL";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let hd = load_host_data()?;
-    let default_connect_url = retrieve_default_url(&hd.config);
+static CAS: Lazy<Script> = Lazy::new(|| {
+    Script::new(
+        r#"if redis.call("GET", KEYS[1]) == ARGV[1] then
+            return redis.call("SET", KEYS[1], ARGV[2])
+        else
+            return 0
+        end"#,
+    )
+});
 
-    start_provider(
-        KvRedisProvider::new(&default_connect_url),
-        "kv-redis-provider",
-    )?;
+#[derive(Clone)]
+enum DefaultConnection {
+    Client(redis::Client),
+    Conn(ConnectionManager),
+}
 
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let HostData { config, .. } = load_host_data()?;
+    let client = redis::Client::open(retrieve_default_url(config))
+        .context("failed to construct default Redis client")?;
+    let default_connection = if let Ok(conn) = client.get_tokio_connection_manager().await {
+        DefaultConnection::Conn(conn)
+    } else {
+        DefaultConnection::Client(client)
+    };
+    let provider = KvRedisProvider::new(default_connection);
+    let fut = run_provider_handler(provider.clone(), "kv-redis-provider")
+        .await
+        .context("failed to run provider")?;
+    provider.serve(fut).await?;
     eprintln!("KVRedis provider exiting");
     Ok(())
 }
 
 /// Redis keyValue provider implementation.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct KvRedisProvider {
-    // store redis connections per actor
-    actors: Arc<RwLock<HashMap<String, RwLock<ConnectionManager>>>>,
-    // Default connection URL for actors without a `URL` link value
-    default_connect_url: String,
+    // store redis connections per source ID
+    sources: Arc<RwLock<HashMap<String, ConnectionManager>>>,
+    // default connection, which may be uninitialized
+    default_connection: Arc<RwLock<DefaultConnection>>,
 }
 
 impl KvRedisProvider {
-    fn new(default_connect_url: &str) -> Self {
+    fn new(default_connection: DefaultConnection) -> Self {
         KvRedisProvider {
-            default_connect_url: default_connect_url.to_string(),
-            ..Default::default()
+            sources: Arc::default(),
+            default_connection: Arc::new(RwLock::new(default_connection)),
+        }
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
+        if let DefaultConnection::Conn(conn) = self.default_connection.read().await.deref() {
+            Ok(conn.clone())
+        } else {
+            let mut default_conn = self.default_connection.write().await;
+            match default_conn.deref_mut() {
+                DefaultConnection::Conn(conn) => Ok(conn.clone()),
+                DefaultConnection::Client(client) => {
+                    let conn = client
+                        .get_tokio_connection_manager()
+                        .await
+                        .context("failed to construct Redis connection manager")?;
+                    *default_conn = DefaultConnection::Conn(conn.clone());
+                    Ok(conn)
+                }
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn invocation_conn(
+        &self,
+        headers: Option<&HeaderMap>,
+    ) -> anyhow::Result<ConnectionManager> {
+        if let Some(ref source_id) = headers
+            .map(invocation_context)
+            .and_then(|Context { actor, .. }| actor)
+        {
+            let sources = self.sources.read().await;
+            let Some(conn) = sources.get(source_id) else {
+                error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");
+                bail!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
+            };
+            Ok(conn.clone())
+        } else {
+            self.get_default_connection().await.map_err(|err| {
+                error!(?err, "failed to get default connection for invocation");
+                err
+            })
+        }
+    }
+
+    /// Execute Redis async command
+    async fn exec_cmd<T: FromRedisValue>(
+        &self,
+        headers: Option<&HeaderMap>,
+        cmd: &mut Cmd,
+    ) -> anyhow::Result<T> {
+        let mut conn = self.invocation_conn(headers).await?;
+        match cmd.query_async(&mut conn).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                error!("failed to perform redis command: {e}");
+                bail!("failed to perform redis command: {e}")
+            }
+        }
+    }
+
+    /// Execute Redis async script
+    async fn exec_script<T: FromRedisValue>(
+        &self,
+        headers: Option<&HeaderMap>,
+        cmd: &mut ScriptInvocation<'_>,
+    ) -> anyhow::Result<T> {
+        let mut conn = self.invocation_conn(headers).await?;
+        match cmd.invoke_async(&mut conn).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                error!("failed to perform redis command: {e}");
+                bail!("failed to perform redis command: {e}")
+            }
+        }
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
+        let connection = get_connection();
+        let wrpc = connection.get_wrpc_client(connection.provider_key());
+        let mut commands = pin!(commands);
+        'outer: loop {
+            use wrpc_interface_keyvalue::{Atomic as _, Eventual as _};
+            let delete_invocations = wrpc
+                .serve_delete()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.delete` invocations")?;
+            let mut delete_invocations = pin!(delete_invocations);
+
+            let exists_invocations = wrpc
+                .serve_exists()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.exists` invocations")?;
+            let mut exists_invocations = pin!(exists_invocations);
+
+            let get_invocations = wrpc
+                .serve_get()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.get` invocations")?;
+            let mut get_invocations = pin!(get_invocations);
+
+            let set_invocations = wrpc
+                .serve_set()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.set` invocations")?;
+            let mut set_invocations = pin!(set_invocations);
+
+            let compare_and_swap_invocations = wrpc
+                .serve_compare_and_swap()
+                .await
+                .context("failed to serve `wrpc:keyvalue/atomic.compare-and-swap` invocations")?;
+            let mut compare_and_swap_invocations = pin!(compare_and_swap_invocations);
+
+            let increment_invocations = wrpc
+                .serve_increment()
+                .await
+                .context("failed to serve `wrpc:keyvalue/atomic.increment` invocations")?;
+            let mut increment_invocations = pin!(increment_invocations);
+            loop {
+                select! {
+                    invocation = delete_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.delete` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.delete` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = exists_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_exists(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.exists` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = get_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.get` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.get` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = set_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_set(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.set` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.set` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = compare_and_swap_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_compare_and_swap(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.compare-and-swamp` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/atomic.compare-and-swamp` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = increment_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_increment(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.increment` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/atomic.increment` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    _ = &mut commands => {
+                        debug!("shutdown command received");
+                        return Ok(())
+                    }
+                }
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_delete<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_cmd::<()>(context.as_ref(), &mut Cmd::del(key))
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_exists<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_cmd::<bool>(context.as_ref(), &mut Cmd::exists(key))
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_get<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_cmd::<Bytes>(context.as_ref(), &mut Cmd::get(key))
+                    .await
+                    .map(Some),
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(
+        level = "debug",
+        skip(self, result_subject, error_subject, value, transmitter)
+    )]
+    async fn serve_set<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            error_subject,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
+            Tx,
+        >,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        let value: BytesMut = match value.try_collect().await {
+            Ok(value) => value,
+            Err(err) => {
+                error!(?err, "failed to receive value");
+                if let Err(err) = transmitter
+                    .transmit_static(error_subject, err.to_string())
+                    .await
+                {
+                    error!(?err, "failed to transmit error")
+                }
+                return;
+            }
+        };
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_cmd::<()>(context.as_ref(), &mut Cmd::set(key, value.deref()))
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_compare_and_swap<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, old, new),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_script::<bool>(context.as_ref(), CAS.key(key).arg(old).arg(new))
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    /// Increments a numeric value, returning the new value
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_increment<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.exec_cmd::<u64>(context.as_ref(), &mut Cmd::incr(key, value))
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
         }
     }
 }
 
 /// Handle provider control commands
 #[async_trait]
-impl WasmcloudCapabilityProvider for KvRedisProvider {
+impl ProviderHandler for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
@@ -84,37 +501,38 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
         link_config: impl LinkConfig,
     ) -> ProviderOperationResult<()> {
         let source_id = link_config.get_source_id();
-        let redis_url = link_config
-            .get_config()
-            .get(CONFIG_REDIS_URL_KEY)
-            .unwrap_or(&self.default_connect_url);
-
-        match redis::Client::open(redis_url.clone()) {
-            Ok(client) => match client.get_tokio_connection_manager().await {
-                Ok(conn_manager) => {
-                    info!(redis_url, "established link");
-                    let mut update_map = self.actors.write().await;
-                    update_map.insert(source_id.to_string(), RwLock::new(conn_manager));
-                }
+        let conn = if let Some(url) = link_config.get_config().get(CONFIG_REDIS_URL_KEY) {
+            match redis::Client::open(url.to_string()) {
+                Ok(client) => match client.get_tokio_connection_manager().await {
+                    Ok(conn) => {
+                        info!(url, "established link");
+                        conn
+                    }
+                    Err(err) => {
+                        warn!(
+                            url,
+                            ?err,
+                        "Could not create Redis connection manager for source [{source_id}], keyvalue operations will fail",
+                    );
+                        return Err(anyhow!("failed to create redis connection manager").into());
+                    }
+                },
                 Err(err) => {
                     warn!(
-                        redis_url,
                         ?err,
-                    "Could not create Redis connection manager for source [{}], keyvalue operations will fail",
-                    source_id
-                );
-                    return Err(anyhow!("failed to create redis connection manager").into());
+                        "Could not create Redis client for source [{source_id}], keyvalue operations will fail",
+                    );
+                    return Err(anyhow!("failed to create redis client").into());
                 }
-            },
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "Could not create Redis client for source [{}], keyvalue operations will fail",
-                    source_id
-                );
-                return Err(anyhow!("failed to create redis client").into());
             }
-        }
+        } else {
+            self.get_default_connection().await.map_err(|err| {
+                error!(?err, "failed to get default connection for link");
+                err
+            })?
+        };
+        let mut sources = self.sources.write().await;
+        sources.insert(source_id.to_string(), conn);
 
         Ok(())
     }
@@ -122,7 +540,7 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
-        let mut aw = self.actors.write().await;
+        let mut aw = self.sources.write().await;
         if let Some(conn) = aw.remove(source_id) {
             info!("redis closing connection for actor {}", source_id);
             drop(conn)
@@ -132,178 +550,12 @@ impl WasmcloudCapabilityProvider for KvRedisProvider {
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> ProviderOperationResult<()> {
-        let mut aw = self.actors.write().await;
+        let mut aw = self.sources.write().await;
         // empty the actor link data and stop all servers
         for (_, conn) in aw.drain() {
             drop(conn)
         }
         Ok(())
-    }
-}
-
-/// Handle KeyValue methods that interact with redis
-#[async_trait]
-impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
-    /// Increments a numeric value, returning the new value
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
-    async fn increment(&self, ctx: Context, arg: IncrementRequest) -> i32 {
-        let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Returns true if the store contains the key
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn contains(&self, ctx: Context, arg: String) -> bool {
-        let mut cmd = redis::Cmd::exists(arg.to_string());
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Deletes a key, returning true if the key was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn del(&self, ctx: Context, arg: String) -> bool {
-        let mut cmd = redis::Cmd::del(arg.to_string());
-        let v = self.exec::<i32>(&ctx, &mut cmd).await;
-        v > 0
-    }
-
-    /// Gets a value for a specified key. If the key exists,
-    /// the return structure contains exists: true and the value,
-    /// otherwise the return structure contains exists == false.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn get(&self, ctx: Context, arg: String) -> GetResponse {
-        let mut cmd = redis::Cmd::get(arg.to_string());
-        let value: String = self.exec(&ctx, &mut cmd).await;
-        GetResponse {
-            exists: value != String::default(),
-            value,
-        }
-    }
-
-    /// Append a value onto the end of a list. Returns the new list size
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> u32 {
-        let mut cmd = redis::Cmd::rpush(&arg.list_name, &arg.value);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Deletes a list and its contents
-    /// input: list name
-    /// returns: true if the list existed and was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn list_clear(&self, ctx: Context, arg: String) -> bool {
-        self.del(ctx, arg).await
-    }
-
-    /// Deletes an item from a list. Returns true if the item was removed.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> bool {
-        let mut cmd = redis::Cmd::lrem(&arg.list_name, 1, &arg.value);
-        let v = self.exec::<i32>(&ctx, &mut cmd).await;
-        v > 0
-    }
-
-    /// Retrieves a range of values from a list using 0-based indices.
-    /// Start and end values are inclusive, for example, (0,10) returns
-    /// 11 items if the list contains at least 11 items. If the stop value
-    /// is beyond the end of the list, it is treated as the end of the list.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Vec<String> {
-        let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Sets the value of a key.
-    /// expires is an optional number of seconds before the value should be automatically deleted,
-    /// or 0 for no expiration.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
-    async fn set(&self, ctx: Context, arg: SetRequest) -> () {
-        let mut cmd = match arg.expires {
-            0 => redis::Cmd::set(&arg.key, &arg.value),
-            _ => redis::Cmd::set_ex(&arg.key, &arg.value, arg.expires as usize),
-        };
-        self.exec::<()>(&ctx, &mut cmd).await;
-    }
-
-    /// Add an item into a set. Returns number of items added
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> u32 {
-        let mut cmd = redis::Cmd::sadd(&arg.set_name, &arg.value);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Remove a item from the set. Returns
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> u32 {
-        let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    /// Deletes a set and its contents
-    /// input: set name
-    /// returns: true if the set existed and was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_clear(&self, ctx: Context, arg: String) -> bool {
-        self.del(ctx, arg).await
-    }
-
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, keys = ?arg))]
-    async fn set_intersection(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
-        let mut cmd = redis::Cmd::sinter(arg);
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
-        let mut cmd = redis::Cmd::smembers(arg.to_string());
-        self.exec(&ctx, &mut cmd).await
-    }
-
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, keys = ?arg))]
-    async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Vec<String> {
-        let mut cmd = redis::Cmd::sunion(arg);
-        self.exec(&ctx, &mut cmd).await
-    }
-}
-
-impl KvRedisProvider {
-    /// Helper function to execute redis async command while holding onto a mutable connection.
-    ///
-    /// This provider is multi-threaded, and requests from different actors use
-    /// different connections, and requests can run in parallel.
-    ///
-    /// There is a single connection per actor public key, and the write lock on the connection
-    /// effectively serializes redis operations for all instances of the same actor.
-    /// The lock is held only for the duration of a redis command from this provider
-    /// and waiting for its response. The lock duration does not overlap with
-    /// message passing between actors and this provider, including serialization
-    /// of requests and deserialization of responses, which are fully parallelizable.
-    ///
-    /// There is a read lock held on the actors hashtable, which does not interfere
-    /// with redis operations, but any control commands for new actor links
-    /// or removal of actor links may need to wait for in-progress operations to complete.
-    /// That should be rare, because most links are passed to the provider at startup.
-    async fn exec<T: FromRedisValue + Default>(&self, ctx: &Context, cmd: &mut redis::Cmd) -> T {
-        let Some(source_id) = ctx.actor.as_ref() else {
-            error!("missing actor reference in execution context");
-            return T::default();
-        };
-
-        // Get read lock on actor-connections HashMap
-        let rd = self.actors.read().await;
-        let Some(rc) = rd.get(source_id) else {
-            error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");
-            return T::default();
-        };
-
-        // get write lock on this actor's connection
-        let mut con = rc.write().await;
-        match cmd.query_async(con.deref_mut()).await {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to perform redis command: {e}");
-                T::default()
-            }
-        }
     }
 }
 

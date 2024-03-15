@@ -1,5 +1,0 @@
-package wasmcloud:provider-kvredis;
-
-world provider-kvredis {
-    export wasmcloud:keyvalue/key-value;
-}

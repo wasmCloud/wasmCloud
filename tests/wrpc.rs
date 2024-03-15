@@ -1,13 +1,15 @@
 use core::str::{self, FromStr as _};
 use core::time::Duration;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::Ipv4Addr;
 
 use anyhow::{ensure, Context as _};
 use nkeys::KeyPair;
+use redis::AsyncCommands as _;
 use serde::Deserialize;
 use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT_PREVIEW2};
+use tokio::try_join;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
@@ -20,15 +22,24 @@ use wasmcloud_test_util::{
 pub mod common;
 use common::free_port;
 use common::nats::start_nats;
+use common::redis::start_redis;
 
 const LATTICE: &str = "default";
 const PINGER_COMPONENT_ID: &str = "wrpc_pinger_component";
 const PONGER_COMPONENT_ID: &str = "wrpc_ponger_component";
 
-async fn assert_incoming_http(port: u16) -> anyhow::Result<()> {
+async fn assert_incoming_http(
+    port: u16,
+    redis_conn: &mut redis::aio::ConnectionManager,
+) -> anyhow::Result<()> {
     let body = format!(
         r#"{{"min":42,"max":4242,"config_key":"test-config-data","authority":"localhost:{port}"}}"#,
     );
+
+    redis::Cmd::set("foo", "bar")
+        .query_async(redis_conn)
+        .await
+        .context("failed to set `foo` key in Redis")?;
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(20))
@@ -94,6 +105,29 @@ async fn assert_incoming_http(port: u16) -> anyhow::Result<()> {
     ensure!(split == ["hi", "there", "friend"]);
     ensure!(is_same);
     ensure!(archie);
+
+    let redis_keys: BTreeSet<String> = redis_conn
+        .keys("*")
+        .await
+        .context("failed to list keys in Redis")?;
+    let expected_redis_keys = BTreeSet::from(["counter".into(), "result".into()]);
+    ensure!(
+        redis_keys == expected_redis_keys,
+        r#"invalid keys in Redis:
+  got: {redis_keys:?}
+  expected: {expected_redis_keys:?}"#
+    );
+
+    let redis_res: redis::Value = redis::Cmd::get("counter")
+        .query_async(redis_conn)
+        .await
+        .context("failed to get `counter` key in Redis")?;
+    ensure!(redis_res == redis::Value::Data(b"42".to_vec()));
+    let redis_res: redis::Value = redis::Cmd::get("result")
+        .query_async(redis_conn)
+        .await
+        .context("failed to get `result` key in Redis")?;
+    ensure!(redis_res == redis::Value::Data(http_res.into()));
     Ok(())
 }
 
@@ -108,9 +142,17 @@ async fn wrpc() -> anyhow::Result<()> {
         )
         .init();
 
-    // Start NATS server
-    let (nats_server, nats_url, nats_client) =
-        start_nats().await.expect("should be able to start NATS");
+    let ((nats_server, nats_url, nats_client), (redis_server, redis_url)) = try_join!(
+        async { start_nats().await.context("failed to start NATS") },
+        async { start_redis().await.context("failed to start Redis") }
+    )?;
+    let redis_client =
+        redis::Client::open(redis_url.as_str()).context("failed to connect to Redis")?;
+    let mut redis_conn = redis_client
+        .get_tokio_connection_manager()
+        .await
+        .context("failed to construct Redis connection manager")?;
+
     // Build client for interacting with the lattice
     let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
         .lattice(LATTICE.to_string())
@@ -130,6 +172,35 @@ async fn wrpc() -> anyhow::Result<()> {
     let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
         .expect("failed to construct provider ref");
 
+    let kvredis_provider_key = KeyPair::from_seed(test_providers::RUST_KVREDIS_SUBJECT)
+        .context("failed to parse `rust-kvredis` provider key")?;
+    let kvredis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
+        .expect("failed to construct provider ref");
+
+    let component_http_port = free_port().await?;
+
+    let http_config_name = "http-default-address".to_string();
+    let kvredis_config_name = "kvredis-url".to_string();
+
+    // Create configuration for the HTTP provider
+    assert_config_put(
+        &ctl_client,
+        &http_config_name,
+        HashMap::from_iter([(
+            "ADDRESS".to_string(),
+            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
+        )]),
+    )
+    .await?;
+
+    // Create configuration for the Redis provider
+    assert_config_put(
+        &ctl_client,
+        &kvredis_config_name,
+        HashMap::from_iter([("URL".to_string(), redis_url.to_string())]),
+    )
+    .await?;
+
     assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
         client: &ctl_client,
         lattice: LATTICE,
@@ -148,6 +219,17 @@ async fn wrpc() -> anyhow::Result<()> {
         provider_key: &httpclient_provider_key,
         provider_id: &httpclient_provider_key.public_key(),
         url: &httpclient_provider_url,
+        config: vec![],
+    })
+    .await?;
+
+    assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
+        client: &ctl_client,
+        lattice: LATTICE,
+        host_key: &host.host_key(),
+        provider_key: &kvredis_provider_key,
+        provider_id: &kvredis_provider_key.public_key(),
+        url: &kvredis_provider_url,
         config: vec![],
     })
     .await?;
@@ -177,20 +259,6 @@ async fn wrpc() -> anyhow::Result<()> {
     )
     .await
     .expect("should've scaled actor");
-
-    let component_http_port = free_port().await?;
-    let http_config_name = "http-default-address".to_string();
-
-    // Create configuration for the HTTP provider
-    assert_config_put(
-        &ctl_client,
-        &http_config_name,
-        HashMap::from_iter([(
-            "ADDRESS".to_string(),
-            format!("{}:{component_http_port}", Ipv4Addr::LOCALHOST),
-        )]),
-    )
-    .await?;
 
     assert_advertise_link(
         &ctl_client,
@@ -235,11 +303,25 @@ async fn wrpc() -> anyhow::Result<()> {
     .await
     .context("failed to advertise link")?;
 
-    assert_incoming_http(component_http_port).await?;
+    assert_advertise_link(
+        &ctl_client,
+        PINGER_COMPONENT_ID,
+        kvredis_provider_key.public_key(),
+        "default",
+        "wasi",
+        "keyvalue",
+        vec!["atomic".to_string(), "eventual".to_string()],
+        vec![],
+        vec![kvredis_config_name],
+    )
+    .await
+    .context("failed to advertise link")?;
 
-    nats_server
-        .stop()
-        .await
-        .expect("should be able to stop NATS");
+    assert_incoming_http(component_http_port, &mut redis_conn).await?;
+
+    try_join!(
+        async { nats_server.stop().await.context("failed to stop NATS") },
+        async { redis_server.stop().await.context("failed to stop Redis") },
+    )?;
     Ok(())
 }
