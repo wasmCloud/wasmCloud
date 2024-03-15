@@ -10,8 +10,6 @@ on:
     tags:
       - 'actor-v[0-9].[0-9]+.[0-9]+'
       - 'actor-v[0-9].[0-9]+.[0-9]+-*'
-      - 'compat-v[0-9].[0-9]+.[0-9]+'
-      - 'compat-v[0-9].[0-9]+.[0-9]+-*'
       - 'control-interface-v[0-9].[0-9]+.[0-9]+'
       - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
       - 'core-v[0-9].[0-9]+.[0-9]+'
@@ -499,8 +497,6 @@ jobs:
         include:
           - crate: actor
             workspace-dependencies: true
-
-          - crate: compat
 
           - crate: control-interface
 
