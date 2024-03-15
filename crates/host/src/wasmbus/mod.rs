@@ -1289,8 +1289,6 @@ struct Provider {
     claims: Option<jwt::Claims<jwt::CapabilityProvider>>,
 }
 
-type ConfigCache = HashMap<String, HashMap<String, String>>;
-
 /// wasmCloud Host
 pub struct Host {
     // TODO: Clean up actors after stop
@@ -1310,6 +1308,7 @@ pub struct Host {
     /// NATS client to use for RPC calls
     rpc_nats: Arc<async_nats::Client>,
     data: Store,
+    /// Task to watch for changes in the LATTICEDATA store
     data_watch: AbortHandle,
     config_data: Store,
     config_generator: BundleGenerator,
@@ -1326,7 +1325,6 @@ pub struct Host {
     links: RwLock<HashMap<String, Vec<InterfaceLinkDefinition>>>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
-    config_data_cache: Arc<RwLock<ConfigCache>>,
     metrics: Arc<HostMetrics>,
 }
 
@@ -1823,7 +1821,6 @@ impl Host {
             links: RwLock::default(),
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
-            config_data_cache: Arc::default(),
             metrics: Arc::new(metrics),
         };
 
@@ -1941,25 +1938,6 @@ impl Host {
                 match entry {
                     Ok(entry) => host.process_entry(entry, false).await,
                     Err(err) => error!(%err, "failed to read entry from lattice data bucket"),
-                }
-            })
-            .await;
-
-        config_data
-            .keys()
-            .await
-            .context("failed to read keys of config data bucket")?
-            .map_err(|e| anyhow!(e).context("failed to read config data stream"))
-            .try_filter_map(|key| async {
-                config_data
-                    .entry(key)
-                    .await
-                    .context("failed to get entry in config data bucket")
-            })
-            .for_each(|res| async {
-                match res {
-                    Ok(entry) => host.process_config_entry(entry).await,
-                    Err(err) => error!(%err, "failed to read entry from config data bucket"),
                 }
             })
             .await;
@@ -3275,19 +3253,17 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn handle_config_get(&self, entity_id: &str) -> anyhow::Result<Vec<u8>> {
-        trace!(%entity_id, "handling all config");
-        self.config_data_cache
-            .read()
-            .await
-            .get(entity_id)
-            .map_or_else(
-                || {
-                    serde_json::to_vec(&CtlResponse::error("config not found"))
-                        .map_err(anyhow::Error::from)
-                },
-                |data| serde_json::to_vec(&CtlResponse::ok(data)).map_err(anyhow::Error::from),
-            )
+    async fn handle_config_get(&self, config_name: &str) -> anyhow::Result<Vec<u8>> {
+        trace!(%config_name, "handling get config");
+        let config_bytes = self
+            .config_data
+            .get(config_name)
+            .await?
+            .context("config not found")?;
+        let config_map: HashMap<String, String> = serde_json::from_slice(&config_bytes)
+            .context("config data should be a map of string -> string")?;
+
+        serde_json::to_vec(&CtlResponse::ok(config_map)).map_err(anyhow::Error::from)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3497,11 +3473,11 @@ impl Host {
         debug!("handle config entry put");
         // Validate that the data is of the proper type by deserialing it
         serde_json::from_slice::<HashMap<String, String>>(&data)
-            .context("Config data should be a map of string -> string")?;
+            .context("config data should be a map of string -> string")?;
         self.config_data
             .put(config_name, data)
             .await
-            .context("Unable to store config data")?;
+            .context("unable to store config data")?;
         // We don't write it into the cached data and instead let the caching thread handle it as we
         // won't need it immediately.
         self.publish_event("config_set", event::config_set(config_name))
@@ -4010,26 +3986,6 @@ impl Host {
         };
         if let Err(error) = &res {
             error!(key, ?operation, ?error, "failed to process KV bucket entry");
-        }
-    }
-
-    #[instrument(level = "trace", skip_all, fields(bucket = %entry.bucket, key = %entry.key, revision = %entry.revision, operation = ?entry.operation))]
-    async fn process_config_entry(&self, entry: KvEntry) {
-        match entry.operation {
-            Operation::Put => {
-                let data: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        error!(?error, "failed to decode config data on entry update");
-                        return;
-                    }
-                };
-                let mut lock = self.config_data_cache.write().await;
-                lock.insert(entry.key, data);
-            }
-            Operation::Delete | Operation::Purge => {
-                self.config_data_cache.write().await.remove(&entry.key);
-            }
         }
     }
 }
