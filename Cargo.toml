@@ -48,7 +48,11 @@ http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
 rand = { workspace = true }
-redis = { workspace = true }
+redis = { workspace = true, features = [
+    "aio",
+    "connection-manager",
+    "tokio-comp",
+] }
 reqwest = { workspace = true, features = [
     "rustls-tls",
     "json",

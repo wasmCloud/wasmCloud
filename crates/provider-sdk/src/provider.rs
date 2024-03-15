@@ -2,6 +2,7 @@ use core::fmt;
 use core::fmt::Formatter;
 use core::future::Future;
 
+use core::time::Duration;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
@@ -783,17 +784,24 @@ impl fmt::Debug for ProviderConnection {
     }
 }
 
-/// Returns a provider-specific [`wrpc_transport::Client`]
-fn wrpc_client(
-    nats: Arc<async_nats::Client>,
-    lattice: &str,
-    provider_key: &str,
-    target: &str,
-) -> wasmcloud_core::wrpc::Client {
-    let mut headers = HeaderMap::new();
-    headers.insert("source-id", provider_key);
-    headers.insert("target-id", target);
-    wasmcloud_core::wrpc::Client::new(nats, lattice, target, headers)
+/// Extracts trace context from incoming headers
+pub fn invocation_context(headers: &HeaderMap) -> Context {
+    #[cfg(feature = "otel")]
+    {
+        let trace_context: TraceContext = convert_header_map_to_hashmap(headers)
+            .into_iter()
+            .collect::<Vec<(String, String)>>();
+        attach_span_context(&trace_context);
+    }
+    // Determine source ID for the invocation
+    let source_id = headers
+        .get(WRPC_SOURCE_ID_HEADER_NAME)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "<unknown>".into());
+    Context {
+        actor: Some(source_id),
+        tracing: convert_header_map_to_hashmap(headers),
+    }
 }
 
 impl ProviderConnection {
@@ -820,11 +828,15 @@ impl ProviderConnection {
 
     /// Used for fetching the RPC client in order to make RPC calls
     pub fn get_wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
-        wrpc_client(
+        let mut headers = HeaderMap::new();
+        headers.insert("source-id", self.provider_key.as_str());
+        headers.insert("target-id", target);
+        wasmcloud_core::wrpc::Client::new(
             Arc::clone(&self.nats),
             &self.lattice,
-            &self.provider_key,
             target,
+            headers,
+            Duration::from_secs(10), // TODO: Make this configurable
         )
     }
 
@@ -939,21 +951,11 @@ impl ProviderConnection {
 
                             let invocation_id = Uuid::from_u128(Ulid::new().into()).to_string();
                             let operation = format!("{world_key_name}.{wit_fn}");
-
-                            // Build a trace context from incoming headers
-                            let context = context.unwrap_or_default();
-                            #[cfg(feature = "otel")]
-                            {
-                                let trace_context: TraceContext = convert_header_map_to_hashmap(&context)
-                                    .into_iter()
-                                    .collect::<Vec<(String, String)>>();
-                                attach_span_context(&trace_context);
-                            }
-
-                            // Determine source ID for the invocation
-                            let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME).map(ToString::to_string).unwrap_or_else(|| "<unknown>".into());
-
                             let current = tracing::Span::current();
+                            let context = context.unwrap_or_default();
+                            let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME)
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| "<unknown>".into());
                             current.record("operation", &tracing::field::display(&operation));
                             current.record("lattice_name", &tracing::field::display(&lattice));
                             current.record("invocation_id", &tracing::field::display(&invocation_id));
@@ -964,6 +966,7 @@ impl ProviderConnection {
                             );
                             current.record("provider_id", provider_id.clone());
                             current.record("link_name", &tracing::field::display(&link_name));
+                            let context = invocation_context(&context);
 
                             // Perform RPC
                             match this.handle_wrpc(provider.clone(), operation.clone(), source_id, params, context).in_current_span().await {
@@ -1009,19 +1012,12 @@ impl ProviderConnection {
         operation: String,
         source_id: String,
         invocation_params: Vec<wrpc_transport::Value>,
-        context: HeaderMap,
+        context: Context,
     ) -> InvocationResult<Vec<u8>> {
         // Dispatch the invocation to the provider
         let span = tracing::debug_span!("dispatch", %source_id, %operation);
         provider
-            .dispatch_wrpc_dynamic(
-                Context {
-                    actor: Some(source_id),
-                    tracing: convert_header_map_to_hashmap(&context),
-                },
-                operation,
-                invocation_params,
-            )
+            .dispatch_wrpc_dynamic(context, operation, invocation_params)
             .instrument(span)
             .await
     }

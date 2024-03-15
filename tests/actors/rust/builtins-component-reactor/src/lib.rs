@@ -255,13 +255,12 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .map_err(|e| e.trace())
             .expect("failed to delete `foo`");
 
-        // NOTE: If https://github.com/WebAssembly/wasi-keyvalue/pull/18 is merged, this should not
-        // return an error
-        keyvalue::eventual::exists(&bucket, &foo_key)
+        let foo_exists = keyvalue::eventual::exists(&bucket, &foo_key)
             .map_err(|e| e.trace())
-            .expect_err(
-                "`exists` method should have returned an error for `foo` key, which was deleted",
+            .expect(
+                "`exists` method should not have returned an error for `foo` key, which was deleted",
             );
+        assert!(!foo_exists);
 
         let result_key = String::from("result");
 

@@ -169,7 +169,7 @@ impl Queue {
 
 #[derive(Clone, Debug)]
 struct Handler {
-    nats: async_nats::Client,
+    nats: Arc<async_nats::Client>,
     // ConfigBundle is perfectly safe to pass around, but in order to update it on the fly, we need
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
@@ -198,6 +198,23 @@ struct Handler {
     /// result types of the function, which is required for the wRPC protocol to set up proper
     /// subscriptions for the return types.
     polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
+
+    invocation_timeout: Duration,
+}
+
+impl Handler {
+    fn wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
+        let injector = TraceContextInjector::default_with_span();
+        let mut headers = injector_to_headers(&injector);
+        headers.insert("source-id", self.component_id.as_str());
+        wasmcloud_core::wrpc::Client::new(
+            Arc::clone(&self.nats),
+            &self.lattice,
+            target,
+            headers,
+            self.invocation_timeout,
+        )
+    }
 }
 
 #[async_trait]
@@ -215,8 +232,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_create_container(name.to_string())
             .await
@@ -240,8 +256,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_container_exists(name.to_string())
             .await
@@ -265,8 +280,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_delete_container(name.to_string())
             .await
@@ -293,8 +307,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_get_container_info(name.to_string())
             .await
@@ -324,8 +337,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_get_container_data(
                 ObjectId {
@@ -356,8 +368,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_has_object(ObjectId {
                 container: container.to_string(),
@@ -389,8 +400,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let mut buf = vec![];
         value
             .read_to_end(&mut buf)
@@ -425,8 +435,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let container = container.to_string();
         let (res, tx) = wrpc
             .invoke_delete_objects(container.to_string(), names)
@@ -455,8 +464,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         // TODO: implement a stream with limit and offset
         let (res, tx) = wrpc
             .invoke_list_container_objects(container.to_string(), None, None)
@@ -484,8 +492,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_get_object_info(ObjectId {
                 container: container.to_string(),
@@ -522,8 +529,7 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let container = container.to_string();
         let (res, tx) = wrpc
             .invoke_clear_container(container.to_string())
@@ -639,10 +645,10 @@ impl Bus for Handler {
             let injector = TraceContextInjector::default_with_span();
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
-            let (results, tx) =
-                wasmcloud_core::wrpc::Client::new(self.nats.clone(), &self.lattice, &id, headers)
-                    .invoke_dynamic(instance, name, DynamicTuple(params), results)
-                    .await?;
+            let (results, tx) = self
+                .wrpc_client(&id)
+                .invoke_dynamic(instance, name, DynamicTuple(params), results)
+                .await?;
             tx.await.context("failed to transmit parameters")?;
             Ok(results)
         } else {
@@ -663,8 +669,7 @@ impl KeyValueAtomic for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_increment(bucket.to_string(), key, delta)
             .await
@@ -692,8 +697,7 @@ impl KeyValueAtomic for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_compare_and_swap(bucket.to_string(), key, old, new)
             .await
@@ -717,8 +721,7 @@ impl KeyValueEventual for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_get(bucket.to_string(), key)
             .await
@@ -744,8 +747,7 @@ impl KeyValueEventual for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
         let mut buf = vec![];
         value
@@ -772,8 +774,7 @@ impl KeyValueEventual for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
         let (res, tx) = wrpc
             .invoke_delete(bucket.to_string(), key)
@@ -795,8 +796,7 @@ impl KeyValueEventual for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_exists(bucket.to_string(), key)
             .await
@@ -960,8 +960,7 @@ impl Messaging for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_static::<Result<_, String>>(
                 "wasmcloud:messaging/consumer",
@@ -993,8 +992,7 @@ impl Messaging for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_static::<Result<Vec<_>, String>>(
                 "wasmcloud:messaging/consumer",
@@ -1021,8 +1019,7 @@ impl Messaging for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, tx) = wrpc
             .invoke_static::<Result<(), String>>(
                 "wasmcloud:messaging/consumer",
@@ -1061,8 +1058,7 @@ impl OutgoingHttp for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc =
-            wrpc_transport_nats::Client::new(self.nats.clone(), format!("{}.{id}", self.lattice));
+        let wrpc = self.wrpc_client(&id);
         let (res, body_errors, tx) = wrpc
             .invoke_handle_wasmtime(request)
             .await
@@ -1315,7 +1311,7 @@ pub struct Host {
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
     /// NATS client to use for RPC calls
-    rpc_nats: async_nats::Client,
+    rpc_nats: Arc<async_nats::Client>,
     data: Store,
     data_watch: AbortHandle,
     config_data: Store,
@@ -1813,7 +1809,7 @@ impl Host {
             host_key,
             labels: RwLock::new(labels),
             ctl_nats,
-            rpc_nats,
+            rpc_nats: Arc::new(rpc_nats),
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
@@ -2131,6 +2127,7 @@ impl Host {
             // NOTE(brooksmtownsend): We only use this client for serving functions,
             // and the headers will be set by the incoming invocation.
             async_nats::HeaderMap::new(),
+            Duration::default(), // this client should not invoke anything
         );
         let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
         let actor = Arc::new(Actor {
@@ -2321,13 +2318,14 @@ impl Host {
             .collect::<HashMap<_, _>>();
 
         let handler = Handler {
-            nats: self.rpc_nats.clone(),
+            nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
             interface_link_name: Arc::new(RwLock::new("default".to_string())),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfilled_imports: imports,
+            invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
 
         let actor = self

@@ -2704,6 +2704,7 @@ dependencies = [
  "pin-project-lite",
  "rustls 0.21.10",
  "ryu",
+ "sha1_smol",
  "tokio",
  "tokio-retry",
  "tokio-util",
@@ -3211,6 +3212,12 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
 
 [[package]]
 name = "sha2"
@@ -4399,10 +4406,14 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-kvredis"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "once_cell",
  "redis",
  "tempfile",
  "tokio",
@@ -4410,8 +4421,10 @@ dependencies = [
  "url",
  "uuid",
  "wasmcloud-control-interface",
- "wasmcloud-provider-wit-bindgen",
+ "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
+ "wrpc-interface-keyvalue",
+ "wrpc-transport",
 ]
 
 [[package]]
@@ -5343,9 +5356,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7abefdaa6b9ecb989d91ab0d7025545fe6db4dcfd58d293097bda5eb621fde9"
+checksum = "a94cdeb50f8390af30b963c1e81353793740b2370794eb479eee1cea7089b988"
 dependencies = [
  "anyhow",
  "async-nats",
