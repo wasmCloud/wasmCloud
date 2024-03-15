@@ -16,7 +16,7 @@ use wash_lib::{
     actor::scale_component,
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
-    cli::CommandOutput,
+    cli::{sanitize_component_id, CommandOutput},
     config::downloads_dir,
     id::{ModuleId, ServerId},
     parser::get_config,
@@ -285,7 +285,7 @@ pub async fn handle_command(
     let actor_ref = format!("file://{}", artifact_path.display());
     // Since the only restriction on actor_id is that it must be unique, we can just use the artifact path as the actor_id
     // to ensure uniqueness
-    let actor_id = artifact_path.display().to_string();
+    let actor_id = sanitize_component_id(&artifact_path.display().to_string());
 
     // Scale the actor to one max replica
     scale_component(ScaleComponentArgs {

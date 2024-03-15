@@ -16,6 +16,8 @@ use crate::{
     wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
 };
 
+use super::validate_component_id;
+
 #[derive(Debug, Clone, Parser)]
 pub enum StartCommand {
     /// Launch a component in a host
@@ -44,7 +46,7 @@ pub struct StartComponentCommand {
     pub component_ref: String,
 
     /// Unique ID to use for the component
-    #[clap(name = "component-id")]
+    #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// Maximum number of instances this component can run concurrently.
@@ -175,7 +177,7 @@ pub struct StartProviderCommand {
     pub provider_ref: String,
 
     /// Unique provider ID to use for the provider
-    #[clap(name = "provider-id")]
+    #[clap(name = "provider-id", value_parser = validate_component_id)]
     pub provider_id: String,
 
     /// Link name of provider

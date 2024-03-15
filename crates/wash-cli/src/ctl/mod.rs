@@ -146,14 +146,12 @@ mod test {
             "--host-id",
             HOST_ID,
             PROVIDER_ID,
-            "blahblah",
         ])?;
         match stop_provider_all.command {
             CtlCliCommand::Stop(StopCommand::Provider(StopProviderCommand {
                 opts,
                 host_id,
                 provider_id,
-                link_name,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -162,7 +160,6 @@ mod test {
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
                 assert_eq!(provider_id, PROVIDER_ID);
-                assert_eq!(link_name, "blahblah");
                 assert!(!skip_wait);
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
@@ -173,12 +170,10 @@ mod test {
             CtlCliCommand::Stop(StopCommand::Provider(StopProviderCommand {
                 host_id,
                 provider_id,
-                link_name,
                 ..
             })) => {
                 assert_eq!(host_id, None);
                 assert_eq!(provider_id, "foobar");
-                assert_eq!(link_name, "default");
             }
             cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
         }

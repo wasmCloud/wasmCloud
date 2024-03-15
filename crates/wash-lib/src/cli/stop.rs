@@ -14,6 +14,8 @@ use crate::{
     wait::{wait_for_provider_stop_event, FindEventOutcome, ProviderStoppedInfo},
 };
 
+use super::validate_component_id;
+
 #[derive(Debug, Clone, Parser)]
 pub enum StopCommand {
     /// Stop a component running in a host
@@ -44,7 +46,7 @@ pub struct StopComponentCommand {
 
     /// Unique component Id or a string to match on the prefix of the ID. If multiple components are matched, then an error
     /// will be returned with a list of all matching options
-    #[clap(name = "component-id")]
+    #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// By default, the command will wait until the component has been stopped.
@@ -69,14 +71,8 @@ pub struct StopProviderCommand {
     /// Provider Id (e.g. the public key for the provider) or a string to match on the prefix of the
     /// ID, or friendly name, or call alias of the provider. If multiple providers are matched, then
     /// an error will be returned with a list of all matching options
-    #[clap(name = "provider-id")]
+    #[clap(name = "provider-id", value_parser = validate_component_id)]
     pub provider_id: String,
-
-    // NOTE(thomastaylor312): Since this is a positional argument and is optional, it has to be the
-    // last one
-    /// Link name of provider. If none is provided, it will default to "default"
-    #[clap(name = "link-name", default_value = "default")]
-    pub link_name: String,
 
     /// By default, the command will wait until the provider has been stopped. If this flag is
     /// passed, the command will return immediately after acknowledgement from the host, without
@@ -138,7 +134,6 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
             HashMap::from([
                 ("result".into(), text.into()),
                 ("provider_id".into(), cmd.provider_id.to_string().into()),
-                ("link_name".into(), cmd.link_name.into()),
                 ("host_id".into(), host_id.to_string().into()),
             ]),
         ));

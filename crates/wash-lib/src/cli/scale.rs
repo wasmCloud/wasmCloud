@@ -8,6 +8,8 @@ use crate::{
     config::WashConnectionOptions,
 };
 
+use super::validate_component_id;
+
 #[derive(Debug, Clone, Parser)]
 pub enum ScaleCommand {
     /// Scale a component running in a host to a certain level of concurrency
@@ -30,7 +32,7 @@ pub struct ScaleComponentCommand {
     pub component_ref: String,
 
     /// Unique ID to use for the component
-    #[clap(name = "component-id")]
+    #[clap(name = "component-id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// Maximum number of component instances allowed to run concurrently. Setting this value to `0` will stop the component.
