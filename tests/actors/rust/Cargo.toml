@@ -29,7 +29,6 @@ tokio = { version = "1", default-features = false }
 uuid = { version = "1", default-features = false }
 wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
-wasmcloud-compat = { path = "../../../crates/compat" }
 wasmcloud-interface-blobstore = { version = "0.9", default-features = false }
 wasmcloud-interface-httpserver = { version = "0.12", default-features = false }
 wasmcloud-interface-keyvalue = { version = "0.12", default-features = false }

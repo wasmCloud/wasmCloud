@@ -74,7 +74,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 vaultrs = { workspace = true, features = ["rustls"] }
 wascap = { workspace = true }
-wasmcloud-compat = { version = "0.1", path = "./crates/compat", default-features = false }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
@@ -196,7 +195,6 @@ wasm-encoder = { version = "0.41", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
 wasmcloud-actor-macros = { version = "0", path = "./crates/actor/macros", default-features = false }
-wasmcloud-compat = { version = "0.1", path = "./crates/compat", default-features = false }
 wasmcloud-component-adapters = { version = "0.8", default-features = false }
 wasmcloud-control-interface = { version = "0.33", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.2", path = "./crates/core", default-features = false }
