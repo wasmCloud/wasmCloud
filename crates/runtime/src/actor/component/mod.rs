@@ -251,7 +251,10 @@ where
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
         match instance_name.as_ref() {
-            "wasi:cli/environment@0.2.0"
+            "wasi:blobstore/blobstore@0.2.0-draft"
+            | "wasi:blobstore/container@0.2.0-draft"
+            | "wasi:blobstore/types@0.2.0-draft"
+            | "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
             | "wasi:cli/stdin@0.2.0"
