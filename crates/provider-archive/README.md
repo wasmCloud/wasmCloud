@@ -6,7 +6,7 @@
 # Provider Archive
 Until the [WASI](https://wasi.dev) specification includes robust networking support _and_ the available WebAssembly tooling (**wasm3** , **wasmtime**, etc) supports this WASI specification, _and_ the Rust compiler is able to generate the right set of WASI imports when compiling "regular" socket code ... our support for portable capability providers will be limited.
 
-In the absence of useful portable capability providers, we need the ability to store, retrieve, and schedule _native_ capability providers. A native capability provider is an FFI plugin stored in a binary file that is specific to a particular CPU architecture and Operating System. The issue with these binary files (_shared object_ files on linux) is that we cannot embed secure claims JWTs in these like we can in WebAssembly files. With actors, we use these signed tokens to get a verifiable, globally unique public key (identity) as well as a hash of the associated file to verify that the file has not been tampered with since being signed.
+In the absence of useful portable capability providers, we need the ability to store, retrieve, and schedule _native_ capability providers. A native capability provider is an FFI plugin stored in a binary file that is specific to a particular CPU architecture and Operating System. The issue with these binary files (_shared object_ files on linux) is that we cannot embed secure claims JWTs in these like we can in WebAssembly files. With components, we use these signed tokens to get a verifiable, globally unique public key (identity) as well as a hash of the associated file to verify that the file has not been tampered with since being signed.
 
 To give us the ability to store, retrieve, schedule, and _sign_ capability providers, we need a **Provider Archive** (PAR). This is a simple TAR file that contains a signed JWT, as well as a binary file for each of the supported OS/CPU combinations.
 
@@ -49,7 +49,7 @@ The following is a list of some of the possible operating systems (_NOTE_ not al
 * windows
 
 ## Appendix C - JSON Web Token Claims
-The following is a list of the custom claims that will appear in the `wascap` section beneath the standard JWT fields. This is the same nesting style used by actor claims when embedded into a WebAssembly file:
+The following is a list of the custom claims that will appear in the `wascap` section beneath the standard JWT fields. This is the same nesting style used by component claims when embedded into a WebAssembly file:
 
 * `hashes` - This is a map where the key is an `[arch]-[os]` string and the value is the hash for that particular file. Having these hashes inside the signed token means we can verify that the plugin binaries have not been tampered with.
 * `name` - Friendly name of the capability provider.

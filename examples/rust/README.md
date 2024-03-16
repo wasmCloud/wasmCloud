@@ -4,9 +4,9 @@ This folder contains examples that can be run with [wasmcloud][wasmcloud] which 
 
 As much of WebAssembly tooling is written in Rust, Rust currently posseses the best support for WebAssembly and it's emerging standards.
 
-## Building individual example actors
+## Building individual example components
 
-Example actors built in Rust can be compiled similarly to any other wasmcloud project:
+Example components built in Rust can be compiled similarly to any other wasmcloud project:
 
 ```console
 wash build

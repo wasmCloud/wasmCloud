@@ -1,6 +1,6 @@
 # sqldb-postgres capability provider
 
-This capability provider allows wasmCloud actors to use a Postgres-compatible
+This capability provider allows wasmCloud components to use a Postgres-compatible
 database, and implements the "wasmcloud:sqldb" capability contract.
 
 ### Capabilities:
@@ -20,7 +20,7 @@ database, and implements the "wasmcloud:sqldb" capability contract.
 
 ### Link
 
-- Edit `linkdefs.json` to adjust your settings. To make these active when linking an actor to this provider,
+- Edit `linkdefs.json` to adjust your settings. To make these active when linking a component to this provider,
 set a link value with key `config_b64` with value from the output of the command
 ```shell
 base64 -w0 linkdefs.json

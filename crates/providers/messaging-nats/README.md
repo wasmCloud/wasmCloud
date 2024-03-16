@@ -1,5 +1,5 @@
 # NATS Capability Provider
-This capability provider is an implementation of the `wasmcloud:messaging` contract. It exposes publish, request, and subscribe functionality to actors.
+This capability provider is an implementation of the `wasmcloud:messaging` contract. It exposes publish, request, and subscribe functionality to components.
 
 ## Link Definition Configuration Settings
 To configure this provider, use the following link settings in link definitions:

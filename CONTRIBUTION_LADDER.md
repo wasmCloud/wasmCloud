@@ -1,6 +1,7 @@
 # Contribution Ladder
 
 ---
+- [Contribution Ladder](#contribution-ladder)
   - [Community Member](#community-member)
   - [Contributor](#contributor)
     - [How to become a contributor](#how-to-become-a-contributor)
@@ -25,7 +26,7 @@ Here are some ideas for how you can be more involved and participate in the comm
 * Comment on an issue that you’re interested in.
 * Submit a pull request to fix an issue.
 * Report a bug.
-* Share an actor/provider you made and your experience with it
+* Share a component/provider you made and your experience with it
 * Come chat with us in [Slack](https://slack.wasmcloud.com/).
 
 As a community member you must follow our [Code of Conduct](CODE_OF_CONDUCT.md).

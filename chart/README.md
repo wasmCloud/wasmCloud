@@ -94,7 +94,7 @@ like. The number of hosts can be scaled by setting `replicaCount` to the desired
 #### Kubernetes Applier Support
 
 This chart comes with built in support for the [Kubernetes Applier provider and
-actor](https://github.com/cosmonic/kubernetes-applier). To enable support so that any applier
+component](https://github.com/cosmonic/kubernetes-applier). To enable support so that any applier
 provider running on these nodes automatically gets the necessary credentials, set
 `wasmcloud.enableApplierSupport` to `true`. Note that this will force usage of a pod
 `ServiceAccount`.

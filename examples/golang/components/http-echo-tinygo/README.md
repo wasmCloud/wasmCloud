@@ -1,7 +1,7 @@
 <h1 align="center">HTTP Echo (TinyGo)</h1>
 <hr>
 
-This repository contains a [Web Assembly System Interface ("WASI")][wasi] and [Component Model][component-model] enabled actor example of a [Golang][go] (in this case [TinyGo][tinygo]), built to run on [wasmCloud][wasmcloud].
+This repository contains a [Web Assembly System Interface ("WASI")][wasi] and [Component Model][component-model] enabled WebAssembly component example of a [Golang][go] (in this case [TinyGo][tinygo]), built to run on [wasmCloud][wasmcloud].
 
 > **Warning**
 > The WASI & the Component Model specifications are still undergoing changes and iterating quickly,

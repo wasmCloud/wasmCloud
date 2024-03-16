@@ -8,9 +8,9 @@ Work is still ongoing, but the WebAssembly-for-Python effort is primarily driven
 
 [componentize-py]: https://github.com/bytecodealliance/componentize-py/
 
-## Building individual example actors
+## Building individual example components
 
-Example actors built in Python can be compiled similarly to any other wasmcloud project:
+Example components built in Python can be compiled similarly to any other wasmcloud project:
 
 ```console
 wash build

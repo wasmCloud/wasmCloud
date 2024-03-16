@@ -44,7 +44,7 @@ The following capability providers are included automatically in every host runt
 | **N/A**  | [`wasmcloud:builtin:numbergen`](https://github.com/wasmCloud/interfaces/tree/main/numbergen) | Number generator, including random numbers and GUID strings |
 | **N/A**  | [`wasmcloud:builtin:logging`](https://github.com/wasmCloud/interfaces/tree/main/logging)     | Basic level-categorized text logging capability             |
 
-While neither of these providers requires a _link definition_, to use either of them your actors _must_ be signed with their contract IDs.
+While neither of these providers requires a _link definition_, to use either of them your components _must_ be signed with their contract IDs.
 
 ## Community Capability Providers
 
@@ -52,7 +52,7 @@ The following is a list of community supported capability providers developed by
 
 | Provider                                                                                       | Contract                                                                                                   | Description                                                                                                                                                                                                                 |
 | :--------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [mlinference](https://github.com/Finfalter/wasmCloudArtefacts/tree/main/providers/mlinference) | [`wasmcloud:mlinference`](https://github.com/Finfalter/wasmCloudArtefacts/tree/main/providers/mlinference) | This repository provides a wasmCloud capability provider and actors to perform inference using machine learning models for ONNX and Tensorflow. [Additional Documentation](https://finfalter.github.io/wasmCloudArtefacts/) |
+| [mlinference](https://github.com/Finfalter/wasmCloudArtefacts/tree/main/providers/mlinference) | [`wasmcloud:mlinference`](https://github.com/Finfalter/wasmCloudArtefacts/tree/main/providers/mlinference) | This repository provides a wasmCloud capability provider and components to perform inference using machine learning models for ONNX and Tensorflow. [Additional Documentation](https://finfalter.github.io/wasmCloudArtefacts/) |
 
 ## Additional Examples
 

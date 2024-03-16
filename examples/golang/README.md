@@ -4,9 +4,9 @@ This folder contains examples that can be run with [wasmcloud][wasmcloud] which 
 
 Most examples compile with [TinyGo][tinygo] rather than the Golang compiler proper given that WebAssembly support landed in TinyGo first and is still slightly better supported there.
 
-## Building individual example actors
+## Building individual example components
 
-Example actors built in Golang can be compiled similarly to any other wasmcloud project:
+Example components built in Golang can be compiled similarly to any other wasmcloud project:
 
 ```console
 wash build

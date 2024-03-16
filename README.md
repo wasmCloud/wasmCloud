@@ -53,11 +53,11 @@ curl localhost:8080
 
 ### WebAssembly Modules (Stable ABI)
 
-wasmCloud has a wide range of [examples](https://github.com/wasmCloud/examples/) built on the [stable ABI](https://wasmcloud.com/docs/hosts/abis/wasmbus/). This includes actors, providers, interfaces, and full applications we've created to demonstrate how to design, compose, and build applications in wasmCloud.
+wasmCloud has a wide range of [examples](https://github.com/wasmCloud/examples/) built on the [stable ABI](https://wasmcloud.com/docs/hosts/abis/wasmbus/). This includes components, providers, interfaces, and full applications we've created to demonstrate how to design, compose, and build applications in wasmCloud.
 
 ### **Experimental** WASI Preview 2 WebAssembly Components
 
-wasmCloud is actively staying up-to-date with WASI Preview 2 and the Component Model. For actor components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
+wasmCloud is actively staying up-to-date with WASI Preview 2 and the Component Model. For components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
 
 ### 💥 Awesome wasmCloud
 
@@ -97,7 +97,7 @@ wasmCloud uses some terminology you might not be familiar with. Check out the [c
 
 ## RPC Framework
 
-wasmCloud uses an [RPC API](https://wasmcloud.com/docs/hosts/lattice-protocols/rpc) to enable seamless communication among the host runtime, actors, and providers.
+wasmCloud uses an [RPC API](https://wasmcloud.com/docs/hosts/lattice-protocols/rpc) to enable seamless communication among the host runtime, components, and providers.
 
 ---
 
@@ -145,13 +145,13 @@ wasmCloud also has an [**experimental** SDK](https://github.com/wasmCloud/provid
 
 ### `wasmcloud_actor` (`Experimental`)
 
-[`wasmcloud_actor`](./crates/actor) is a wasmCloud actor library written in Rust which facilitates building of wasmCloud actors.
+[`wasmcloud_actor`](./crates/actor) is a wasmCloud actor library written in Rust which facilitates building of wasmCloud components.
 
 The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
 
 ### wascap
 
-[`wascap`](./crates/wascap) is a low-level library used to insert and retrieve [claims](https://wasmcloud.com/docs/hosts/security#claims) on actors and providers. Claims are part of wasmCloud's zero-trust security model.
+[`wascap`](./crates/wascap) is a low-level library used to insert and retrieve [claims](https://wasmcloud.com/docs/hosts/security#claims) on components and providers. Claims are part of wasmCloud's zero-trust security model.
 
 ---
 
