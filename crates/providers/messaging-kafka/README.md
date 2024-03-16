@@ -5,7 +5,7 @@
 
 This capability provider is an implementation of the `wasmcloud:messaging` contract.
 
-It exposes publish and subscribe functionality to actors to operate on Kafka topics when connecting to a Kafka-compatible API. At the time of writing, this provider was tested and works well with [Apache Kafka][kafka] and [Redpanda][redpanda].
+It exposes publish and subscribe functionality to components to operate on Kafka topics when connecting to a Kafka-compatible API. At the time of writing, this provider was tested and works well with [Apache Kafka][kafka] and [Redpanda][redpanda].
 
 [kafka]: https://kafka.apache.org/
 [redpanda]: https://redpanda.com/
@@ -15,7 +15,7 @@ It exposes publish and subscribe functionality to actors to operate on Kafka top
 | Property | Description                                                                                                                                                                                                                                                                |
 |:---------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `HOSTS`  | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
-| `TOPIC`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this actor for processing                                                                                                                                                             |
+| `TOPIC`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing                                                                                                                                                             |
 
 ## Limitations
 

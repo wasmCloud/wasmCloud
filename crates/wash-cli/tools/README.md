@@ -1,12 +1,12 @@
 # Tools
 
 ## docker-compose
-Bundles [NATS](https://hub.docker.com/_/nats/), [Redis](https://hub.docker.com/_/redis) and [Registry](https://hub.docker.com/_/registry) into a single manifest. These components are commonly used during wasmcloud development and when running our example actors and providers, so it's beneficial to use this compose file when starting your wasmcloud journey.
+Bundles [NATS](https://hub.docker.com/_/nats/), [Redis](https://hub.docker.com/_/redis) and [Registry](https://hub.docker.com/_/registry) into a single manifest. These components are commonly used during wasmcloud development and when running our example components and providers, so it's beneficial to use this compose file when starting your wasmcloud journey.
 
 ## kvcounter-example
-Helper script to run our [keyvalue counter](https://github.com/wasmcloud/examples/tree/master/kvcounter) actor, [redis](https://github.com/wasmcloud/capability-providers/tree/main/redis) capability provider and [httpserver](https://github.com/wasmcloud/capability-providers/tree/main/http-server) capability providers. This example shows the interaction that an actor can have with multiple capability providers, and serves as a sample reference for using `wash` in the CLI or in the REPL.
+Helper script to run our [keyvalue counter](https://github.com/wasmcloud/examples/tree/master/kvcounter) component, [redis](https://github.com/wasmcloud/capability-providers/tree/main/redis) capability provider and [httpserver](https://github.com/wasmcloud/capability-providers/tree/main/http-server) capability providers. This example shows the interaction that an actor can have with multiple capability providers, and serves as a sample reference for using `wash` in the CLI or in the REPL.
 
-Running `bash kvcounter-example.sh` will attempt to determine if the program prerequisites are running (NATS, Redis, and a wasmcloud host) and then execute the following `wash` commands to launch and configure our actors and providers.
+Running `bash kvcounter-example.sh` will attempt to determine if the program prerequisites are running (NATS, Redis, and a wasmcloud host) and then execute the following `wash` commands to launch and configure our components and providers.
 ```shell
 wash ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0
 wash ctl start provider wasmcloud.azurecr.io/redis:0.10.0

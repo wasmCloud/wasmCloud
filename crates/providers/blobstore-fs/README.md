@@ -15,5 +15,5 @@ Similar to other wasmcloud providers, this provider is configured wiht link conf
 > [!NOTE]
 > The provider must have read and write access to the disk location specified by `ROOT`
 >
-> Each actor's files will be stored under the path `$ROOT/<actor id>`
+> Each component's files will be stored under the path `$ROOT/<component id>`
 

@@ -2,7 +2,7 @@
 
 This capability provider is an implementation of the `wasmcloud:blobstore` contract. 
 It provides a means to access buckets and files on AWS S3, and supports simultaneous S3 access
-from different actors configured with different access roles and policies.
+from different components configured with different access roles and policies.
 
 ## Configuration
 
@@ -25,9 +25,9 @@ from different actors configured with different access roles and policies.
   - `AWS_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
 
 
-### with 'env' file (actor link definition)
+### with 'env' file (link definition)
 
-When linking the Blobstore-s3 capability provider to an actor, you can use the link parameter `env`
+When linking the Blobstore-s3 capability provider to a component, you can use the link parameter `env`
 to specify the name of the file containing configuration settings.
 The value of the `env` parameter should be an absolute path to a text file on disk.
 
@@ -47,22 +47,22 @@ _and_ defined in the 'env' file, values from the file take precedence.
 Blobstore-s3 capability provider settings can be passed to the provider through an env file, as
 described above, or through environment variables in the provider's process. Configuring through environment variables
 is useful for testing from the command-line, or when the provider and wasmcloud host are running in a k8s container.
-Note that process environment variables apply to all linked actors, unless they are overridden by an 'env' file for that link.
+Note that process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
 
-The blobstore-S3 can maintain simultaneous connections for different actors using different access roles and policies,
-but only if credentials are specified with actor link parameters (the 'env' file described above,
+The blobstore-S3 can maintain simultaneous connections for different components using different access roles and policies,
+but only if credentials are specified with link parameters (the 'env' file described above,
 or 'config-json', below). Process environment variables are not link-specific and so cannot be used to enforce
-different access policies. When Blobstore-S3 is expected to provide services to actors with distinct
+different access policies. When Blobstore-S3 is expected to provide services to components with distinct
 access roles, environment variables should only be used for non-secret settings such as `AWS_REGION`
-that may apply to multiple actors.
+that may apply to multiple components.
 
 For any settings defined both in an 'env' file and the environment, the value from the 'env' file takes precedence.
 
-### with config-json (actor link definition)
+### with config-json (link definition)
 
 A third means of setting Blobstore-S3 configuration is with a json file, base-64 encoded,
 and passed as the link value `config_b64`. This option, like the 'env' file, allows for settings
-to be specific to an actor-link, however it is not as secure, because of the additional processing
+to be specific to a link, however it is not as secure, because of the additional processing
 required to generate the encoded structure and pass it into either `wash` or the web dashboard.
 Note that the field names in the json structure, defined by `StorageConfig` in src/config.rs,
 are different from the environment variable names.
@@ -74,11 +74,11 @@ Json settings take precedence over environment variables and 'env' file values.
 
 Link definitions can optionally contain bucket name aliases which replace an alias with a different name.
 For example, if the link definition contains the setting "alias_backup=backup.20220101", then for any api
-where the actor saves an object to the bucket "backup", it will actually be stored in the bucket "backup.20220101".
-The use case for this is to allow the actor to hard-code a small number of symbolic names that can be remapped
-by an administrator when linking the actor to this provider. If an alias is defined, it is in effect for all api methods.
+where the component saves an object to the bucket "backup", it will actually be stored in the bucket "backup.20220101".
+The use case for this is to allow the component to hard-code a small number of symbolic names that can be remapped
+by an administrator when linking the component to this provider. If an alias is defined, it is in effect for all api methods.
 Any use of a bucket name not in the alias map is passed on without change. As a convention, it is recommended
-to use the prefix "alias_" for bucket names within actor code, to clarify to readers that use of an alias is intended;
+to use the prefix "alias_" for bucket names within component code, to clarify to readers that use of an alias is intended;
 however, the prefix is not required.
 
 

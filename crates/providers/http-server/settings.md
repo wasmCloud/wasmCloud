@@ -85,7 +85,7 @@ Example with all settings
 
 ## Using the http server settings
 
-The link definition connecting an actor to a capability provider includes a key-value map called "values". "values" is currently defined as a map with string keys and string values, and there are a few options for specifying the httpserver settings within the values map.
+The link definition connecting a component to a capability provider includes a key-value map called "values". "values" is currently defined as a map with string keys and string values, and there are a few options for specifying the httpserver settings within the values map.
 
 - use key `config_file`, with a value that is the absolute path to a json or toml file (file type detected by the `.json` or `.toml` extension). 
 

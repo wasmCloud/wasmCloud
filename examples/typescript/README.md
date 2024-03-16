@@ -9,9 +9,9 @@ Work is still ongoing, but the WebAssembly-for-Javascript effort is primarily dr
 [jco]: https://github.com/bytecodealliance/jco
 [componentize-js]: https://github.com/bytecodealliance/componentize-js
 
-## Building individual example actors
+## Building individual example components
 
-Example actors built in Typescript can be compiled similarly to any other wasmcloud project:
+Example components built in Typescript can be compiled similarly to any other wasmcloud project:
 
 ```console
 wash build

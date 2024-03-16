@@ -1,6 +1,6 @@
 # Typescript HTTP Hello World
 
-This repository contains a hello world HTTP actor component, written in [Typescript][ts].
+This repository contains a hello world HTTP component, written in [Typescript][ts].
 
 This component:
 
@@ -20,11 +20,11 @@ This component:
 
 This relies on the following installed software:
 
-| Name   | Description                                                                                             |
-| ------ | ------------------------------------------------------------------------------------------------------- |
-| `wash` | [Wasmcloud Shell][wash] controls your [wasmcloud][wasmcloud] host instances and enables building actors |
-| `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                   |
-| `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                     |
+| Name   | Description                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------- |
+| `wash` | [Wasmcloud Shell][wash] controls your [wasmcloud][wasmcloud] host instances and enables building components |
+| `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                       |
+| `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                         |
 
 [wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli
 [node]: https://nodejs.org
@@ -50,15 +50,15 @@ wash up
 
 This command won't return (as it's the running host process), but you can view the output of the host.
 
-## Build the actor component
+## Build the component
 
-To build the [actor component][wasmcloud-actor-component], we can use `wash`:
+To build the [component][wasmcloud-actor-component], we can use `wash`:
 
 ```console
 wash build
 ```
 
-This will build and sign the actor and place a signed [WebAssembly component][wasm-component] at `build/index_s.wasm`.
+This will build and sign the component and place a signed [WebAssembly component][wasm-component] at `build/index_s.wasm`.
 
 `build` performs many substeps (see `package.json` for details):
 
@@ -66,13 +66,13 @@ This will build and sign the actor and place a signed [WebAssembly component][wa
 - (`build:component`) builds a [WebAssembly component][wasm-component] using the [`jco` toolchain][jco]
 - (`build:actor`) sign an actor for this component using `wash`
 
-[wasmcloud-actor-component]: https://wasmcloud.com/docs/concepts/webassembly-components
+[wasmcloud-component]: https://wasmcloud.com/docs/concepts/webassembly-components
 [wasm-component]: https://component-model.bytecodealliance.org/
 [jco]: https://github.com/bytecodealliance/jco
 
-## Start the actor along with the HTTP server provider
+## Start the component along with the HTTP server provider
 
-To start the actor, HTTP server provider and everything we need to run:
+To start the component, HTTP server provider and everything we need to run:
 
 ```console
 npm run wadm:start
@@ -80,9 +80,9 @@ npm run wadm:start
 
 This command will deploy the application to your running wasmcloud host, using [`wadm`][wadm], a declarative WebAssembly orchestrator.
 
-## Send a request to the running actor
+## Send a request to the running component
 
-To send a request to the running actor (via the HTTP server provider):
+To send a request to the running component (via the HTTP server provider):
 
 ```console
 curl localhost:8081
@@ -92,7 +92,7 @@ curl localhost:8081
 > Confused as to why it is port 8081?
 >
 > See `typescript-http-hello-world.wadm.yaml` for more information on the pieces of the architecture;
-> actors, providers, and link definitions.
+> components, providers, and link definitions.
 
 ## (Optional) reload on code change
 

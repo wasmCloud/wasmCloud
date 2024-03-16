@@ -23,7 +23,7 @@ The dependency check script will also install this for you, see that section bel
 
 ### `build` Integration Tests
 
-To run the `wash build` integration tests that compile actors using actual language toolchains, you must have those toolchains installed. Currently the requirements for this are:
+To run the `wash build` integration tests that compile components using actual language toolchains, you must have those toolchains installed. Currently the requirements for this are:
 
 - [Rust](https://rustup.rs/)
   - The `wasm32-unknown-unknown` target must be installed.
