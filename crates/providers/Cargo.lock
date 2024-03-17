@@ -2607,7 +2607,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-compression",
  "data-encoding",
@@ -4033,7 +4033,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -4216,7 +4216,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.33.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4237,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4470,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4569,7 +4569,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4589,7 +4589,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "heck",

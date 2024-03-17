@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-compression",
  "data-encoding",
@@ -5009,7 +5009,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.26.0"
+version = "0.27.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -5079,7 +5079,7 @@ dependencies = [
  "warp-embed",
  "wascap",
  "wash-lib",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5090,7 +5090,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5143,7 +5143,7 @@ dependencies = [
  "wascap",
  "wasm-encoder 0.41.2",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-core",
  "wasmparser",
  "wat",
@@ -5311,7 +5311,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "0.82.0"
+version = "1.0.0-alpha.2"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -5342,7 +5342,7 @@ dependencies = [
  "uuid 1.7.0",
  "vaultrs",
  "wascap",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-core",
  "wasmcloud-host",
  "wasmcloud-test-util",
@@ -5409,7 +5409,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.33.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5430,7 +5430,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5486,7 +5486,7 @@ dependencies = [
  "url",
  "uuid 1.7.0",
  "wascap",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
@@ -5511,7 +5511,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5616,7 +5616,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5630,13 +5630,13 @@ dependencies = [
  "tracing",
  "url",
  "wascap",
- "wasmcloud-control-interface 0.33.0",
+ "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-host",
 ]
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "heck 0.4.1",
