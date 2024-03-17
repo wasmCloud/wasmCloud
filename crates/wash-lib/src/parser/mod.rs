@@ -122,7 +122,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             // TODO(#1624): Default to ~/.wash/keys
             key_directory: raw_config
                 .key_directory
-                .unwrap_or_else(|| PathBuf::from("./keys")),
+                .unwrap_or_else(|| PathBuf::from("~/.wash/keys")),
             wasm_target: raw_config
                 .wasm_target
                 .map(WasmTarget::from)
@@ -192,7 +192,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
             // TODO(#1624): Default to ~/.wash/keys
             key_directory: raw_config
                 .key_directory
-                .unwrap_or_else(|| PathBuf::from("./keys")),
+                .unwrap_or_else(|| PathBuf::from("~/.wash/keys")),
         })
     }
 }
