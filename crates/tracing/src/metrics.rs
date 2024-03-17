@@ -1,5 +1,5 @@
+#[cfg(feature = "otel")]
 use anyhow::Context;
-
 #[cfg(not(feature = "otel"))]
 pub fn configure_metrics(_: String, _: &wasmcloud_core::OtelConfig) -> anyhow::Result<()> {
     // no-op for when otel isn't enabled.
@@ -54,7 +54,6 @@ struct ExponentialHistogramAggregationSelector {
 
 impl ExponentialHistogramAggregationSelector {
     /// Create a new  aggregation selector.
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
