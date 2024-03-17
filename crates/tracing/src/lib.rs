@@ -1,3 +1,4 @@
+#[cfg(feature = "otel")]
 use heck::ToKebabCase;
 #[cfg(feature = "otel")]
 pub use opentelemetry::{
@@ -24,7 +25,7 @@ pub fn configure_observability(
 ) -> anyhow::Result<()> {
     // if OTEL is not enabled, explicitly do not emit observability
     let otel_config = OtelConfig::default();
-    traces::configure_tracing("", otel_config, use_structured_logging, log_level_override)
+    traces::configure_tracing("", &otel_config, use_structured_logging, log_level_override)
 }
 
 /// Configures observability for each type of signal
