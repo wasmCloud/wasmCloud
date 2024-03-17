@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
-use serde::Deserialize;
 use tokio::fs::{self, create_dir_all, File};
 use tokio::io::AsyncSeekExt as _;
 use tokio::sync::RwLock;
@@ -40,7 +39,7 @@ const FIRST_SEQ_NBR: u64 = 0;
 
 pub type ChunkOffsetKey = (String, usize);
 
-#[derive(Default, Debug, Clone, Deserialize)]
+#[derive(Default, Debug, Clone)]
 struct FsProviderConfig {
     root: Arc<PathBuf>,
 }
