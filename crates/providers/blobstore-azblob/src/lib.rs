@@ -612,22 +612,29 @@ impl BlobstoreAzblobProvider {
                         .await
                         .context("failed to retrieve azure blobstore client")?;
 
-                    let stream = client.list_containers().into_stream();
+                    let stream = client
+                        .container_client(container)
+                        .list_blobs()
+                        .into_stream();
                     let container_names = stream
                         .map(|res| {
                             res.map(|list_response| {
                                 list_response
-                                    .containers
-                                    .iter()
-                                    .map(|container| {
-                                        Some(wrpc_transport::Value::String(container.name.clone()))
+                                    .blobs
+                                    .blobs()
+                                    .map(|blob| {
+                                        Some(wrpc_transport::Value::String(blob.name.clone()))
                                     })
                                     .collect::<Vec<_>>()
                             })
                             .map_err(|e| anyhow::anyhow!(e))
                         })
                         .skip(offset.unwrap_or_default().try_into().unwrap_or(usize::MAX))
-                        .take(limit.unwrap_or_default().try_into().unwrap_or(usize::MAX));
+                        .take(
+                            limit
+                                .and_then(|limit| limit.try_into().ok())
+                                .unwrap_or(usize::MAX),
+                        );
 
                     anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(container_names)))
                 }
