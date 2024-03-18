@@ -28,9 +28,9 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context};
 use heck::{ToKebabCase, ToUpperCamelCase};
-use proc_macro2::{Ident, Span, TokenStream, TokenTree};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{
     parse_macro_input, punctuated::Punctuated, visit_mut::VisitMut, ImplItemFn, ItemEnum,
@@ -685,40 +685,6 @@ fn build_wrpc_impls(impl_struct_name: &Ident, resolve: &Resolve) -> anyhow::Resu
     );
 
     Ok(tokens)
-}
-
-/// Check if a given type has a wrapped type (ex. Option<T>, Vec<T>)
-pub(crate) fn has_wrapped_type(
-    ty: syn::Type,
-    expected: impl AsRef<str>,
-) -> Result<Option<syn::Type>> {
-    let mut tt = ty.to_token_stream().into_iter().collect::<Vec<TokenTree>>();
-    match &mut tt[..] {
-        // If we can see the Wrapper<T> pattern, we can extract the inner type
-        [
-            TokenTree::Ident(w),  // Wrapper (Option)
-            TokenTree::Punct(ref p),  // <
-            ..,  // T
-            TokenTree::Punct(_) // >
-        ] if *w == expected.as_ref() && p.as_char() == '<' => {
-            let inner_ty = syn::parse2::<syn::Type>(TokenStream::from_iter(tt.drain(2..tt.len()-1).collect::<Vec<TokenTree>>()))
-                .map_err(|e| anyhow!(e))
-                .context("failed to parse type out of wrapper")?;
-            Ok(Some(inner_ty))
-        },
-        // If we didn't match, then there's no inner type/this isn't a wrapper
-        _ => Ok(None),
-    }
-}
-
-/// Check if a given [`syn::Type`] is an optional (i.e. Option<T>), returning the inner type
-pub(crate) fn has_option_type(ty: syn::Type) -> Result<Option<syn::Type>> {
-    has_wrapped_type(ty, "Option")
-}
-
-/// Check if a given [`syn::Type`] is an list type (i.e. Vec<T>), returning the inner type
-pub(crate) fn has_vec_type(ty: syn::Type) -> Result<Option<syn::Type>> {
-    has_wrapped_type(ty, "Vec")
 }
 
 #[cfg(test)]

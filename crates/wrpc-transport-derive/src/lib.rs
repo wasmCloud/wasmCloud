@@ -41,7 +41,7 @@ pub mod deps {
     pub use wrpc_transport;
 }
 
-pub use wrpc_transport_derive_macro::{Encode, Receive};
+pub use wrpc_transport_derive_macro::{Encode, Receive, Subscribe};
 
 /// Re-export of [`wrpc_transport::Encode`] to make usage easier
 pub use wrpc_transport::{Encode, Receive};

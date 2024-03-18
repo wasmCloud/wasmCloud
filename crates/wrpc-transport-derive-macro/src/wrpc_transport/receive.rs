@@ -32,6 +32,81 @@ pub fn derive_receive_inner(input: TokenStream) -> Result<TokenStream> {
     }
 }
 
+/// Derive [`wrpc_transport::Subscribe`] for a given input stream
+pub fn derive_subscribe_inner(input: TokenStream) -> Result<TokenStream> {
+    let item = syn::parse2::<syn::Item>(input)
+        .map_err(|e| anyhow!(e))
+        .context("failed to parse input into item")?;
+
+    // Depending on the type of struct, generate the impl
+    match item {
+        // For enums we generate an impl of Subscribe
+        syn::Item::Enum(_) => {
+            derive_subscribe_inner_for_enum(item).context("failed to derive for enum")
+        }
+
+        // For structs we generate an impl for Subscribe
+        syn::Item::Struct(_) => {
+            derive_subscribe_inner_for_struct(item).context("failed to derive for struct")
+        }
+
+        // All other types of syntax tree are not allowed
+        _ => {
+            warn!("derive(Subscribe) does not support this syntax item");
+            Ok(TokenStream::new())
+        }
+    }
+}
+
+/// Derive `Subscribe` for a Rust struct
+fn derive_subscribe_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
+    let syn::Item::Struct(s) = item else {
+        bail!("provided syn::Item is not a struct");
+    };
+
+    let struct_name = s.ident;
+
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(s.attrs)?;
+
+    // Build the generated impl
+    Ok(quote::quote!(
+        #[automatically_derived]
+        impl #crate_path::deps::wrpc_transport::Subscribe for #struct_name
+        {
+            async fn subscribe<T: #crate_path::deps::wrpc_transport::Subscriber + Send + Sync>(
+                subscriber: &T,
+                subject: T::Subject,
+            ) -> Result<Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T::Stream>>, T::SubscribeError> {
+                Ok(None)
+            }
+        }
+    ))
+}
+
+/// Derive `Subscribe` for a Rust struct
+fn derive_subscribe_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
+    let syn::Item::Enum(e) = item else {
+        bail!("provided syn::Item is not an enum");
+    };
+
+    let enum_name = e.ident;
+
+    let AttrOptions { crate_path } = AttrOptions::try_from_attributes(e.attrs)?;
+
+    Ok(quote::quote!(
+        #[automatically_derived]
+        impl #crate_path::deps::wrpc_transport::Subscribe for #enum_name
+        {
+            async fn subscribe<T: #crate_path::deps::wrpc_transport::Subscriber + Send + Sync>(
+                subscriber: &T,
+                subject: T::Subject,
+            ) -> Result<Option<#crate_path::deps::wrpc_transport::AsyncSubscription<T::Stream>>, T::SubscribeError> {
+                Ok(None)
+            }
+        }
+    ))
+}
+
 /// Derive `Receive` for a Rust struct
 fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
     let syn::Item::Struct(s) = item else {

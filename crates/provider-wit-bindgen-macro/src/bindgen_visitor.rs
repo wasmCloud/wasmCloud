@@ -614,7 +614,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // Add the attributes we want to be present to the enum
                     e.attrs.append(&mut vec![
                         parse_quote!(
-                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Encode, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive)]
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Encode, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Subscribe)]
                         ),
                         parse_quote!(
                             #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde")]
@@ -725,7 +725,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                     // Add the attributes we want to be present
                     s.attrs.append(&mut vec![
                         parse_quote!(
-                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Encode, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive)]
+                            #[derive(Debug, ::wasmcloud_provider_wit_bindgen::deps::serde::Serialize, ::wasmcloud_provider_wit_bindgen::deps::serde::Deserialize, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Encode, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Receive, ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport_derive::Subscribe)]
                         ),
                         parse_quote!(
                             #[serde(crate = "::wasmcloud_provider_wit_bindgen::deps::serde", rename_all = "camelCase")]

@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use bytes::Bytes;
 use futures::stream::empty;
 
-use wrpc_transport_derive::{Encode, Receive};
+use wrpc_transport_derive::{Encode, Receive, Subscribe};
 
 #[macro_use]
 mod common;
@@ -10,7 +10,7 @@ mod common;
 /// Ensure that an Encode call works on one for which it is derived
 #[tokio::test]
 async fn roundtrip_single_member_struct() -> Result<()> {
-    #[derive(Debug, PartialEq, Eq, Encode, Receive, Default)]
+    #[derive(Debug, PartialEq, Eq, Encode, Receive, Default, Subscribe)]
     struct TestStruct {
         one: u32,
     }
@@ -36,7 +36,7 @@ async fn roundtrip_single_member_struct() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_struct_simple() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default, Subscribe)]
     struct TestStruct {
         byte: u8,
         string: String,
@@ -55,7 +55,7 @@ async fn roundtrip_struct_simple() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_struct_with_option() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default, Subscribe)]
     struct TestStruct {
         byte: u8,
         string: String,
@@ -85,7 +85,7 @@ async fn roundtrip_struct_with_option() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_struct_with_vec() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive, Default, Subscribe)]
     struct TestStruct {
         byte: u8,
         string: String,
