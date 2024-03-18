@@ -7,3 +7,7 @@ world logging {
 world incoming-http {
     export wasi:http/incoming-handler@0.2.0;
 }
+
+world messaging-handler {
+    export wasmcloud:messaging/handler;
+}

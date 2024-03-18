@@ -1,50 +1,34 @@
+// Message broker interface
+// This is a phase 1 interface, and is subject to change
+// This interface is used to send and receive messages from a message broker
+
+// Note that in this phase 1 interface, subscriptions are defined out of band from this
+// component. Components themselves cannot establish or terminate subscriptions. This may
+// change for phase 2.
 package wasmcloud:messaging;
 
-/// This interface represents the functions necessary
-/// to implement the [messaging wasmCloud interface](https://github.com/wasmCloud/interfaces/blob/main/messaging/messaging.smithy)
-///
-/// Derived from https://github.com/wasmCloud/interfaces/blob/f020c93d4cacd50318301f686e2f059a15862e1e/messaging/messaging.smithy
-interface messaging {
-    /// A message to be published
-    record message {
-        /// Subject (or topic) of the message
+// Types common to message broker interactions
+interface types {
+    // A message sent to or received from a broker
+    record broker-message {
         subject: string,
-
-        /// Topic on which the reply should be sent
+        body: list<u8>,
         reply-to: option<string>,
-
-        /// Message payload
-        body: list<u8>,
     }
-
-    /// Message sent as part of a request, with timeout
-    record request-message {
-        /// Subject (or topic) of the message
-        subject: string,
-
-        /// Message payload
-        body: list<u8>,
-
-        /// Timeout in milliseconds
-        timeout-ms: u32,
-    }
-
-    /// Publish - send a message
-    ///
-    /// This function returns immediately after the message has been sent.
-    ///
-    /// If the sender expects to receive an asynchronous reply, the replyTo field should be
-    /// filled with the subject for teh response.
-    publish: func(msg: message);
-
-    /// Request - send a message in a request/reply pattern, waiting for a response
-    request: func(msg: request-message) -> message;
 }
 
-/// Actors that receive messages sent by a messaging provider adhere to this interface
-interface message-subscriber {
-    use messaging.{message};
+interface handler {
+    use types.{broker-message};
 
-    /// Subscription handler
-    handle-message: func(msg: message);
+    // Callback handled to invoke a function when a message is received from a subscription
+    handle-message: func(msg: broker-message) -> result<_, string>;
+}
+
+interface consumer {
+    use types.{broker-message};
+
+    // Perform a request operation on a subject
+    request: func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, string>;
+    // Publish a message to a subject without awaiting a response
+    publish: func(msg: broker-message) -> result<_, string>;
 }

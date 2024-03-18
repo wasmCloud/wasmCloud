@@ -1,8 +1,0 @@
-[package]
-name = "foobar-component-command"
-edition = "2021"
-version = "0.1.0"
-
-[dependencies]
-anyhow = { workspace = true, features = ["std"] }
-rmp-serde = { workspace = true }

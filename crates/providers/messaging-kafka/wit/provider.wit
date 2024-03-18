@@ -1,6 +1,6 @@
 package wasmcloud:provider-messaging-kafka;
 
 world provider-messaging-kafka {
-    import wasmcloud:messaging/message-subscriber;
-    export wasmcloud:messaging/messaging;
+    import wasmcloud:messaging/handler;
+    export wasmcloud:messaging/consumer;
 }

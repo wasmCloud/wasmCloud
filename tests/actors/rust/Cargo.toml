@@ -1,13 +1,8 @@
 [workspace]
 members = [
-    "blobstore-http-smithy",
     "builtins-component-reactor",
-    "foobar-component-command",
-    "kv-http-smithy",
     "lattice-control-http-smithy", 
     "messaging-invoker",
-    "messaging-receiver-smithy",
-    "messaging-sender-http-smithy",
     "pinger-config-component",
     "ponger-config-component",
     "wrpc-pinger-component",

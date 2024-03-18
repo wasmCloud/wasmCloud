@@ -162,35 +162,17 @@ impl capability::Messaging for Handler {
     async fn request(
         &self,
         subject: String,
-        body: Option<Vec<u8>>,
+        body: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
         assert_eq!(subject, "test-messaging-request");
-        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
+        assert_eq!(body, b"foo".as_slice());
         assert_eq!(timeout, Duration::from_millis(1000));
         Ok(messaging::types::BrokerMessage {
             subject,
-            body: Some("bar".into()),
+            body: "bar".into(),
             reply_to: None,
         })
-    }
-
-    async fn request_multi(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        assert_eq!(subject, "test-messaging-request-multi");
-        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
-        assert_eq!(timeout, Duration::from_millis(1000));
-        assert_eq!(max_results, 1);
-        Ok(vec![messaging::types::BrokerMessage {
-            subject,
-            body: Some("bar".into()),
-            reply_to: None,
-        }])
     }
 
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
@@ -343,7 +325,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
         ) => {
             ensure!(subject == "test-messaging-publish");
             ensure!(reply_to.as_deref() == Some("noreply"));
-            body.context("body missing")?
+            body
         }
         (None, None) => bail!("no messages published"),
         _ => bail!("too many messages published"),

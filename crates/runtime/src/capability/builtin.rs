@@ -3,6 +3,7 @@ use super::{blobstore, format_opt, messaging};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
+use core::future::Future;
 use core::str::FromStr;
 use core::time::Duration;
 
@@ -422,21 +423,21 @@ pub trait Messaging {
     async fn request(
         &self,
         subject: String,
-        body: Option<Vec<u8>>,
+        body: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage>;
 
-    /// Handle `wasmcloud:messaging/consumer.request_multi`
-    async fn request_multi(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>>;
-
     /// Handle `wasmcloud:messaging/consumer.publish`
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()>;
+}
+
+/// `wasmcloud:messaging/handler` implementation
+pub trait MessagingHandler {
+    /// Handle `wasmcloud:messaging/handler.handle-message`
+    fn handle_message(
+        &self,
+        msg: &messaging::types::BrokerMessage,
+    ) -> impl Future<Output = anyhow::Result<Result<(), String>>> + Send;
 }
 
 #[async_trait]
@@ -725,24 +726,11 @@ impl Messaging for Handler {
     async fn request(
         &self,
         subject: String,
-        body: Option<Vec<u8>>,
+        body: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
         self.proxy_messaging("wasmcloud:messaging/consumer.request")?
             .request(subject, body, timeout)
-            .await
-    }
-
-    #[instrument(skip(body))]
-    async fn request_multi(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        self.proxy_messaging("wasmcloud:messaging/consumer.request-multi")?
-            .request_multi(subject, body, timeout, max_results)
             .await
     }
 

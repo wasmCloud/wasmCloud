@@ -45,8 +45,8 @@ use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, LinkName, Ote
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
-    KeyValueAtomic, KeyValueEventual, LatticeInterfaceTarget, Logging, Messaging, OutgoingHttp,
-    TargetEntity,
+    KeyValueAtomic, KeyValueEventual, LatticeInterfaceTarget, Logging, Messaging,
+    MessagingHandler as _, OutgoingHttp, TargetEntity,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -945,7 +945,7 @@ impl Messaging for Handler {
     async fn request(
         &self,
         subject: String,
-        body: Option<Vec<u8>>,
+        body: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
         let LatticeInterfaceTarget { id, .. } = self
@@ -970,39 +970,6 @@ impl Messaging for Handler {
         let BrokerMessage(msg) = res.map_err(|err| anyhow!(err).context("function failed"))?;
         tx.await.context("failed to transmit parameters")?;
         Ok(msg)
-    }
-
-    #[instrument(skip(self, body))]
-    async fn request_multi(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasmcloud",
-                "messaging",
-                "consumer",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
-        let (res, tx) = wrpc
-            .invoke_static::<Result<Vec<_>, String>>(
-                "wasmcloud:messaging/consumer",
-                "request-multi",
-                (subject, body, timeout, max_results),
-            )
-            .await
-            .context("failed to invoke `wasmcloud:messaging/consumer.request`")?;
-        // TODO: return a result directly
-        let msgs = res.map_err(|err| anyhow!(err).context("function failed"))?;
-        tx.await.context("failed to transmit parameters")?;
-        let msgs = msgs.into_iter().map(|BrokerMessage(msg)| msg).collect();
-        Ok(msgs)
     }
 
     #[instrument(skip_all)]
@@ -1103,13 +1070,14 @@ impl Deref for Actor {
 }
 
 // This enum is used to differentiate between component export invocations
-pub(crate) enum InvocationParams {
+enum InvocationParams {
     Custom {
         instance: Arc<String>,
         name: Arc<String>,
         params: Vec<wrpc_transport::Value>,
     },
     IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
+    MessagingHandleMessage(BrokerMessage),
 }
 
 impl std::fmt::Debug for InvocationParams {
@@ -1121,6 +1089,9 @@ impl std::fmt::Debug for InvocationParams {
                 .field("function", name)
                 .finish(),
             InvocationParams::IncomingHttpHandle(_) => f.debug_tuple("IncomingHttpHandle").finish(),
+            InvocationParams::MessagingHandleMessage(_) => {
+                f.debug_tuple("MessagingHandleMessage").finish()
+            }
         }
     }
 }
@@ -1150,6 +1121,10 @@ impl Actor {
             InvocationParams::IncomingHttpHandle(_) => (
                 "wasi:http/incoming-handler".to_string(),
                 "handle".to_string(),
+            ),
+            InvocationParams::MessagingHandleMessage(_) => (
+                "wasmcloud:messaging/handler".to_string(),
+                "handle-message".to_string(),
             ),
         };
         let PolicyResponse {
@@ -1276,6 +1251,25 @@ impl Actor {
                     .record_component_invocation(elapsed, &attributes, res.is_err());
                 res?;
                 Ok(())
+            }
+            InvocationParams::MessagingHandleMessage(BrokerMessage(msg)) => {
+                let actor = actor
+                    .into_messaging_handler()
+                    .await
+                    .context("failed to instantiate `wasmcloud:messaging/handler`")?;
+                let res = actor
+                    .handle_message(&msg)
+                    .await
+                    .context("failed to call `wasmcloud:messaging/handler.handle-message`");
+                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+                attributes.push(KeyValue::new(
+                    "operation",
+                    "wasmcloud:messaging/handler.handle-message",
+                ));
+                self.metrics
+                    .record_component_invocation(elapsed, &attributes, res.is_err());
+                let res = res?;
+                transmitter.transmit_static(result_subject, res).await
             }
         }
     }
@@ -2139,6 +2133,29 @@ impl Host {
                              }| AcceptedInvocation {
                                 context,
                                 params: InvocationParams::IncomingHttpHandle(params.0),
+                                result_subject,
+                                error_subject,
+                                transmitter,
+                            },
+                        )
+                    })))
+                }
+                "wasmcloud:messaging/handler" => {
+                    let invocations = wrpc
+                        .serve_static("wasmcloud:messaging/handler", "handle-message")
+                        .await
+                        .context("failed to serve `wasmcloud:messaging/handler.handle-message`")?;
+                    exports.push(Box::pin(invocations.map(move |invocation| {
+                        invocation.map(
+                            |AcceptedInvocation {
+                                 context,
+                                 params,
+                                 result_subject,
+                                 error_subject,
+                                 transmitter,
+                             }| AcceptedInvocation {
+                                context,
+                                params: InvocationParams::MessagingHandleMessage(params),
                                 result_subject,
                                 error_subject,
                                 transmitter,

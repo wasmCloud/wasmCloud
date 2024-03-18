@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 wit_bindgen::generate!({
     world: "messaging-invoker",
     exports: {
-        "wasmcloud:messaging/message-subscriber": Subscriber,
+        "wasmcloud:messaging/handler": Subscriber,
     },
     additional_derives: [serde::Serialize, serde::Deserialize],
 });
@@ -18,9 +18,8 @@ struct Subscriber;
 use wasi::logging::logging;
 use wasmcloud::bus::lattice;
 use wasmcloud::keyvalue::key_value;
-use wasmcloud::messaging::messaging;
-
-use exports::wasmcloud::messaging::message_subscriber;
+use wasmcloud::messaging::consumer::publish;
+use wasmcloud::messaging::types;
 
 /// Logging context used for grouping messages together when passed through wasi:logging
 const LOG_CTX: &str = "messaging-invoker";
@@ -49,8 +48,8 @@ struct InvokeRequest {
     params_json_b64: Vec<String>,
 }
 
-impl message_subscriber::Guest for Subscriber {
-    fn handle_message(msg: message_subscriber::Message) {
+impl exports::wasmcloud::messaging::handler::Guest for Subscriber {
+    fn handle_message(msg: types::BrokerMessage) -> Result<(), String> {
         logging::log(
             logging::Level::Debug,
             LOG_CTX,
@@ -68,12 +67,9 @@ impl message_subscriber::Guest for Subscriber {
         } = match serde_json::from_slice(&msg.body) {
             Ok(v) => v,
             Err(e) => {
-                logging::log(
-                    logging::Level::Error,
-                    LOG_CTX,
-                    format!("failed to decode payload into invocation request: {e}").as_str(),
-                );
-                return;
+                return Err(format!(
+                    "failed to decode payload into invocation request: {e}"
+                ))
             }
         };
 
@@ -87,12 +83,7 @@ impl message_subscriber::Guest for Subscriber {
             .map(Bytes::from)
             .collect::<Vec<Bytes>>();
         if params_json_b64.len() != params_json.len() {
-            logging::log(
-                logging::Level::Error,
-                LOG_CTX,
-                format!("failed to decode one or more base64 encoded JSON params while executing operation [{operation}]").as_str(),
-            );
-            return;
+            return Err(format!("failed to decode one or more base64 encoded JSON params while executing operation [{operation}]"));
         }
 
         // Set the intended link name before invocation, if necessary
@@ -120,24 +111,17 @@ impl message_subscriber::Guest for Subscriber {
         );
 
         // Translate the incoming invocation request to a static invocation
-        match handle_operation(&operation, params_json) {
-            Ok(v) => {
-                if let Some(resp_subject) = msg.reply_to {
-                    messaging::publish(&messaging::Message {
-                        subject: resp_subject,
-                        reply_to: None,
-                        body: v.unwrap_or_default().to_vec(),
-                    });
-                }
-            }
-            Err(e) => {
-                logging::log(
-                    logging::Level::Error,
-                    LOG_CTX,
-                    format!("failed to handle operation [{operation}]: {e}").as_str(),
-                );
-            }
+        let v = handle_operation(&operation, params_json)
+            .with_context(|| format!("failed to handle operation [{operation}]"))
+            .map_err(|err| format!("{err:#}"))?;
+        if let Some(resp_subject) = msg.reply_to {
+            publish(&types::BrokerMessage {
+                subject: resp_subject,
+                reply_to: None,
+                body: v.unwrap_or_default().into(),
+            })?;
         }
+        Ok(())
     }
 }
 

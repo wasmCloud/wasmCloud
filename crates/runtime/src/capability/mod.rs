@@ -5,7 +5,8 @@ pub mod provider;
 
 pub use builtin::{
     ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual,
-    LatticeInterfaceTarget, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
+    LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
+    OutgoingHttpRequest, TargetEntity,
 };
 
 // NOTE: this import is used below in bindgen
