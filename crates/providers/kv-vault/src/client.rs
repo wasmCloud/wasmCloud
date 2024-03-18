@@ -35,6 +35,7 @@ impl Client {
                 wrapping: false,
                 timeout: None,
                 namespace: None,
+                identity: None,
             })?),
             namespace: config.mount,
         })
