@@ -37,7 +37,7 @@ use tracing::trace;
 use tracing_subscriber::EnvFilter;
 
 use crate::wrpc_transport::encode::derive_encode_inner;
-use crate::wrpc_transport::receive::derive_receive_inner;
+use crate::wrpc_transport::receive::{derive_receive_inner, derive_subscribe_inner};
 
 mod config;
 mod wrpc_transport;
@@ -70,6 +70,22 @@ pub fn derive_receive(input: proc_macro::TokenStream) -> proc_macro::TokenStream
 
     let derived = derive_receive_inner(input).expect("failed to perform derive");
     trace!("derive(wrpc_transport::Receive) output:\n---\n{derived}\n---");
+
+    derived.into()
+}
+
+/// Derive an [`wrpc_transport::Subscribe`] implementation
+#[proc_macro_derive(Subscribe, attributes(wrpc_transport_derive))]
+pub fn derive_subscribe(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .try_init();
+
+    let input = TokenStream::from(input);
+    trace!("derive(wrpc_transport::Subscribe) input\n---\n{input}\n---");
+
+    let derived = derive_subscribe_inner(input).expect("failed to perform derive");
+    trace!("derive(wrpc_transport::Subscribe) output:\n---\n{derived}\n---");
 
     derived.into()
 }
