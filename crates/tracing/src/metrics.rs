@@ -1,10 +1,5 @@
 #[cfg(feature = "otel")]
 use anyhow::Context;
-#[cfg(not(feature = "otel"))]
-pub fn configure_metrics(_: String, _: &wasmcloud_core::OtelConfig) -> anyhow::Result<()> {
-    // no-op for when otel isn't enabled.
-    Ok(())
-}
 
 #[cfg(feature = "otel")]
 #[allow(clippy::missing_errors_doc)]
@@ -52,6 +47,7 @@ struct ExponentialHistogramAggregationSelector {
     pub(crate) _private: (),
 }
 
+#[cfg(feature = "otel")]
 impl ExponentialHistogramAggregationSelector {
     /// Create a new  aggregation selector.
     pub fn new() -> Self {
