@@ -1,7 +1,7 @@
 use anyhow::Context;
 use wasmcloud_provider_sdk::run_provider_handler;
 
-use wasmcloud_provider_blobstore_azblob::BlobstoreAzblobProvider;
+use wasmcloud_provider_blobstore_azure::BlobstoreAzblobProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
