@@ -4699,7 +4699,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-provider-blobstore-azblob"
+name = "wasmcloud-provider-blobstore-azure"
 version = "0.1.0"
 dependencies = [
  "anyhow",
