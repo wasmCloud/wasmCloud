@@ -2269,29 +2269,8 @@ impl Host {
         self.store_component_spec(&actor_id, &component_spec)
             .await?;
 
-        let polyfilled_imports = component.polyfilled_imports().clone();
         // Map the imports to pull out the result types of the functions for lookup when invoking them
-        let imports = polyfilled_imports
-            .iter()
-            .map(|(instance, funcs)| {
-                (
-                    instance.clone(),
-                    funcs
-                        .iter()
-                        .filter_map(|(name, func)| {
-                            match func {
-                                DynamicFunction::Static { results, .. } => {
-                                    Some((name.clone(), results.clone()))
-                                }
-                                // We do not support method imports (on resources) at this time.
-                                DynamicFunction::Method { .. } => None,
-                            }
-                        })
-                        .collect::<HashMap<_, _>>(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
+        let imports = get_import_results(&component);
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
@@ -2735,6 +2714,8 @@ impl Host {
             }
 
             let max = actor.max_instances;
+            let mut handler = actor.handler.clone();
+            handler.polyfilled_imports = get_import_results(&new_actor);
             let Ok(new_actor) = self
                 .instantiate_actor(
                     &annotations,
@@ -2742,7 +2723,7 @@ impl Host {
                     actor_id.to_string(),
                     max,
                     new_actor.clone(),
-                    actor.handler.clone(),
+                    handler,
                 )
                 .await
             else {
@@ -4326,6 +4307,33 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             let name = async_nats::header::HeaderName::from_str(k.as_str()).ok()?;
             let value = async_nats::header::HeaderValue::from_str(v.as_str()).ok()?;
             Some((name, value))
+        })
+        .collect()
+}
+
+fn get_import_results(
+    component: &wasmcloud_runtime::Component,
+) -> HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>> {
+    let polyfilled_imports = component.polyfilled_imports().clone();
+    // Map the imports to pull out the result types of the functions for lookup when invoking them
+    polyfilled_imports
+        .iter()
+        .map(|(instance, funcs)| {
+            (
+                instance.clone(),
+                funcs
+                    .iter()
+                    .filter_map(|(name, func)| {
+                        match func {
+                            DynamicFunction::Static { results, .. } => {
+                                Some((name.clone(), results.clone()))
+                            }
+                            // We do not support method imports (on resources) at this time.
+                            DynamicFunction::Method { .. } => None,
+                        }
+                    })
+                    .collect::<HashMap<_, _>>(),
+            )
         })
         .collect()
 }
