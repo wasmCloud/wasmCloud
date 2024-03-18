@@ -219,7 +219,7 @@ impl Handler {
 
 #[async_trait]
 impl Blobstore for Handler {
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
@@ -243,7 +243,7 @@ impl Blobstore for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::Blobstore;
 
@@ -267,7 +267,7 @@ impl Blobstore for Handler {
         Ok(exists)
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
@@ -291,7 +291,7 @@ impl Blobstore for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn container_info(
         &self,
         name: &str,
@@ -322,7 +322,7 @@ impl Blobstore for Handler {
         })
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn get_data(
         &self,
         container: &str,
@@ -358,7 +358,7 @@ impl Blobstore for Handler {
         Ok(data)
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
@@ -385,7 +385,7 @@ impl Blobstore for Handler {
         Ok(has)
     }
 
-    #[instrument(skip(value))]
+    #[instrument(level = "trace", skip(self, value))]
     async fn write_data(
         &self,
         container: &str,
@@ -425,7 +425,7 @@ impl Blobstore for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
@@ -449,7 +449,7 @@ impl Blobstore for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn list_objects(
         &self,
         container: &str,
@@ -477,7 +477,7 @@ impl Blobstore for Handler {
         Ok(names)
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn object_info(
         &self,
         container: &str,
@@ -514,7 +514,7 @@ impl Blobstore for Handler {
         })
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
@@ -656,7 +656,7 @@ impl Bus for Handler {
 
 #[async_trait]
 impl KeyValueAtomic for Handler {
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
         use wrpc_interface_keyvalue::Atomic;
 
@@ -677,8 +677,7 @@ impl KeyValueAtomic for Handler {
         Ok(value)
     }
 
-    #[allow(unused)] // TODO: Implement https://github.com/wasmCloud/wasmCloud/issues/457
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn compare_and_swap(
         &self,
         bucket: &str,
@@ -708,7 +707,7 @@ impl KeyValueAtomic for Handler {
 
 #[async_trait]
 impl KeyValueEventual for Handler {
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
         use wrpc_interface_keyvalue::Eventual;
 
@@ -729,7 +728,7 @@ impl KeyValueEventual for Handler {
         Ok(value)
     }
 
-    #[instrument(skip(self, value))]
+    #[instrument(level = "trace", skip(self, value))]
     async fn set(
         &self,
         bucket: &str,
@@ -761,7 +760,7 @@ impl KeyValueEventual for Handler {
         Ok(value)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
         use wrpc_interface_keyvalue::Eventual;
 
@@ -783,7 +782,7 @@ impl KeyValueEventual for Handler {
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
         use wrpc_interface_keyvalue::Eventual;
 
@@ -807,7 +806,7 @@ impl KeyValueEventual for Handler {
 
 #[async_trait]
 impl Logging for Handler {
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip(self))]
     async fn log(
         &self,
         level: logging::Level,
@@ -901,6 +900,7 @@ impl Encode for BrokerMessage {
 }
 
 impl Subscribe for BrokerMessage {
+    #[instrument(level = "trace", skip_all)]
     async fn subscribe<T: wrpc_transport::Subscriber + Send + Sync>(
         _subscriber: &T,
         _subject: T::Subject,
@@ -911,6 +911,7 @@ impl Subscribe for BrokerMessage {
 
 #[async_trait]
 impl<'a> Receive<'a> for BrokerMessage {
+    #[instrument(level = "trace", skip_all)]
     async fn receive<T>(
         payload: impl Buf + Send + 'a,
         rx: &mut (impl Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin),
@@ -941,7 +942,7 @@ impl<'a> Receive<'a> for BrokerMessage {
 
 #[async_trait]
 impl Messaging for Handler {
-    #[instrument(skip(self, body))]
+    #[instrument(level = "trace", skip(self, body))]
     async fn request(
         &self,
         subject: String,
@@ -972,7 +973,7 @@ impl Messaging for Handler {
         Ok(msg)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -1001,7 +1002,7 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
         request: wasmtime_wasi_http::types::OutgoingRequest,

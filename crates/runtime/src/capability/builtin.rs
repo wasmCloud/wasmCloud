@@ -457,28 +457,28 @@ pub trait OutgoingHttp {
 
 #[async_trait]
 impl Blobstore for Handler {
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
         self.proxy_blobstore("wasi:blobstore/blobstore.create-container")?
             .create_container(name)
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
         self.proxy_blobstore("wasi:blobstore/blobstore.container-exists")?
             .container_exists(name)
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
         self.proxy_blobstore("wasi:blobstore/blobstore.delete-container")?
             .delete_container(name)
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn container_info(
         &self,
         name: &str,
@@ -488,7 +488,7 @@ impl Blobstore for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn get_data(
         &self,
         container: &str,
@@ -500,14 +500,14 @@ impl Blobstore for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
         self.proxy_blobstore("wasi:blobstore/container.has-object")?
             .has_object(container, name)
             .await
     }
 
-    #[instrument(skip(value))]
+    #[instrument(level = "trace", skip(self, value))]
     async fn write_data(
         &self,
         container: &str,
@@ -519,14 +519,14 @@ impl Blobstore for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
         self.proxy_blobstore("wasi:blobstore/container.delete-objects")?
             .delete_objects(container, names)
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn list_objects(
         &self,
         container: &str,
@@ -537,7 +537,7 @@ impl Blobstore for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn object_info(
         &self,
         container: &str,
@@ -548,7 +548,7 @@ impl Blobstore for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
         self.proxy_blobstore("wasi:blobstore/container.clear")?
             .clear_container(container)
@@ -663,14 +663,14 @@ impl KeyValueAtomic for Handler {
 
 #[async_trait]
 impl KeyValueEventual for Handler {
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
         self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.get")?
             .get(bucket, key)
             .await
     }
 
-    #[instrument(skip(value))]
+    #[instrument(level = "trace", skip(self, value))]
     async fn set(
         &self,
         bucket: &str,
@@ -682,14 +682,14 @@ impl KeyValueEventual for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
         self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.delete")?
             .delete(bucket, key)
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip(self))]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
         self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.exists")?
             .exists(bucket, key)
@@ -699,7 +699,7 @@ impl KeyValueEventual for Handler {
 
 #[async_trait]
 impl IncomingHttp for Handler {
-    #[instrument(skip(request))]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
         request: ::http::Request<HyperIncomingBody>,
@@ -722,7 +722,7 @@ impl IncomingHttp for Handler {
 
 #[async_trait]
 impl Messaging for Handler {
-    #[instrument(skip(body))]
+    #[instrument(level = "trace", skip(self, body))]
     async fn request(
         &self,
         subject: String,
@@ -734,7 +734,7 @@ impl Messaging for Handler {
             .await
     }
 
-    #[instrument(skip(msg))]
+    #[instrument(level = "trace", skip_all)]
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
         self.proxy_messaging("wasmcloud:messaging/consumer.publish")?
             .publish(msg)
@@ -744,7 +744,7 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(skip(request))]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
         request: wasmtime_wasi_http::types::OutgoingRequest,

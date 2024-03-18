@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 use tokio::{select, spawn};
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use wasmcloud_provider_sdk::provider::invocation_context;
 use wasmcloud_provider_sdk::{
     get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
@@ -610,26 +610,29 @@ impl FsProvider {
             ..
         }: AcceptedInvocation<Option<HeaderMap>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let path = self.get_container(context.as_ref(), container).await?;
-                    let dir = fs::read_dir(path).await.context("failed to read path")?;
-                    let names = ReadDirStream::new(dir)
-                        .skip(offset.unwrap_or_default().try_into().unwrap_or(usize::MAX))
-                        .take(limit.unwrap_or_default().try_into().unwrap_or(usize::MAX))
-                        .then(|entry| async move {
-                            let entry = entry.context("failed to lookup directory entry")?;
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            // TODO: Remove the need for this wrapping
-                            Ok(vec![Some(wrpc_transport::Value::String(name))])
-                        });
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(names)))
-                }
-                .await,
-            )
-            .await
+        if let Err(err) =
+            transmitter
+                .transmit_static(
+                    result_subject,
+                    async {
+                        let path = self.get_container(context.as_ref(), container).await?;
+                        let offset = offset.unwrap_or_default().try_into().unwrap_or(usize::MAX);
+                        let limit = limit.unwrap_or(u64::MAX).try_into().unwrap_or(usize::MAX);
+                        debug!(path = ?path.display(), offset, limit, "read directory");
+                        let dir = fs::read_dir(path).await.context("failed to read path")?;
+                        let names = ReadDirStream::new(dir).skip(offset).take(limit).then(
+                            |entry| async move {
+                                let entry = entry.context("failed to lookup directory entry")?;
+                                let name = entry.file_name().to_string_lossy().to_string();
+                                // TODO: Remove the need for this wrapping
+                                Ok(vec![Some(wrpc_transport::Value::String(name))])
+                            },
+                        );
+                        anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(names)))
+                    }
+                    .await,
+                )
+                .await
         {
             error!(?err, "failed to transmit result")
         }
@@ -772,8 +775,10 @@ impl FsProvider {
                     let limit = end
                         .checked_sub(start)
                         .context("`end` must be greater than `start`")?;
+                    debug!(limit, "compute limit");
                     let limit = Arc::new(AtomicUsize::new(limit.try_into().unwrap_or(usize::MAX)));
                     let path = self.get_object(context.as_ref(), id).await?;
+                    debug!(path = ?path.display(), "open file");
                     let mut object = File::open(path).await.context("failed to open file")?;
                     object
                         .seek(SeekFrom::Start(start))
@@ -788,18 +793,22 @@ impl FsProvider {
                             }
                         })
                         .map(move |buf| {
-                            // TODO: Remove the need for this wrapping
                             let mut buf = buf.context("failed to read file")?;
                             let n = limit.load(Ordering::Relaxed);
+                            trace!(n, len = buf.len(), "read byte chunk");
                             if buf.len() > n {
+                                trace!(n, len = buf.len(), "byte chunk exceeds limit, truncate");
                                 buf.truncate(n);
                                 limit.store(0, Ordering::Relaxed);
                             } else {
                                 limit.fetch_sub(buf.len(), Ordering::Relaxed);
                             }
-                            Ok(vec![Some(wrpc_transport::Value::List(
-                                buf.into_iter().map(wrpc_transport::Value::U8).collect(),
-                            ))])
+                            // TODO: Remove the need for this wrapping
+                            Ok(buf
+                                .into_iter()
+                                .map(wrpc_transport::Value::U8)
+                                .map(Some)
+                                .collect())
                         });
                     anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
                 }
