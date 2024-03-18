@@ -243,12 +243,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/runtime@npm:^7.13.10, @babel/runtime@npm:^7.23.2, @babel/runtime@npm:^7.23.7":
+"@babel/runtime@npm:^7.13.10, @babel/runtime@npm:^7.23.2":
   version: 7.23.8
   resolution: "@babel/runtime@npm:7.23.8"
   dependencies:
     regenerator-runtime: "npm:^0.14.0"
   checksum: ec8f1967a36164da6cac868533ffdff97badd76d23d7d820cc84f0818864accef972f22f9c6a710185db1e3810e353fc18c3da721e5bb3ee8bc61bdbabce03ff
+  languageName: node
+  linkType: hard
+
+"@babel/runtime@npm:^7.24.0":
+  version: 7.24.0
+  resolution: "@babel/runtime@npm:7.24.0"
+  dependencies:
+    regenerator-runtime: "npm:^0.14.0"
+  checksum: 8d32c7e116606ea322b89f9fde8ffae6be9503b549dc0d0abb38bd9dc26e87469b9fb7a66964cc089ee558fd0a97d304fb0a3cfec140694764fb0d71b6a6f5e4
   languageName: node
   linkType: hard
 
@@ -2415,7 +2424,7 @@ __metadata:
     "@types/eslint": "npm:~8.56.5"
     "@wasmcloud/tsconfig": "workspace:^"
     immer: "npm:^10.0.4"
-    nats.ws: "npm:^1.20.0"
+    nats.ws: "npm:^1.21.0"
     rxjs: "npm:^7.8.1"
     tsup: "npm:^8.0.2"
   languageName: unknown
@@ -2498,7 +2507,7 @@ __metadata:
     autoprefixer: "npm:^10.4.18"
     class-variance-authority: "npm:^0.7.0"
     clsx: "npm:^2.1.0"
-    date-fns: "npm:^3.4.0"
+    date-fns: "npm:^3.6.0"
     eslint: "npm:^8.57.0"
     eslint-config-prettier: "npm:^9.1.0"
     eslint-import-resolver-typescript: "npm:^3.6.1"
@@ -2512,16 +2521,16 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.14.3"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.4"
-    lucide-react: "npm:^0.354.0"
-    nats.ws: "npm:^1.20.0"
+    lucide-react: "npm:^0.358.0"
+    nats.ws: "npm:^1.21.0"
     postcss: "npm:^8.4.35"
     prettier: "npm:^3.2.5"
     react: "npm:^18.2.0"
     react-dom: "npm:^18.2.0"
-    react-hook-form: "npm:^7.51.0"
+    react-hook-form: "npm:^7.51.1"
     react-router-dom: "npm:^6.22.3"
     rxjs: "npm:^7.8.1"
-    tailwind-merge: "npm:^2.2.1"
+    tailwind-merge: "npm:^2.2.2"
     tailwindcss: "npm:^3.4.1"
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
@@ -2529,7 +2538,7 @@ __metadata:
     usehooks-ts: "npm:^3.0.1"
     vite: "npm:^5.1.4"
     vite-plugin-svgr: "npm:^4.2.0"
-    vite-tsconfig-paths: "npm:^4.3.1"
+    vite-tsconfig-paths: "npm:^4.3.2"
     zod: "npm:^3.22.4"
   languageName: unknown
   linkType: soft
@@ -3291,10 +3300,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"date-fns@npm:^3.4.0":
-  version: 3.4.0
-  resolution: "date-fns@npm:3.4.0"
-  checksum: 38932c99ad28a69a18bd9e2331d0c86a46146d3e9efc92cbc612400a075785231c3271822948eb0377db738fa8a583aa4782d8246a939fe6f188727ea9323c29
+"date-fns@npm:^3.6.0":
+  version: 3.6.0
+  resolution: "date-fns@npm:3.6.0"
+  checksum: cac35c58926a3b5d577082ff2b253612ec1c79eb6754fddef46b6a8e826501ea2cb346ecbd211205f1ba382ddd1f9d8c3f00bf433ad63cc3063454d294e3a6b8
   languageName: node
   linkType: hard
 
@@ -5446,12 +5455,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.354.0":
-  version: 0.354.0
-  resolution: "lucide-react@npm:0.354.0"
+"lucide-react@npm:^0.358.0":
+  version: 0.358.0
+  resolution: "lucide-react@npm:0.358.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: fe9c29eed5f1fab9eda0cafb44bd08255aee77d8234195db7b8e9734eaee203bfc8e4c432263fc8ed58daa64e6a859627d1ca7449be2c9974ba22f0e5c2bd5d5
+  checksum: 9adb4a8836bd84a7ea4f71d81d287f69711165f5dcfa92be07c7cc3dbf7bd918ba1bba166741e0ea46565827e77243e4f0438a1e71a96794b5dfa5ebca290bf0
   languageName: node
   linkType: hard
 
@@ -5671,15 +5680,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nats.ws@npm:^1.20.0":
-  version: 1.20.0
-  resolution: "nats.ws@npm:1.20.0"
+"nats.ws@npm:^1.21.0":
+  version: 1.21.0
+  resolution: "nats.ws@npm:1.21.0"
   dependencies:
-    nkeys.js: "npm:1.0.5"
+    nkeys.js: "npm:1.1.0"
   dependenciesMeta:
     nkeys.js:
       optional: true
-  checksum: 58d086c446f12a2d06d94b90513c5541edc00fb6dd9e37e902e67af9ff5f7d98d1e5e0a90ef1cb235482d89dcb3d3faca5465616e0578880c8e49a64ccd2afd0
+  checksum: ebb83d33dcb8b1b6ec6e5ecdb75c42c5df19d97bb81cccd31fd9de55d8aba7aa372a9902ccea027356f4e7bf6ae82b9b880e4145795c1e847f43cfeef9db61af
   languageName: node
   linkType: hard
 
@@ -5697,12 +5706,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nkeys.js@npm:1.0.5":
-  version: 1.0.5
-  resolution: "nkeys.js@npm:1.0.5"
+"nkeys.js@npm:1.1.0":
+  version: 1.1.0
+  resolution: "nkeys.js@npm:1.1.0"
   dependencies:
     tweetnacl: "npm:1.0.3"
-  checksum: d076f0d0d18f89b28fdde92a6d5762d4c187f151bb142b35ad5b846c395c8e0dbc71571343c6a48da15f9058db83a49ba499d5c61c7e81040f15233f6df1d3aa
+  checksum: 54ee6a141cadb1dd58d8739bb98424adbdb866256496e022c2ceee793581cfe774e51fd18b50563d4145ff647f670c73e30c0b164b0edfe4f91330187fe3eeb0
   languageName: node
   linkType: hard
 
@@ -6262,12 +6271,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-hook-form@npm:^7.51.0":
-  version: 7.51.0
-  resolution: "react-hook-form@npm:7.51.0"
+"react-hook-form@npm:^7.51.1":
+  version: 7.51.1
+  resolution: "react-hook-form@npm:7.51.1"
   peerDependencies:
     react: ^16.8.0 || ^17 || ^18
-  checksum: 2697e2b56afca36098aed04d187e9756641e1f61e1a29c566b7bba0899c885fc5f995219a29a9535db748bd55e186cdf95ff8af546247a4bf3418a00863cbd24
+  checksum: eecc48d505687ae7ed7793c102a3ca2d548a09ec404258f32a8de88c5234ba470f108836797dcd70a7375501ec7a96e5f795b1e98d8c19c5f7fb87f64109bda1
   languageName: node
   linkType: hard
 
@@ -7131,12 +7140,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tailwind-merge@npm:^2.2.1":
-  version: 2.2.1
-  resolution: "tailwind-merge@npm:2.2.1"
+"tailwind-merge@npm:^2.2.2":
+  version: 2.2.2
+  resolution: "tailwind-merge@npm:2.2.2"
   dependencies:
-    "@babel/runtime": "npm:^7.23.7"
-  checksum: 3d8aecfa03c077472a038f25e95504ca47c1e7549ab843a854a690509098caac4e2e57790a7cadda4054fd07ec31421980a7afac33547013cf22299788625e72
+    "@babel/runtime": "npm:^7.24.0"
+  checksum: f7ec370e58d1d8f12ed6509d93333f2dacfcb43110334c5424db50ae456d14939ad32cff1ef7e31d1d10a6fff9d2e80be11560ef1ebb3fe5c83de6d465a7f7b8
   languageName: node
   linkType: hard
 
@@ -7316,9 +7325,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsconfck@npm:^3.0.1":
-  version: 3.0.1
-  resolution: "tsconfck@npm:3.0.1"
+"tsconfck@npm:^3.0.3":
+  version: 3.0.3
+  resolution: "tsconfck@npm:3.0.3"
   peerDependencies:
     typescript: ^5.0.0
   peerDependenciesMeta:
@@ -7326,7 +7335,7 @@ __metadata:
       optional: true
   bin:
     tsconfck: bin/tsconfck.js
-  checksum: c5317404e2a809af31ad093f82365518a5856b2f342371991f729f42cab0def1b87dca8d22df3fb8c82acda7248710d4fb5030270db024c8000bc8272a3e6d58
+  checksum: 1c17217dc3758e71bebdb223b7cd6e613f8f8c92a225cccc40d459554dfae50cbf9d339c6a4a5a8d04620fe1c21bb6d454b6e10421e3fcd808ea51d0b5039ffd
   languageName: node
   linkType: hard
 
@@ -7754,19 +7763,19 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite-tsconfig-paths@npm:^4.3.1":
-  version: 4.3.1
-  resolution: "vite-tsconfig-paths@npm:4.3.1"
+"vite-tsconfig-paths@npm:^4.3.2":
+  version: 4.3.2
+  resolution: "vite-tsconfig-paths@npm:4.3.2"
   dependencies:
     debug: "npm:^4.1.1"
     globrex: "npm:^0.1.2"
-    tsconfck: "npm:^3.0.1"
+    tsconfck: "npm:^3.0.3"
   peerDependencies:
     vite: "*"
   peerDependenciesMeta:
     vite:
       optional: true
-  checksum: 1432f80750f5cbe181c265eb9fc2e9fff8b25a2858f176dc0a02311e3e826333526ee9c16bb0aaaa8555a417ea944d68a2e8225181215cd9502370f913eb3f79
+  checksum: c12e2087fd01ac8a694850c649b79d5b9798cdba0ef9ab4116f669d8ffa1a9a3195c5a14410d3d9a12d2f08cd35ddd74f03d9c7b13a2d590d002055cdaab45c0
   languageName: node
   linkType: hard
 
