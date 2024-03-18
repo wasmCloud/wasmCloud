@@ -604,6 +604,33 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             .write_data(&result_key, &result_value)
             .expect("failed to write `result`");
 
+        eprintln!("call `wasi:blobstore/container.container.list-objects`...");
+        let objects = created_container
+            .list_objects()
+            .expect("failed to list container objects");
+        eprintln!(
+            "call `wasi:blobstore/container.stream-object-names.read-stream-object-names`..."
+        );
+        let (names, end) = objects
+            .read_stream_object_names(2)
+            .expect("failed to read object names");
+        assert!(end);
+        assert_eq!(names, [result_key.clone()]);
+
+        eprintln!("call `wasi:blobstore/container.container.get-data`...");
+        let stored_value = created_container
+            .get_data(
+                &result_key,
+                0,
+                body.len().saturating_add(10).try_into().unwrap_or(u64::MAX),
+            )
+            .expect("failed to get container data");
+        eprintln!("call `wasi:blobstore/types.incoming-value.consume-sync`...");
+        let stored_value =
+            blobstore::types::IncomingValue::incoming_value_consume_sync(stored_value)
+                .expect("failed to get stored value buffer");
+        assert_eq!(stored_value, body);
+
         // TODO: Expand blobstore testing procedure
 
         http::types::ResponseOutparam::set(response_out, Ok(response));
