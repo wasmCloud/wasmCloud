@@ -36,12 +36,10 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        # image: wasmcloud.azurecr.io/httpserver:0.17.0
-        image: file:///Users/bhayes/repos/wasmCloud/wasmCloud/crates/providers/http-server/build/httpserver.par.gz
+        image: file://../../../../crates/providers/providers/http-server/build/httpserver.par.gz
         contract: wasmcloud:httpserver
     - name: blobstore
       type: capability
       properties:
-        # image: wasmcloud.azurecr.io/blobstore_fs:0.3.1
-        image: file:///Users/bhayes/repos/wasmCloud/wasmCloud/crates/providers/blobstore-fs/build/blobstore_fs.par.gz
+        image: file://../../../../crates/providers/blobstore-fs/blobstore_fs.par.gz
         contract: wasmcloud:blobstore
