@@ -1,11 +1,11 @@
-//! This crate exposes derive macros that enable Rust types to derive [`wrpc_transport::EncodeSync`] and [`wrpc_transport::Receive`] traits.
+//! This crate exposes derive macros that enable Rust types to derive [`wrpc_transport::Encode`] and [`wrpc_transport::Receive`] traits.
 //!
 //! # Example
 //!
 //! ```rust,ignore
 //! use wrpc_transport_derive::{Encode, Receive};
 //!
-//! #[derive(Trace, PartialEq, Eq, EncodeSync, Receive, Default)]
+//! #[derive(Trace, PartialEq, Eq, Encode, Receive, Default)]
 //! struct TestStruct {
 //!     one: u32,
 //! }
@@ -13,7 +13,8 @@
 //! let mut buffer: Vec<u8> = Vec::new();
 //! // Encode the TestStruct
 //! TestStruct { one: 1 }
-//!     .encode_sync(&mut buffer)
+//!     .encode(&mut buffer)
+//!     .await
 //!     .context("failed to perform encode")?;
 //!
 //! // Attempt to receive the value
@@ -40,7 +41,7 @@ pub mod deps {
     pub use wrpc_transport;
 }
 
-pub use wrpc_transport_derive_macro::{EncodeSync, Receive};
+pub use wrpc_transport_derive_macro::{Encode, Receive};
 
 /// Re-export of [`wrpc_transport::Encode`] to make usage easier
-pub use wrpc_transport::{Encode, EncodeSync, Receive};
+pub use wrpc_transport::{Encode, Receive};

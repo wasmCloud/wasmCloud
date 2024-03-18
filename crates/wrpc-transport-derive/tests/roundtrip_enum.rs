@@ -2,14 +2,14 @@ use anyhow::{Context as _, Result};
 use bytes::Bytes;
 use futures::stream::empty;
 
-use wrpc_transport_derive::{EncodeSync, Receive};
+use wrpc_transport_derive::{Encode, Receive};
 
 #[macro_use]
 mod common;
 
 #[tokio::test]
 async fn roundtrip_enum_simple() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, EncodeSync, Receive)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive)]
     enum TestEnum {
         A,
         B,
@@ -25,7 +25,7 @@ async fn roundtrip_enum_simple() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_enum_unnamed_variant_args() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, EncodeSync, Receive)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive)]
     enum TestEnum {
         A,
         B(String, String),
@@ -41,7 +41,7 @@ async fn roundtrip_enum_unnamed_variant_args() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_enum_named_variant_args() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, EncodeSync, Receive)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive)]
     enum TestEnum {
         A,
         B { first: String, second: String },
@@ -63,7 +63,7 @@ async fn roundtrip_enum_named_variant_args() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_enum_mixed_variant_args() -> Result<()> {
-    #[derive(Debug, Clone, PartialEq, Eq, EncodeSync, Receive)]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, Receive)]
     enum TestEnum {
         A,
         B { first: String, second: String },

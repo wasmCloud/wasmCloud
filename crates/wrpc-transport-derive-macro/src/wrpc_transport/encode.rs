@@ -5,36 +5,35 @@ use syn::{Fields, FieldsNamed, FieldsUnnamed, Ident, LitInt};
 use tracing::warn;
 
 use crate::config::AttrOptions;
-use crate::rust::{has_option_type, has_vec_type};
 
-/// Derive [`wrpc_transport::EncodeSync`] for a given input stream
-pub fn derive_encode_sync_inner(input: TokenStream) -> Result<TokenStream> {
+/// Derive [`wrpc_transport::Encode`] for a given input stream
+pub fn derive_encode_inner(input: TokenStream) -> Result<TokenStream> {
     let item = syn::parse2::<syn::Item>(input)
         .map_err(|e| anyhow!(e))
         .context("failed to parse input into item")?;
 
     // Depending on the type of struct, generate the impl
     match item {
-        // For enums we generate an impl of EncodeSync
+        // For enums we generate an impl of Encode
         syn::Item::Enum(_) => {
-            derive_encode_sync_inner_for_enum(item).context("failed to derive for enum")
+            derive_encode_inner_for_enum(item).context("failed to derive for enum")
         }
 
-        // For structs we generate an impl for EncodeSync
+        // For structs we generate an impl for Encode
         syn::Item::Struct(_) => {
-            derive_encode_sync_inner_for_struct(item).context("failed to derive for struct")
+            derive_encode_inner_for_struct(item).context("failed to derive for struct")
         }
 
         // All other types of syntax tree are not allowed
         _ => {
-            warn!("derive(EncodeSync) does not support this syntax item");
+            warn!("derive(Encode) does not support this syntax item");
             Ok(TokenStream::new())
         }
     }
 }
 
-/// Derive `EncodeSync` for a Rust struct
-fn derive_encode_sync_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
+/// Derive `Encode` for a Rust struct
+fn derive_encode_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
     let syn::Item::Struct(s) = item else {
         bail!("provided syn::Item is not a struct");
     };
@@ -47,48 +46,39 @@ fn derive_encode_sync_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
 
     // For each member of the struct, we must:
     // - generate a line that attempts to encode the member
-    // - remember the type so we can require it to be EncodeSync
+    // - remember the type so we can require it to be Encode
     for member in s.fields.iter() {
         let member_name = member
             .ident
             .clone()
             .context("unexpectedly missing field name in struct")?;
         members.push(member_name.clone());
-        if let Ok(Some(_)) = has_option_type(member.ty.clone()) {
-            encode_lines.push(quote::quote!(
-                #crate_path::deps::wrpc_transport::EncodeSync::encode_sync_option(#member_name, &mut payload).context("failed to encode member (option) `#member_name`")?;
-            ));
-        } else if let Ok(Some(_)) = has_vec_type(member.ty.clone()) {
-            encode_lines.push(quote::quote!(
-                #crate_path::deps::wrpc_transport::EncodeSync::encode_sync_list(#member_name, &mut payload).context("failed to encode member (list) `#member_name`")?;
-            ));
-        } else {
-            encode_lines.push(quote::quote!(
-                #member_name.encode_sync(&mut payload).context("failed to encode member `#member_name`")?;
-            ));
-        }
+        encode_lines.push(quote::quote!(
+            #member_name.encode(&mut payload).await.context("failed to encode member `#member_name`")?;
+        ));
     }
 
     // Build the generated impl
     Ok(quote::quote!(
         #[automatically_derived]
-        impl #crate_path::deps::wrpc_transport::EncodeSync for #struct_name
+        #[#crate_path::deps::async_trait::async_trait]
+        impl #crate_path::deps::wrpc_transport::Encode for #struct_name
         {
-            fn encode_sync(
+            async fn encode(
                 self,
-                mut payload: impl #crate_path::deps::bytes::buf::BufMut
-            ) -> #crate_path::deps::anyhow::Result<()> {
+                mut payload: &mut (impl #crate_path::deps::bytes::buf::BufMut + Send)
+            ) -> #crate_path::deps::anyhow::Result<Option<#crate_path::deps::wrpc_transport::AsyncValue>> {
                 use #crate_path::deps::anyhow::Context as _;
                 let Self { #( #members ),* } = self;
                 #( #encode_lines );*
-                Ok(())
+                Ok(None)
             }
         }
     ))
 }
 
-/// Derive `EncodeSync` for a Rust struct
-fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
+/// Derive `Encode` for a Rust struct
+fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
     let syn::Item::Enum(e) = item else {
         bail!("provided syn::Item is not an enum");
     };
@@ -99,7 +89,7 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
     let AttrOptions { crate_path } = AttrOptions::try_from_attributes(e.attrs)?;
 
     // For each variant, we must do two things:
-    // - ensure that the type we're about to use is EncodeSync
+    // - ensure that the type we're about to use is Encode
     // - generate a line that encodes the variant
     for (idx, v) in e.variants.iter().enumerate() {
         let name = &v.ident;
@@ -120,7 +110,7 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 let mut args = Vec::<Ident>::new();
                 let mut named_field_encode_lines = Vec::<TokenStream>::new();
                 for named_field in named.iter() {
-                    // Every type that is used inside must be constrained to ensure EncodeSync
+                    // Every type that is used inside must be constrained to ensure Encode 
                     // For every named field we must do two things:
                     // - keep name of the arg (for listing later)
                     // - build a line that does the encode sync
@@ -130,7 +120,7 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                         .context("unexpectedly missing named field")?;
                     args.push(named_field_name.clone());
                     named_field_encode_lines.push(quote::quote!(
-                        #named_field_name.encode_sync(&mut payload)?
+                        #named_field_name.encode(&mut payload).await?;
                     ));
                 }
 
@@ -158,14 +148,14 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 let mut args = Vec::<Ident>::new();
                 let mut unnamed_field_encode_lines = Vec::<TokenStream>::new();
                 for (unnamed_field_idx, _) in unnamed.iter().enumerate() {
-                    // Every type that is used inside must be constrained to ensure EncodeSync
+                    // Every type that is used inside must be constrained to ensure Encode 
                     // For every unnamed field we must do two things:
                     // - keep name of the arg (for listing later)
                     // - build a line that does the encode sync
                     let unnamed_field_arg_name = format_ident!("arg{}", unnamed_field_idx);
                     args.push(unnamed_field_arg_name.clone());
                     unnamed_field_encode_lines.push(quote::quote!(
-                        #unnamed_field_arg_name.encode_sync(&mut payload)?
+                        #unnamed_field_arg_name.encode(&mut payload).await?;
                     ));
                 }
 
@@ -178,24 +168,28 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
             }
             // If there are no fields we can just encode the discriminant
             Fields::Unit => variant_encode_lines.push(quote::quote!(
-                Self::#name => #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?
+                Self::#name => {
+                    #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
+                }
             )),
         }
     }
 
     Ok(quote::quote!(
-        impl #crate_path::deps::wrpc_transport::EncodeSync for #enum_name
+        #[automatically_derived]
+        #[#crate_path::deps::async_trait::async_trait]
+        impl #crate_path::deps::wrpc_transport::Encode for #enum_name
         {
-            fn encode_sync(
+            async fn encode(
                 self,
-                mut payload: impl #crate_path::deps::bytes::buf::BufMut
-            ) -> #crate_path::deps::anyhow::Result<()> {
+                mut payload: &mut (impl #crate_path::deps::bytes::buf::BufMut + Send)
+            ) -> #crate_path::deps::anyhow::Result<Option<#crate_path::deps::wrpc_transport::AsyncValue>> {
                 match self {
                     #(
                         #variant_encode_lines
                     ),*
                 }
-                Ok(())
+                Ok(None)
             }
         }
     ))
@@ -205,11 +199,11 @@ fn derive_encode_sync_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 mod tests {
     use anyhow::Result;
 
-    use crate::wrpc_transport::encode_sync::derive_encode_sync_inner;
+    use crate::wrpc_transport::encode::derive_encode_inner;
 
     #[test]
     fn encode_struct_simple() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -222,7 +216,7 @@ mod tests {
 
     #[test]
     fn encode_struct_with_option() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -236,7 +230,7 @@ mod tests {
 
     #[test]
     fn encode_struct_with_vec() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -250,7 +244,7 @@ mod tests {
 
     #[test]
     fn encode_enum_simple() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             enum Simple {
                 A,
                 B,
@@ -264,7 +258,7 @@ mod tests {
 
     #[test]
     fn encode_enum_unnamed_variant_args() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             enum UnnamedVariants {
                 A,
                 B(String, String),
@@ -278,7 +272,7 @@ mod tests {
 
     #[test]
     fn encode_enum_named_variant_args() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             enum NamedVariants {
                 A,
                 B { first: String, second: String },
@@ -292,7 +286,7 @@ mod tests {
 
     #[test]
     fn encode_enum_mixed_variant_args() -> Result<()> {
-        let derived = derive_encode_sync_inner(quote::quote!(
+        let derived = derive_encode_inner(quote::quote!(
             enum MixedVariants {
                 A,
                 B { first: String, second: String },

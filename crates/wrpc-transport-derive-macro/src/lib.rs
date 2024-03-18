@@ -1,4 +1,4 @@
-//! This crate contains derive macros that enable Rust types to derive [`wrpc_transport::EncodeSync`] and [`wrpc_transport::Receive`] traits.
+//! This crate contains derive macros that enable Rust types to derive [`wrpc_transport::Encode`] and [`wrpc_transport::Receive`] traits.
 //!
 //! This crate is intended to be used via `wrpc-transport-derive`, the umbrella crate which hosts dependencies required by this (internal) macro crate.
 //!
@@ -7,7 +7,7 @@
 //! ```rust,ignore
 //! use wrpc_transport_derive::{Encode, Receive};
 //!
-//! #[derive(Trace, PartialEq, Eq, EncodeSync, Receive, Default)]
+//! #[derive(Trace, PartialEq, Eq, Encode, Receive, Default)]
 //! struct TestStruct {
 //!     one: u32,
 //! }
@@ -15,7 +15,8 @@
 //! let mut buffer: Vec<u8> = Vec::new();
 //! // Encode the TestStruct
 //! TestStruct { one: 1 }
-//!     .encode_sync(&mut buffer)
+//!     .encode(&mut buffer)
+//!     .await
 //!     .context("failed to perform encode")?;
 //!
 //! // Attempt to receive the value
@@ -35,25 +36,24 @@ use proc_macro2::TokenStream;
 use tracing::trace;
 use tracing_subscriber::EnvFilter;
 
-use crate::wrpc_transport::encode_sync::derive_encode_sync_inner;
+use crate::wrpc_transport::encode::derive_encode_inner;
 use crate::wrpc_transport::receive::derive_receive_inner;
 
 mod config;
-mod rust;
 mod wrpc_transport;
 
-/// Derive an [`wrpc_transport::EncodeSync`] implementation
-#[proc_macro_derive(EncodeSync, attributes(wrpc_transport_derive))]
-pub fn derive_encode_sync(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+/// Derive an [`wrpc_transport::Encode`] implementation
+#[proc_macro_derive(Encode, attributes(wrpc_transport_derive))]
+pub fn derive_encode(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
     let input = TokenStream::from(input);
-    trace!("derive(wrpc_transport::EncodeSync) input:\n---\n{input}\n---");
+    trace!("derive(wrpc_transport::Encode) input:\n---\n{input}\n---");
 
-    let derived = derive_encode_sync_inner(input).expect("failed to perform derive");
-    trace!("derive(wrpc_transport::EncodeSync) output:\n---\n{derived}\n---");
+    let derived = derive_encode_inner(input).expect("failed to perform derive");
+    trace!("derive(wrpc_transport::Encode) output:\n---\n{derived}\n---");
 
     derived.into()
 }

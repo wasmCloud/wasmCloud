@@ -18,7 +18,7 @@ status = "actively-developed"
 proc-macro = true
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
 syn = { workspace = true, features = [ "full", "parsing", "extra-traits", "printing", "clone-impls" ] }
 proc-macro2 = { workspace = true, features = [ "proc-macro" ] }
 quote = { workspace = true }

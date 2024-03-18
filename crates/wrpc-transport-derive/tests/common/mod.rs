@@ -28,7 +28,8 @@ macro_rules! test_roundtrip_value {
         let mut buffer: Vec<u8> = Vec::new();
         let val = $struct_inst;
         val.clone()
-            .encode_sync(&mut buffer)
+            .encode(&mut buffer)
+            .await
             .context("failed to perform encode")?;
 
         // Rebuild from received value
