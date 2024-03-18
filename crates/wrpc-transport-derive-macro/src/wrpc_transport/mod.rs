@@ -1,2 +1,2 @@
-pub mod encode_sync;
+pub mod encode;
 pub mod receive;

@@ -328,39 +328,22 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 // Build the tokens that we'll need to encode the result. These differ whether we're dealing with a normal type
                 // or a special case (i.e. Vec<T> and Option<T>)
                 acc.2.push(match lm.invocation_return {
-                    // If we successfully parse a complex type out, we need to check whether it's a vec or option
-                    syn::ReturnType::Type(_, ty) => {
-                        if has_vec_type(*ty.clone()).is_ok_and(|v| v.is_some()) {
-                            quote!(::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::EncodeSync::encode_sync_list(result, &mut res)
-                                   .map_err(|e| {
-                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
-                                           format!("failed to encode result (list) of operation [{operation}]: {e}")
-                                       )
-                                   })?)
-                        } else if has_option_type(*ty).is_ok_and(|v| v.is_some()) {
-                            quote!(::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::EncodeSync::encode_sync_option(result, &mut res)
-                                   .map_err(|e| {
-                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
-                                           format!("failed to encode result (option) of operation [{operation}]: {e}")
-                                       )
-                                   })?)
-                        } else {
-                            // If we can't detect a special case type, just encode normally, we *should* be dealing with a
-                            // type that implements EncodeSync already
-                            quote!(result
-                                   .encode_sync(&mut res)
-                                   .map_err(|e| {
-                                       ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
-                                           format!("failed to encode result of operation [{operation}]: {e}")
-                                       )
-                                   })?)
-                        }
+                    syn::ReturnType::Type(_, _) => {
+                        quote!(result
+                               .encode(&mut res)
+                               .await
+                               .map_err(|e| {
+                                   ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
+                                       format!("failed to encode result of operation [{operation}]: {e}")
+                                   )
+                               })?)
                     }
 
                     // If we don't parse a complex type we may have gotten a builtin like a `bool` or `u32`, we can pass those through normally
                     syn::ReturnType::Default => {
                         quote!(result
-                               .encode_sync(&mut res)
+                               .encode(&mut res)
+                               .await
                                .map_err(|e| {
                                    ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationError::Unexpected(
                                        format!("failed to encode result of operation [{operation}]: {e}")
@@ -558,7 +541,7 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 operation: String,
                 mut params: Vec<::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::Value>,
             ) -> ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::error::InvocationResult<Vec<u8>> {
-                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::{Encode, EncodeSync, Receive};
+                use ::wasmcloud_provider_wit_bindgen::deps::wrpc_transport::{Encode, Receive};
                 use ::wasmcloud_provider_wit_bindgen::deps::anyhow::Context as _;
                 match operation.as_str() {
                     #(
