@@ -1,36 +1,28 @@
-use std::num::NonZeroU32;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use core::future::Future;
+use core::pin::pin;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use anyhow::Context as _;
+use anyhow::{bail, Context as _};
+use async_nats::HeaderMap;
+use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, TryStreamExt as _};
+use tokio::sync::RwLock;
+use tokio::{select, spawn};
+use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::provider::invocation_context;
+use wasmcloud_provider_sdk::{
+    get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
+};
+use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 use anyhow::Result;
 use azure_storage_blobs::prelude::*;
 use config::StorageConfig;
 use futures::StreamExt;
-use tokio::sync::RwLock;
-
-use tracing::error;
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait, wasmcloud_provider_sdk::core::LinkDefinition,
-    wasmcloud_provider_sdk::Context,
-};
-
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: BlobstoreAzblobProvider,
-    contract: "wasmcloud:blobstore",
-    wit_bindgen_cfg: "provider-blobstore"
-});
 
 mod config;
-
-/// number of items to return in get_objects if max_items not specified
-const DEFAULT_MAX_ITEMS: u32 = 1000;
-
-/// maximum size of message (in bytes) that we'll return from azblob (500MB)
-const DEFAULT_MAX_CHUNK_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 
 /// Blobstore Azblob provider
 ///
@@ -38,492 +30,994 @@ const DEFAULT_MAX_CHUNK_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 /// for the blobstore provider WIT contract
 #[derive(Default, Clone)]
 pub struct BlobstoreAzblobProvider {
-    /// Per-actor storage for NATS connection clients
-    actors: Arc<RwLock<HashMap<String, BlobServiceClient>>>,
-}
-
-impl BlobstoreAzblobProvider {
-    /// Retrieve the per-actor [`BlobServiceClient`] for a given link context
-    async fn client(&self, ctx: &Context) -> Result<BlobServiceClient> {
-        let actor_id = ctx.actor.as_ref().context("no actor in request")?;
-
-        let client = self
-            .actors
-            .read()
-            .await
-            .get(actor_id)
-            .with_context(|| format!("actor not linked:{}", actor_id))?
-            .clone();
-        Ok(client)
-    }
+    /// Per-config storage for Azure connection clients
+    config: Arc<RwLock<HashMap<String, BlobServiceClient>>>,
 }
 
 /// Handle provider control commands
-/// put_link (new actor link command), del_link (remove link command), and shutdown
+/// put_link (new component link command), del_link (remove link command), and shutdown
 #[async_trait]
-impl WasmcloudCapabilityProvider for BlobstoreAzblobProvider {
-    async fn put_link(&self, ld: &LinkDefinition) -> bool {
-        let config =
-            match StorageConfig::from_values(&HashMap::from_iter(ld.values.iter().cloned())) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!(error = %e, actor_id = %ld.actor_id, "failed to read storage config");
-                    return false;
-                }
-            };
+impl ProviderHandler for BlobstoreAzblobProvider {
+    #[instrument(level = "info", skip_all)]
+    async fn receive_link_config_as_target(
+        &self,
+        link_config: impl LinkConfig,
+    ) -> ProviderOperationResult<()> {
+        let config = link_config.get_config();
+        let config = match StorageConfig::from_values(config) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(error = %e, source_id = %link_config.get_source_id(), "failed to read storage config");
+                return Err(e.into());
+            }
+        };
         let link =
             BlobServiceClient::builder(config.storage_account.clone(), config.configure_az())
                 .blob_service_client();
 
-        let mut update_map = self.actors.write().await;
-        update_map.insert(ld.actor_id.to_string(), link);
+        let mut update_map = self.config.write().await;
+        update_map.insert(link_config.get_source_id().to_string(), link);
 
-        true
+        Ok(())
     }
 
-    /// Handle notification that a link is dropped: close the connection
-    async fn delete_link(&self, actor_id: &str) {
-        self.actors.write().await.remove(actor_id);
+    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+        self.config.write().await.remove(source_id);
+        Ok(())
     }
 
-    /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) {
-        self.actors.write().await.drain();
+    async fn shutdown(&self) -> ProviderOperationResult<()> {
+        self.config.write().await.drain();
+        Ok(())
     }
 }
 
-/// Handle Blobstore methods that interact with Azblob
-/// To simplify testing, the methods are also implemented for StorageClient,
-#[async_trait]
-impl WasmcloudBlobstoreBlobstore for BlobstoreAzblobProvider {
-    async fn container_exists(&self, ctx: Context, container_name: String) -> bool {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return false;
-            }
-        };
-        match client.container_client(container_name).exists().await {
-            Ok(res) => res,
-            Err(e) => {
-                error!(error = %e, "failed to check container existence");
-                false
-            }
+impl BlobstoreAzblobProvider {
+    async fn get_config(&self, headers: Option<&HeaderMap>) -> anyhow::Result<BlobServiceClient> {
+        if let Some(ref source_id) = headers
+            .map(invocation_context)
+            .and_then(|Context { actor, .. }| actor)
+        {
+            self.config
+                .read()
+                .await
+                .get(source_id)
+                .with_context(|| format!("failed to lookup {source_id} configuration"))
+                .cloned()
+        } else {
+            bail!(
+                "failed to lookup source of invocation, could not construct Azure blobstore client"
+            )
         }
     }
 
-    async fn create_container(&self, ctx: Context, container_name: ContainerId) -> () {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
+    #[instrument(level = "trace", skip_all)]
+    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
+        let connection = get_connection();
+        let wrpc = connection.get_wrpc_client(connection.provider_key());
+        let mut commands = pin!(commands);
+        'outer: loop {
+            use wrpc_interface_blobstore::Blobstore as _;
+            let clear_container_invocations = wrpc.serve_clear_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.clear-container` invocations",
+            )?;
+            let mut clear_container_invocations = pin!(clear_container_invocations);
+
+            let container_exists_invocations = wrpc.serve_container_exists().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.container-exists` invocations",
+            )?;
+            let mut container_exists_invocations = pin!(container_exists_invocations);
+
+            let create_container_invocations = wrpc.serve_create_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.create-container` invocations",
+            )?;
+            let mut create_container_invocations = pin!(create_container_invocations);
+
+            let delete_container_invocations = wrpc.serve_delete_container().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.delete-container` invocations",
+            )?;
+            let mut delete_container_invocations = pin!(delete_container_invocations);
+
+            let get_container_info_invocations = wrpc.serve_get_container_info().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-container-info` invocations",
+            )?;
+            let mut get_container_info_invocations = pin!(get_container_info_invocations);
+
+            let list_container_objects_invocations =
+                wrpc.serve_list_container_objects().await.context(
+                    "failed to serve `wrpc:blobstore/blobstore.list-container-objects` invocations",
+                )?;
+            let mut list_container_objects_invocations = pin!(list_container_objects_invocations);
+
+            let copy_object_invocations = wrpc
+                .serve_copy_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.copy-object` invocations")?;
+            let mut copy_object_invocations = pin!(copy_object_invocations);
+
+            let delete_object_invocations = wrpc
+                .serve_delete_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.delete-object` invocations")?;
+            let mut delete_object_invocations = pin!(delete_object_invocations);
+
+            let delete_objects_invocations = wrpc
+                .serve_delete_objects()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.delete-objects` invocations")?;
+            let mut delete_objects_invocations = pin!(delete_objects_invocations);
+
+            let get_container_data_invocations = wrpc.serve_get_container_data().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-container-data` invocations",
+            )?;
+            let mut get_container_data_invocations = pin!(get_container_data_invocations);
+
+            let get_object_info_invocations = wrpc.serve_get_object_info().await.context(
+                "failed to serve `wrpc:blobstore/blobstore.get-object-info` invocations",
+            )?;
+            let mut get_object_info_invocations = pin!(get_object_info_invocations);
+
+            let has_object_invocations = wrpc
+                .serve_has_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.has-object` invocations")?;
+            let mut has_object_invocations = pin!(has_object_invocations);
+
+            let move_object_invocations = wrpc
+                .serve_move_object()
+                .await
+                .context("failed to serve `wrpc:blobstore/blobstore.move-object` invocations")?;
+            let mut move_object_invocations = pin!(move_object_invocations);
+
+            let write_container_data_invocations =
+                wrpc.serve_write_container_data().await.context(
+                    "failed to serve `wrpc:blobstore/blobstore.write-container-data` invocations",
+                )?;
+            let mut write_container_data_invocations = pin!(write_container_data_invocations);
+
+            loop {
+                select! {
+                    invocation = clear_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_clear_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.clear-container` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.clear-container` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    },
+                    invocation = container_exists_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_container_exists(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = create_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_create_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_container_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_container(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-container` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-container` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_container_info_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_container_info(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-info` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-container-info` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = list_container_objects_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_list_container_objects(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.list-container-objects` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.list-container-objects` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = copy_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_copy_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.copy-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.copy-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = delete_objects_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete_objects(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-objects` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.delete-objects` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_container_data_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_container_data(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-data` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-container-data` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = get_object_info_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get_object_info(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-object-info` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.get-object-info` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = has_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_has_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.has-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.has-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = move_object_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_move_object(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.move-object` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.move-object` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    invocation = write_container_data_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_write_container_data(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.write-container-data` invocation") ;
+                            },
+                            None => {
+                                warn!("`wrpc:blobstore/blobstore.write-container-data` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            },
+                        }
+                    },
+                    _ = &mut commands => {
+                        debug!("shutdown command received");
+                        return Ok(())
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BlobstoreAzblobProvider {
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_clear_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let stream = client.list_containers().into_stream();
+                    stream
+                        .try_for_each_concurrent(None, |list_response| async {
+                            match futures::future::join_all(
+                                list_response.containers.into_iter().map(|container| async {
+                                    client.container_client(container.name).delete().await
+                                }),
+                            )
+                            .await
+                            .into_iter()
+                            .collect::<Result<Vec<_>, azure_storage::Error>>()
+                            {
+                                Ok(_) => Ok(()),
+                                Err(err) => Err(err.context("failed to delete container")),
+                            }
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_container_exists<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    client
+                        .container_client(container)
+                        .exists()
+                        .await
+                        .context("failed to check container existence")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_create_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    client
+                        .container_client(container)
+                        .create()
+                        .await
+                        .context("failed to create container")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_container<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    client
+                        .container_client(container)
+                        .delete()
+                        .await
+                        .context("failed to delete container")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_container_info<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: container,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let properties = client
+                        .container_client(container)
+                        .get_properties()
+                        .await
+                        .context("failed to get container properties")?;
+
+                    let created_at = properties
+                        .date
+                        .unix_timestamp()
+                        .try_into()
+                        .context("failed to convert created_at date to u64")?;
+
+                    // NOTE: The `created_at` format is currently undefined
+                    // https://github.com/WebAssembly/wasi-blobstore/issues/7
+                    anyhow::Ok(wrpc_interface_blobstore::ContainerMetadata { created_at })
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_list_container_objects<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (container, limit, offset),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, Option<u64>, Option<u64>), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let stream = client.list_containers().into_stream();
+                    let container_names = stream
+                        .map(|res| {
+                            res.map(|list_response| {
+                                list_response
+                                    .containers
+                                    .iter()
+                                    .map(|container| {
+                                        Some(wrpc_transport::Value::String(container.name.clone()))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|e| anyhow::anyhow!(e))
+                        })
+                        .skip(offset.unwrap_or_default().try_into().unwrap_or(usize::MAX))
+                        .take(limit.unwrap_or_default().try_into().unwrap_or(usize::MAX));
+
+                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(container_names)))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_copy_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (src, dest),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                wrpc_interface_blobstore::ObjectId,
+            ),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let copy_source = client
+                        .container_client(src.container)
+                        .blob_client(src.object)
+                        .url()
+                        .context("failed to get source object for copy")?;
+
+                    client
+                        .container_client(dest.container)
+                        .blob_client(dest.object)
+                        .copy(copy_source)
+                        .await
+                        .map(|_| ())
+                        .context("failed to copy source object")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    client
+                        .container_client(id.container)
+                        .blob_client(id.object)
+                        .delete()
+                        .await
+                        .map(|_| ())
+                        .context("failed to delete object")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_delete_objects<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (container, objects),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, Vec<String>), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let deletes = objects.iter().map(|object| async {
+                        client
+                            .container_client(container.clone())
+                            .blob_client(object.clone())
+                            .delete()
+                            .await
+                    });
+                    futures::future::join_all(deletes)
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>, azure_storage::Error>>()
+                        .map(|_| ())
+                        .context("failed to delete objects")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_container_data<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (id, start, end),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (wrpc_interface_blobstore::ObjectId, u64, u64),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let stream = client
+                        .container_client(id.container)
+                        .blob_client(id.object)
+                        .get()
+                        .range(start..end)
+                        .into_stream();
+
+                    let data = stream
+                        .map_err(|e| anyhow::anyhow!(e))
+                        .and_then(|res| async {
+                            Ok(vec![Some(wrpc_transport::Value::List(
+                                res.data
+                                    .collect()
+                                    .await
+                                    .map(|bytes| {
+                                        bytes.into_iter().map(wrpc_transport::Value::U8).collect()
+                                    })
+                                    .map_err(|e| anyhow::anyhow!(e))?,
+                            ))])
+                        });
+
+                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_get_object_info<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let info = client
+                        .container_client(id.container)
+                        .blob_client(id.object)
+                        .get_properties()
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))?;
+
+                    // NOTE: The `created_at` format is currently undefined
+                    // https://github.com/WebAssembly/wasi-blobstore/issues/7
+                    anyhow::Ok(wrpc_interface_blobstore::ObjectMetadata {
+                        created_at: info
+                            .date
+                            .unix_timestamp()
+                            .try_into()
+                            .context("failed to convert created_at date to u64")?,
+                        size: info.blob.properties.content_length,
+                    })
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_has_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: id,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    client
+                        .container_client(id.container)
+                        .blob_client(id.object)
+                        .exists()
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    async fn serve_move_object<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (src, dest),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                wrpc_interface_blobstore::ObjectId,
+            ),
+            Tx,
+        >,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
+
+                    let source_client = client
+                        .container_client(src.container)
+                        .blob_client(src.object);
+
+                    // Copy and then delete the source object
+                    let copy_source = source_client
+                        .url()
+                        .context("failed to get source object for copy")?;
+
+                    client
+                        .container_client(dest.container)
+                        .blob_client(dest.object)
+                        .copy(copy_source)
+                        .await
+                        .map(|_| ())
+                        .context("failed to copy source object to move")?;
+
+                    source_client
+                        .delete()
+                        .await
+                        .map(|_| ())
+                        .context("failed to delete source object")
+                }
+                .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(
+        level = "trace",
+        skip(self, result_subject, error_subject, transmitter, data)
+    )]
+    async fn serve_write_container_data<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (id, data),
+            result_subject,
+            error_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (
+                wrpc_interface_blobstore::ObjectId,
+                impl Stream<Item = anyhow::Result<Bytes>> + Send,
+            ),
+            Tx,
+        >,
+    ) {
+        // TODO: Consider streaming
+        let data: BytesMut = match data.try_collect().await {
+            Ok(data) => data,
+            Err(err) => {
+                error!(?err, "failed to receive value");
+                if let Err(err) = transmitter
+                    .transmit_static(error_subject, err.to_string())
+                    .await
+                {
+                    error!(?err, "failed to transmit error")
+                }
                 return;
             }
         };
-        match client.container_client(container_name).create().await {
-            Ok(_) => (),
-            Err(e) => error!(error = %e, "failed to create container"),
-        }
-    }
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                async {
+                    let client = self
+                        .get_config(context.as_ref())
+                        .await
+                        .context("failed to retrieve azure blobstore client")?;
 
-    async fn get_container_info(
-        &self,
-        ctx: Context,
-        container_name: ContainerId,
-    ) -> ContainerMetadata {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                };
-            }
-        };
-
-        match client
-            .container_client(container_name)
-            .get_properties()
+                    client
+                        .container_client(id.container)
+                        .blob_client(id.object)
+                        .put_block_blob(data)
+                        .await
+                        .map(|_| ())
+                        .context("failed to write container data")
+                }
+                .await,
+            )
             .await
         {
-            Ok(res) => ContainerMetadata {
-                container_id: res.container.name,
-                // TODO: no date?
-                created_at: None,
-            },
-            Err(e) => {
-                error!(error = %e, "failed to get container info");
-                ContainerMetadata {
-                    container_id: String::default(),
-                    created_at: None,
-                }
-            }
-        }
-    }
-
-    async fn get_object_info(&self, ctx: Context, arg: ContainerObjectSelector) -> ObjectMetadata {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                };
-            }
-        };
-
-        match client
-            .container_client(&arg.container_id)
-            .blob_client(&arg.object_id)
-            .get_properties()
-            .await
-        {
-            Ok(res) => {
-                let blob = res.blob;
-                ObjectMetadata {
-                    container_id: arg.container_id,
-                    content_encoding: blob.properties.content_encoding,
-                    content_length: blob.properties.content_length,
-                    content_type: Some(blob.properties.content_type),
-                    last_modified: Some(Timestamp::from(blob.properties.last_modified)),
-                    object_id: arg.object_id,
-                }
-            }
-            Err(se) => {
-                error!(error = %se, "failed to get object info");
-                ObjectMetadata {
-                    container_id: String::default(),
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    last_modified: None,
-                    object_id: String::default(),
-                }
-            }
-        }
-    }
-
-    async fn list_containers(&self, ctx: Context) -> Vec<ContainerMetadata> {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return Vec::new();
-            }
-        };
-
-        let mut stream = client.list_containers().into_stream();
-        let mut all_containers = Vec::new();
-
-        while let Some(response) = stream.next().await {
-            match response {
-                Ok(res) => {
-                    res.containers.iter().for_each(|c| {
-                        all_containers.push(ContainerMetadata {
-                            container_id: c.name.clone(),
-                            // TODO: no creation date?
-                            created_at: None,
-                        });
-                    });
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to list containers");
-                    return Vec::new();
-                }
-            };
-        }
-
-        all_containers
-    }
-
-    async fn remove_containers(
-        &self,
-        ctx: Context,
-        container_names: Vec<String>,
-    ) -> Vec<OperationResult> {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return Vec::new();
-            }
-        };
-
-        let mut results = Vec::new();
-        for container_name in container_names.iter() {
-            match client
-                .container_client(container_name)
-                .delete()
-                .into_future()
-                .await
-            {
-                Ok(_) => results.push(OperationResult {
-                    key: container_name.to_string(),
-                    error: None,
-                    success: true,
-                }),
-                Err(e) => {
-                    error!(error = %e, "failed to delete container");
-                    results.push(OperationResult {
-                        key: container_name.to_string(),
-                        error: Some(e.to_string()),
-                        success: false,
-                    });
-                }
-            }
-        }
-
-        results
-    }
-
-    async fn object_exists(&self, ctx: Context, arg: ContainerObjectSelector) -> bool {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return false;
-            }
-        };
-
-        match client
-            .container_client(&arg.container_id)
-            .blob_client(&arg.object_id)
-            .exists()
-            .await
-        {
-            Ok(res) => res,
-            Err(e) => {
-                error!(error = %e, "failed to check object existence");
-                false
-            }
-        }
-    }
-
-    async fn list_objects(&self, ctx: Context, req: ListObjectsRequest) -> ListObjectsResponse {
-        //
-        // TODO: az-blob-rust-sdk does not support continuation token
-        //
-
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return ListObjectsResponse {
-                    continuation: None,
-                    is_last: true,
-                    objects: Vec::new(),
-                };
-            }
-        };
-
-        let mut list_blob = client.container_client(req.container_id).list_blobs();
-
-        if let Some(max_items) = req.max_items {
-            if max_items > i32::MAX as u32 {
-                error!("max items too large");
-                return ListObjectsResponse {
-                    continuation: None,
-                    is_last: true,
-                    objects: vec![],
-                };
-            }
-            list_blob = list_blob.max_results(NonZeroU32::new(max_items).unwrap());
-        } else {
-            list_blob = list_blob.max_results(NonZeroU32::new(DEFAULT_MAX_ITEMS).unwrap());
-        }
-
-        let mut stream = list_blob.into_stream();
-
-        let mut all_blobs = Vec::new();
-
-        while let Some(response) = stream.next().await {
-            match response {
-                Ok(res) => {
-                    res.blobs.blobs().for_each(|c| {
-                        all_blobs.push(ObjectMetadata {
-                            container_id: c.name.clone(),
-                            last_modified: Some(Timestamp::from(c.properties.last_modified)),
-                            object_id: c.name.to_string(),
-                            content_length: c.properties.content_length,
-                            content_encoding: c.properties.content_encoding.clone(),
-                            content_type: Some(c.properties.content_type.to_string()),
-                        });
-                    });
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to list containers");
-                }
-            };
-        }
-
-        ListObjectsResponse {
-            continuation: None,
-            is_last: true,
-            objects: all_blobs,
-        }
-    }
-
-    async fn remove_objects(
-        &self,
-        ctx: Context,
-        arg: RemoveObjectsRequest,
-    ) -> Vec<OperationResult> {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return Vec::new();
-            }
-        };
-
-        let container_client = client.container_client(&arg.container_id);
-        let mut results = Vec::new();
-        for obj in arg.objects.iter() {
-            let blob_client = container_client.blob_client(obj);
-            match blob_client.delete().into_future().await {
-                Ok(_) => {}
-                Err(e) => {
-                    error!(error = %e, "failed to delete object");
-                    results.push(OperationResult {
-                        key: obj.clone(),
-                        error: Some(e.to_string()),
-                        success: false,
-                    });
-                }
-            }
-        }
-
-        if !results.is_empty() {
-            error!(
-                "delete_objects returned {}/{} errors",
-                results.len(),
-                arg.objects.len()
-            );
-        }
-        results
-    }
-
-    async fn put_object(&self, ctx: Context, req: PutObjectRequest) -> PutObjectResponse {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return PutObjectResponse { stream_id: None };
-            }
-        };
-
-        let container_client = client.container_client(&req.chunk.container_id);
-        if !req.chunk.is_last {
-            error!("put_object for multi-part upload: not implemented!");
-            return PutObjectResponse { stream_id: None };
-        }
-        if req.chunk.offset != 0 {
-            error!("put_object with initial offset non-zero: not implemented!");
-            return PutObjectResponse { stream_id: None };
-        }
-        if req.chunk.bytes.is_empty() {
-            error!("put_object with zero bytes");
-            return PutObjectResponse { stream_id: None };
-        }
-
-        let bytes = req.chunk.bytes.to_owned();
-        let blob_client = container_client.blob_client(&req.chunk.object_id);
-        let mut builder = blob_client.put_block_blob(bytes);
-
-        if let Some(content_type) = req.content_type {
-            builder = builder.content_type(content_type);
-        }
-
-        if let Some(content_encoding) = req.content_encoding {
-            builder = builder.content_encoding(content_encoding);
-        }
-
-        match builder.await {
-            Ok(_) => PutObjectResponse { stream_id: None },
-            Err(e) => {
-                error!(error = %e, "failed to put object");
-                PutObjectResponse { stream_id: None }
-            }
-        }
-    }
-
-    async fn get_object(&self, ctx: Context, req: GetObjectRequest) -> GetObjectResponse {
-        let client = match self.client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return GetObjectResponse {
-                    content_encoding: None,
-                    content_length: 0,
-                    content_type: None,
-                    error: Some("failed to read file".into()),
-                    initial_chunk: None,
-                    success: false,
-                };
-            }
-        };
-
-        let mut stream = client
-            .container_client(&req.container_id)
-            .blob_client(&req.object_id)
-            .get()
-            .chunk_size(DEFAULT_MAX_CHUNK_SIZE_BYTES)
-            .into_stream();
-        let mut result = vec![];
-        // The stream is composed of individual calls to the get blob endpoint
-        while let Some(value) = stream.next().await {
-            match value {
-                Ok(value) => {
-                    let data = value.data.collect().await.unwrap();
-                    result.extend(&data);
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to get object");
-                    return GetObjectResponse {
-                        content_encoding: None,
-                        content_length: 0,
-                        content_type: None,
-                        error: Some("failed to read file".into()),
-                        initial_chunk: None,
-                        success: false,
-                    };
-                }
-            }
-        }
-
-        GetObjectResponse {
-            content_encoding: None,
-            content_length: result.len() as u64,
-            content_type: None,
-            error: None,
-            initial_chunk: Some(Chunk {
-                bytes: result,
-                is_last: true,
-                offset: 0,
-                object_id: req.object_id.clone(),
-                container_id: req.container_id.clone(),
-            }),
-            success: true,
-        }
-    }
-
-    async fn put_chunk(&self, _ctx: Context, _req: PutChunkRequest) -> () {
-        error!("put_chunk is unimplemented");
-    }
-}
-
-impl From<time::OffsetDateTime> for Timestamp {
-    fn from(dt: time::OffsetDateTime) -> Self {
-        Timestamp {
-            sec: dt.unix_timestamp() as u64,
-            nsec: dt.nanosecond(),
+            error!(?err, "failed to transmit result")
         }
     }
 }
