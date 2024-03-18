@@ -1,0 +1,10 @@
+name = "Blobstore FS"
+language = "rust"
+type = "provider"
+
+[rust]
+target_dir = "../"
+
+[provider]
+bin_name = "blobstore_fs"
+vendor = "wasmCloud"

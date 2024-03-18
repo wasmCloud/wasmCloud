@@ -1,0 +1,37 @@
+// Message broker interface
+// This is a phase 1 interface, and is subject to change
+// This interface is used to send and receive messages from a message broker
+
+// Note that in this phase 1 interface, subscriptions are defined out of band from this
+// component. Components themselves cannot establish or terminate subscriptions. This may
+// change for phase 2.
+package wasmcloud:messaging;
+
+// Types common to message broker interactions
+interface types {
+    // A message sent to or received from a broker
+    record broker-message {
+        subject: string,
+        body: option<list<u8>>,
+        reply-to: option<string>,
+    }
+}
+
+interface handler {
+    use types.{broker-message};
+
+    // Callback handled to invoke a function when a message is received from a subscription
+    handle-message: func(msg: broker-message) -> result<_, string>;
+}
+
+interface consumer {
+    use types.{broker-message};
+
+    // Perform a request operation on a subject
+    request: func(subject: string, body: option<list<u8>>, timeout-ms: u32) -> result<broker-message, string>;
+    // Performs a request and collects multiple responses. If a non-zero timeout is supplied, this will finish a collection at that time, unless
+    // maximum results is reached first. If both timeout-ms and max-results are 0, the provider will choose when to terminate
+    request-multi: func(subject: string, body: option<list<u8>>, timeout-ms: u32, max-results: u32) -> result<list<broker-message>, string>;
+    // Publish a message to a subject without awaiting a response
+    publish: func(msg: broker-message) -> result<_, string>;
+}
