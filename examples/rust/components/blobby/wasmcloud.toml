@@ -1,0 +1,8 @@
+name = "blobby"
+language = "rust"
+type = "actor"
+version = "0.1.0"
+
+[actor]
+wit_world = "blobby"
+wasm_target = "wasm32-wasi-preview2"

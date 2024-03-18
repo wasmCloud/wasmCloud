@@ -1,0 +1,7 @@
+blobstore = "../../runtime/wit/deps/blobstore"
+io = "../../runtime/wit/deps/io"
+keyvalue = "../../runtime/wit/deps/keyvalue"
+logging = "../../runtime/wit/deps/logging"
+messaging = "../../runtime/wit/deps/messaging"
+wasmcloud = "../../../wit"
+http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
