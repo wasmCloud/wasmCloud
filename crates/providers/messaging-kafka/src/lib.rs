@@ -134,7 +134,7 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
             {
                 let component_id = component_id.clone();
                 if let Err(e) = InvocationHandler::new(component_id)
-                    .handle_message(Message {
+                    .handle_message(BrokerMessage {
                         body: message,
                         reply_to: None,
                         subject: topic.to_owned(),
@@ -191,13 +191,13 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
 #[async_trait]
-impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
+impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
     #[instrument(
         level = "debug", 
         skip_all,
         fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len())
     )]
-    async fn publish(&self, ctx: Context, msg: Message) -> () {
+    async fn publish(&self, ctx: Context, msg: BrokerMessage) -> Result<(), String> {
         debug!("publishing message: {msg:?}");
 
         let hosts = {
@@ -205,7 +205,7 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
                 Ok(connections) => connections,
                 Err(e) => {
                     error!("failed to read connections: {e}");
-                    return;
+                    return Err(format!("failed to read connections: {e}"));
                 }
             };
 
@@ -213,7 +213,7 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
                 Some(config) => config,
                 None => {
                     error!("no actor config for connection");
-                    return;
+                    return Err("no actor config for connection".to_string());
                 }
             };
 
@@ -224,7 +224,7 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             Ok(client) => client,
             Err(e) => {
                 error!("failed to build client: {e}");
-                return;
+                return Err(format!("failed to build client: {e}"));
             }
         };
 
@@ -233,7 +233,7 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             Ok(controller_client) => controller_client,
             Err(e) => {
                 error!("failed to build controller client: {e}");
-                return;
+                return Err(format!("failed to build controller client: {e}"));
             }
         };
 
@@ -262,14 +262,14 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             Ok(partition_client) => partition_client,
             Err(e) => {
                 error!("failed to create partition client: {e}");
-                return;
+                return Err(format!("failed to create partition client: {e}"));
             }
         };
 
         // produce some data
         let records = vec![Record {
             key: None,
-            value: Some(msg.body.clone()),
+            value: Some(msg.body),
             headers: BTreeMap::from([("source".to_owned(), b"wasm".to_vec())]),
             timestamp: chrono::offset::Utc::now(),
         }];
@@ -279,19 +279,26 @@ impl WasmcloudMessagingMessaging for KafkaMessagingProvider {
             .await
         {
             error!("failed to produce record: {e}");
-        };
+            return Err(format!("failed to produce record: {e}"));
+        }
+        Ok(())
     }
 
-    #[instrument(level = "debug", skip_all, fields(subject = %_msg.subject))]
-    async fn request(&self, _ctx: Context, _msg: RequestMessage) -> Message {
+    #[instrument(level = "debug", skip_all, fields(subject = _subject))]
+    async fn request(
+        &self,
+        _ctx: Context,
+        _subject: String,
+        _body: Vec<u8>,
+        _timeout_ms: u32,
+    ) -> Result<BrokerMessage, String> {
         // Kafka does not support request-reply in the traditional sense. You can publish to a
         // topic, and get an acknowledgement that it was received, but you can't get a
         // reply from a consumer on the other side.
         error!("not implemented (Kafka does not officially support the request-reply paradigm)");
-        Message {
-            subject: String::default(),
-            reply_to: None,
-            body: Vec::new(),
-        }
+        Err(
+            "not implemented (Kafka does not officially support the request-reply paradigm)"
+                .to_string(),
+        )
     }
 }

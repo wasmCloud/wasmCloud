@@ -6,9 +6,7 @@ use std::process::{Output, Stdio};
 
 use nkeys::KeyPair;
 use wascap::caps;
-use wasmcloud_component_adapters::{
-    WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
-};
+use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 
 use anyhow::{bail, ensure, Context};
 use futures::try_join;
@@ -128,62 +126,23 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         [
             "--manifest-path=./rust/Cargo.toml",
             "--target=wasm32-unknown-unknown",
-            "-p=kv-http-smithy",
-            "-p=blobstore-http-smithy",
             "-p=lattice-control-http-smithy",
-            "-p=messaging-receiver-smithy",
-            "-p=messaging-sender-http-smithy",
         ],
         |name, kind| {
-            [
-                "blobstore-http-smithy",
-                "kv-http-smithy",
-                "lattice-control-http-smithy",
-                "messaging-receiver-smithy",
-                "messaging-sender-http-smithy",
-            ]
-            .contains(&name)
-                && kind.contains(&CrateType::Cdylib)
+            ["lattice-control-http-smithy"].contains(&name) && kind.contains(&CrateType::Cdylib)
         },
     )
     .await
     .context("failed to build module crates")?;
-    match (
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next(),
-    ) {
+    match (artifacts.next().deref_artifact(), artifacts.next()) {
         (
             // NOTE: this list of artifacts must stay sorted
-            Some(("blobstore-http-smithy", [blobstore_http_smithy])),
-            Some(("kv-http-smithy", [kv_http_smithy])),
             Some(("lattice-control-http-smithy", [lattice_controller_http_smithy])),
-            Some(("messaging-receiver-smithy", [messaging_receiver_smithy])),
-            Some(("messaging-sender-http-smithy", [messaging_sender_http_smithy])),
             None,
         ) => {
-            copy(kv_http_smithy, out_dir.join("rust-kv-http-smithy.wasm")).await?;
-            copy(
-                blobstore_http_smithy,
-                out_dir.join("rust-blobstore-http-smithy.wasm"),
-            )
-            .await?;
             copy(
                 lattice_controller_http_smithy,
                 out_dir.join("rust-lattice-control-http-smithy.wasm"),
-            )
-            .await?;
-            copy(
-                messaging_receiver_smithy,
-                out_dir.join("rust-messaging-receiver-smithy.wasm"),
-            )
-            .await?;
-            copy(
-                messaging_sender_http_smithy,
-                out_dir.join("rust-messaging-sender-http-smithy.wasm"),
             )
             .await?;
             Ok(())
@@ -198,7 +157,6 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
     // NOTE: this list should be kept sorted
     let project_names = [
         "builtins-component-reactor",
-        "foobar-component-command",
         "messaging-invoker",
         "pinger-config-component",
         "ponger-config-component",
@@ -234,12 +192,10 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
-                artifacts.next().deref_artifact(),
                 artifacts.next(),
             ) {
                 (
                     Some(("builtins-component-reactor", [builtins_component_reactor])),
-                    Some(("foobar-component-command", [foobar_component_command])),
                     Some(("messaging-invoker", [messaging_invoker])),
                     Some(("pinger-config-component", [pinger_config_component])),
                     Some(("ponger-config-component", [ponger_config_component])),
@@ -251,10 +207,6 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                         copy(
                             builtins_component_reactor,
                             out_dir.join("rust-builtins-component-reactor.wasm"),
-                        ),
-                        copy(
-                            foobar_component_command,
-                            out_dir.join("rust-foobar-component-command.wasm"),
                         ),
                         copy(
                             messaging_invoker,
@@ -342,21 +294,6 @@ async fn main() -> anyhow::Result<()> {
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
 
-    // Build WASI command components
-    for name in ["foobar-component-command"] {
-        let path = out_dir.join(format!("rust-{name}.wasm"));
-        let module = fs::read(&path)
-            .await
-            .with_context(|| format!("failed to read `{}`", path.display()))?;
-        let component = encode_component(module, WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER)
-            .with_context(|| format!("failed to encode `{}`", path.display()))?;
-
-        let path = out_dir.join(format!("rust-{name}-preview2.wasm"));
-        fs::write(&path, component)
-            .await
-            .with_context(|| format!("failed to write `{}`", path.display()))?;
-    }
-
     // Create a new keypair to use when signing wasm modules built for test
     let issuer = KeyPair::new_account();
     println!(
@@ -380,33 +317,11 @@ async fn main() -> anyhow::Result<()> {
             "builtins-component-reactor-preview2",
             Some(builtin_caps.clone()),
         ),
-        ("foobar-component-command", None),
-        ("foobar-component-command-preview2", None),
-        (
-            "kv-http-smithy",
-            Some(vec![caps::HTTP_SERVER.into(), caps::KEY_VALUE.into()]),
-        ),
-        (
-            "blobstore-http-smithy",
-            Some(vec![caps::HTTP_SERVER.into(), caps::BLOB.into()]),
-        ),
-        (
-            "lattice-control-http-smithy",
-            Some(vec![caps::HTTP_SERVER.into(), caps::LATTICE_CONTROL.into()]),
-        ),
-        (
-            "messaging-sender-http-smithy",
-            Some(vec![caps::HTTP_SERVER.into(), caps::MESSAGING.into()]),
-        ),
-        (
-            "messaging-receiver-smithy",
-            Some(vec![caps::MESSAGING.into()]),
-        ),
+        ("messaging-invoker-preview2", None),
         ("pinger-config-component-preview2", None),
         ("ponger-config-component-preview2", None),
         ("wrpc-pinger-component-preview2", None),
         ("wrpc-ponger-component-preview2", None),
-        ("messaging-invoker-preview2", None),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await

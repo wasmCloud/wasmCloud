@@ -132,7 +132,7 @@ async fn kv_vault_suite() -> Result<()> {
         "default",
         "wasmcloud",
         "messaging",
-        vec!["messaging".to_string(), "message-subscriber".to_string()],
+        vec!["consumer".to_string(), "handler".to_string()],
         vec![],
         vec![],
     )

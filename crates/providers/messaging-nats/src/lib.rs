@@ -178,7 +178,7 @@ async fn dispatch_msg(
     nats_msg: async_nats::Message,
     _permit: OwnedSemaphorePermit,
 ) {
-    let msg = Message {
+    let msg = BrokerMessage {
         body: nats_msg.payload.into(),
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
@@ -271,14 +271,14 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
 #[async_trait]
-impl WasmcloudMessagingMessaging for NatsMessagingProvider {
+impl WasmcloudMessagingConsumer for NatsMessagingProvider {
     #[instrument(level = "debug", skip(self, ctx, msg), fields(source_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
-    async fn publish(&self, ctx: Context, msg: Message) -> () {
+    async fn publish(&self, ctx: Context, msg: BrokerMessage) -> Result<(), String> {
         let source_id = match ctx.actor.as_ref() {
             Some(source_id) => source_id,
             None => {
                 error!("no actor in request");
-                return;
+                return Err("no actor in request".to_string());
             }
         };
 
@@ -291,7 +291,7 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
                 Some(nats_bundle) => nats_bundle,
                 None => {
                     error!("actor not linked: {source_id}");
-                    return;
+                    return Err(format!("actor not linked: {source_id}"));
                 }
             };
             nats_bundle.client.clone()
@@ -299,10 +299,11 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
 
         let headers = NatsHeaderInjector::default_with_span().into();
 
+        let body = msg.body.into();
         let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
                 nats_client
-                    .publish_with_reply(msg.subject.to_string(), reply_to, msg.body.clone().into())
+                    .publish_with_reply(msg.subject.to_string(), reply_to, body)
                     .await
             } else {
                 nats_client
@@ -310,31 +311,33 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
                         msg.subject.to_string(),
                         reply_to,
                         headers,
-                        msg.body.clone().into(),
+                        body,
                     )
                     .await
             }
             .map_err(|e| e.to_string()),
             None => nats_client
-                .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
+                .publish_with_headers(msg.subject.to_string(), headers, body)
                 .await
                 .map_err(|e| e.to_string()),
         };
         let _ = nats_client.flush().await;
-        res.unwrap_or(())
+        res
     }
 
-    #[instrument(level = "debug", skip(self, ctx, msg), fields(source_id = ?ctx.actor, subject = %msg.subject))]
-    async fn request(&self, ctx: Context, msg: RequestMessage) -> Message {
+    #[instrument(level = "debug", skip(self, ctx), fields(source_id = ?ctx.actor, subject = %subject))]
+    async fn request(
+        &self,
+        ctx: Context,
+        subject: String,
+        body: Vec<u8>,
+        timeout_ms: u32,
+    ) -> Result<BrokerMessage, String> {
         let source_id = match ctx.actor.as_ref() {
             Some(source_id) => source_id,
             None => {
                 error!("no actor in request");
-                return Message {
-                    subject: String::default(),
-                    reply_to: None,
-                    body: Vec::new(),
-                };
+                return Err("no actor in request".to_string());
             }
         };
 
@@ -344,11 +347,7 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
                 Some(nats_bundle) => nats_bundle,
                 None => {
                     error!("actor not linked: {source_id}");
-                    return Message {
-                        subject: String::default(),
-                        reply_to: None,
-                        body: Vec::new(),
-                    };
+                    return Err(format!("actor not linked: {source_id}"));
                 }
             };
             nats_bundle.client.clone()
@@ -357,21 +356,15 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
         // Inject OTEL headers
         let headers = NatsHeaderInjector::default_with_span().into();
 
+        let timeout = Duration::from_millis(timeout_ms.into());
+        let body = body.into();
         // Perform the request with a timeout
-        let request_with_timeout = if should_strip_headers(&msg.subject) {
-            tokio::time::timeout(
-                Duration::from_millis(msg.timeout_ms as u64),
-                nats_client.request(msg.subject.to_string(), msg.body.clone().into()),
-            )
-            .await
+        let request_with_timeout = if should_strip_headers(&subject) {
+            tokio::time::timeout(timeout, nats_client.request(subject, body)).await
         } else {
             tokio::time::timeout(
-                Duration::from_millis(msg.timeout_ms as u64),
-                nats_client.request_with_headers(
-                    msg.subject.to_string(),
-                    headers,
-                    msg.body.clone().into(),
-                ),
+                timeout,
+                nats_client.request_with_headers(subject, headers, body),
             )
             .await
         };
@@ -380,25 +373,17 @@ impl WasmcloudMessagingMessaging for NatsMessagingProvider {
         match request_with_timeout {
             Err(timeout_err) => {
                 error!("nats request timed out: {timeout_err}");
-                Message {
-                    subject: String::default(),
-                    reply_to: None,
-                    body: Vec::new(),
-                }
+                return Err(format!("nats request timed out: {timeout_err}"));
             }
             Ok(Err(send_err)) => {
                 error!("nats send error: {send_err}");
-                Message {
-                    subject: String::default(),
-                    reply_to: None,
-                    body: Vec::new(),
-                }
+                return Err(format!("nats send error: {send_err}"));
             }
-            Ok(Ok(resp)) => Message {
+            Ok(Ok(resp)) => Ok(BrokerMessage {
                 body: resp.payload.to_vec(),
                 reply_to: resp.reply.map(|s| s.to_string()),
                 subject: resp.subject.to_string(),
-            },
+            }),
         }
     }
 }

@@ -170,7 +170,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             )],
         );
         messaging::consumer::publish(&messaging::types::BrokerMessage {
-            body: Some(body.clone()),
+            body: body.clone(),
             reply_to: Some("noreply".into()),
             subject: "test-messaging-publish".into(),
         })
@@ -180,34 +180,10 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             body: response_body,
             reply_to,
             subject: _,
-        } = messaging::consumer::request("test-messaging-request", Some(b"foo"), 1000)
+        } = messaging::consumer::request("test-messaging-request", b"foo", 1000)
             .expect("failed to request");
-        assert_eq!(response_body.as_deref(), Some(b"bar".as_slice()));
+        assert_eq!(response_body, b"bar");
         assert_eq!(reply_to, None);
-
-        let responses = messaging::consumer::request_multi(
-            "test-messaging-request-multi",
-            Some(b"foo"),
-            1000,
-            1,
-        )
-        .expect("failed to request multi");
-        let mut responses = responses.into_iter();
-        match (responses.next(), responses.next()) {
-            (
-                Some(messaging::types::BrokerMessage {
-                    body: response_body,
-                    reply_to,
-                    subject: _,
-                }),
-                None,
-            ) => {
-                assert_eq!(response_body.as_deref(), Some(b"bar".as_slice()));
-                assert_eq!(reply_to, None);
-            }
-            (None, None) => panic!("no responses received"),
-            _ => panic!("too many responses received"),
-        }
 
         bus::lattice::set_link_name(
             "keyvalue",

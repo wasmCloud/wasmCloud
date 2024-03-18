@@ -286,8 +286,10 @@ where
             | "wasi:sockets/tcp@0.2.0"
             | "wasi:sockets/udp-create-socket@0.2.0"
             | "wasi:sockets/udp@0.2.0"
+            | "wasmcloud:bus/guest-config"
             | "wasmcloud:bus/lattice"
-            | "wasmcloud:bus/guest-config" => continue,
+            | "wasmcloud:messaging/consumer"
+            | "wasmcloud:messaging/handler" => continue,
             _ => {}
         }
         let wit_parser::WorldItem::Interface(interface) = item else {

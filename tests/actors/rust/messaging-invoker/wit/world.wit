@@ -19,8 +19,8 @@ world messaging-invoker {
   /// Invoke wasmcloud:keyvalue contract operations
   import wasmcloud:keyvalue/key-value;
 
-  /// Invoke wasmcloud:keyvalue contract operations
-  import wasmcloud:messaging/messaging;
+  /// Invoke wasmcloud:messaging contract operations
+  import wasmcloud:messaging/consumer;
 
   /// Invoke wasmcloud:blobstore contract operations
   import wasmcloud:blobstore/blobstore;
@@ -32,5 +32,5 @@ world messaging-invoker {
   import test-actors:testing/busybox;
 
   /// Handle messages coming in via NATS (mediated by the nats-messaging provider)
-  export wasmcloud:messaging/message-subscriber;
+  export wasmcloud:messaging/handler;
 }

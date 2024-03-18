@@ -285,19 +285,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 
 [[package]]
-name = "blobstore-http-smithy"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "wasmbus-rpc",
- "wasmcloud-interface-blobstore",
- "wasmcloud-interface-httpserver",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -652,14 +639,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
-name = "foobar-component-command"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rmp-serde",
-]
-
-[[package]]
 name = "form_urlencoded"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,19 +989,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kv-http-smithy"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "wasmbus-rpc",
- "wasmcloud-interface-httpserver",
- "wasmcloud-interface-keyvalue",
-]
-
-[[package]]
 name = "lattice-control-http-smithy"
 version = "0.1.0"
 dependencies = [
@@ -1120,33 +1086,6 @@ dependencies = [
  "serde",
  "serde_json",
  "wit-bindgen 0.16.0",
-]
-
-[[package]]
-name = "messaging-receiver-smithy"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "tokio",
- "wasmbus-rpc",
- "wasmcloud-interface-messaging",
-]
-
-[[package]]
-name = "messaging-sender-http-smithy"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "tokio",
- "wasmbus-rpc",
- "wasmcloud-interface-httpserver",
- "wasmcloud-interface-messaging",
 ]
 
 [[package]]
@@ -2724,41 +2663,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-interface-blobstore"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecc8e8b52c1042963f258b864d6e9d27ba0c3b145a1b0698159e91ff5334dedc"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_bytes",
- "serde_json",
- "wasmbus-rpc",
-]
-
-[[package]]
 name = "wasmcloud-interface-httpserver"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54caf06ad2db2b2f6bd719ea771c72779cb2fef92c865bde66dad3db63515365"
 dependencies = [
  "async-trait",
- "serde",
- "serde_bytes",
- "serde_json",
- "wasmbus-rpc",
- "weld-codegen",
-]
-
-[[package]]
-name = "wasmcloud-interface-keyvalue"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f6a1c01ab4f0061c24e7735540e2b678e81e2147a816b8cdd850507d4ebef8f"
-dependencies = [
- "async-trait",
- "log",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -2778,21 +2688,6 @@ dependencies = [
  "log",
  "rmp-serde",
  "serde",
- "wasmbus-rpc",
- "weld-codegen",
-]
-
-[[package]]
-name = "wasmcloud-interface-messaging"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe861c87bc80f3670237aefa9530fb7b56ea7b98e37869886bdd5d35d3b6b3e"
-dependencies = [
- "async-trait",
- "log",
- "serde",
- "serde_bytes",
- "serde_json",
  "wasmbus-rpc",
  "weld-codegen",
 ]

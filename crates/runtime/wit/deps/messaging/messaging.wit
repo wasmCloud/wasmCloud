@@ -12,7 +12,7 @@ interface types {
     // A message sent to or received from a broker
     record broker-message {
         subject: string,
-        body: option<list<u8>>,
+        body: list<u8>,
         reply-to: option<string>,
     }
 }
@@ -28,10 +28,7 @@ interface consumer {
     use types.{broker-message};
 
     // Perform a request operation on a subject
-    request: func(subject: string, body: option<list<u8>>, timeout-ms: u32) -> result<broker-message, string>;
-    // Performs a request and collects multiple responses. If a non-zero timeout is supplied, this will finish a collection at that time, unless
-    // maximum results is reached first. If both timeout-ms and max-results are 0, the provider will choose when to terminate
-    request-multi: func(subject: string, body: option<list<u8>>, timeout-ms: u32, max-results: u32) -> result<list<broker-message>, string>;
+    request: func(subject: string, body: list<u8>, timeout-ms: u32) -> result<broker-message, string>;
     // Publish a message to a subject without awaiting a response
     publish: func(msg: broker-message) -> result<_, string>;
 }
