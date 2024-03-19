@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 use anyhow::{anyhow, Context as _, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
