@@ -5752,7 +5752,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "futures",
- "heck 0.4.1",
+ "heck 0.5.0",
  "ignore",
  "indicatif",
  "nkeys",
@@ -6379,7 +6379,7 @@ name = "wasmcloud-provider-wit-bindgen-macro"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "serde",
@@ -6455,7 +6455,7 @@ name = "wasmcloud-tracing"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "heck 0.4.1",
+ "heck 0.5.0",
  "once_cell",
  "opentelemetry 0.21.0",
  "opentelemetry-appender-tracing",
