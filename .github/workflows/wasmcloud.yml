@@ -253,6 +253,29 @@ jobs:
       - uses: actions/deploy-pages@v4.0.5
         id: deployment
 
+  docker:
+    runs-on: ubuntu-latest
+    needs:
+      - build-bin
+      - test-linux
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build wasmCloud
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+      - name: Build wash
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./crates/wash-cli/Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
+
   oci:
     strategy:
       matrix:
