@@ -40,3 +40,7 @@ updates:
       patterns:
       - "*upload-artifact*"
       - "*download-artifact*"
+- package-ecosystem: "github-actions"
+  directory: "/.github/actions"
+  schedule:
+    interval: "daily"
