@@ -28,7 +28,6 @@ hyper-rustls = { version = "0.25", features = [
 ], default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
 simple_env_load = { workspace = true }
 tokio = { workspace = true }
-tower-service = { workspace = true }
 tracing = { workspace = true }
 wasmcloud-provider-wit-bindgen = { workspace = true, features = ["otel"] }
 
