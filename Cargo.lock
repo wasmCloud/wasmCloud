@@ -416,7 +416,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "tracing",
- "uuid 1.7.0",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -1227,7 +1227,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "url",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "web-sys",
 ]
 
@@ -2739,7 +2739,7 @@ dependencies = [
  "serde_json",
  "time",
  "url",
- "uuid 1.7.0",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -5504,9 +5504,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
+checksum = "a183cf7feeba97b4dd1c0d46788634f6221d87fa961b305bed08c851829efcc0"
 dependencies = [
  "getrandom",
  "rand",
@@ -5586,7 +5586,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-futures",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wasmcloud-control-interface 0.32.1",
 ]
 
@@ -5984,7 +5984,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "vaultrs",
  "wascap",
  "wasmcloud-control-interface 1.0.0-alpha.1",
@@ -6018,7 +6018,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tokio",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wit-bindgen",
 ]
 
@@ -6101,7 +6101,7 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wascap",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -6139,7 +6139,7 @@ dependencies = [
  "tracing",
  "ulid",
  "url",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wascap",
  "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-core",
@@ -6260,7 +6260,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wasmcloud-control-interface 1.0.0-alpha.1",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
@@ -6347,7 +6347,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.22.0",
  "ulid",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wasmcloud-core",
  "wasmcloud-tracing",
  "wrpc-transport",
@@ -6413,7 +6413,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid 1.7.0",
+ "uuid 1.8.0",
  "wascap",
  "wasi-common",
  "wasmcloud-actor",
