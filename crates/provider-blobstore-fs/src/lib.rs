@@ -8,7 +8,6 @@ use core::pin::pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::os::unix::prelude::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -845,9 +844,13 @@ impl FsProvider {
                         .context("creation time before Unix epoch")?;
                     // NOTE: The `created_at` format is currently undefined
                     // https://github.com/WebAssembly/wasi-blobstore/issues/7
+                    #[cfg(unix)]
+                    let size = std::os::unix::fs::MetadataExt::size(&md);
+                    #[cfg(windows)]
+                    let size = std::os::windows::fs::MetadataExt::file_size(&md);
                     anyhow::Ok(wrpc_interface_blobstore::ObjectMetadata {
                         created_at: created_at.as_secs(),
-                        size: md.size(),
+                        size,
                     })
                 }
                 .await,
