@@ -11,16 +11,16 @@ runs:
   using: composite
   steps:
   # Install Nix
-  - uses: DeterminateSystems/nix-installer-action@v7
+  - uses: DeterminateSystems/nix-installer-action@v10
     with:
       extra-conf: |
         accept-flake-config = true
 
   # Setup magic Nix cache
-  - uses: DeterminateSystems/magic-nix-cache-action@v2
+  - uses: DeterminateSystems/magic-nix-cache-action@v4
 
   # Setup Cachix cache
-  - uses: cachix/cachix-action@v12
+  - uses: cachix/cachix-action@v14
     continue-on-error: true
     with:
       name: wasmcloud
