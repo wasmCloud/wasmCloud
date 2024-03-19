@@ -10,6 +10,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, TryStreamExt as _};
 use tokio::sync::RwLock;
 use tokio::{select, spawn};
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::provider::invocation_context;
 use wasmcloud_provider_sdk::{
@@ -800,23 +801,30 @@ impl BlobstoreAzblobProvider {
                     let stream = client
                         .container_client(id.container)
                         .blob_client(id.object)
-                        .get()
-                        .range(start..end)
-                        .into_stream();
+                        .get_content()
+                        .await?;
 
-                    let data = stream
-                        .map_err(|e| anyhow::anyhow!(e))
-                        .and_then(|res| async {
-                            Ok(vec![Some(wrpc_transport::Value::List(
-                                res.data
-                                    .collect()
-                                    .await
-                                    .map(|bytes| {
-                                        bytes.into_iter().map(wrpc_transport::Value::U8).collect()
-                                    })
-                                    .map_err(|e| anyhow::anyhow!(e))?,
-                            ))])
-                        });
+                    let data = ReaderStream::new(std::io::Cursor::new(stream)).map(|bytes| {
+                        let buf = bytes.context("Failed to read bytes")?;
+                        Ok(buf
+                            .into_iter()
+                            .map(wrpc_transport::Value::U8)
+                            .map(Some)
+                            .collect())
+                    });
+
+                    //     .map_err(|e| anyhow::anyhow!(e))
+                    //     .and_then(|res| async {
+                    //         Ok(vec![Some(wrpc_transport::Value::List(
+                    //             res.data
+                    //                 .collect()
+                    //                 .await
+                    //                 .map(|bytes| {
+                    //                     bytes.into_iter().map(wrpc_transport::Value::U8).collect()
+                    //                 })
+                    //                 .map_err(|e| anyhow::anyhow!(e))?,
+                    //         ))])
+                    //     });
 
                     anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
                 }
