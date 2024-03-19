@@ -1,15 +1,10 @@
-wit_bindgen::generate!({
-    world: "actor",
-    exports: {
-        "test-actors:testing/pingpong": Component,
-    },
-});
+wit_bindgen::generate!("actor");
 
 use exports::test_actors::testing::*;
 
-struct Component;
+struct Actor;
 
-impl pingpong::Guest for Component {
+impl pingpong::Guest for Actor {
     fn ping() -> String {
         wasmcloud::bus::guest_config::get("pong")
             .expect("Unable to fetch value")
@@ -17,3 +12,5 @@ impl pingpong::Guest for Component {
             .unwrap_or_else(|| "config value not set".to_string())
     }
 }
+
+export!(Actor);

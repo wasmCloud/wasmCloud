@@ -1,8 +1,5 @@
 wit_bindgen::generate!({
     world: "actor",
-    exports: {
-        "wasi:http/incoming-handler": Actor,
-    },
     with: {
         "wasi:io/streams@0.2.0": wasmcloud_actor::wasi::io::streams,
     }
@@ -636,3 +633,5 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         http::types::ResponseOutparam::set(response_out, Ok(response));
     }
 }
+
+export!(Actor);

@@ -1,22 +1,16 @@
-wit_bindgen::generate!({
-    world: "actor",
-    exports: {
-        "test-actors:testing/pingpong": Component,
-        "test-actors:testing/busybox": Component,
-    },
-});
+wit_bindgen::generate!("actor");
 
 use exports::test_actors::testing::*;
 
-struct Component;
+struct Actor;
 
-impl pingpong::Guest for Component {
+impl pingpong::Guest for Actor {
     fn ping() -> String {
         "pong".to_string()
     }
 }
 
-impl busybox::Guest for Component {
+impl busybox::Guest for Actor {
     #[doc = " increments a number"]
     fn increment_number(num: u32) -> u32 {
         num.saturating_add(1)
@@ -52,3 +46,5 @@ impl busybox::Guest for Component {
         true
     }
 }
+
+export!(Actor);

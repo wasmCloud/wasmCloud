@@ -6,14 +6,11 @@ use serde::{Deserialize, Serialize};
 
 wit_bindgen::generate!({
     world: "messaging-invoker",
-    exports: {
-        "wasmcloud:messaging/handler": Subscriber,
-    },
     additional_derives: [serde::Serialize, serde::Deserialize],
 });
 
 /// The struct which will hold implementations of the subscriber
-struct Subscriber;
+struct Actor;
 
 use wasi::logging::logging;
 use wasmcloud::bus::lattice;
@@ -48,7 +45,7 @@ struct InvokeRequest {
     params_json_b64: Vec<String>,
 }
 
-impl exports::wasmcloud::messaging::handler::Guest for Subscriber {
+impl exports::wasmcloud::messaging::handler::Guest for Actor {
     fn handle_message(msg: types::BrokerMessage) -> Result<(), String> {
         logging::log(
             logging::Level::Debug,
@@ -184,3 +181,5 @@ fn handle_operation(operation: &str, mut params_json: Vec<Bytes>) -> Result<Opti
         }
     }
 }
+
+export!(Actor);

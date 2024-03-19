@@ -1,8 +1,4 @@
 wit_bindgen::generate!({
-    exports: {
-        world: Actor,
-        "wasi:http/incoming-handler": Actor,
-    },
     with: {
         "wasi:io/streams@0.2.0": wasmcloud_actor::wasi::io::streams,
     }
@@ -490,3 +486,5 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         .expect_err("should not be able to bind to any IPv6 address on UDP");
     }
 }
+
+export!(Actor);
