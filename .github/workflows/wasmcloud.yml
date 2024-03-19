@@ -124,8 +124,17 @@ jobs:
       - uses: actions/checkout@v4.1.1
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
-      - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+      - run: move "target/release/blobstore-fs.exe" "artifact/bin/blobstore-fs.exe"
+      - run: move "target/release/blobstore-s3.exe" "artifact/bin/blobstore-s3.exe"
+      - run: move "target/release/http-client.exe" "artifact/bin/http-client.exe"
+      - run: move "target/release/http-server.exe" "artifact/bin/http-server.exe"
+      - run: move "target/release/keyvalue-redis.exe" "artifact/bin/keyvalue-redis.exe"
+      - run: move "target/release/keyvalue-vault.exe" "artifact/bin/keyvalue-vault.exe"
+      - run: move "target/release/lattice-controller.exe" "artifact/bin/lattice-controller.exe"
+      - run: move "target/release/messaging-kafka.exe" "artifact/bin/messaging-kafka.exe"
+      - run: move "target/release/messaging-nats.exe" "artifact/bin/messaging-nats.exe"
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
+      - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: wasmcloud-x86_64-pc-windows-msvc

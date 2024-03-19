@@ -123,12 +123,10 @@
             cargoLock.root = readTOML ./Cargo.lock;
 
             cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
-            cargoLock.providers-rust = readTOML ./crates/providers/Cargo.lock;
 
             lockPackages =
               cargoLock.root.package
-              ++ cargoLock.actors-rust.package
-              ++ cargoLock.providers-rust.package;
+              ++ cargoLock.actors-rust.package;
 
             # deduplicate lockPackages by $name:$version:$checksum
             lockPackages' = listToAttrs (
@@ -440,11 +438,11 @@
               [
                 pkgs.buildah
                 pkgs.cargo-audit
+                pkgs.minio
                 pkgs.nats-server
                 pkgs.protobuf # prost build dependency
                 pkgs.redis
                 pkgs.vault
-                pkgs.minio
                 pkgs.wit-deps
               ]
               ++ optional (!(pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64)) pkgs.tinygo; # TinyGo currently fails to buid due to GDB not being supported on aarch64-darwin
