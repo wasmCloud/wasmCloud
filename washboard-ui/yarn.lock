@@ -2074,22 +2074,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-table@npm:^8.13.2":
-  version: 8.13.2
-  resolution: "@tanstack/react-table@npm:8.13.2"
+"@tanstack/react-table@npm:^8.14.0":
+  version: 8.14.0
+  resolution: "@tanstack/react-table@npm:8.14.0"
   dependencies:
-    "@tanstack/table-core": "npm:8.13.2"
+    "@tanstack/table-core": "npm:8.14.0"
   peerDependencies:
     react: ">=16"
     react-dom: ">=16"
-  checksum: b91d5fc04a9a0b43c38da00a5a5c2fcfe0c3b3ec521c97f5e2eb2893a7f3446209fe4d07950b8179a0ab10b7b49230abce3d2db2a56fdc9d8fdb27023afea639
+  checksum: 9febbc5c25dbe84d248312c745edeff785f6fe1e4ed91dcc9878ae50072891ee06613c966be4f5df23f2d647d4a68961461096c61177cd9b698568d7394cf0e4
   languageName: node
   linkType: hard
 
-"@tanstack/table-core@npm:8.13.2":
-  version: 8.13.2
-  resolution: "@tanstack/table-core@npm:8.13.2"
-  checksum: 7381147fd9d50905cb581e1498f2924a3b46646872248b25cb4f287419b0819919211da983873921497efb82e4ca40b20db86dac332027a371df4d84cddc9532
+"@tanstack/table-core@npm:8.14.0":
+  version: 8.14.0
+  resolution: "@tanstack/table-core@npm:8.14.0"
+  checksum: 308aa894f39005bda253f84cd6c4ffd9bf1350d0113af7ef24043bf5cc1bf16e9acbfa969ec3065df2a584853b6bf8344f6e37c753e2be54450ee737bb702ba4
   languageName: node
   linkType: hard
 
@@ -2494,7 +2494,7 @@ __metadata:
     "@radix-ui/react-toast": "npm:^1.1.5"
     "@radix-ui/react-toggle": "npm:^1.0.3"
     "@radix-ui/react-tooltip": "npm:^1.0.7"
-    "@tanstack/react-table": "npm:^8.13.2"
+    "@tanstack/react-table": "npm:^8.14.0"
     "@types/node": "npm:^20.11.28"
     "@types/react": "npm:^18.2.67"
     "@types/react-dom": "npm:^18.2.22"
@@ -2521,7 +2521,7 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.15.1"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.4"
-    lucide-react: "npm:^0.358.0"
+    lucide-react: "npm:^0.359.0"
     nats.ws: "npm:^1.21.0"
     postcss: "npm:^8.4.36"
     prettier: "npm:^3.2.5"
@@ -5455,12 +5455,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.358.0":
-  version: 0.358.0
-  resolution: "lucide-react@npm:0.358.0"
+"lucide-react@npm:^0.359.0":
+  version: 0.359.0
+  resolution: "lucide-react@npm:0.359.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 9adb4a8836bd84a7ea4f71d81d287f69711165f5dcfa92be07c7cc3dbf7bd918ba1bba166741e0ea46565827e77243e4f0438a1e71a96794b5dfa5ebca290bf0
+  checksum: f48c597a17a1b1386bbde87f1815083a96188785efae53b2186da210cce352327b28cd5390569dacde93a7e287f71d161ab0d24cb144d8c3d6142cda352a5842
   languageName: node
   linkType: hard
 
