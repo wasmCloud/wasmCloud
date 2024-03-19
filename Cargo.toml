@@ -2,6 +2,7 @@
 name = "wasmcloud"
 version = "1.0.0-alpha.2"
 description = "wasmCloud host runtime"
+default-run = "wasmcloud"
 
 authors.workspace = true
 categories.workspace = true
@@ -19,6 +20,63 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 [badges.maintenance]
 status = "actively-developed"
 
+[features]
+providers = [
+    "dep:redis",
+    "dep:wasmcloud-provider-blobstore-fs",
+    "dep:wasmcloud-provider-blobstore-s3",
+    "dep:wasmcloud-provider-http-client",
+    "dep:wasmcloud-provider-http-server",
+    "dep:wasmcloud-provider-keyvalue-redis",
+    "dep:wasmcloud-provider-keyvalue-vault",
+    "dep:wasmcloud-provider-lattice-controller",
+    "dep:wasmcloud-provider-messaging-kafka",
+    "dep:wasmcloud-provider-messaging-nats",
+    "dep:wasmcloud-provider-sdk",
+]
+default = ["providers"]
+
+[[bin]]
+name = "blobstore-fs"
+required-features = ["providers"]
+
+[[bin]]
+name = "blobstore-s3"
+required-features = ["providers"]
+
+[[bin]]
+name = "http-server"
+required-features = ["providers"]
+
+[[bin]]
+name = "http-client"
+required-features = ["providers"]
+
+[[bin]]
+name = "keyvalue-redis"
+required-features = ["providers"]
+
+[[bin]]
+name = "keyvalue-vault"
+required-features = ["providers"]
+
+[[bin]]
+name = "lattice-controller"
+required-features = ["providers"]
+
+[[bin]]
+name = "messaging-kafka"
+required-features = ["providers"]
+
+[[bin]]
+name = "messaging-nats"
+required-features = ["providers"]
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
@@ -32,21 +90,36 @@ clap = { workspace = true, features = [
     "usage",
 ] }
 nkeys = { workspace = true }
+redis = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-host = { workspace = true }
+wasmcloud-provider-blobstore-fs = { workspace = true, optional = true }
+wasmcloud-provider-blobstore-s3 = { workspace = true, optional = true }
+wasmcloud-provider-http-client = { workspace = true, optional = true }
+wasmcloud-provider-http-server = { workspace = true, optional = true }
+wasmcloud-provider-keyvalue-redis = { workspace = true, optional = true }
+wasmcloud-provider-keyvalue-vault = { workspace = true, optional = true }
+wasmcloud-provider-lattice-controller = { workspace = true, optional = true }
+wasmcloud-provider-messaging-kafka = { workspace = true, optional = true }
+wasmcloud-provider-messaging-nats = { workspace = true, optional = true }
+wasmcloud-provider-sdk = { workspace = true, features = [
+    "otel",
+], optional = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
-async-nats = { workspace = true }
 assert-json-diff = { workspace = true }
+async-nats = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
+once_cell = { workspace = true }
+provider-archive = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true, features = [
     "aio",
@@ -64,7 +137,6 @@ serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-actors = { workspace = true }
-test-providers = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = [
@@ -88,7 +160,6 @@ wrpc-types = { workspace = true }
 
 [workspace]
 members = ["crates/*"]
-exclude = ["crates/providers"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -97,6 +168,11 @@ async-compression = { version = "0.3", default-features = false }
 async-nats = { version = "0.33", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 atelier_core = { version = "0.2", default-features = false }
+aws-config = { version = "1.0", default-features = false }
+aws-sdk-s3 = { version = "1.4", default-features = false }
+aws-smithy-runtime = { version = "1.1", default-features = false }
+axum = { version = "0.7", default-features = false }
+axum-server = { version = "0.6", default-features = false }
 base64 = { version = "0.21", default-features = false }
 bytes = { version = "1", default-features = false }
 cargo_atelier = { version = "0.2", default-features = false }
@@ -111,6 +187,7 @@ cloudevents-sdk = { version = "0.7", default-features = false }
 command-group = { version = "5", default-features = false }
 config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
+dashmap = { version = "5", default-features = false }
 data-encoding = { version = "2", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 dirs = { version = "4", default-features = false }
@@ -122,6 +199,7 @@ http-body = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 humantime = { version = "2", default-features = false }
 hyper = { version = "1", default-features = false }
+hyper-rustls = { version = "0.26", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 ignore = { version = "0.4", default-features = false }
 indicatif = { version = "0.17", default-features = false }
@@ -129,8 +207,8 @@ log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
 nix = { version = "0.27", default-features = false }
 nkeys = { version = "0.3", default-features = false }
-notify = { version = "6", default-features = false }
 normpath = { version = "1.2", default-features = false }
+notify = { version = "6", default-features = false }
 nuid = { version = "0.4", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
@@ -140,6 +218,7 @@ opentelemetry-nats = { version = "0.1", path = "./crates/opentelemetry-nats", de
 opentelemetry-otlp = { version = "0.14", default-features = false }
 opentelemetry_sdk = { version = "0.21", default-features = false }
 path-absolutize = { version = "3", default-features = false }
+path-clean = { version = "1", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0.9", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
@@ -150,6 +229,7 @@ reqwest = { version = "0.11", default-features = false }
 ring = { version = "0.17", default-features = false }
 rmp-serde = { version = "1", default-features = false }
 rmpv = { version = "1", default-features = false }
+rskafka = { version = "0.5", default-features = false }
 rust-embed = { version = "6", default-features = false }
 sanitize-filename = { version = "0.4", default-features = false }
 scopeguard = { version = "1", default-features = false }
@@ -163,6 +243,7 @@ serde_with = { version = "2", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "0.9", default-features = false }
 sha2 = { version = "0.10", default-features = false }
+simple_env_load = { version = "0.2", default-features = false }
 syn = { version = "2", default-features = false }
 sysinfo = { version = "0.27", default-features = false }
 tempfile = { version = "3", default-features = false }
@@ -170,15 +251,16 @@ term-table = { version = "1", default-features = false }
 termcolor = { version = "1", default-features = false }
 test-actors = { version = "0", path = "./tests/actors", default-features = false }
 test-case = { version = "3", default-features = false }
-test-providers = { version = "0", path = "./tests/providers", default-features = false }
 thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
-toml = { version = "0.7", default-features = false }
+toml = { version = "0.8", default-features = false }
 tower = { version = "0.4", default-features = false }
+tower-http = { version = "0.5", default-features = false }
+tower-service = { version = "0.3", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.22", default-features = false }
@@ -203,6 +285,15 @@ wasmcloud-component-adapters = { version = "0.8", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0-alpha.1", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.3", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
+wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
+wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
+wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
+wasmcloud-provider-http-server = { version = "*", path = "./crates/provider-http-server", default-features = false }
+wasmcloud-provider-keyvalue-redis = { version = "*", path = "./crates/provider-keyvalue-redis", default-features = false }
+wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-keyvalue-vault", default-features = false }
+wasmcloud-provider-lattice-controller = { version = "*", path = "./crates/provider-lattice-controller", default-features = false }
+wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
+wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
 wasmcloud-provider-sdk = { version = "0.3", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { version = "0.1", path = "./crates/provider-wit-bindgen", default-features = false }
 wasmcloud-provider-wit-bindgen-macro = { version = "0.1", path = "./crates/provider-wit-bindgen-macro", default-features = false }

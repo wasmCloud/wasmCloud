@@ -1,3 +1,5 @@
+#![cfg(feature = "providers")]
+
 use core::str::{self, FromStr as _};
 use core::time::Duration;
 
@@ -5,14 +7,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::Ipv4Addr;
 
 use anyhow::{ensure, Context as _};
-use nkeys::KeyPair;
 use redis::AsyncCommands as _;
 use serde::Deserialize;
 use tempfile::tempdir;
 use test_actors::{RUST_WRPC_PINGER_COMPONENT, RUST_WRPC_PONGER_COMPONENT_PREVIEW2};
-use tokio::try_join;
+use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
-use url::Url;
 use uuid::Uuid;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::provider::assert_start_provider;
@@ -23,6 +23,7 @@ use wasmcloud_test_util::{
 pub mod common;
 use common::free_port;
 use common::nats::start_nats;
+use common::providers;
 use common::redis::start_redis;
 
 const LATTICE: &str = "default";
@@ -163,26 +164,6 @@ async fn wrpc() -> anyhow::Result<()> {
         .await
         .context("failed to start test host")?;
 
-    let blobstore_fs_provider_key = KeyPair::from_seed(test_providers::RUST_BLOBSTORE_FS_SUBJECT)
-        .context("failed to parse `rust-blobstore-fs` provider key")?;
-    let blobstore_fs_provider_url = Url::from_file_path(test_providers::RUST_BLOBSTORE_FS)
-        .expect("failed to construct provider ref");
-
-    let httpclient_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPCLIENT_SUBJECT)
-        .context("failed to parse `rust-httpclient` provider key")?;
-    let httpclient_provider_url = Url::from_file_path(test_providers::RUST_HTTPCLIENT)
-        .expect("failed to construct provider ref");
-
-    let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
-        .context("failed to parse `rust-httpserver` provider key")?;
-    let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
-        .expect("failed to construct provider ref");
-
-    let kvredis_provider_key = KeyPair::from_seed(test_providers::RUST_KVREDIS_SUBJECT)
-        .context("failed to parse `rust-kvredis` provider key")?;
-    let kvredis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
-        .expect("failed to construct provider ref");
-
     let blobstore_dir = tempdir()?;
     let http_port = free_port().await?;
 
@@ -220,13 +201,20 @@ async fn wrpc() -> anyhow::Result<()> {
     )
     .await?;
 
+    let (rust_blobstore_fs, rust_http_client, rust_http_server, rust_keyvalue_redis) = join!(
+        providers::rust_blobstore_fs(),
+        providers::rust_http_client(),
+        providers::rust_http_server(),
+        providers::rust_keyvalue_redis(),
+    );
+
     assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &blobstore_fs_provider_key,
-        provider_id: &blobstore_fs_provider_key.public_key(),
-        url: &blobstore_fs_provider_url,
+        provider_key: &rust_blobstore_fs.subject,
+        provider_id: &rust_blobstore_fs.subject.public_key(),
+        url: &rust_blobstore_fs.url(),
         config: vec![],
     })
     .await?;
@@ -235,9 +223,9 @@ async fn wrpc() -> anyhow::Result<()> {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &httpserver_provider_key,
-        provider_id: &httpserver_provider_key.public_key(),
-        url: &httpserver_provider_url,
+        provider_key: &rust_http_server.subject,
+        provider_id: &rust_http_server.subject.public_key(),
+        url: &rust_http_server.url(),
         config: vec![],
     })
     .await?;
@@ -246,9 +234,9 @@ async fn wrpc() -> anyhow::Result<()> {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &httpclient_provider_key,
-        provider_id: &httpclient_provider_key.public_key(),
-        url: &httpclient_provider_url,
+        provider_key: &rust_http_client.subject,
+        provider_id: &rust_http_client.subject.public_key(),
+        url: &rust_http_client.url(),
         config: vec![],
     })
     .await?;
@@ -257,9 +245,9 @@ async fn wrpc() -> anyhow::Result<()> {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &kvredis_provider_key,
-        provider_id: &kvredis_provider_key.public_key(),
-        url: &kvredis_provider_url,
+        provider_key: &rust_keyvalue_redis.subject,
+        provider_id: &rust_keyvalue_redis.subject.public_key(),
+        url: &rust_keyvalue_redis.url(),
         config: vec![],
     })
     .await?;
@@ -292,7 +280,7 @@ async fn wrpc() -> anyhow::Result<()> {
 
     assert_advertise_link(
         &ctl_client,
-        httpserver_provider_key.public_key(),
+        rust_http_server.subject.public_key(),
         PINGER_COMPONENT_ID,
         "default",
         "wasi",
@@ -322,7 +310,7 @@ async fn wrpc() -> anyhow::Result<()> {
     assert_advertise_link(
         &ctl_client,
         PINGER_COMPONENT_ID,
-        httpclient_provider_key.public_key(),
+        rust_http_client.subject.public_key(),
         "default",
         "wasi",
         "http",
@@ -336,7 +324,7 @@ async fn wrpc() -> anyhow::Result<()> {
     assert_advertise_link(
         &ctl_client,
         PINGER_COMPONENT_ID,
-        kvredis_provider_key.public_key(),
+        rust_keyvalue_redis.subject.public_key(),
         "default",
         "wasi",
         "keyvalue",
@@ -350,7 +338,7 @@ async fn wrpc() -> anyhow::Result<()> {
     assert_advertise_link(
         &ctl_client,
         PINGER_COMPONENT_ID,
-        blobstore_fs_provider_key.public_key(),
+        rust_blobstore_fs.subject.public_key(),
         "default",
         "wasi",
         "blobstore",

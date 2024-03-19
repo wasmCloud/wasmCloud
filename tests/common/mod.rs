@@ -17,6 +17,7 @@ use url::Url;
 
 pub mod minio;
 pub mod nats;
+pub mod providers;
 pub mod redis;
 pub mod vault;
 

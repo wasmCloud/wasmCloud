@@ -9,15 +9,7 @@ updates:
       patterns:
       - "wasmtime*"
 - package-ecosystem: "cargo"
-  directory: "/crates/providers"
-  schedule:
-    interval: "daily"
-- package-ecosystem: "cargo"
   directory: "/tests/actors/rust"
-  schedule:
-    interval: "daily"
-- package-ecosystem: "cargo"
-  directory: "/tests/actors/rust/tcp-component-command"
   schedule:
     interval: "daily"
 - package-ecosystem: npm

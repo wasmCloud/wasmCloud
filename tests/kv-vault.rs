@@ -1,10 +1,11 @@
+#![cfg(feature = "providers")]
+
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use nkeys::KeyPair;
 use serde_json::json;
-use tokio::try_join;
+use tokio::{join, try_join};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
@@ -18,6 +19,7 @@ use wasmcloud_test_util::provider::assert_start_provider;
 
 pub mod common;
 use crate::common::nats::start_nats;
+use crate::common::providers;
 use crate::common::vault::start_vault;
 
 const LATTICE: &str = "test-kv-vault";
@@ -31,18 +33,6 @@ async fn kv_vault_suite() -> Result<()> {
     let ((vault_server, vault_url, _vault_client), (nats_server, nats_url, nats_client)) =
         try_join!(start_vault(vault_token), start_nats())
             .context("failed to start backing services")?;
-
-    // Get provider key/url for pre-built kv-vault provider (subject of this test)
-    let kv_vault_provider_key = KeyPair::from_seed(test_providers::RUST_KV_VAULT_SUBJECT)
-        .context("failed to parse `rust-kv-vault` provider key")?;
-    let kv_vault_provider_url = Url::from_file_path(test_providers::RUST_KV_VAULT)
-        .map_err(|()| anyhow!("failed to construct provider ref"))?;
-
-    // Get provider key/url for pre-built kv-vault provider (subject of this test)
-    let messaging_nats_provider_key = KeyPair::from_seed(test_providers::RUST_NATS_SUBJECT)
-        .context("failed to parse `rust-kv-vault` provider key")?;
-    let messaging_nats_provider_url = Url::from_file_path(test_providers::RUST_NATS)
-        .map_err(|()| anyhow!("failed to construct provider ref"))?;
 
     // Get actor key/url for pre-built messaging-invoker actor component
     let messaging_invoker_actor_url =
@@ -100,14 +90,19 @@ async fn kv_vault_suite() -> Result<()> {
     .await
     .context("should've scaled actor")?;
 
+    let (rust_messaging_nats, rust_keyvalue_vault) = join!(
+        providers::rust_messaging_nats(),
+        providers::rust_keyvalue_vault()
+    );
+
     // Start the messaging-nats provider
     assert_start_provider(wasmcloud_test_util::provider::StartProviderArgs {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &messaging_nats_provider_key,
-        provider_id: &messaging_nats_provider_key.public_key(),
-        url: &messaging_nats_provider_url,
+        provider_key: &rust_messaging_nats.subject,
+        provider_id: &rust_messaging_nats.subject.public_key(),
+        url: &rust_messaging_nats.url(),
         config: vec!["messaging".into()],
     })
     .await?;
@@ -117,9 +112,9 @@ async fn kv_vault_suite() -> Result<()> {
         client: &ctl_client,
         lattice: LATTICE,
         host_key: &host.host_key(),
-        provider_key: &kv_vault_provider_key,
-        provider_id: &kv_vault_provider_key.public_key(),
-        url: &kv_vault_provider_url,
+        provider_key: &rust_keyvalue_vault.subject,
+        provider_id: &rust_keyvalue_vault.subject.public_key(),
+        url: &rust_keyvalue_vault.url(),
         config: vec![],
     })
     .await?;
@@ -128,7 +123,7 @@ async fn kv_vault_suite() -> Result<()> {
     assert_advertise_link(
         &ctl_client,
         MESSAGING_INVOKER_COMPONENT_ID,
-        messaging_nats_provider_key.public_key(),
+        rust_messaging_nats.subject.public_key(),
         "default",
         "wasmcloud",
         "messaging",
@@ -143,7 +138,7 @@ async fn kv_vault_suite() -> Result<()> {
     assert_advertise_link(
         &ctl_client,
         MESSAGING_INVOKER_COMPONENT_ID,
-        kv_vault_provider_key.public_key(),
+        rust_keyvalue_vault.subject.public_key(),
         "default",
         "wasmcloud",
         "keyvalue",
