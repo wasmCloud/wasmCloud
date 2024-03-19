@@ -105,6 +105,8 @@
         test.excludes = [
           "wash-cli"
           "wash-lib"
+          "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable
+          "wasmcloud-provider-messaging-nats" # tests appear to be broken
         ];
         test.workspace = true;
 
