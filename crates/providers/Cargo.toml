@@ -14,6 +14,7 @@ lto = true
 members = [
     "blobstore-fs",
     "blobstore-s3",
+    "blobstore-azure",
     "http-client",
     "http-server",
     "kv-redis",
