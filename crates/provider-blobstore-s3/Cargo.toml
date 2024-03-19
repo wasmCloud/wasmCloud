@@ -33,5 +33,5 @@ wasmcloud-provider-wit-bindgen = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
 crc32fast = "1.3.2"
-fastrand = "1.7"
+fastrand = "2.0"
 rand = "0.8"
