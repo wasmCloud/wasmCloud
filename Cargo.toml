@@ -308,7 +308,7 @@ wrpc-interface-blobstore = { version = "0.12", default-features = false }
 wrpc-interface-http = { version = "0.17", default-features = false }
 wrpc-interface-keyvalue = { version = "0.9", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.11", default-features = false }
-wrpc-transport = { version = "0.20", default-features = false }
+wrpc-transport = { version = "0.20.6", default-features = false }
 wrpc-transport-derive = { version = "0.1", path = "./crates/wrpc-transport-derive", default-features = false }
 wrpc-transport-derive-macro = { version = "0.1", path = "./crates/wrpc-transport-derive-macro", default-features = false }
 wrpc-transport-nats = { version = "0.17", default-features = false }

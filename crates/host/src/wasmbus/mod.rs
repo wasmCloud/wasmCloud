@@ -215,14 +215,8 @@ impl Handler {
             self.invocation_timeout,
         )
     }
-}
 
-#[async_trait]
-impl Blobstore for Handler {
-    #[instrument(level = "trace", skip(self))]
-    async fn create_container(&self, name: &str) -> anyhow::Result<()> {
-        use wrpc_interface_blobstore::Blobstore;
-
+    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
@@ -232,7 +226,17 @@ impl Blobstore for Handler {
             )))
             .await
             .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        Ok(self.wrpc_client(&id))
+    }
+}
+
+#[async_trait]
+impl Blobstore for Handler {
+    #[instrument(level = "trace", skip(self))]
+    async fn create_container(&self, name: &str) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::Blobstore;
+
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_create_container(name)
             .await
@@ -247,16 +251,7 @@ impl Blobstore for Handler {
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_container_exists(name)
             .await
@@ -271,16 +266,7 @@ impl Blobstore for Handler {
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_delete_container(name)
             .await
@@ -298,16 +284,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
         use wrpc_interface_blobstore::{Blobstore, ContainerMetadata};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_container_info(name)
             .await
@@ -331,16 +308,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<IncomingInputStream> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_container_data(
                 &ObjectId {
@@ -362,16 +330,7 @@ impl Blobstore for Handler {
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_has_object(&ObjectId {
                 container: container.to_string(),
@@ -394,16 +353,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let mut buf = vec![];
         value
             .read_to_end(&mut buf)
@@ -429,16 +379,7 @@ impl Blobstore for Handler {
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_delete_objects(container, names.iter().map(String::as_str))
             .await
@@ -457,16 +398,7 @@ impl Blobstore for Handler {
     {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         // TODO: implement a stream with limit and offset
         let (res, tx) = wrpc
             .invoke_list_container_objects(container, None, None)
@@ -485,16 +417,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId, ObjectMetadata};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_object_info(&ObjectId {
                 container: container.to_string(),
@@ -518,20 +441,71 @@ impl Blobstore for Handler {
     async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_clear_container(container)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.clear-container`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
+        let (res, tx) = wrpc
+            .invoke_copy_object(
+                &ObjectId {
+                    container: src_container,
+                    object: src_name,
+                },
+                &ObjectId {
+                    container: dest_container,
+                    object: dest_name,
+                },
+            )
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.copy-object`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
+        let (res, tx) = wrpc
+            .invoke_move_object(
+                &ObjectId {
+                    container: src_container,
+                    object: src_name,
+                },
+                &ObjectId {
+                    container: dest_container,
+                    object: dest_name,
+                },
+            )
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.move-object`")?;
         // TODO: return a result directly
         res.map_err(|err| anyhow!(err).context("function failed"))?;
         tx.await.context("failed to transmit parameters")?;

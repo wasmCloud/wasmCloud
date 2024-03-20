@@ -362,6 +362,7 @@ impl KvRedisProvider {
                 result_subject,
                 self.exec_cmd::<Bytes>(context.as_ref(), &mut Cmd::get(key))
                     .await
+                    .map(Some)
                     .map(Some),
             )
             .await

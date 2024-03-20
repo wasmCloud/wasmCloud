@@ -33,7 +33,7 @@ impl Instance {
 
 #[async_trait]
 impl container::HostContainer for Ctx {
-    #[instrument]
+    #[instrument(skip(self))]
     fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
         self.table
             .delete(container)
@@ -41,7 +41,7 @@ impl container::HostContainer for Ctx {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn name(&mut self, container: Resource<Container>) -> anyhow::Result<Result<String>> {
         let name = self
             .table
@@ -50,7 +50,7 @@ impl container::HostContainer for Ctx {
         Ok(Ok(name.to_string()))
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn info(
         &mut self,
         container: Resource<Container>,
@@ -65,7 +65,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn get_data(
         &mut self,
         container: Resource<Container>,
@@ -89,7 +89,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn write_data(
         &mut self,
         container: Resource<Container>,
@@ -116,7 +116,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn list_objects(
         &mut self,
         container: Resource<Container>,
@@ -137,7 +137,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn delete_object(
         &mut self,
         container: Resource<Container>,
@@ -146,7 +146,7 @@ impl container::HostContainer for Ctx {
         self.delete_objects(container, vec![name]).await
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn delete_objects(
         &mut self,
         container: Resource<Container>,
@@ -162,7 +162,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn has_object(
         &mut self,
         container: Resource<Container>,
@@ -178,7 +178,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn object_info(
         &mut self,
         container: Resource<Container>,
@@ -194,7 +194,7 @@ impl container::HostContainer for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<()>> {
         let container = self
             .table
@@ -209,7 +209,7 @@ impl container::HostContainer for Ctx {
 
 #[async_trait]
 impl container::HostStreamObjectNames for Ctx {
-    #[instrument]
+    #[instrument(skip(self))]
     fn drop(&mut self, names: Resource<StreamObjectNames>) -> anyhow::Result<()> {
         let _ = self
             .table
@@ -218,7 +218,7 @@ impl container::HostStreamObjectNames for Ctx {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn read_stream_object_names(
         &mut self,
         this: Resource<StreamObjectNames>,
@@ -239,7 +239,7 @@ impl container::HostStreamObjectNames for Ctx {
         Ok(Ok((names, false)))
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn skip_stream_object_names(
         &mut self,
         this: Resource<StreamObjectNames>,
@@ -262,7 +262,7 @@ impl container::HostStreamObjectNames for Ctx {
 
 #[async_trait]
 impl types::HostOutgoingValue for Ctx {
-    #[instrument]
+    #[instrument(skip(self))]
     fn drop(&mut self, outgoing_value: Resource<types::OutgoingValue>) -> anyhow::Result<()> {
         self.table
             .delete(outgoing_value)
@@ -270,14 +270,14 @@ impl types::HostOutgoingValue for Ctx {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<types::OutgoingValue>> {
         self.table
             .push(AsyncVec::default())
             .context("failed to push outgoing value")
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn outgoing_value_write_body(
         &mut self,
         outgoing_value: Resource<types::OutgoingValue>,
@@ -298,7 +298,7 @@ impl types::HostOutgoingValue for Ctx {
 
 #[async_trait]
 impl types::HostIncomingValue for Ctx {
-    #[instrument]
+    #[instrument(skip(self))]
     fn drop(&mut self, incoming_value: Resource<types::IncomingValue>) -> anyhow::Result<()> {
         let _ = self
             .table
@@ -307,7 +307,7 @@ impl types::HostIncomingValue for Ctx {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn incoming_value_consume_sync(
         &mut self,
         incoming_value: Resource<types::IncomingValue>,
@@ -322,7 +322,7 @@ impl types::HostIncomingValue for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: Resource<types::IncomingValue>,
@@ -340,7 +340,7 @@ impl types::HostIncomingValue for Ctx {
         Ok(Ok(stream))
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn size(
         &mut self,
         _incoming_value: Resource<types::IncomingValue>,
@@ -353,7 +353,7 @@ impl types::Host for Ctx {}
 
 #[async_trait]
 impl blobstore::Host for Ctx {
-    #[instrument]
+    #[instrument(skip(self))]
     async fn create_container(
         &mut self,
         name: ContainerName,
@@ -370,7 +370,7 @@ impl blobstore::Host for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn get_container(
         &mut self,
         name: ContainerName,
@@ -388,7 +388,7 @@ impl blobstore::Host for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
         match self.handler.delete_container(&name).await {
             Ok(()) => Ok(Ok(())),
@@ -396,7 +396,7 @@ impl blobstore::Host for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
         match self.handler.container_exists(&name).await {
             Ok(exists) => Ok(Ok(exists)),
@@ -404,16 +404,28 @@ impl blobstore::Host for Ctx {
         }
     }
 
-    #[allow(unused)] // TODO: Implement and remove
-    #[instrument]
+    #[instrument(skip(self))]
     async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+        match self
+            .handler
+            .copy_object(src.container, src.object, dest.container, dest.object)
+            .await
+        {
+            Ok(exists) => Ok(Ok(exists)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
-    #[allow(unused)] // TODO: Implement and remove
-    #[instrument]
+    #[instrument(skip(self))]
     async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+        match self
+            .handler
+            .move_object(src.container, src.object, dest.container, dest.object)
+            .await
+        {
+            Ok(exists) => Ok(Ok(exists)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 }
 

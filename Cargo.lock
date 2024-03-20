@@ -5863,22 +5863,28 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
+ "async-nats",
+ "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
  "base64 0.21.7",
  "bytes",
- "crc32fast",
- "fastrand",
+ "futures",
  "hyper-rustls 0.25.0",
  "rand",
+ "serde",
+ "serde_json",
  "simple_env_load",
  "tokio",
+ "tokio-util",
  "tracing",
- "wasmcloud-provider-wit-bindgen",
+ "wasmcloud-provider-sdk",
+ "wrpc-interface-blobstore",
+ "wrpc-transport",
 ]
 
 [[package]]
@@ -7000,9 +7006,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.20.3"
+version = "0.20.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4166390fbebe32f4fcdff94155b03ba1bf38a86b302f0d38df3ed8aa12e53f9"
+checksum = "b695d109af8653faef40df85de41bbcc198f377494e4dee50bbe33483bfa7eb2"
 dependencies = [
  "anyhow",
  "async-nats",

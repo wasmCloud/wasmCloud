@@ -1,11 +1,14 @@
+use anyhow::Context as _;
 use wasmcloud_provider_blobstore_s3::BlobstoreS3Provider;
-use wasmcloud_provider_sdk::start_provider;
+use wasmcloud_provider_sdk::run_provider_handler;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // start_provider initializes the threaded tokio executor,
-    // listens to lattice rpcs, handles actor links,
-    // and returns only when it receives a shutdown message
-    start_provider(BlobstoreS3Provider::default(), "blobstore-s3-provider")?;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let provider = BlobstoreS3Provider::default();
+    let fut = run_provider_handler(provider.clone(), "blobstore-s3-provider")
+        .await
+        .context("failed to run provider")?;
+    provider.serve(fut).await?;
     eprintln!("Blobstore S3 Provider exiting");
     Ok(())
 }

@@ -169,12 +169,19 @@ where
             0 => match self.stream.poll_next_unpin(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(None),
-                Poll::Ready(Some(Ok(mut values))) => {
-                    self.buffer = values.split_off(1);
-                    let item = values.pop().expect("element missing");
-                    assert!(values.is_empty());
-                    Poll::Ready(Some(Ok(item)))
-                }
+                Poll::Ready(Some(Ok(mut values))) => match values.len() {
+                    0 => Poll::Ready(None),
+                    1 => {
+                        let item = values.pop().expect("element missing");
+                        Poll::Ready(Some(Ok(item)))
+                    }
+                    _ => {
+                        self.buffer = values.split_off(1);
+                        let item = values.pop().expect("element missing");
+                        assert!(values.is_empty());
+                        Poll::Ready(Some(Ok(item)))
+                    }
+                },
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
             },
             _ => {

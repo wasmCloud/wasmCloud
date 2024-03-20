@@ -187,10 +187,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     assert_scale_actor(
         &ctl_client,
         &host.host_key(),
-        format!(
-            "file://{RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED
-     }"
-        ),
+        format!("file://{RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED}"),
         PONGER_COMPONENT_ID,
         None,
         5,
