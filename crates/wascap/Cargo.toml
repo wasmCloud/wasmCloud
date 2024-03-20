@@ -16,7 +16,6 @@ repository.workspace = true
 [dependencies]
 data-encoding = { workspace = true }
 humantime = { workspace = true }
-log = { workspace = true }
 nkeys = { workspace = true }
 nuid = { workspace = true }
 ring = { workspace = true }
