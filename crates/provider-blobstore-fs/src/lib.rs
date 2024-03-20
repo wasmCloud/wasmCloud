@@ -5,7 +5,6 @@
 use core::future::Future;
 use core::pin::pin;
 
-use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -19,24 +18,17 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
 use tokio::fs::{self, create_dir_all, File};
-use tokio::io::AsyncSeekExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio::sync::RwLock;
 use tokio::{select, spawn};
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, warn};
 use wasmcloud_provider_sdk::provider::invocation_context;
 use wasmcloud_provider_sdk::{
     get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
 use wrpc_transport::{AcceptedInvocation, Transmitter};
-
-#[allow(unused)]
-const CAPABILITY_ID: &str = "wasmcloud:blobstore";
-#[allow(unused)]
-const FIRST_SEQ_NBR: u64 = 0;
-
-pub type ChunkOffsetKey = (String, usize);
 
 #[derive(Default, Debug, Clone)]
 struct FsProviderConfig {
@@ -425,9 +417,7 @@ impl FsProvider {
             }
         }
     }
-}
 
-impl FsProvider {
     #[instrument(level = "trace", skip(self, result_subject, transmitter))]
     async fn serve_clear_container<Tx: Transmitter>(
         &self,
@@ -774,8 +764,6 @@ impl FsProvider {
                     let limit = end
                         .checked_sub(start)
                         .context("`end` must be greater than `start`")?;
-                    debug!(limit, "compute limit");
-                    let limit = Arc::new(AtomicUsize::new(limit.try_into().unwrap_or(usize::MAX)));
                     let path = self.get_object(context.as_ref(), id).await?;
                     debug!(path = ?path.display(), "open file");
                     let mut object = File::open(path).await.context("failed to open file")?;
@@ -783,32 +771,15 @@ impl FsProvider {
                         .seek(SeekFrom::Start(start))
                         .await
                         .context("failed to seek from start")?;
-                    let data = ReaderStream::new(object)
-                        .take_while({
-                            let limit = Arc::clone(&limit);
-                            move |_| {
-                                let limit = Arc::clone(&limit);
-                                async move { limit.load(Ordering::Relaxed) > 0 }
-                            }
-                        })
-                        .map(move |buf| {
-                            let mut buf = buf.context("failed to read file")?;
-                            let n = limit.load(Ordering::Relaxed);
-                            trace!(n, len = buf.len(), "read byte chunk");
-                            if buf.len() > n {
-                                trace!(n, len = buf.len(), "byte chunk exceeds limit, truncate");
-                                buf.truncate(n);
-                                limit.store(0, Ordering::Relaxed);
-                            } else {
-                                limit.fetch_sub(buf.len(), Ordering::Relaxed);
-                            }
-                            // TODO: Remove the need for this wrapping
-                            Ok(buf
-                                .into_iter()
-                                .map(wrpc_transport::Value::U8)
-                                .map(Some)
-                                .collect())
-                        });
+                    let data = ReaderStream::new(object.take(limit)).map(move |buf| {
+                        let buf = buf.context("failed to read file")?;
+                        // TODO: Remove the need for this wrapping
+                        Ok(buf
+                            .into_iter()
+                            .map(wrpc_transport::Value::U8)
+                            .map(Some)
+                            .collect())
+                    });
                     anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
                 }
                 .await,
