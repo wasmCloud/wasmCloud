@@ -134,11 +134,12 @@ pub fn configure_tracing(
 /// of the layers
 #[cfg(feature = "otel")]
 pub fn configure_tracing(
-    service_name: &str,
+    service_name: impl AsRef<str>,
     otel_config: &OtelConfig,
     use_structured_logging: bool,
     log_level_override: Option<&Level>,
 ) -> anyhow::Result<()> {
+    let service_name = service_name.as_ref();
     STDERR
         .set(std::io::stderr())
         .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
