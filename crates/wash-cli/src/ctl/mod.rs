@@ -60,6 +60,7 @@ mod test {
     use wash_lib::cli::{
         get::GetHostsCommand,
         scale::ScaleComponentCommand,
+        start::{StartActorCommand, StartComponentCommand, StartProviderCommand},
         stop::{StopComponentCommand, StopProviderCommand},
         update::UpdateComponentCommand,
     };
@@ -86,6 +87,157 @@ mod test {
     /// change between versions. This test will fail if any subcommand of `wash ctl`
     /// changes syntax, ordering of required elements, or flags.
     fn test_ctl_comprehensive() -> anyhow::Result<()> {
+        let start_actor_all: Cmd = Parser::try_parse_from([
+            "ctl",
+            "start",
+            "actor",
+            "--lattice",
+            DEFAULT_LATTICE,
+            "--ctl-host",
+            CTL_HOST,
+            "--ctl-port",
+            CTL_PORT,
+            "--timeout-ms",
+            "2001",
+            "--auction-timeout-ms",
+            "2002",
+            "--constraint",
+            "arch=x86_64",
+            "--host-id",
+            HOST_ID,
+            "wasmcloud.azurecr.io/actor:v1",
+            "myactor",
+        ])?;
+        match start_actor_all.command {
+            CtlCliCommand::Start(StartCommand::Actor(StartActorCommand {
+                opts,
+                host_id,
+                component_ref,
+                component_id,
+                constraints,
+                auction_timeout_ms,
+                ..
+            })) => {
+                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
+                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
+                assert_eq!(auction_timeout_ms, 2002);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
+                assert_eq!(component_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
+                assert_eq!(component_id, "myactor".to_string());
+                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
+            }
+            cmd => panic!("ctl start actor constructed incorrect command {cmd:?}"),
+        }
+
+        let start_provider_all: Cmd = Parser::try_parse_from([
+            "ctl",
+            "start",
+            "provider",
+            "--lattice",
+            DEFAULT_LATTICE,
+            "--ctl-host",
+            CTL_HOST,
+            "--ctl-port",
+            CTL_PORT,
+            "--timeout-ms",
+            "2001",
+            "--auction-timeout-ms",
+            "2002",
+            "--constraint",
+            "arch=x86_64",
+            "--host-id",
+            HOST_ID,
+            "--link-name",
+            "default",
+            "--skip-wait",
+            "wasmcloud.azurecr.io/provider:v1",
+            "providerv1",
+        ])?;
+        match start_provider_all.command {
+            CtlCliCommand::Start(StartCommand::Provider(StartProviderCommand {
+                opts,
+                host_id,
+                provider_ref,
+                provider_id,
+                link_name,
+                constraints,
+                auction_timeout_ms,
+                config,
+                skip_wait,
+            })) => {
+                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
+                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
+                assert_eq!(opts.timeout_ms, 2001);
+                assert_eq!(auction_timeout_ms, 2002);
+                assert_eq!(link_name, "default".to_string());
+                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
+                assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
+                assert_eq!(provider_id, "providerv1".to_string());
+                assert!(config.is_empty());
+                assert!(skip_wait);
+            }
+            cmd => panic!("ctl start provider constructed incorrect command {cmd:?}"),
+        }
+
+        let start_component_all: Cmd = Parser::try_parse_from([
+            "ctl",
+            "start",
+            "component",
+            "--lattice",
+            DEFAULT_LATTICE,
+            "--ctl-host",
+            CTL_HOST,
+            "--ctl-port",
+            CTL_PORT,
+            "--timeout-ms",
+            "2001",
+            "--auction-timeout-ms",
+            "2002",
+            "--constraint",
+            "arch=x86_64",
+            "--host-id",
+            HOST_ID,
+            "--link-name",
+            "default",
+            "--skip-wait",
+            "wasmcloud.azurecr.io/provider:v1",
+            "providerv1",
+        ])?;
+        match start_component_all.command {
+            CtlCliCommand::Start(StartCommand::Component(StartComponentCommand {
+                opts,
+                host_id,
+                component_ref,
+                component_id,
+                link_name,
+                constraints,
+                auction_timeout_ms,
+                config,
+                skip_wait,
+                ..
+            })) => {
+                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
+                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
+                assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
+                assert_eq!(opts.timeout_ms, 2001);
+                assert_eq!(auction_timeout_ms, 2002);
+                assert_eq!(link_name, "default".to_string());
+                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
+                assert_eq!(
+                    component_ref,
+                    "wasmcloud.azurecr.io/provider:v1".to_string()
+                );
+                assert_eq!(component_id, "providerv1".to_string());
+                assert!(config.is_empty());
+                assert!(skip_wait);
+            }
+            cmd => panic!("ctl start component constructed incorrect command {cmd:?}"),
+        }
+
         let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",

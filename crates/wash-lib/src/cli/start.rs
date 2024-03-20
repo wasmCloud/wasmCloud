@@ -24,13 +24,14 @@ use super::validate_component_id;
 
 #[derive(Debug, Clone, Parser)]
 pub enum StartCommand {
+    #[clap(name = "component")]
     Component(StartComponentCommand),
 
-    /// Launch a component in a host
+    /// Launch an actor component in a host
     #[clap(name = "actor")]
     Actor(StartActorCommand),
 
-    /// Launch a provider in a host
+    /// Launch a provider component in a host
     #[clap(name = "provider")]
     Provider(StartProviderCommand),
 }
@@ -48,7 +49,7 @@ pub struct StartActorCommand {
     pub host_id: Option<String>,
 
     /// Component reference, e.g. the absolute file path or OCI URL.
-    #[clap(name = "component-ref", alias = "actor-ref", alias = "component")]
+    #[clap(name = "component-ref", alias = "actor-ref")]
     pub component_ref: String,
 
     /// Unique ID to use for the component
@@ -93,7 +94,7 @@ pub struct StartProviderCommand {
     pub host_id: Option<String>,
 
     /// Provider reference, e.g. the OCI URL for the provider
-    #[clap(name = "component-ref", alias = "provider-ref", alias = "component")]
+    #[clap(name = "component-ref", alias = "provider-ref")]
     pub provider_ref: String,
 
     /// Unique provider ID to use for the provider
@@ -136,11 +137,11 @@ pub struct StartComponentCommand {
     pub host_id: Option<String>,
 
     /// Component reference, e.g. the absolute file path or OCI URL.
-    #[clap(name = "component-ref", alias = "component")]
+    #[clap(name = "component-ref", alias = "ref")]
     pub component_ref: String,
 
     /// Unique ID to use for the component
-    #[clap(name = "component-id", value_parser = validate_component_id)]
+    #[clap(name = "component-id", alias = "id", value_parser = validate_component_id)]
     pub component_id: String,
 
     /// Link name of provider component
@@ -149,7 +150,7 @@ pub struct StartComponentCommand {
 
     /// List of named configuration to apply to the provider component, may be empty
     #[clap(long = "config")]
-    pub config: Option<Vec<String>>,
+    pub config: Vec<String>,
 
     /// Maximum number of instances this component can run concurrently.
     #[clap(
@@ -185,7 +186,6 @@ pub struct StartComponentCommand {
 
     /// OCI username, if omitted anonymous authentication will be used
     #[clap(
-        short = 'u',
         long = "user",
         env = "WASH_REG_USER",
         hide_env_values = true
@@ -194,7 +194,6 @@ pub struct StartComponentCommand {
 
     /// OCI password, if omitted anonymous authentication will be used
     #[clap(
-        short = 'p',
         long = "password",
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
@@ -468,7 +467,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
             link_name: cmd.link_name,
             constraints: cmd.constraints,
             auction_timeout_ms: cmd.auction_timeout_ms,
-            config: cmd.config.unwrap_or_default(),
+            config: cmd.config,
             skip_wait: cmd.skip_wait,
         })
         .await;
@@ -480,7 +479,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                     encoding: wasmparser::Encoding::Component,
                     ..
                 })) => {
-            let caps = extract_claims(buf)?;
+            let caps = extract_claims(&buf)?;
             let token = caps.with_context(|| {
                 format!(
                     "No capabilities discovered in actor component: {}",
@@ -488,7 +487,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 )
             })?;
 
-            let validation = validate_token::<Actor>(&token.jwt).with_context(|| {
+            validate_token::<Actor>(&token.jwt).with_context(|| {
                 format!(
                     "capabilities token validation failed for actor component: {}",
                     component_ref

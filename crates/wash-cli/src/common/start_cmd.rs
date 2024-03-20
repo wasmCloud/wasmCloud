@@ -42,15 +42,15 @@ pub async fn handle_command(
 mod test {
     use super::*;
 
-    use crate::ctl::CtlCliCommand;
-
     use clap::Parser;
-    use wash_lib::cli::start::{StartActorCommand, StartComponentCommand, StartProviderCommand};
+    use wash_lib::cli::start::{
+        StartActorCommand, StartCommand, StartComponentCommand, StartProviderCommand,
+    };
 
     #[derive(Parser)]
     struct Cmd {
         #[clap(subcommand)]
-        command: CtlCliCommand,
+        command: StartCommand,
     }
 
     const CTL_HOST: &str = "127.0.0.1";
@@ -60,14 +60,13 @@ mod test {
     const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
 
     #[test]
-    /// Enumerates multiple options of the `ctl` command to ensure API doesn't
-    /// change between versions. This test will fail if any subcommand of `wash ctl`
+    /// Enumerates multiple options of the `wash start` command to ensure API doesn't
+    /// change between versions. This test will fail if any subcommand of `wash start`
     /// changes syntax, ordering of required elements, or flags.
-    fn test_ctl_comprehensive() -> Result<()> {
+    fn test_start_comprehensive() -> Result<()> {
         let start_component_all: Cmd = Parser::try_parse_from([
-            "ctl",
             "start",
-            "component",
+            "actor",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -86,7 +85,7 @@ mod test {
             "myactor",
         ])?;
         match start_component_all.command {
-            CtlCliCommand::Start(StartCommand::Actor(StartActorCommand {
+            StartCommand::Actor(StartActorCommand {
                 opts,
                 host_id,
                 component_ref,
@@ -94,7 +93,7 @@ mod test {
                 constraints,
                 auction_timeout_ms,
                 ..
-            })) => {
+            }) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
@@ -107,7 +106,6 @@ mod test {
             cmd => panic!("ctl start component constructed incorrect command {cmd:?}"),
         }
         let start_provider_all: Cmd = Parser::try_parse_from([
-            "ctl",
             "start",
             "provider",
             "--lattice",
@@ -131,7 +129,7 @@ mod test {
             "providerv1",
         ])?;
         match start_provider_all.command {
-            CtlCliCommand::Start(StartCommand::Provider(StartProviderCommand {
+            StartCommand::Provider(StartProviderCommand {
                 opts,
                 host_id,
                 provider_ref,
@@ -141,7 +139,7 @@ mod test {
                 auction_timeout_ms,
                 config,
                 skip_wait,
-            })) => {
+            }) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
@@ -159,8 +157,8 @@ mod test {
         }
 
         let start_component_as_actor: Cmd = Parser::try_parse_from([
-            "ctl",
             "start",
+            "component",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -180,7 +178,7 @@ mod test {
         ])?;
 
         match start_component_as_actor.command {
-            CtlCliCommand::Start(StartCommand::Actor(StartComponentCommand {
+            StartCommand::Component(StartComponentCommand {
                 opts,
                 host_id,
                 component_ref,
@@ -188,7 +186,7 @@ mod test {
                 constraints,
                 auction_timeout_ms,
                 ..
-            })) => {
+            }) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
@@ -202,8 +200,8 @@ mod test {
         }
 
         let start_component_as_provider: Cmd = Parser::try_parse_from([
-            "ctl",
             "start",
+            "component",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -226,7 +224,7 @@ mod test {
         ])?;
 
         match start_component_as_provider.command {
-            CtlCliCommand::Start(StartCommand::Provider(StartComponentCommand {
+            StartCommand::Component(StartComponentCommand {
                 opts,
                 host_id,
                 component_ref,
@@ -234,10 +232,9 @@ mod test {
                 link_name,
                 constraints,
                 auction_timeout_ms,
-                config,
                 skip_wait,
                 ..
-            })) => {
+            }) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
@@ -251,7 +248,6 @@ mod test {
                     "wasmcloud.azurecr.io/provider:v1".to_string()
                 );
                 assert_eq!(component_id, "providerv1".to_string());
-                assert!(config.is_empty());
                 assert!(skip_wait);
             }
             cmd => panic!("ctl start constructed incorrect command {cmd:?}"),
