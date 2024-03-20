@@ -21,7 +21,7 @@ aws-sdk-s3 = { workspace = true, features = ["rustls", "rt-tokio"] }
 aws-smithy-runtime = { workspace = true, features = ["client", "tls-rustls"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
-hyper-rustls = { version = "0.25", features = [
+hyper-rustls = { version = "0.26", features = [
     "http2",
     "ring",
     "webpki-tokio",
