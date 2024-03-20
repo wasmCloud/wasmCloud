@@ -528,10 +528,10 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         .await;
     }
 
-    anyhow!(
+    Err(anyhow!(
         "The provided component {} is not a valid actor or provider component. Failed with errors: {} and {}", 
         cmd.component_ref, 
         provider.err().unwrap(), 
         actor.err().unwrap()
-    )
+    ))
 }
