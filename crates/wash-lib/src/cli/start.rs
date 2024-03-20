@@ -9,7 +9,7 @@ use wascap::wasm::extract_claims;
 
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, cached_oci_file},
+    cli::{cached_oci_file, input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
@@ -185,19 +185,11 @@ pub struct StartComponentCommand {
     pub allow_latest: bool,
 
     /// OCI username, if omitted anonymous authentication will be used
-    #[clap(
-        long = "user",
-        env = "WASH_REG_USER",
-        hide_env_values = true
-    )]
+    #[clap(long = "user", env = "WASH_REG_USER", hide_env_values = true)]
     pub user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
-    #[clap(
-        long = "password",
-        env = "WASH_REG_PASSWORD",
-        hide_env_values = true
-    )]
+    #[clap(long = "password", env = "WASH_REG_PASSWORD", hide_env_values = true)]
     pub password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
@@ -476,9 +468,9 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
     let actor = match wasmparser::Parser::new(0).parse_all(&buf).next() {
         // Inspect claims inside of Wasm
         Some(Ok(wasmparser::Payload::Version {
-                    encoding: wasmparser::Encoding::Component,
-                    ..
-                })) => {
+            encoding: wasmparser::Encoding::Component,
+            ..
+        })) => {
             let caps = extract_claims(&buf)?;
             let token = caps.with_context(|| {
                 format!(
@@ -495,7 +487,6 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
             })?;
 
             Ok(())
-
         }
         _ => Err(anyhow!(
             "The provided actor component couldn't be parsed as a wasm component",
@@ -518,8 +509,8 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
 
     Err(anyhow!(
         "The provided component {} is not a valid actor or provider component. Failed with errors: {} and {}", 
-        cmd.component_ref, 
-        provider.err().unwrap(), 
+        cmd.component_ref,
+        provider.err().unwrap(),
         actor.err().unwrap()
     ))
 }
