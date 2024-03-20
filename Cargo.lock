@@ -5512,9 +5512,9 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 
 [[package]]
 name = "vaultrs"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfaaf13c89ba01829cc0ce4dc77f8d1d6c171f6a0ca939c7513702d05cd79e92"
+checksum = "0bb996bb053adadc767f8b0bda2a80bc2b67d24fe89f2b959ae919e200d79a19"
 dependencies = [
  "async-trait",
  "bytes",
