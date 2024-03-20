@@ -6157,7 +6157,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6212,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6238,7 +6238,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6261,7 +6261,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -6299,7 +6299,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-nats"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-nats",
