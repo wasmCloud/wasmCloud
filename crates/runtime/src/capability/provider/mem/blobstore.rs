@@ -10,11 +10,12 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::{stream, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::join;
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wrpc_transport::IncomingInputStream;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// In-memory [`Blobstore`] [`Container`] object
 pub struct Object {
     data: Vec<u8>,
@@ -263,6 +264,56 @@ impl capability::Blobstore for Blobstore {
         let store = self.0.read().await;
         let container = store.get(container).context("container not found")?;
         container.write().await.objects.clear();
+        Ok(())
+    }
+
+    #[instrument]
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        let store = self.0.read().await;
+        let src_container = store
+            .get(&src_container)
+            .context("source container not found")?;
+        let dest_container = store
+            .get(&dest_container)
+            .context("destination container not found")?;
+        let (src_container, mut dest_container) =
+            join!(src_container.read(), dest_container.write());
+        let object = src_container
+            .objects
+            .get(&src_name)
+            .context("object not found")?;
+        dest_container.objects.insert(dest_name, object.clone());
+        Ok(())
+    }
+
+    #[instrument]
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        let store = self.0.read().await;
+        let src_container = store
+            .get(&src_container)
+            .context("source container not found")?;
+        let dest_container = store
+            .get(&dest_container)
+            .context("destination container not found")?;
+        let (mut src_container, mut dest_container) =
+            join!(src_container.write(), dest_container.write());
+        let object = src_container
+            .objects
+            .remove(&src_name)
+            .context("object not found")?;
+        dest_container.objects.insert(dest_name, object);
         Ok(())
     }
 }

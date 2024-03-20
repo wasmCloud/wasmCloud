@@ -623,6 +623,7 @@ impl FsProvider {
                             |entry| async move {
                                 let entry = entry.context("failed to lookup directory entry")?;
                                 let name = entry.file_name().to_string_lossy().to_string();
+                                trace!(name, "list file name");
                                 // TODO: Remove the need for this wrapping
                                 Ok(vec![Some(wrpc_transport::Value::String(name))])
                             },
@@ -924,7 +925,9 @@ impl FsProvider {
                         .context("failed to resolve destination container path")?;
                     let dest = resolve_subpath(&dest_container, dest.object)
                         .context("failed to resolve destination object path")?;
+                    debug!("copy `{}` to `{}`", src.display(), dest.display());
                     fs::copy(&src, dest).await.context("failed to copy")?;
+                    debug!("remove `{}`", src.display());
                     fs::remove_file(src)
                         .await
                         .context("failed to remove source")

@@ -1,4 +1,6 @@
 use std::env;
+use std::ffi::OsStr;
+use std::net::Ipv4Addr;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -6,27 +8,22 @@ use url::Url;
 
 use super::{free_port, BackgroundServer};
 
-/// Spawn a minio server to use for testing
-pub async fn start_minio() -> Result<(BackgroundServer, tempfile::TempDir, Url)> {
+/// Start Minio as a subprocess on a random port
+pub async fn start_minio(path: impl AsRef<OsStr>) -> Result<(BackgroundServer, Url)> {
     let port = free_port().await?;
-    let host = "127.0.0.1";
-    let address = format!("{host}:{port}");
-    let data_dir = tempfile::tempdir().context("failed to create temp dir for minio")?;
-    let server = BackgroundServer::spawn(
-        Command::new(env::var("TEST_MINIO_BIN").as_deref().unwrap_or("minio")).args([
-            "server",
-            "--address",
-            address.as_ref(),
-            format!("{}", data_dir.path().display()).as_ref(),
-        ]),
-    )
-    .await
-    .context("failed to start minio")?;
+    let url = Url::parse(&format!("http://{}:{port}", Ipv4Addr::LOCALHOST))
+        .context("failed to parse MinIO URL")?;
     Ok((
-        server,
-        data_dir,
-        format!("http://{address}")
-            .parse()
-            .context("failed to parse URL for minio")?,
+        BackgroundServer::spawn(
+            Command::new(env::var("TEST_MINIO_BIN").as_deref().unwrap_or("minio"))
+                .args(["server", "--address"])
+                .arg(format!("{}:{port}", Ipv4Addr::LOCALHOST))
+                .arg("--console-address")
+                .arg(format!("{}:0", Ipv4Addr::LOCALHOST))
+                .arg(path),
+        )
+        .await
+        .context("failed to start MinIO")?,
+        url,
     ))
 }

@@ -12,7 +12,7 @@ pub async fn start_vault(token: impl AsRef<str>) -> Result<(BackgroundServer, Ur
     let bin_path = std::env::var("TEST_VAULT_BIN").unwrap_or("vault".to_string());
     let port = free_port()
         .await
-        .context("failed to find open port for NATS")?;
+        .context("failed to find open port for Vault")?;
     let host = "127.0.0.1";
     let server = BackgroundServer::spawn(Command::new(bin_path).args([
         "server",

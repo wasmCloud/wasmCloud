@@ -296,6 +296,24 @@ pub trait Blobstore {
 
     /// Handle `wasi:blobstore/container.clear`
     async fn clear_container(&self, container: &str) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.copy-object`
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.move-object`
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -552,6 +570,32 @@ impl Blobstore for Handler {
     async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
         self.proxy_blobstore("wasi:blobstore/container.clear")?
             .clear_container(container)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.copy-object")?
+            .copy_object(src_container, src_name, dest_container, dest_name)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.move-object")?
+            .move_object(src_container, src_name, dest_container, dest_name)
             .await
     }
 }
