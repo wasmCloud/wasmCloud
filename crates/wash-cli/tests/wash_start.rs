@@ -20,6 +20,13 @@ async fn integration_start_stop_actor_serial() -> Result<()> {
 
     wash_instance.stop_actor("hello_actor_id", None).await?;
 
+    //...same thing, but using the general `wash start ...` command
+    wash_instance
+        .start_component_as_actor(HELLO_OCI_REF, "hello_actor_id")
+        .await?;
+
+    wash_instance.stop_actor("hello_actor_id", None).await?;
+
     Ok(())
 }
 
@@ -34,6 +41,15 @@ async fn integration_start_stop_provider_serial() -> Result<()> {
 
     // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
     // code
+    wash_instance
+        .stop_provider("httpserver_start_stop", None)
+        .await?;
+
+    //...same thing, but using the general `wash start ...` command
+    wash_instance
+        .start_component_as_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
+        .await?;
+
     wash_instance
         .stop_provider("httpserver_start_stop", None)
         .await?;

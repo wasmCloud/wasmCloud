@@ -1,15 +1,15 @@
-use std::{collections::HashMap, fs::File};
+use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use provider_archive::*;
 use tokio::time::Duration;
-use wascap::jwt::validate_token;
-use wascap::wasm::{extract_claims, Actor};
+use wascap::jwt::{validate_token, Actor};
+use wascap::wasm::extract_claims;
 
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
+    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, cached_oci_file},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
@@ -457,7 +457,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         .await?;
     }
 
-    let provider = ProviderArchive::try_load(&buf);
+    let provider = ProviderArchive::try_load(&buf).await;
 
     if provider.is_ok() {
         return handle_start_provider(StartProviderCommand {
@@ -476,7 +476,10 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
 
     let actor = match wasmparser::Parser::new(0).parse_all(&buf).next() {
         // Inspect claims inside of Wasm
-        Some(Ok(_)) => {
+        Some(Ok(wasmparser::Payload::Version {
+                    encoding: wasmparser::Encoding::Component,
+                    ..
+                })) => {
             let caps = extract_claims(buf)?;
             let token = caps.with_context(|| {
                 format!(
@@ -492,21 +495,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 )
             })?;
 
-            let is_component = matches!(
-                wit_parsed,
-                Some(Ok(wasmparser::Payload::Version {
-                    encoding: wasmparser::Encoding::Component,
-                    ..
-                }))
-            );
-
-            if is_component {
-                Ok(())
-            } else {
-                Err(anyhow!(
-                    "The provided component is not a valid actor component"
-                ))
-            }
+            Ok(())
 
         }
         _ => Err(anyhow!(

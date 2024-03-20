@@ -314,6 +314,32 @@ impl TestWashInstance {
             .context("failed to parse output of `wash start actor`")
     }
 
+    /// Trigger the equivalent of `wash start` on a [`TestWashInstance`]
+    pub(crate) async fn start_component_as_actor(
+        &self,
+        oci_ref: impl AsRef<str>,
+        component_id: impl AsRef<str>,
+    ) -> Result<StartCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "start",
+                oci_ref.as_ref(),
+                component_id.as_ref(),
+                "--output",
+                "json",
+                "--timeout-ms",
+                DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
+                "--ctl-port",
+                &self.nats_port.to_string(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to start actor")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash start actor`")
+    }
+
     /// Trigger the equivalent of `wash start provider` on a [`TestWashInstance`]
     pub(crate) async fn start_provider(
         &self,
@@ -324,6 +350,33 @@ impl TestWashInstance {
             .args([
                 "start",
                 "provider",
+                oci_ref.as_ref(),
+                component_id.as_ref(),
+                "--output",
+                "json",
+                "--timeout-ms",
+                DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
+                "--ctl-port",
+                &self.nats_port.to_string(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to start provider")?;
+
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash start provider`")
+    }
+
+    /// Trigger the equivalent of `wash start ` on a [`TestWashInstance`]
+    pub(crate) async fn start_component_as_provider(
+        &self,
+        oci_ref: impl AsRef<str>,
+        component_id: impl AsRef<str>,
+    ) -> Result<StartCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "start",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
