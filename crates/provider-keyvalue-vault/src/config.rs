@@ -1,9 +1,15 @@
 //! Configuration for kv-vault capability provider
 //!
 
+use core::time::Duration;
+
+use std::collections::HashMap;
+use std::env;
+
 use anyhow::{Context, Result};
-use std::{collections::HashMap, env};
 use url::Url;
+
+use crate::client::TOKEN_REFRESH_INTERVAL;
 
 /// Default address at which Vault is expected to be running,
 /// used if unspecified by configuration
@@ -25,6 +31,12 @@ pub struct Config {
     /// The linkdef value `certs` and the environment variable `VAULT_CERTS`
     /// are parsed as a comma-separated string of file paths to generate this list.
     pub certs: Vec<String>,
+
+    /// Renewal TTL for tokens used by this provider. Defaults to 72 hours.
+    pub token_increment_ttl: Option<String>,
+
+    /// Refresh interval for tokens used by this provider. Defaults to 12 hours.
+    pub token_refresh_interval: Option<std::time::Duration>,
 }
 
 impl Default for Config {
@@ -37,6 +49,13 @@ impl Default for Config {
 impl Config {
     /// initialize from linkdef values, environment, and defaults
     pub fn from_values(values: &HashMap<String, String>) -> Result<Config> {
+        // load environment variables from file
+        if let Some(env_file) = values.get("env").or_else(|| values.get("ENV")) {
+            eprintln!("file try read env from file: {}", env_file);
+            let data = std::fs::read_to_string(env_file)
+                .with_context(|| format!("reading env file '{env_file}'"))?;
+            simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
+        }
         let addr = env::var("VAULT_ADDR")
             .ok()
             .or_else(|| values.get("addr").cloned())
@@ -70,6 +89,27 @@ impl Config {
             token,
             mount,
             certs,
+            token_increment_ttl: env::var("VAULT_TOKEN_INCREMENT_TTL")
+                .ok()
+                .or_else(|| values.get("token_increment_ttl").cloned())
+                .or_else(|| values.get("TOKEN_INCREMENT_TTL").cloned()),
+            token_refresh_interval: match env::var("VAULT_TOKEN_REFRESH_INTERVAL")
+                .ok()
+                .or_else(|| values.get("token_refresh_interval").cloned())
+                .or_else(|| values.get("TOKEN_REFRESH_INTERVAL").cloned())
+            {
+                Some(val) => {
+                    let secs = val.parse::<u64>().unwrap_or_else(|_| {
+                        eprintln!(
+                            "Could not parse VAULT_TOKEN_REFRESH_INTERVAL as u64, using default of {}",
+                            TOKEN_REFRESH_INTERVAL.as_secs()
+                        );
+                        TOKEN_REFRESH_INTERVAL.as_secs()
+                    });
+                    Some(Duration::from_secs(secs))
+                }
+                _ => None,
+            },
         })
     }
 }

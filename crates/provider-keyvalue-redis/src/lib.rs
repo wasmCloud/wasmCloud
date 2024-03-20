@@ -86,7 +86,7 @@ impl KvRedisProvider {
                 DefaultConnection::Conn(conn) => Ok(conn.clone()),
                 DefaultConnection::Client(client) => {
                     let conn = client
-                        .get_tokio_connection_manager()
+                        .get_connection_manager()
                         .await
                         .context("failed to construct Redis connection manager")?;
                     *default_conn = DefaultConnection::Conn(conn.clone());
@@ -482,7 +482,7 @@ impl ProviderHandler for KvRedisProvider {
         let source_id = link_config.get_source_id();
         let conn = if let Some(url) = link_config.get_config().get(CONFIG_REDIS_URL_KEY) {
             match redis::Client::open(url.to_string()) {
-                Ok(client) => match client.get_tokio_connection_manager().await {
+                Ok(client) => match client.get_connection_manager().await {
                     Ok(conn) => {
                         info!(url, "established link");
                         conn

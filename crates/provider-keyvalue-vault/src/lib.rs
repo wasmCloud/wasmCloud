@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context as _, Result};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
@@ -31,13 +32,13 @@ wasmcloud_provider_wit_bindgen::generate!({
 /// Redis KV provider implementation which utilizes [Hashicorp Vault](https://developer.hashicorp.com/vault/docs)
 #[derive(Default, Clone)]
 pub struct KvVaultProvider {
-    // store redis connections per actor
-    actors: std::sync::Arc<RwLock<HashMap<String, RwLock<Client>>>>,
+    // store vault connection per actor
+    actors: Arc<RwLock<HashMap<String, Arc<Client>>>>,
 }
 
 impl KvVaultProvider {
     /// Retrieve a client for a given context (determined by source_id)
-    async fn get_client(&self, ctx: &Context) -> Result<Client> {
+    async fn get_client(&self, ctx: &Context) -> Result<Arc<Client>> {
         // get the actor ID
         let source_id = ctx
             .actor
@@ -51,8 +52,6 @@ impl KvVaultProvider {
             .await
             .get(source_id)
             .with_context(|| format!("invalid parameter: actor [{source_id}] not linked"))?
-            .read()
-            .await
             .clone();
         Ok(client)
     }
@@ -72,6 +71,12 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
     ) -> ProviderOperationResult<()> {
         let source_id = link_config.get_source_id();
         let link_name = link_config.get_source_id();
+        debug!(
+           %source_id,
+           %link_name,
+            "adding link for actor",
+        );
+
         let config_values = link_config.get_config();
         let config = match Config::from_values(config_values) {
             Ok(config) => config,
@@ -98,14 +103,10 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
                     .into());
             }
         };
+        client.set_renewal().await;
 
         let mut update_map = self.actors.write().await;
-        info!(
-           %source_id,
-           %link_name,
-            "adding link for actor",
-        );
-        update_map.insert(source_id.to_string(), RwLock::new(client));
+        update_map.insert(source_id.to_string(), Arc::new(client));
 
         Ok(())
     }
@@ -115,7 +116,7 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
     async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(source_id) {
-            info!("deleting link for actor [{source_id}]");
+            debug!("deleting link for actor [{source_id}]");
             drop(client)
         }
         Ok(())

@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let HostData { config, .. } = load_host_data().context("failed to load host data")?;
     let client = redis::Client::open(retrieve_default_url(config))
         .context("failed to construct default Redis client")?;
-    let default_connection = if let Ok(conn) = client.get_tokio_connection_manager().await {
+    let default_connection = if let Ok(conn) = client.get_connection_manager().await {
         DefaultConnection::Conn(conn)
     } else {
         DefaultConnection::Client(client)

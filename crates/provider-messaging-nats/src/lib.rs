@@ -3,9 +3,10 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail, Context as _};
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
+use tokio::fs;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
@@ -75,19 +76,26 @@ impl NatsMessagingProvider {
         cfg: ConnectionConfig,
         component_id: ComponentId,
     ) -> anyhow::Result<NatsClientBundle> {
-        let opts = match (cfg.auth_jwt, cfg.auth_seed) {
+        let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
-                let key_pair = std::sync::Arc::new(KeyPair::from_seed(&seed)?);
+                let seed = KeyPair::from_seed(&seed).context("failed to parse seed key pair")?;
+                let seed = Arc::new(seed);
                 async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
-                    let key_pair = key_pair.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                    let seed = seed.clone();
+                    async move { seed.sign(&nonce).map_err(async_nats::AuthError::new) }
                 })
             }
             (None, None) => async_nats::ConnectOptions::default(),
-            _ => {
-                anyhow::bail!("must provide both jwt and seed for jwt authentication");
-            }
+            _ => bail!("must provide both jwt and seed for jwt authentication"),
         };
+        if let Some(tls_ca) = &cfg.tls_ca {
+            opts = add_tls_ca(tls_ca, opts)?;
+        } else if let Some(tls_ca_file) = &cfg.tls_ca_file {
+            let ca = fs::read_to_string(tls_ca_file)
+                .await
+                .context("failed to read TLS CA file")?;
+            opts = add_tls_ca(&ca, opts)?;
+        }
 
         // Use the first visible cluster_uri
         let url = cfg.cluster_uris.first().unwrap();
@@ -392,6 +400,24 @@ impl WasmcloudMessagingConsumer for NatsMessagingProvider {
 // parse failures
 fn should_strip_headers(topic: &str) -> bool {
     topic.starts_with("$SYS")
+}
+
+fn add_tls_ca(
+    tls_ca: &str,
+    opts: async_nats::ConnectOptions,
+) -> anyhow::Result<async_nats::ConnectOptions> {
+    let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
+    let mut roots = async_nats::rustls::RootCertStore::empty();
+    if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
+        roots.add_parsable_certificates(&[ca]);
+    } else {
+        bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
+    };
+    let tls_client = async_nats::rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(opts.tls_client_config(tls_client).require_tls(true))
 }
 
 #[cfg(test)]
