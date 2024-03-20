@@ -203,7 +203,7 @@ indicatif = { version = "0.17", default-features = false }
 names = { version = "0.14", default-features = false }
 nix = { version = "0.27", default-features = false }
 nkeys = { version = "0.3", default-features = false }
-normpath = { version = "1.2", default-features = false }
+normpath = { version = "1", default-features = false }
 notify = { version = "6", default-features = false }
 nuid = { version = "0.4", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
@@ -300,7 +300,7 @@ wat = { version = "1", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
 which = { version = "4", default-features = false }
 wit-bindgen = { version = "0.17", default-features = false }
-wit-bindgen-core = { version = "=0.17.0", default-features = false }
+wit-bindgen-core = { version = "0.17", default-features = false }
 wit-bindgen-go = { version = "0.17", default-features = false }
 wit-component = { version = "0.20", default-features = false }
 wit-parser = { version = "0.13", default-features = false }
