@@ -151,7 +151,7 @@ async fn wrpc() -> anyhow::Result<()> {
     let redis_client =
         redis::Client::open(redis_url.as_str()).context("failed to connect to Redis")?;
     let mut redis_conn = redis_client
-        .get_tokio_connection_manager()
+        .get_connection_manager()
         .await
         .context("failed to construct Redis connection manager")?;
 
