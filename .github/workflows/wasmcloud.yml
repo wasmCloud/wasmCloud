@@ -22,6 +22,22 @@ on:
       - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-wit-bindgen-v[0-9].[0-9]+.[0-9]+'
@@ -122,8 +138,12 @@ jobs:
     runs-on: windows-latest-8-cores
     steps:
       - uses: actions/checkout@v4.1.1
-      - uses: Swatinem/rust-cache@v2.7.3
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-latest-8-cores-shared-cache
         if: ${{ !startswith(github.ref, format('refs/tags')) && github.ref != 'refs/heads/main' }}
+
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
       - run: move "target/release/blobstore-fs.exe" "artifact/bin/blobstore-fs.exe"
@@ -279,15 +299,17 @@ jobs:
       - build-bin
       - build-windows
       - test-linux
-    runs-on: ubuntu-22.04-16-cores
-    steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: ./.github/actions/build-par
-        with:
-          name: ${{ matrix.name }}
-          capability: ${{ matrix.capability }}
-          issuer: ${{ secrets.WASMCLOUD_ISSUER }}
-          subject: ${{ secrets[matrix.subject] }}
+    permissions:
+      packages: write
+    uses: ./.github/workflows/provider.yml
+    with:
+      name: ${{ matrix.name }}
+      capability: ${{ matrix.capability }}
+    secrets:
+      issuer: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
+      subject: ${{ secrets[matrix.subject] }}
+      azurecr_username: ${{ secrets.AZURECR_PUSH_USER }}
+      azurecr_password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
   deploy-doc:
     runs-on: ubuntu-22.04-16-cores
