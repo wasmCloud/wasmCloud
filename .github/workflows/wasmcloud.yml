@@ -494,7 +494,7 @@ jobs:
       - name: Push `rpm`
         working-directory: ./crates/wash-cli
         run: |
-          rpms=(194 204 209 216 226 231 236 239 240 244 260 273)
+          rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283)
           for distro_version in "${rpms[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
