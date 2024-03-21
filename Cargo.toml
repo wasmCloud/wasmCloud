@@ -17,6 +17,13 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/wasmCloud/wasmCloud"
 
+[workspace]
+members = ["crates/*"]
+exclude = [
+    "examples/rust/components/blobby",
+    "examples/rust/components/http-hello-world",
+]
+
 [badges.maintenance]
 status = "actively-developed"
 
@@ -112,10 +119,12 @@ wasmcloud-tracing = { workspace = true, features = ["otel"] }
 [dev-dependencies]
 assert-json-diff = { workspace = true }
 async-nats = { workspace = true }
-bytes = { workspace = true }
 base64 = { workspace = true }
+blobby = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
+http-hello-world = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
 once_cell = { workspace = true }
@@ -158,9 +167,6 @@ wrpc-transport-derive = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
 
-[workspace]
-members = ["crates/*"]
-
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
@@ -174,6 +180,7 @@ aws-smithy-runtime = { version = "1.1", default-features = false }
 axum = { version = "0.7", default-features = false }
 axum-server = { version = "0.6", default-features = false }
 base64 = { version = "0.21", default-features = false }
+blobby = { path = "./examples/rust/components/blobby", default-features = false }
 bytes = { version = "1", default-features = false }
 cargo_atelier = { version = "0.2", default-features = false }
 cargo_metadata = { version = "0.18", default-features = false }
@@ -197,6 +204,7 @@ hex = { version = "0.4", default-features = false }
 http = { version = "1", default-features = false, features = ["std"] }
 http-body = { version = "1", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
+http-hello-world = { path = "./examples/rust/components/http-hello-world", default-features = false }
 humantime = { version = "2", default-features = false }
 hyper = { version = "1", default-features = false }
 hyper-rustls = { version = "0.26", default-features = false }
