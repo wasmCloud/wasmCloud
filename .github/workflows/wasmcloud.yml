@@ -254,7 +254,7 @@ jobs:
         id: deployment
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-16-cores
     needs:
       - build-bin
       - test-linux
