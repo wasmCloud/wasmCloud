@@ -436,18 +436,17 @@
           ...
         }:
           extendDerivations {
-            buildInputs =
-              [
-                pkgs.buildah
-                pkgs.cargo-audit
-                pkgs.minio
-                pkgs.nats-server
-                pkgs.protobuf # prost build dependency
-                pkgs.redis
-                pkgs.vault
-                pkgs.wit-deps
-              ]
-              ++ optional (!(pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64)) pkgs.tinygo; # TinyGo currently fails to buid due to GDB not being supported on aarch64-darwin
+            buildInputs = [
+              pkgs.buildah
+              pkgs.cargo-audit
+              pkgs.minio
+              pkgs.nats-server
+              pkgs.protobuf # prost build dependency
+              pkgs.redis
+              pkgs.tinygo
+              pkgs.vault
+              pkgs.wit-deps
+            ];
           }
           devShells;
       };
