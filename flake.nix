@@ -171,12 +171,6 @@
                 ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
 
               depsBuildBuild = depsBuildBuild';
-
-              nativeBuildInputs =
-                nativeBuildInputs
-                ++ [
-                  pkgs.protobuf # prost build dependency
-                ];
             }
             // optionalAttrs (args ? cargoArtifacts) {
               depsBuildBuild =
@@ -441,7 +435,6 @@
               pkgs.cargo-audit
               pkgs.minio
               pkgs.nats-server
-              pkgs.protobuf # prost build dependency
               pkgs.redis
               pkgs.tinygo
               pkgs.vault
