@@ -113,7 +113,7 @@ impl FsProvider {
         resolve_subpath(&container, object).context("failed to resolve subpath")
     }
 
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
         let connection = get_connection();
         let wrpc = connection.get_wrpc_client(connection.provider_key());
@@ -418,7 +418,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_clear_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -466,7 +466,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_container_exists<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -494,7 +494,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_create_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -522,7 +522,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -550,7 +550,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_container_info<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -588,7 +588,7 @@ impl FsProvider {
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_list_container_objects<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -627,7 +627,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_copy_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -673,7 +673,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -705,7 +705,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_objects<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -742,7 +742,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_container_data<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -767,10 +767,13 @@ impl FsProvider {
                     let path = self.get_object(context.as_ref(), id).await?;
                     debug!(path = ?path.display(), "open file");
                     let mut object = File::open(path).await.context("failed to open file")?;
-                    object
-                        .seek(SeekFrom::Start(start))
-                        .await
-                        .context("failed to seek from start")?;
+                    if start > 0 {
+                        debug!("seek file");
+                        object
+                            .seek(SeekFrom::Start(start))
+                            .await
+                            .context("failed to seek from start")?;
+                    }
                     let data = ReaderStream::new(object.take(limit)).map(move |buf| {
                         let buf = buf.context("failed to read file")?;
                         // TODO: Remove the need for this wrapping
@@ -790,7 +793,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_object_info<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -832,7 +835,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_has_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -860,7 +863,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_move_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -909,7 +912,7 @@ impl FsProvider {
     }
 
     #[instrument(
-        level = "trace",
+        level = "debug",
         skip(self, result_subject, error_subject, transmitter, data)
     )]
     async fn serve_write_container_data<Tx: Transmitter>(
