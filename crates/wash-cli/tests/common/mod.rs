@@ -351,7 +351,7 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "component ",
+                "component",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
