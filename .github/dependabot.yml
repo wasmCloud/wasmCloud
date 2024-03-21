@@ -41,6 +41,10 @@ updates:
       - "*upload-artifact*"
       - "*download-artifact*"
 - package-ecosystem: "github-actions"
-  directory: "/.github/actions"
+  directory: "/.github/actions/build-nix"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "github-actions"
+  directory: "/.github/actions/install-nix"
   schedule:
     interval: "daily"
