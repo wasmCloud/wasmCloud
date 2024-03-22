@@ -5956,13 +5956,22 @@ name = "wasmcloud-provider-keyvalue-vault"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "async-nats",
+ "async-trait",
+ "base64 0.21.7",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_json",
  "simple_env_load",
  "thiserror",
  "tokio",
  "tracing",
  "url",
  "vaultrs",
- "wasmcloud-provider-wit-bindgen",
+ "wasmcloud-provider-sdk",
+ "wrpc-interface-keyvalue",
+ "wrpc-transport",
 ]
 
 [[package]]
@@ -5996,7 +6005,6 @@ version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.21.7",
  "bytes",
  "futures",
  "opentelemetry 0.21.0",

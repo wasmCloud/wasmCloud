@@ -1,10 +1,16 @@
 //! Hashicorp Vault implementation of the wasmcloud KeyValue capability contract "wrpc:keyvalue"
 
+use anyhow::Context as _;
 use wasmcloud_provider_keyvalue_vault::KvVaultProvider;
-use wasmcloud_provider_sdk::start_provider;
+use wasmcloud_provider_sdk::run_provider_handler;
 
-fn main() -> anyhow::Result<()> {
-    start_provider(KvVaultProvider::default(), "kv-vault-provider")?;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let provider = KvVaultProvider::default();
+    let fut = run_provider_handler(provider.clone(), "kv-vault-provider")
+        .await
+        .context("failed to run provider")?;
+    provider.serve(fut).await?;
     eprintln!("KvVault provider exiting");
     Ok(())
 }
