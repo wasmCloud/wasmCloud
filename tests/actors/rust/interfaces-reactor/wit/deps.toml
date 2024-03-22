@@ -1,0 +1,4 @@
+http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
+messaging = "https://github.com/wasmCloud/messaging/archive/09f3b13faacb37f05ca31dc061cc1dd22a4a2821.tar.gz"
+sockets = "https://github.com/WebAssembly/wasi-sockets/archive/v0.2.0.tar.gz"
+testing = "../../../wit/testing"

@@ -33,19 +33,15 @@ mod test {
                         "wasi",
                         "blobstore",
                         "blobstore",
-                        None,
                     ),
                     wasmcloud::bus::lattice::CallTargetInterface::new(
-                        "wasi", "keyvalue", "eventual", None,
+                        "wasi", "keyvalue", "eventual",
                     ),
-                    wasmcloud::bus::lattice::CallTargetInterface::new(
-                        "wasi", "logging", "logging", None,
-                    ),
+                    wasmcloud::bus::lattice::CallTargetInterface::new("wasi", "logging", "logging"),
                     wasmcloud::bus::lattice::CallTargetInterface::new(
                         "wasmcloud",
                         "messaging",
                         "consumer",
-                        None,
                     ),
                 ],
             );

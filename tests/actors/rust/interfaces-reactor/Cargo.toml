@@ -1,0 +1,17 @@
+[package]
+name = "interfaces-reactor"
+edition = "2021"
+description = """
+HTTP server actor, which performs the integration testing routine
+"""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["serde"] }
+wasmcloud-actor = { workspace = true, features = ["rand", "uuid"] }
+wit-bindgen = { workspace = true, features = ["default"] }

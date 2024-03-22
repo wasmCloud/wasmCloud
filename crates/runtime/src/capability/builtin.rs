@@ -205,7 +205,7 @@ pub struct LatticeInterfaceTarget {
 
 impl std::fmt::Display for LatticeInterfaceTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (wit_ns, wit_pkg, wit_iface, _) = self.interface.as_parts();
+        let (wit_ns, wit_pkg, wit_iface) = self.interface.as_parts();
         let link_name = &self.link_name;
         let id = &self.id;
         write!(f, "{link_name}/{id}/{wit_ns}:{wit_pkg}/{wit_iface}")
@@ -343,9 +343,6 @@ pub trait Bus {
         target: String,
         interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()>;
-
-    /// Get the current link name
-    async fn get_link_name(&self) -> anyhow::Result<String>;
 
     /// Handle `wasmcloud:bus/config.get`
     async fn get(
@@ -624,13 +621,6 @@ impl Bus for Handler {
     ) -> anyhow::Result<()> {
         self.proxy_bus("wasmcloud:bus/lattice.set-link-name")?
             .set_link_name(link_name, interfaces)
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn get_link_name(&self) -> anyhow::Result<String> {
-        self.proxy_bus("wasmcloud:bus/lattice.get-link-name")?
-            .get_link_name()
             .await
     }
 

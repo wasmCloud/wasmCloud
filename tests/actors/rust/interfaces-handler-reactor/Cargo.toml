@@ -1,0 +1,14 @@
+[package]
+name = "interfaces-handler-reactor"
+edition = "2021"
+description = """
+Reactor component, which exports various handlers used in integration testing
+"""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmcloud-actor = { workspace = true }
+wit-bindgen = { workspace = true, features = ["default"] }

@@ -1,8 +1,0 @@
-package test-wrpc:ponger;
-
-world actor {
-  import wasi:logging/logging;
-
-  export test-actors:testing/pingpong;
-  export test-actors:testing/busybox;
-}

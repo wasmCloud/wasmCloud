@@ -50,44 +50,31 @@ pub struct CallTargetInterface {
     pub package: String,
     /// WIT interface (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
     pub interface: String,
-    // TODO(brooksmtownsend): I'm almost certain we do not need this.
-    /// WIT package name (ex. `get` in `wasi:keyvalue/readwrite.get`)
-    pub function: Option<String>,
 }
 
 impl CallTargetInterface {
     /// Returns the 3-tuple of (namespace, package, interface) for this interface
     #[must_use]
-    pub fn as_parts(&self) -> (&str, &str, &str, Option<&str>) {
-        (
-            &self.namespace,
-            &self.package,
-            &self.interface,
-            self.function.as_deref(),
-        )
+    pub fn as_parts(&self) -> (&str, &str, &str) {
+        (&self.namespace, &self.package, &self.interface)
     }
 
     /// Build a [`TargetInterface`] from constituent parts
     #[must_use]
-    pub fn from_parts(parts: (&str, &str, &str, Option<&str>)) -> Self {
-        let (ns, pkg, iface, function) = parts;
+    pub fn from_parts((ns, pkg, iface): (&str, &str, &str)) -> Self {
         Self {
             namespace: ns.into(),
             package: pkg.into(),
             interface: iface.into(),
-            function: function.map(String::from),
         }
     }
 
     /// Build a target interface from a given operation
     pub fn from_operation(operation: impl AsRef<str>) -> anyhow::Result<Self> {
         let operation = operation.as_ref();
-        let (wit_ns, wit_pkg, wit_iface, wit_fn) = parse_wit_meta_from_operation(operation)?;
+        let (wit_ns, wit_pkg, wit_iface, _) = parse_wit_meta_from_operation(operation)?;
         Ok(CallTargetInterface::from_parts((
-            &wit_ns,
-            &wit_pkg,
-            &wit_iface,
-            wit_fn.as_deref(),
+            &wit_ns, &wit_pkg, &wit_iface,
         )))
     }
 }

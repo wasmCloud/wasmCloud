@@ -331,7 +331,6 @@ where
             namespace: package_name.namespace.to_string(),
             package: package_name.name.to_string(),
             interface: interface_name.to_string(),
-            function: None,
         });
         let mut linker = linker.root();
         let mut linker = match linker.instance(&instance_name) {
