@@ -253,6 +253,29 @@ jobs:
       - uses: actions/deploy-pages@v4.0.5
         id: deployment
 
+  docker:
+    runs-on: ubuntu-22.04-16-cores
+    needs:
+      - build-bin
+      - test-linux
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build wasmCloud
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+      - name: Build wash
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./crates/wash-cli/Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
+
   oci:
     strategy:
       matrix:
@@ -486,7 +509,7 @@ jobs:
       - name: Push `deb`
         working-directory: ./crates/wash-cli
         run: |
-          debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266)
+          debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266 278 284)
           for distro_version in "${debs[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
@@ -494,7 +517,7 @@ jobs:
       - name: Push `rpm`
         working-directory: ./crates/wash-cli
         run: |
-          rpms=(194 204 209 216 226 231 236 239 240 244 260 273)
+          rpms=(194 204 209 216 226 231 236 239 240 244 260 273 279 283)
           for distro_version in "${rpms[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
