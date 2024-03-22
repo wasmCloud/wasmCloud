@@ -25,22 +25,6 @@ mod test {
             );
             let _: Vec<u8> = wasi::random::random::get_random_bytes(4);
             let _: u64 = wasi::random::random::get_random_u64();
-            // TODO: Add support for HTTP
-            //outgoing_http::handle(
-            //    types::new_outgoing_request(
-            //        types::MethodParam::Get,
-            //        "path",
-            //        "query",
-            //        Some(types::SchemeParam::Https),
-            //        "authority",
-            //        types::new_fields(&[("myheader", "myvalue")]),
-            //    ),
-            //    Some(types::RequestOptions {
-            //        connect_timeout_ms: Some(42),
-            //        first_byte_timeout_ms: Some(42),
-            //        between_bytes_timeout_ms: Some(42),
-            //    }),
-            //);
 
             wasmcloud::bus::lattice::set_link_name(
                 "default",
