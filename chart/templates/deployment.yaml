@@ -189,7 +189,7 @@ spec:
           imagePullPolicy: {{ .Values.nats.image.pullPolicy }}
           args:
             - "-js"
-            {{- if .Values.nats.leafnode.enabled }}
+            {{- if or .Values.nats.leafnode.enabled .Values.nats.insecureWebsocket.enabled }}
             - "-c"
             - "/nats/nats.conf"
             {{- end }}
@@ -200,8 +200,13 @@ spec:
               containerPort: 6222
             - name: management
               containerPort: 8222
-          {{- if .Values.nats.leafnode.enabled }}
+            {{- if and (not .Values.nats.leafnode.enabled) .Values.nats.insecureWebsocket.enabled }}
+            - name: websocket
+              containerPort: 4001
+            {{- end}}
+          {{- if or .Values.nats.leafnode.enabled .Values.nats.insecureWebsocket.enabled }}
           volumeMounts:
+            {{- if .Values.nats.leafnode.enabled }}˚
             - name: leafnode-config
               mountPath: /nats/nats.conf
               subPath: nats.conf
@@ -210,18 +215,32 @@ spec:
               mountPath: /nats/nats.creds
               subPath: nats.creds
               readOnly: true
+            {{- end }}
+            {{- if and (not .Values.nats.leafnode.enabled) .Values.nats.insecureWebsocket.enabled }}
+            - name: websocket-config
+              mountPath: /nats/nats.conf
+              subPath: nats.conf
+              readOnly: true
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.nats.resources | nindent 12 }}
         {{- end }}
-      {{- if .Values.nats.leafnode.enabled }}
+      {{- if or .Values.nats.leafnode.enabled .Values.nats.insecureWebsocket.enabled }}
       volumes:
+        {{- if .Values.nats.leafnode.enabled }}
         - name: leafnode-config
           configMap:
             name: {{ include "wasmcloud_host.fullname" . }}
         - name: leafnode-creds
           secret:
             secretName: {{ include "wasmcloud_host.fullname" . }}-nats
+        {{- end }}
+        {{- if and (not .Values.nats.leafnode.enabled) .Values.nats.insecureWebsocket.enabled }}
+        - name: websocket-config
+          configMap:
+            name: {{ include "wasmcloud_host.fullname" . }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

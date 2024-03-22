@@ -84,6 +84,12 @@ nats:
     clusterURL: "nats-leaf://connect.ngs.global"
     # Credentials to use
     credentials: ""
+  # Enables websocket support but TLS is disabled. This is mainly intended for testing purposes in
+  # conjunction with the washboard. Please do not enable for production.
+  # Note: Does not have any effect if nats.leafnode.enabled is true.
+  insecureWebsocket:
+    enabled: true
+  
 
   image:
     repository: nats
@@ -136,3 +142,37 @@ affinity: {}
 # Whether or not to expose the host and its NATS server as a service. This defaults to true for ease
 # of "kick the tires" use. For real deployments, this should likely be turned off
 useService: true
+
+# wadm specific configurations
+wadm:
+  # Specifies whether wadm should be deployed.
+  enabled: false
+  # The NATS cluster to connect to. This defaults to the wasmCloud service and port 8080 for ease of "kick the tires" use (`useService: true` and `nats.enabled: true`
+  # should be set).
+  natsServer: ""
+  
+  replicas: 1
+  
+  image:
+    repository: ghcr.io/wasmcloud/wadm
+    pullPolicy: IfNotPresent
+    tag: "v0.10.0"
+  
+  resources: {}
+  
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - "ALL"
+    seccompProfile:
+      type: "RuntimeDefault"
+  
+  nodeSelector: {}
+  
+  tolerations: []
+  
+  affinity: {}
