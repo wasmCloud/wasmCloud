@@ -4,15 +4,14 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use nkeys::KeyPair;
-use wascap::caps;
-use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
-
 use anyhow::{bail, ensure, Context};
 use futures::try_join;
+use nkeys::KeyPair;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::process::Command;
+use wascap::caps;
+use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 
 // Unfortunately, `cargo` exported structs and enums do not implement `Deserialize`, so
 // implement the relevant parts here
@@ -118,50 +117,16 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
     }
 }
 
-async fn install_rust_wasm32_unknown_unknown_actors(
-    out_dir: impl AsRef<Path>,
-) -> anyhow::Result<()> {
-    let out_dir = out_dir.as_ref();
-    let mut artifacts = build_artifacts(
-        [
-            "--manifest-path=./rust/Cargo.toml",
-            "--target=wasm32-unknown-unknown",
-            "-p=lattice-control-http-smithy",
-        ],
-        |name, kind| {
-            ["lattice-control-http-smithy"].contains(&name) && kind.contains(&CrateType::Cdylib)
-        },
-    )
-    .await
-    .context("failed to build module crates")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (
-            // NOTE: this list of artifacts must stay sorted
-            Some(("lattice-control-http-smithy", [lattice_controller_http_smithy])),
-            None,
-        ) => {
-            copy(
-                lattice_controller_http_smithy,
-                out_dir.join("rust-lattice-control-http-smithy.wasm"),
-            )
-            .await?;
-            Ok(())
-        }
-        _ => bail!("invalid module build artifacts"),
-    }
-}
-
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
     // NOTE: this list should be kept sorted
     let project_names = [
         "builtins-component-reactor",
-        "messaging-invoker",
+        "interfaces-handler-reactor",
+        "interfaces-reactor",
         "pinger-config-component",
         "ponger-config-component",
-        "wrpc-pinger-component",
-        "wrpc-ponger-component",
     ];
 
     let cargo_build_args = [
@@ -191,16 +156,14 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
-                artifacts.next().deref_artifact(),
                 artifacts.next(),
             ) {
                 (
                     Some(("builtins-component-reactor", [builtins_component_reactor])),
-                    Some(("messaging-invoker", [messaging_invoker])),
+                    Some(("interfaces-handler-reactor", [interfaces_handler_reactor])),
+                    Some(("interfaces-reactor", [interfaces_reactor])),
                     Some(("pinger-config-component", [pinger_config_component])),
                     Some(("ponger-config-component", [ponger_config_component])),
-                    Some(("wrpc-pinger-component", [wrpc_pinger_component])),
-                    Some(("wrpc-ponger-component", [wrpc_ponger_component])),
                     None,
                 ) => {
                     try_join!(
@@ -209,8 +172,12 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                             out_dir.join("rust-builtins-component-reactor.wasm"),
                         ),
                         copy(
-                            messaging_invoker,
-                            out_dir.join("rust-messaging-invoker.wasm"),
+                            interfaces_reactor,
+                            out_dir.join("rust-interfaces-reactor.wasm"),
+                        ),
+                        copy(
+                            interfaces_handler_reactor,
+                            out_dir.join("rust-interfaces-handler-reactor.wasm"),
                         ),
                         copy(
                             pinger_config_component,
@@ -220,14 +187,6 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                             ponger_config_component,
                             out_dir.join("rust-ponger-config-component.wasm"),
                         ),
-                        copy(
-                            wrpc_pinger_component,
-                            out_dir.join("rust-wrpc-pinger-component.wasm"),
-                        ),
-                        copy(
-                            wrpc_ponger_component,
-                            out_dir.join("rust-wrpc-ponger-component.wasm"),
-                        )
                     )
                 }
                 v => bail!("invalid {:?} build artifacts: {v:#?}", project_names),
@@ -265,21 +224,15 @@ async fn main() -> anyhow::Result<()> {
     let out_dir = env::var("OUT_DIR")
         .map(PathBuf::from)
         .context("failed to lookup `OUT_DIR`")?;
-
-    // Build both traditional wasm32-unknown-unknown and wasm32-wasi actors
-    try_join!(
-        install_rust_wasm32_unknown_unknown_actors(&out_dir),
-        install_rust_wasm32_wasi_actors(&out_dir),
-    )?;
+    install_rust_wasm32_wasi_actors(&out_dir).await?;
 
     // Build WASI reactor components
     for name in [
         "builtins-component-reactor",
-        "messaging-invoker",
+        "interfaces-handler-reactor",
+        "interfaces-reactor",
         "pinger-config-component",
         "ponger-config-component",
-        "wrpc-pinger-component",
-        "wrpc-ponger-component",
     ] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
@@ -317,11 +270,10 @@ async fn main() -> anyhow::Result<()> {
             "builtins-component-reactor-preview2",
             Some(builtin_caps.clone()),
         ),
-        ("messaging-invoker-preview2", None),
+        ("interfaces-handler-reactor-preview2", None),
+        ("interfaces-reactor-preview2", None),
         ("pinger-config-component-preview2", None),
         ("ponger-config-component-preview2", None),
-        ("wrpc-pinger-component-preview2", None),
-        ("wrpc-ponger-component-preview2", None),
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await

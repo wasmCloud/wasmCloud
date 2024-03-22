@@ -5,16 +5,13 @@ interface lattice {
     /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
     resource call-target-interface {
-        constructor(namespace: string, %package: string, %interface: string, %function: option<string>);
+        constructor(namespace: string, %package: string, %interface: string);
     }
 
     /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
     /// todo(vados-cosmonic): the list of interfaces should not be necessary once signing is removed
     /// see: https://github.com/wasmCloud/wasmCloud/issues/1219
     set-link-name: func(name: string, interfaces: list<call-target-interface>);
-
-    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
-    get-link-name: func() -> string;
 }
 
 /// An interface for getting configuration data for a wasm module
