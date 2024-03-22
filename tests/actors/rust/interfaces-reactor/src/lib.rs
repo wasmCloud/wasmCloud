@@ -138,9 +138,23 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     )
     .expect_err("should not be able to bind to any IPv6 address on UDP");
 
+    eprintln!("test default messaging...");
     messaging::run_test();
 
-    keyvalue::run_test(&body);
+    eprintln!("test default keyvalue/eventual...");
+    keyvalue::run_eventual_test(&body);
+
+    eprintln!("test vault keyvalue/eventual...");
+    bus::lattice::set_link_name(
+        "vault",
+        vec![bus::lattice::CallTargetInterface::new(
+            "wasi", "keyvalue", "eventual",
+        )],
+    );
+    keyvalue::run_eventual_test(&body);
+
+    eprintln!("test default keyvalue/atomic...");
+    keyvalue::run_atomic_test();
 
     eprintln!("test default blobstore...");
     blobstore::run_test(1, &body, "container");

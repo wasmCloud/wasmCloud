@@ -289,7 +289,8 @@ where
             | "wasmcloud:bus/guest-config"
             | "wasmcloud:bus/lattice"
             | "wasmcloud:messaging/consumer"
-            | "wasmcloud:messaging/handler" => continue,
+            | "wasmcloud:messaging/handler"
+            | "wasmcloud:messaging/types" => continue,
             _ => {}
         }
         let wit_parser::WorldItem::Interface(interface) = item else {

@@ -22,7 +22,7 @@ redis = { workspace = true, features = [
     "tls-rustls-webpki-roots",
     "tokio-rustls-comp",
 ] }
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-keyvalue = { workspace = true }

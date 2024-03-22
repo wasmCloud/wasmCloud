@@ -3,11 +3,44 @@ use std::io::{Read as _, Write as _};
 use wasmcloud_actor::wasi::keyvalue;
 use wasmcloud_actor::{InputStreamReader, OutputStreamWriter};
 
-pub fn run_test(body: &Vec<u8>) {
-    let foo_key = String::from("foo");
-    let bucket = keyvalue::types::Bucket::open_bucket("")
+pub fn run_atomic_test() {
+    let bucket = keyvalue::types::Bucket::open_bucket("test")
         .map_err(|e| e.trace())
         .expect("failed to open empty bucket");
+    let counter_key = String::from("counter");
+    eprintln!("call `wasi:keyvalue/atomic.increment`...");
+    let value = keyvalue::atomic::increment(&bucket, &counter_key, 1)
+        .map_err(|e| e.trace())
+        .expect("failed to increment `counter`");
+    assert_eq!(value, 1);
+    eprintln!("call `wasi:keyvalue/atomic.increment`...");
+    let value = keyvalue::atomic::increment(&bucket, &counter_key, 41)
+        .map_err(|e| e.trace())
+        .expect("failed to increment `counter`");
+    assert_eq!(value, 42);
+
+    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
+    assert!(
+        keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242)
+            .expect("failed to compare and swap")
+    );
+    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
+    assert!(
+        !keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242)
+            .expect("failed to compare and swap")
+    );
+    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
+    assert!(
+        keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 4242, 42)
+            .expect("failed to compare and swap")
+    );
+}
+
+pub fn run_eventual_test(body: &Vec<u8>) {
+    let bucket = keyvalue::types::Bucket::open_bucket("test")
+        .map_err(|e| e.trace())
+        .expect("failed to open empty bucket");
+    let foo_key = String::from("foo");
     eprintln!("call `wasi:keyvalue/eventual.exists`...");
     keyvalue::eventual::exists(&bucket, &foo_key)
         .map_err(|e| e.trace())
@@ -73,7 +106,7 @@ pub fn run_test(body: &Vec<u8>) {
     let result_value = keyvalue::types::IncomingValue::incoming_value_consume_sync(result_value)
         .map_err(|e| e.trace())
         .expect("failed to get incoming value buffer");
-    assert_eq!(&result_value, body);
+    assert_eq!(&result_value, body, "expected body, got {result_value:?}");
 
     let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();
     let mut result_stream = result_value
@@ -91,32 +124,4 @@ pub fn run_test(body: &Vec<u8>) {
     keyvalue::eventual::set(&bucket, &result_key, &result_value)
         .map_err(|e| e.trace())
         .expect("failed to set `result`");
-
-    let counter_key = String::from("counter");
-    eprintln!("call `wasi:keyvalue/atomic.increment`...");
-    let value = keyvalue::atomic::increment(&bucket, &counter_key, 1)
-        .map_err(|e| e.trace())
-        .expect("failed to increment `counter`");
-    assert_eq!(value, 1);
-    eprintln!("call `wasi:keyvalue/atomic.increment`...");
-    let value = keyvalue::atomic::increment(&bucket, &counter_key, 41)
-        .map_err(|e| e.trace())
-        .expect("failed to increment `counter`");
-    assert_eq!(value, 42);
-
-    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
-    assert!(
-        keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242)
-            .expect("failed to compare and swap")
-    );
-    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
-    assert!(
-        !keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242)
-            .expect("failed to compare and swap")
-    );
-    eprintln!("call `wasi:keyvalue/atomic.compare-and-swap`...");
-    assert!(
-        keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 4242, 42)
-            .expect("failed to compare and swap")
-    );
 }

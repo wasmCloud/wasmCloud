@@ -3,12 +3,14 @@
 use core::str::{self, FromStr as _};
 use core::time::Duration;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::net::Ipv4Addr;
 
 use anyhow::{ensure, Context as _};
+use base64::Engine as _;
 use redis::AsyncCommands as _;
 use serde::Deserialize;
+use serde_json::json;
 use tempfile::tempdir;
 use test_actors::{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2, RUST_INTERFACES_REACTOR};
 use tokio::time::sleep;
@@ -51,7 +53,7 @@ async fn interfaces() -> anyhow::Result<()> {
         (minio_server, minio_url),
         (nats_server, nats_url, nats_client),
         (redis_server, redis_url),
-        (vault_server, vault_url, _vault_client),
+        (vault_server, vault_url, vault_client),
     ) = try_join!(
         async {
             start_minio(minio_dir.path())
@@ -358,7 +360,7 @@ async fn interfaces() -> anyhow::Result<()> {
         "keyvalue",
         vec!["eventual".to_string()],
         vec![],
-        vec![],
+        vec![keyvalue_vault_config_name],
     )
     .await
     .context("failed to advertise link")?;
@@ -428,11 +430,19 @@ async fn interfaces() -> anyhow::Result<()> {
     let body = format!(
         r#"{{"min":42,"max":4242,"config_key":"test-config-data","authority":"localhost:{http_port}"}}"#,
     );
-
     redis::Cmd::set("foo", "bar")
         .query_async(&mut redis_conn)
         .await
         .context("failed to set `foo` key in Redis")?;
+    vaultrs::kv2::set(
+        &vault_client,
+        "secret",
+        "test",
+        &json!({"foo": base64::engine::general_purpose::STANDARD_NO_PAD.encode(b"bar")}),
+    )
+    .await
+    .context("failed to set `foo` key in Vault")?;
+
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(20))
@@ -524,7 +534,18 @@ async fn interfaces() -> anyhow::Result<()> {
         .query_async(&mut redis_conn)
         .await
         .context("failed to get `result` key in Redis")?;
-    ensure!(redis_res == redis::Value::Data(http_res.into()));
+    ensure!(redis_res == redis::Value::Data(http_res.clone().into()));
+
+    let vault_res = vaultrs::kv2::read::<HashMap<String, String>>(&vault_client, "secret", "test")
+        .await
+        .context("failed to list vault keys")?;
+    assert_eq!(
+        vault_res,
+        HashMap::from([(
+            "result".to_string(),
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(http_res)
+        )])
+    );
 
     try_join!(
         async { minio_server.stop().await.context("failed to stop MinIO") },

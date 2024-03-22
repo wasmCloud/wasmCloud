@@ -1,33 +1,33 @@
-use std::collections::HashMap;
+use core::future::Future;
+use core::pin::pin;
+use core::str;
+
+use std::collections::{hash_map, HashMap};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
+use async_nats::HeaderMap;
+use async_trait::async_trait;
+use base64::Engine as _;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
-use tracing::{debug, error, instrument};
-
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    serde_json,
-    serde_json::Value,
-    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
+use tokio::{select, spawn};
+use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::provider::invocation_context;
+use wasmcloud_provider_sdk::{
+    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
+use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 pub(crate) mod client;
 pub(crate) mod config;
-pub(crate) mod error;
 
 use crate::client::Client;
 use crate::config::Config;
-use crate::error::VaultError;
 
 /// Token to indicate string data was passed during set
 pub const STRING_VALUE_MARKER: &str = "string_data___";
-
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: KvVaultProvider,
-    contract: "wasmcloud:keyvalue",
-    wit_bindgen_cfg: "provider-kv-vault"
-});
 
 /// Redis KV provider implementation which utilizes [Hashicorp Vault](https://developer.hashicorp.com/vault/docs)
 #[derive(Default, Clone)]
@@ -38,7 +38,9 @@ pub struct KvVaultProvider {
 
 impl KvVaultProvider {
     /// Retrieve a client for a given context (determined by source_id)
-    async fn get_client(&self, ctx: &Context) -> Result<Arc<Client>> {
+    async fn get_client(&self, ctx: Option<&HeaderMap>) -> Result<Arc<Client>> {
+        let ctx = ctx.context("invocation context missing")?;
+        let ctx = invocation_context(ctx);
         // get the actor ID
         let source_id = ctx
             .actor
@@ -55,12 +57,458 @@ impl KvVaultProvider {
             .clone();
         Ok(client)
     }
+
+    #[instrument(level = "trace", skip_all)]
+    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
+        let connection = get_connection();
+        let wrpc = connection.get_wrpc_client(connection.provider_key());
+        let mut commands = pin!(commands);
+        'outer: loop {
+            use wrpc_interface_keyvalue::{Atomic as _, Eventual as _};
+            let delete_invocations = wrpc
+                .serve_delete()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.delete` invocations")?;
+            let mut delete_invocations = pin!(delete_invocations);
+
+            let exists_invocations = wrpc
+                .serve_exists()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.exists` invocations")?;
+            let mut exists_invocations = pin!(exists_invocations);
+
+            let get_invocations = wrpc
+                .serve_get()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.get` invocations")?;
+            let mut get_invocations = pin!(get_invocations);
+
+            let set_invocations = wrpc
+                .serve_set()
+                .await
+                .context("failed to serve `wrpc:keyvalue/eventual.set` invocations")?;
+            let mut set_invocations = pin!(set_invocations);
+
+            let compare_and_swap_invocations = wrpc
+                .serve_compare_and_swap()
+                .await
+                .context("failed to serve `wrpc:keyvalue/atomic.compare-and-swap` invocations")?;
+            let mut compare_and_swap_invocations = pin!(compare_and_swap_invocations);
+
+            let increment_invocations = wrpc
+                .serve_increment()
+                .await
+                .context("failed to serve `wrpc:keyvalue/atomic.increment` invocations")?;
+            let mut increment_invocations = pin!(increment_invocations);
+            loop {
+                select! {
+                    invocation = delete_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_delete(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.delete` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.delete` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = exists_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_exists(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.exists` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.exists` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = get_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_get(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.get` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.get` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = set_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_set(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.set` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/eventual.set` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = compare_and_swap_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_compare_and_swap(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.compare-and-swamp` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/atomic.compare-and-swamp` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    invocation = increment_invocations.next() => {
+                        match invocation {
+                            Some(Ok(invocation)) => {
+                                let provider = self.clone();
+                                spawn(async move { provider.serve_increment(invocation).await });
+                            },
+                            Some(Err(err)) => {
+                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.increment` invocation")
+                            },
+                            None => {
+                                warn!("`wrpc:keyvalue/atomic.increment` stream unexpectedly finished, resubscribe");
+                                continue 'outer
+                            }
+                        }
+                    }
+                    _ = &mut commands => {
+                        debug!("shutdown command received");
+                        return Ok(())
+                    }
+                }
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_delete<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.del(context.as_ref(), bucket, key).await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_exists<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.contains(context.as_ref(), bucket, key).await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_get<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+    ) {
+        let value = match self.get(context.as_ref(), bucket, key).await {
+            Ok(Some(value)) => Ok(Some(Some(value))),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(
+        level = "debug",
+        skip(self, result_subject, error_subject, value, transmitter)
+    )]
+    async fn serve_set<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            error_subject,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<HeaderMap>,
+            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
+            Tx,
+        >,
+    ) {
+        let value: BytesMut = match value.try_collect().await {
+            Ok(value) => value,
+            Err(err) => {
+                error!(?err, "failed to receive value");
+                if let Err(err) = transmitter
+                    .transmit_static(error_subject, err.to_string())
+                    .await
+                {
+                    error!(?err, "failed to transmit error")
+                }
+                return;
+            }
+        };
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.set(context.as_ref(), bucket, key, value.freeze())
+                    .await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_compare_and_swap<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, old, new),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, Err::<(), _>("not supported"))
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    /// Increments a numeric value, returning the new value
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_increment<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, Err::<(), _>("not supported"))
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    /// Gets a value for a specified key. Deserialize the value as json
+    /// If it's any other map, the entire map is returned as a serialized json string
+    /// If the stored value is a plain string, returns the plain value
+    /// All other values are returned as serialized json
+    #[instrument(level = "debug", skip(ctx, self))]
+    async fn get(
+        &self,
+        ctx: Option<&HeaderMap>,
+        path: String,
+        key: String,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let client = match self.get_client(ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                bail!("failed to retrieve client: {e}");
+            }
+        };
+        match client.read_secret(&path).await {
+            Ok(Some(mut secret)) => match secret.remove(&key) {
+                Some(value) => {
+                    let value = base64::engine::general_purpose::STANDARD_NO_PAD
+                        .decode(value)
+                        .context("failed to decode secret")?;
+                    Ok(Some(value))
+                }
+                None => Ok(None),
+            },
+            Ok(None) => Ok(None),
+            Err(e) => {
+                error!(error = %e, "failed to read secret");
+                bail!(anyhow!(e).context("failed to read secret"))
+            }
+        }
+    }
+
+    /// Returns true if the store contains the key
+    #[instrument(level = "debug", skip(ctx, self))]
+    async fn contains(
+        &self,
+        ctx: Option<&HeaderMap>,
+        path: String,
+        key: String,
+    ) -> anyhow::Result<bool> {
+        let client = match self.get_client(ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                bail!("failed to retrieve client: {e}");
+            }
+        };
+        match client.read_secret(&path).await {
+            Ok(Some(secret)) => Ok(secret.contains_key(&key)),
+            Ok(None) => Ok(false),
+            Err(e) => {
+                error!(error = %e, "failed to read secret");
+                bail!(anyhow!(e).context("failed to read secret"))
+            }
+        }
+    }
+
+    /// Deletes a key from a secret
+    #[instrument(level = "debug", skip(ctx, self))]
+    async fn del(&self, ctx: Option<&HeaderMap>, path: String, key: String) -> anyhow::Result<()> {
+        let client = match self.get_client(ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                bail!("failed to retrieve client: {e}");
+            }
+        };
+        let value = match client.read_secret(&path).await {
+            Ok(Some(mut secret)) => {
+                if secret.remove(&key).is_none() {
+                    debug!("key does not exist in the secret");
+                    return Ok(());
+                }
+                secret
+            }
+            Ok(None) => {
+                debug!("secret not found");
+                return Ok(());
+            }
+            Err(e) => {
+                error!(error = %e, "failed to read secret");
+                bail!(anyhow!(e).context("failed to read secret"))
+            }
+        };
+        match client.write_secret(&path, &value).await {
+            Ok(metadata) => {
+                debug!(?metadata, "set returned metadata");
+                Ok(())
+            }
+            Err(e) => {
+                error!(error = %e, "failed to set secret");
+                bail!(anyhow!(e).context("failed to set secret"))
+            }
+        }
+    }
+
+    /// Sets the value of a key.
+    #[instrument(level = "debug", skip(ctx, self))]
+    async fn set(
+        &self,
+        ctx: Option<&HeaderMap>,
+        path: String,
+        key: String,
+        value: Bytes,
+    ) -> anyhow::Result<()> {
+        let client = match self.get_client(ctx).await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("failed to retrieve client: {e}");
+                bail!("failed to retrieve client: {e}");
+            }
+        };
+        let value = base64::engine::general_purpose::STANDARD_NO_PAD.encode(value);
+        let value = match client.read_secret(&path).await {
+            Ok(Some(mut secret)) => {
+                match secret.entry(key) {
+                    hash_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    hash_map::Entry::Occupied(mut e) => {
+                        if *e.get() == value {
+                            return Ok(());
+                        } else {
+                            e.insert(value);
+                        }
+                    }
+                }
+                secret
+            }
+            Ok(None) => HashMap::from([(key, value)]),
+            Err(e) => {
+                error!(error = %e, "vault read: other error");
+                bail!(anyhow!(e).context("vault read: other error"))
+            }
+        };
+        match client.write_secret(&path, &value).await {
+            Ok(metadata) => {
+                debug!(?metadata, "set returned metadata");
+                Ok(())
+            }
+            Err(e) => {
+                error!(error = %e, "failed to set secret");
+                bail!(anyhow!(e).context("failed to set secret"))
+            }
+        }
+    }
 }
 
 /// Handle provider control commands, the minimum required of any provider on
 /// a wasmcloud lattice
 #[async_trait]
-impl WasmcloudCapabilityProvider for KvVaultProvider {
+impl ProviderHandler for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
@@ -130,230 +578,5 @@ impl WasmcloudCapabilityProvider for KvVaultProvider {
             drop(client)
         }
         Ok(())
-    }
-}
-
-/// Handle KeyValue methods that interact with redis
-#[async_trait]
-impl WasmcloudKeyvalueKeyValue for KvVaultProvider {
-    /// Gets a value for a specified key. Deserialize the value as json
-    /// if it's a map containing the key STRING_VALUE_MARKER, with a sting value, return the value
-    /// If it's any other map, the entire map is returned as a serialized json string
-    /// If the stored value is a plain string, returns the plain value
-    /// All other values are returned as serialized json
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn get(&self, ctx: Context, arg: String) -> GetResponse {
-        let client = match self.get_client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return GetResponse {
-                    exists: false,
-                    value: String::default(),
-                };
-            }
-        };
-
-        match client.read_secret::<Value>(&arg.to_string()).await {
-            Ok(Value::Object(mut map)) => {
-                if let Some(Value::String(value)) = map.remove(STRING_VALUE_MARKER) {
-                    GetResponse {
-                        value,
-                        exists: true,
-                    }
-                } else {
-                    GetResponse {
-                        value: serde_json::to_string(&map).unwrap(),
-                        exists: true,
-                    }
-                }
-            }
-            Ok(Value::String(value)) => GetResponse {
-                value,
-                exists: true,
-            },
-            Ok(value) => GetResponse {
-                value: serde_json::to_string(&value).unwrap(),
-                exists: true,
-            },
-            Err(VaultError::NotFound { namespace, path }) => {
-                debug!(
-                    %namespace, %path,
-                    "vault read NotFound error"
-                );
-                GetResponse {
-                    exists: false,
-                    value: String::default(),
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "vault read: other error");
-                GetResponse {
-                    exists: false,
-                    value: String::default(),
-                }
-            }
-        }
-    }
-
-    /// Returns true if the store contains the key
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn contains(&self, ctx: Context, arg: String) -> bool {
-        matches!(
-            self.get(ctx.clone(), arg.to_string()).await,
-            GetResponse { exists: true, .. }
-        )
-    }
-
-    /// Deletes a key, returning true if the key was deleted
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn del(&self, ctx: Context, arg: String) -> bool {
-        let client = match self.get_client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return false;
-            }
-        };
-
-        match client.delete_latest(&arg.to_string()).await {
-            Ok(_) => true,
-            Err(VaultError::NotFound { namespace, path }) => {
-                debug!(%namespace, %path, "vault delete NotFound error");
-                false
-            }
-            Err(e) => {
-                debug!(error = %e, "Error while deleting from vault");
-                false
-            }
-        }
-    }
-
-    /// Increments a numeric value, returning the new value
-    async fn increment(&self, _ctx: Context, _arg: IncrementRequest) -> i32 {
-        error!("`increment` not implemented");
-        0
-    }
-
-    /// Append a value onto the end of a list. Returns the new list size
-    async fn list_add(&self, _ctx: Context, _arg: ListAddRequest) -> u32 {
-        error!("`list_add` not implemented");
-        0
-    }
-
-    /// Deletes a list and its contents
-    /// input: list name
-    /// returns: true if the list existed and was deleted
-    async fn list_clear(&self, _ctx: Context, _arg: String) -> bool {
-        error!("`list_clear` not implemented");
-        false
-    }
-
-    /// Deletes an item from a list. Returns true if the item was removed.
-    async fn list_del(&self, _ctx: Context, _arg: ListDelRequest) -> bool {
-        error!("`list_del` not implemented");
-        false
-    }
-
-    /// Retrieves a range of values from a list using 0-based indices.
-    /// Start and end values are inclusive, for example, (0,10) returns
-    /// 11 items if the list contains at least 11 items. If the stop value
-    /// is beyond the end of the list, it is treated as the end of the list.
-    async fn list_range(&self, _ctx: Context, _arg: ListRangeRequest) -> Vec<String> {
-        error!("`list_range` not implemented");
-        Vec::new()
-    }
-
-    /// Sets the value of a key.
-    /// expiration times are not supported by this api and should be 0.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, key = %arg.key))]
-    async fn set(&self, ctx: Context, arg: SetRequest) -> () {
-        let client = match self.get_client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return;
-            }
-        };
-
-        let value: Value = serde_json::from_str(&arg.value).unwrap_or_else(|_| {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                STRING_VALUE_MARKER.to_string(),
-                Value::String(arg.value.clone()),
-            );
-            Value::Object(map)
-        });
-        match client.write_secret(&arg.key, &value).await {
-            Ok(metadata) => {
-                debug!(?metadata, "set returned metadata");
-            }
-            Err(VaultError::NotFound { namespace, path }) => {
-                error!(
-                    %namespace, %path,
-                    "write secret returned not found, returning empty results",
-                );
-            }
-            Err(e) => {
-                error!(error = %e, "vault set: other error");
-            }
-        }
-    }
-
-    /// Add an item into a set. Returns number of items added
-    async fn set_add(&self, _ctx: Context, _arg: SetAddRequest) -> u32 {
-        error!("`set_add` not implemented");
-        0
-    }
-
-    /// Remove a item from the set. Returns
-    async fn set_del(&self, _ctx: Context, _arg: SetDelRequest) -> u32 {
-        error!("`set_del` not implemented");
-        0
-    }
-
-    async fn set_intersection(&self, _ctx: Context, _arg: Vec<String>) -> Vec<String> {
-        error!("`set_intersection` not implemented");
-        Vec::new()
-    }
-
-    /// returns a list of all secrets at the path
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(source_id = ?ctx.actor, arg = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> Vec<String> {
-        let client = match self.get_client(&ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                return Vec::new();
-            }
-        };
-
-        match client.list_secrets(&arg.to_string()).await {
-            Ok(list) => list,
-            Err(VaultError::NotFound { namespace, path }) => {
-                error!(
-                    %namespace, %path,
-                    "list secrets not found, returning empty results",
-                );
-                Vec::new()
-            }
-            Err(e) => {
-                error!(error = %e, "vault list: other error");
-                Vec::new()
-            }
-        }
-    }
-
-    async fn set_union(&self, _ctx: Context, _arg: Vec<String>) -> Vec<String> {
-        error!("`set_union` not implemented");
-        Vec::new()
-    }
-
-    /// Deletes a set and its contents
-    /// input: set name
-    /// returns: true if the set existed and was deleted
-    async fn set_clear(&self, _ctx: Context, _arg: String) -> bool {
-        error!("`set_clear` not implemented");
-        false
     }
 }

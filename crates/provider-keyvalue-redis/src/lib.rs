@@ -357,16 +357,15 @@ impl KvRedisProvider {
     ) {
         // TODO: Use bucket
         _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<Bytes>(context.as_ref(), &mut Cmd::get(key))
-                    .await
-                    .map(Some)
-                    .map(Some),
-            )
+        let value = match self
+            .exec_cmd::<redis::Value>(context.as_ref(), &mut Cmd::get(key))
             .await
         {
+            Ok(redis::Value::Nil) => Ok(None),
+            Ok(redis::Value::Data(buf)) => Ok(Some(Some(buf))),
+            _ => Err("failed to get data from Redis"),
+        };
+        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
             error!(?err, "failed to transmit result")
         }
     }
