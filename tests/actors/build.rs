@@ -7,7 +7,6 @@ use std::process::{Output, Stdio};
 use anyhow::{bail, ensure, Context};
 use futures::try_join;
 use nkeys::KeyPair;
-use nkeys::KeyPair;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::process::Command;
@@ -260,7 +259,6 @@ async fn main() -> anyhow::Result<()> {
         "builtins-component-reactor-preview2",
         "interfaces-handler-reactor-preview2",
         "interfaces-reactor-preview2",
-        "messaging-invoker-preview2",
         "pinger-config-component-preview2",
         "ponger-config-component-preview2",
     ] {
