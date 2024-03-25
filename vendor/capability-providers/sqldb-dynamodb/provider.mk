@@ -84,7 +84,6 @@ $(dest_par): $(bin_target0) Makefile Cargo.toml
 	$(WASH) par create \
 		--arch $(ARCH_LOOKUP_$(par_target0)) \
 		--binary $(bin_target0) \
-		--capid $(CAPABILITY_ID) \
 		--name $(NAME) \
 		--vendor $(VENDOR) \
 		--version $(VERSION) \
