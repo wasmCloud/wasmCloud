@@ -23,7 +23,7 @@ use tokio::sync::RwLock;
 use tokio::{select, spawn};
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use wasmcloud_provider_sdk::provider::invocation_context;
 use wasmcloud_provider_sdk::{
     get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
