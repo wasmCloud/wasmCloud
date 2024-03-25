@@ -7,10 +7,10 @@ use std::process::{Output, Stdio};
 use anyhow::{bail, ensure, Context};
 use futures::try_join;
 use nkeys::KeyPair;
+use nkeys::KeyPair;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::process::Command;
-use wascap::caps;
 use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 
 // Unfortunately, `cargo` exported structs and enums do not implement `Deserialize`, so
@@ -255,40 +255,27 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Sign the built wasm modules with relevant claims
-    let builtin_caps: Vec<String> = vec![
-        caps::BLOB.into(),
-        caps::HTTP_CLIENT.into(),
-        caps::HTTP_SERVER.into(),
-        caps::KEY_VALUE.into(),
-        caps::LOGGING.into(),
-        caps::MESSAGING.into(),
-        caps::NUMBERGEN.into(),
-    ];
-    for (name, caps) in [
-        ("builtins-component-reactor", Some(builtin_caps.clone())),
-        (
-            "builtins-component-reactor-preview2",
-            Some(builtin_caps.clone()),
-        ),
-        ("interfaces-handler-reactor-preview2", None),
-        ("interfaces-reactor-preview2", None),
-        ("pinger-config-component-preview2", None),
-        ("ponger-config-component-preview2", None),
+    for name in [
+        "builtins-component-reactor",
+        "builtins-component-reactor-preview2",
+        "interfaces-handler-reactor-preview2",
+        "interfaces-reactor-preview2",
+        "messaging-invoker-preview2",
+        "pinger-config-component-preview2",
+        "ponger-config-component-preview2",
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await
             .with_context(|| format!("failed to read `{name}` Wasm"))?;
         let wasm = if cfg!(feature = "docs") {
-            _ = caps;
             wasm
         } else {
             let module = KeyPair::new_module();
             let claims = wascap::prelude::ClaimsBuilder::new()
                 .issuer(&issuer.public_key())
                 .subject(&module.public_key())
-                .with_metadata(wascap::jwt::Actor {
+                .with_metadata(wascap::jwt::Component {
                     name: Some(name.into()),
-                    caps,
                     call_alias: Some(name.into()),
                     ..Default::default()
                 })
