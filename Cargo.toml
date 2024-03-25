@@ -299,9 +299,9 @@ wasmtime-wit-bindgen = { version = "19", default-features = false }
 wat = { version = "1", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
 which = { version = "4", default-features = false }
-wit-bindgen = { version = "0.17", default-features = false }
-wit-bindgen-core = { version = "0.17", default-features = false }
-wit-bindgen-go = { version = "0.17", default-features = false }
+wit-bindgen = { version = "0.22", default-features = false }
+wit-bindgen-core = { version = "0.22", default-features = false }
+wit-bindgen-go = { version = "0.22", default-features = false }
 wit-component = { version = "0.201", default-features = false }
 wit-parser = { version = "0.201", default-features = false }
 wrpc-interface-blobstore = { version = "0.13", default-features = false }
