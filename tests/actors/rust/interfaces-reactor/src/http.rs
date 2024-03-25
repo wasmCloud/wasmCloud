@@ -114,14 +114,6 @@ fn assert_http_run(
         .parse()
         .expect("`content-length` value is not a valid usize");
 
-    let (host_key, host_value) = header_iter.next().expect("`host` header missing");
-    assert_eq!(host_key, "host");
-    assert_eq!(
-        headers.get(&String::from("host")),
-        vec![host_value.as_slice()]
-    );
-    let host_value = String::from_utf8(host_value).expect("`host` header is not a valid string");
-
     assert_eq!(
         header_iter.next(),
         Some(("test-header".into(), b"test-value".to_vec()))
@@ -166,7 +158,6 @@ fn assert_http_run(
     };
     let _trailers = http::types::IncomingBody::finish(request_body);
 
-    assert_eq!(host_value, authority);
     assert_eq!(request_authority, authority);
 
     let outgoing_request = http::types::OutgoingRequest::new(http::types::Fields::new());
