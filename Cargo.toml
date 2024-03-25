@@ -272,7 +272,7 @@ wash-lib = { version = "0.19", path = "./crates/wash-lib", default-features = fa
 wasm-encoder = { version = "0.201", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
-wasmcloud-component-adapters = { version = "0.9", git = "https://github.com/wasmCloud/wasmcloud-component-adapters", rev = "2d26fcf624acf83b74619aa2255a0f1168e9b10c", default-features = false }
+wasmcloud-component-adapters = { version = "0.9", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0-alpha.1", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.3", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
