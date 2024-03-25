@@ -159,6 +159,7 @@ wrpc-types = { workspace = true }
 
 [workspace]
 members = ["crates/*"]
+exclude = ["crates/providers"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
