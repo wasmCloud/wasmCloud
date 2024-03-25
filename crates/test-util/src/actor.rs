@@ -24,7 +24,7 @@ struct ActorScaledEvent {
 /// Given a path to an actor on disks, extract claims
 pub async fn extract_actor_claims(
     wasm_binary_path: impl AsRef<Path>,
-) -> Result<jwt::Claims<jwt::Actor>> {
+) -> Result<jwt::Claims<jwt::Component>> {
     let wasm_binary_path = wasm_binary_path.as_ref();
     let jwt::Token { claims, .. } = extract_claims(fs::read(wasm_binary_path).await?)
         .context("failed to extract kv http smithy actor claims")?
