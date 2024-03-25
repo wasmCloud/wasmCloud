@@ -21,9 +21,9 @@ use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::{
     self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Type, Val,
 };
-use wasmtime_wasi::preview2::command::{self};
-use wasmtime_wasi::preview2::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
-use wasmtime_wasi::preview2::{
+use wasmtime_wasi::command;
+use wasmtime_wasi::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
+use wasmtime_wasi::{
     HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
     Subscribe, WasiCtx, WasiCtxBuilder, WasiView,
 };
@@ -440,52 +440,51 @@ fn instantiate(
         .stderr(stderr.clone())
         .build();
 
-    let mut custom_result_types = HashMap::with_capacity(ty.imports().len());
-    {
-        for (instance_name, item) in ty.imports() {
-            match instance_name {
-                "wasi:cli/environment@0.2.0"
-                | "wasi:cli/exit@0.2.0"
-                | "wasi:cli/stderr@0.2.0"
-                | "wasi:cli/stdin@0.2.0"
-                | "wasi:cli/stdout@0.2.0"
-                | "wasi:cli/terminal-input@0.2.0"
-                | "wasi:cli/terminal-output@0.2.0"
-                | "wasi:cli/terminal-stderr@0.2.0"
-                | "wasi:cli/terminal-stdin@0.2.0"
-                | "wasi:cli/terminal-stdout@0.2.0"
-                | "wasi:clocks/monotonic-clock@0.2.0"
-                | "wasi:clocks/wall-clock@0.2.0"
-                | "wasi:filesystem/preopens@0.2.0"
-                | "wasi:filesystem/types@0.2.0"
-                | "wasi:http/incoming-handler@0.2.0"
-                | "wasi:http/outgoing-handler@0.2.0"
-                | "wasi:http/types@0.2.0"
-                | "wasi:io/error@0.2.0"
-                | "wasi:io/poll@0.2.0"
-                | "wasi:io/streams@0.2.0"
-                | "wasi:sockets/tcp@0.2.0"
-                | "wasmcloud:bus/lattice"
-                | "wasmcloud:bus/guest-config" => continue,
-                _ => {}
-            }
+    let imports = ty.imports(engine);
+    let mut custom_result_types = HashMap::with_capacity(imports.len());
+    for (instance_name, item) in imports {
+        match instance_name {
+            "wasi:cli/environment@0.2.0"
+            | "wasi:cli/exit@0.2.0"
+            | "wasi:cli/stderr@0.2.0"
+            | "wasi:cli/stdin@0.2.0"
+            | "wasi:cli/stdout@0.2.0"
+            | "wasi:cli/terminal-input@0.2.0"
+            | "wasi:cli/terminal-output@0.2.0"
+            | "wasi:cli/terminal-stderr@0.2.0"
+            | "wasi:cli/terminal-stdin@0.2.0"
+            | "wasi:cli/terminal-stdout@0.2.0"
+            | "wasi:clocks/monotonic-clock@0.2.0"
+            | "wasi:clocks/wall-clock@0.2.0"
+            | "wasi:filesystem/preopens@0.2.0"
+            | "wasi:filesystem/types@0.2.0"
+            | "wasi:http/incoming-handler@0.2.0"
+            | "wasi:http/outgoing-handler@0.2.0"
+            | "wasi:http/types@0.2.0"
+            | "wasi:io/error@0.2.0"
+            | "wasi:io/poll@0.2.0"
+            | "wasi:io/streams@0.2.0"
+            | "wasi:sockets/tcp@0.2.0"
+            | "wasmcloud:bus/lattice"
+            | "wasmcloud:bus/guest-config" => continue,
+            _ => {}
+        }
 
-            let item = match item {
-                component::types::ComponentItem::ComponentInstance(item) => item,
+        let item = match item {
+            component::types::ComponentItem::ComponentInstance(item) => item,
+            _ => continue,
+        };
+        let exports = item.exports(engine);
+        let mut instance = HashMap::with_capacity(exports.len());
+        for (func_name, item) in exports {
+            let ty = match item {
+                component::types::ComponentItem::ComponentFunc(ty) => ty,
                 _ => continue,
             };
-            let exports = item.exports();
-            let mut instance = HashMap::with_capacity(exports.len());
-            for (func_name, item) in item.exports() {
-                let ty = match item {
-                    component::types::ComponentItem::ComponentFunc(ty) => ty,
-                    _ => continue,
-                };
-                instance.insert(func_name.to_string(), ty.results().collect());
-            }
-            if !instance.is_empty() {
-                custom_result_types.insert(instance_name.to_string(), instance);
-            }
+            instance.insert(func_name.to_string(), ty.results().collect());
+        }
+        if !instance.is_empty() {
+            custom_result_types.insert(instance_name.to_string(), instance);
         }
     }
 

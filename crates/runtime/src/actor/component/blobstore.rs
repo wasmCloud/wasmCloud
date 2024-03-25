@@ -18,8 +18,8 @@ use futures::{StreamExt, TryStreamExt as _};
 use tokio::io::AsyncSeekExt;
 use tracing::instrument;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
-use wasmtime_wasi::preview2::{HostOutputStream, InputStream};
+use wasmtime_wasi::pipe::{AsyncReadStream, AsyncWriteStream};
+use wasmtime_wasi::{HostOutputStream, InputStream};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
 

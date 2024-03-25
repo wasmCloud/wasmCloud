@@ -9,7 +9,6 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use tokio::sync::{oneshot, Mutex};
 use wasmtime::component::{Resource, ResourceTable};
-use wasmtime_wasi::preview2::{self};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
     HostFutureIncomingResponse, IncomingResponseInternal, OutgoingRequest,
@@ -44,11 +43,11 @@ impl WasiHttpView for Ctx {
     {
         let handler = self.handler.clone();
         let between_bytes_timeout = request.between_bytes_timeout;
-        let res = HostFutureIncomingResponse::new(preview2::spawn(async move {
+        let res = HostFutureIncomingResponse::new(wasmtime_wasi::spawn(async move {
             match OutgoingHttp::handle(&handler, request).await {
                 Ok(Ok(resp)) => Ok(Ok(IncomingResponseInternal {
                     resp,
-                    worker: Arc::new(preview2::spawn(async {})),
+                    worker: Arc::new(wasmtime_wasi::spawn(async {})),
                     between_bytes_timeout,
                 })),
                 Ok(Err(err)) => Ok(Err(err)),
