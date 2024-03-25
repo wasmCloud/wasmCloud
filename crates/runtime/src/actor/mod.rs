@@ -21,7 +21,7 @@ pub struct Config {
 ///
 /// # Arguments
 ///
-/// * `wasm` - Bytes that consitute a valid WebAssembly binary
+/// * `wasm` - Bytes that constitute a valid WebAssembly binary
 fn claims(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Claims<jwt::Component>>> {
     let Some(claims) = extract_claims(wasm).context("failed to extract module claims")? else {
         return Ok(None);
