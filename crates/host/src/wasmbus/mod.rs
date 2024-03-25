@@ -1279,7 +1279,7 @@ pub struct Host {
     queue: AbortHandle,
     // Component ID -> All Links
     links: RwLock<HashMap<String, Vec<InterfaceLinkDefinition>>>,
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Component>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
 }
@@ -1317,7 +1317,7 @@ impl ComponentSpecification {
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
 enum Claims {
-    Actor(jwt::Claims<jwt::Actor>),
+    Actor(jwt::Claims<jwt::Component>),
     Provider(jwt::Claims<jwt::CapabilityProvider>),
 }
 
@@ -1338,12 +1338,10 @@ impl From<StoredClaims> for Claims {
                 let rev = claims.revision.parse().ok();
                 let ver = (!claims.version.is_empty()).then_some(claims.version);
                 let tags = (!claims.tags.is_empty()).then_some(claims.tags);
-                let caps = (!claims.capabilities.is_empty()).then_some(claims.capabilities);
                 let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
-                let metadata = jwt::Actor {
+                let metadata = jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
@@ -1365,7 +1363,6 @@ impl From<StoredClaims> for Claims {
                     .and_then(|schema| serde_json::from_str(&schema).ok());
                 let metadata = jwt::CapabilityProvider {
                     name,
-                    capid: claims.contract_id,
                     rev,
                     ver,
                     config_schema,
@@ -1963,7 +1960,7 @@ impl Host {
                     revision: actor
                         .claims()
                         .and_then(|claims| claims.metadata.as_ref())
-                        .and_then(|jwt::Actor { rev, .. }| *rev)
+                        .and_then(|jwt::Component { rev, .. }| *rev)
                         .unwrap_or_default(),
                     name,
                 })
@@ -2403,7 +2400,7 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Actor>) -> anyhow::Result<()> {
+    async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Component>) -> anyhow::Result<()> {
         let mut actor_claims = self.actor_claims.write().await;
         actor_claims.insert(claims.subject.clone(), claims);
         Ok(())
@@ -3135,10 +3132,7 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            child,
-            annotations,
-            claims,
-            ..
+            child, annotations, ..
         } = entry.remove();
 
         // Send a request to the provider, requesting a graceful shutdown
@@ -3170,7 +3164,7 @@ impl Host {
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
-            event::provider_stopped(claims, &annotations, host_id, provider_id, "stop"),
+            event::provider_stopped(&annotations, host_id, provider_id, "stop"),
         )
         .await?;
         Ok(CtlResponse::success())
@@ -4059,8 +4053,6 @@ enum StoredClaims {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StoredActorClaims {
     call_alias: String,
-    #[serde(alias = "caps", deserialize_with = "deserialize_messy_vec")]
-    capabilities: Vec<String>,
     #[serde(alias = "iss")]
     issuer: String,
     name: String,
@@ -4075,7 +4067,6 @@ struct StoredActorClaims {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StoredProviderClaims {
-    contract_id: String,
     #[serde(alias = "iss")]
     issuer: String,
     name: String,
@@ -4099,10 +4090,9 @@ impl TryFrom<Claims> for StoredClaims {
                 metadata,
                 ..
             }) => {
-                let jwt::Actor {
+                let jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
@@ -4110,7 +4100,6 @@ impl TryFrom<Claims> for StoredClaims {
                 } = metadata.context("no metadata found on actor claims")?;
                 Ok(StoredClaims::Actor(StoredActorClaims {
                     call_alias: call_alias.unwrap_or_default(),
-                    capabilities: caps.unwrap_or_default(),
                     issuer,
                     name: name.unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4127,14 +4116,12 @@ impl TryFrom<Claims> for StoredClaims {
             }) => {
                 let jwt::CapabilityProvider {
                     name,
-                    capid: contract_id,
                     rev,
                     ver,
                     config_schema,
                     ..
                 } = metadata.context("no metadata found on provider claims")?;
                 Ok(StoredClaims::Provider(StoredProviderClaims {
-                    contract_id,
                     issuer,
                     name: name.unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4158,10 +4145,9 @@ impl TryFrom<&Claims> for StoredClaims {
                 metadata,
                 ..
             }) => {
-                let jwt::Actor {
+                let jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
@@ -4171,7 +4157,6 @@ impl TryFrom<&Claims> for StoredClaims {
                     .context("no metadata found on actor claims")?;
                 Ok(StoredClaims::Actor(StoredActorClaims {
                     call_alias: call_alias.clone().unwrap_or_default(),
-                    capabilities: caps.clone().unwrap_or_default(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4188,7 +4173,6 @@ impl TryFrom<&Claims> for StoredClaims {
             }) => {
                 let jwt::CapabilityProvider {
                     name,
-                    capid: contract_id,
                     rev,
                     ver,
                     config_schema,
@@ -4197,7 +4181,6 @@ impl TryFrom<&Claims> for StoredClaims {
                     .as_ref()
                     .context("no metadata found on provider claims")?;
                 Ok(StoredClaims::Provider(StoredProviderClaims {
-                    contract_id: contract_id.clone(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4216,8 +4199,6 @@ impl From<StoredClaims> for HashMap<String, String> {
         match claims {
             StoredClaims::Actor(claims) => HashMap::from([
                 ("call_alias".to_string(), claims.call_alias),
-                ("caps".to_string(), claims.capabilities.clone().join(",")), // TODO: remove in #1093
-                ("capabilities".to_string(), claims.capabilities.join(",")),
                 ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
                 ("issuer".to_string(), claims.issuer),
                 ("name".to_string(), claims.name),
@@ -4229,7 +4210,6 @@ impl From<StoredClaims> for HashMap<String, String> {
                 ("version".to_string(), claims.version),
             ]),
             StoredClaims::Provider(claims) => HashMap::from([
-                ("contract_id".to_string(), claims.contract_id),
                 ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
                 ("issuer".to_string(), claims.issuer),
                 ("name".to_string(), claims.name),

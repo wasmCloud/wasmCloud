@@ -203,8 +203,8 @@ fn is_expired(expires: u64) -> bool {
         > expires
 }
 
-impl From<&jwt::Claims<jwt::Actor>> for PolicyClaims {
-    fn from(claims: &jwt::Claims<jwt::Actor>) -> Self {
+impl From<&jwt::Claims<jwt::Component>> for PolicyClaims {
+    fn from(claims: &jwt::Claims<jwt::Component>) -> Self {
         PolicyClaims {
             public_key: claims.subject.to_string(),
             issuer: claims.issuer.to_string(),
@@ -295,7 +295,7 @@ impl Manager {
         image_ref: impl AsRef<str>,
         max_instances: u32,
         annotations: &BTreeMap<String, String>,
-        claims: Option<&jwt::Claims<jwt::Actor>>,
+        claims: Option<&jwt::Claims<jwt::Component>>,
     ) -> anyhow::Result<Response> {
         let request = ComponentInformation {
             component_id: component_id.as_ref().to_string(),
@@ -334,7 +334,7 @@ impl Manager {
         component_id: impl AsRef<str>,
         image_ref: impl AsRef<str>,
         annotations: &BTreeMap<String, String>,
-        claims: Option<&jwt::Claims<jwt::Actor>>,
+        claims: Option<&jwt::Claims<jwt::Component>>,
         interface: String,
         function: String,
     ) -> anyhow::Result<Response> {
