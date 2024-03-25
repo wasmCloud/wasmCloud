@@ -78,7 +78,6 @@ wash par create \
     --vendor example \
     --compress \
     --name messaging-kafka \
-    --capid wasmcloud:messaging \
     --destination provider.par.gz \
     --binary ../target/debug/messaging_kafka
 ```
