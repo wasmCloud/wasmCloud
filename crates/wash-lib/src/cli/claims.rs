@@ -251,12 +251,6 @@ impl ProviderMetadata {
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ActorMetadata {
-    /// Enable access to the extras functionality (random nos, guids, etc)
-    #[clap(short = 'z', long = "extras")]
-    pub extras: bool,
-    /// Enable access to an append-only event stream provider
-    #[clap(short = 'e', long = "events")]
-    pub eventstream: bool,
     /// A human-readable, descriptive name for the token
     #[clap(short = 'n', long = "name")]
     pub name: Option<String>,
@@ -306,7 +300,6 @@ impl ActorMetadata {
             name: self.name.or(Some(project_config.common.name.clone())),
             rev: self.rev.or(Some(project_config.common.revision)),
             ver: self.ver.or(Some(project_config.common.version.to_string())),
-            eventstream: *(&self.eventstream),
             tags: match actor_config.tags.clone() {
                 Some(tags) => tags
                     .clone()
@@ -639,7 +632,6 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     fs::write(destination_path, signed)?;
     let mut map = HashMap::new();
     map.insert("destination".to_string(), json!(destination));
-    map.insert("capabilities".to_string(), json!(caps_list));
     Ok(CommandOutput::new(
         format!("Successfully signed {destination}"),
         map,
@@ -869,8 +861,6 @@ mod test {
             LOCAL_WASM,
             "--name",
             "MyActor",
-            "--cap",
-            "test:custom",
             "--destination",
             "./myactor_s.wasm",
             "--directory",
@@ -889,14 +879,6 @@ mod test {
             "testtag",
             "--ver",
             "0.0.1",
-            "--blob_store",
-            "--events",
-            "--extras",
-            "--http_client",
-            "--http_server",
-            "--keyvalue",
-            "--logging",
-            "--msg",
             "--disable-keygen",
         ])
         .unwrap();
@@ -913,17 +895,7 @@ mod test {
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert!(metadata.keyvalue);
-                assert!(metadata.msg_broker);
-                assert!(metadata.http_server);
-                assert!(metadata.http_client);
-                assert!(metadata.blob_store);
-                assert!(metadata.extras);
-                assert!(metadata.logging);
-                assert!(metadata.eventstream);
                 assert_eq!(metadata.name.unwrap(), "MyActor");
-                assert!(!metadata.custom_caps.is_empty());
-                assert_eq!(metadata.custom_caps[0], "test:custom");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert_eq!(metadata.rev.unwrap(), 2);
@@ -937,8 +909,6 @@ mod test {
             LOCAL_WASM,
             "-n",
             "MyActor",
-            "-c",
-            "test:custom",
             "-d",
             "./myactor_s.wasm",
             "--directory",
@@ -957,13 +927,6 @@ mod test {
             "testtag",
             "-v",
             "0.0.1",
-            "-f",
-            "-e",
-            "-z",
-            "-q",
-            "-k",
-            "-l",
-            "-g",
             "--disable-keygen",
         ])
         .unwrap();
@@ -980,16 +943,7 @@ mod test {
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert!(metadata.keyvalue);
-                assert!(metadata.msg_broker);
-                assert!(metadata.http_server);
-                assert!(metadata.blob_store);
-                assert!(metadata.extras);
-                assert!(metadata.logging);
-                assert!(metadata.eventstream);
                 assert_eq!(metadata.name.unwrap(), "MyActor");
-                assert!(!metadata.custom_caps.is_empty());
-                assert_eq!(metadata.custom_caps[0], "test:custom");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert_eq!(metadata.rev.unwrap(), 2);
@@ -1078,22 +1032,12 @@ mod test {
             ACCOUNT_KEY,
             "--subject",
             ACTOR_KEY,
-            "-c",
-            "test:custom",
             "--rev",
             "2",
             "--tag",
             "testtag",
             "--ver",
             "0.0.1",
-            "--blob_store",
-            "--events",
-            "--extras",
-            "--http_client",
-            "--http_server",
-            "--keyvalue",
-            "--logging",
-            "--msg",
         ])
         .unwrap();
         match actor_cmd.claims {
@@ -1102,15 +1046,6 @@ mod test {
                 issuer,
                 subject,
                 common,
-                keyvalue,
-                msg_broker,
-                http_server,
-                http_client,
-                blob_store,
-                extras,
-                logging,
-                eventstream,
-                custom_caps,
                 tags,
                 rev,
                 ver,
@@ -1129,16 +1064,6 @@ mod test {
                 assert!(common.disable_keygen);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
                 assert_eq!(subject.unwrap(), ACTOR_KEY);
-                assert!(keyvalue);
-                assert!(msg_broker);
-                assert!(http_server);
-                assert!(http_client);
-                assert!(blob_store);
-                assert!(extras);
-                assert!(logging);
-                assert!(eventstream);
-                assert_eq!(custom_caps.len(), 1);
-                assert_eq!(custom_caps[0], "test:custom");
                 assert!(!tags.is_empty());
                 assert_eq!(tags[0], "testtag");
                 assert_eq!(rev.unwrap(), 2);
@@ -1308,9 +1233,6 @@ mod test {
                 name: Some("testactor".to_string()),
                 ver: Some(Version::parse("0.1.0")?.to_string()),
                 rev: Some(666),
-                http_server: true,
-                http_client: true,
-                custom_caps: vec!["lexcorp:quantum-simulator".to_string()],
                 call_alias: Some("test-actor".to_string()),
                 tags: vec!["test".to_string(), "wasmcloud.com/experimental".to_string()],
                 common: GenerateCommon {
@@ -1329,8 +1251,6 @@ mod test {
             LOCAL_WASM,
             "--name",
             "MyActor",
-            "--cap",
-            "test:custom",
             "--destination",
             "./myactor_s.wasm",
             "--directory",
@@ -1341,9 +1261,6 @@ mod test {
             "test-tag",
             "--ver",
             "0.2.0",
-            "--blob_store",
-            "--keyvalue",
-            "--logging",
         ])
         .unwrap();
 
@@ -1371,21 +1288,7 @@ mod test {
                     cmd.metadata.common.directory.unwrap(),
                     PathBuf::from("./dir")
                 );
-                assert!(cmd.metadata.keyvalue);
-                assert!(cmd.metadata.http_server); // from project_config
-                assert!(cmd.metadata.http_client); // from project_config
-                assert!(cmd.metadata.blob_store);
-                assert!(cmd.metadata.logging);
                 assert_eq!(cmd.metadata.name.unwrap(), "MyActor");
-                assert_eq!(cmd.metadata.custom_caps.len(), 2);
-                assert!(cmd
-                    .metadata
-                    .custom_caps
-                    .contains(&"test:custom".to_string()));
-                assert!(cmd
-                    .metadata
-                    .custom_caps
-                    .contains(&"lexcorp:quantum-simulator".to_string())); // from project_config
                 assert_eq!(cmd.metadata.tags.len(), 3);
                 assert!(cmd.metadata.tags.contains(&"test-tag".to_string()));
                 assert!(cmd.metadata.tags.contains(&"test".to_string())); // from project_config

@@ -152,7 +152,6 @@ pub fn sign_actor_wasm(
                 ..Default::default()
             },
             tags: tags.into_iter().collect(),
-            ..Default::default()
         },
     };
     sign_file(sign_options, OutputKind::Json)?;
