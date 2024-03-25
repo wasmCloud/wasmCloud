@@ -2074,22 +2074,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-table@npm:^8.13.2":
-  version: 8.13.2
-  resolution: "@tanstack/react-table@npm:8.13.2"
+"@tanstack/react-table@npm:^8.15.0":
+  version: 8.15.0
+  resolution: "@tanstack/react-table@npm:8.15.0"
   dependencies:
-    "@tanstack/table-core": "npm:8.13.2"
+    "@tanstack/table-core": "npm:8.14.0"
   peerDependencies:
-    react: ">=16"
-    react-dom: ">=16"
-  checksum: b91d5fc04a9a0b43c38da00a5a5c2fcfe0c3b3ec521c97f5e2eb2893a7f3446209fe4d07950b8179a0ab10b7b49230abce3d2db2a56fdc9d8fdb27023afea639
+    react: ">=16.8"
+    react-dom: ">=16.8"
+  checksum: 390fc89cfa499797192394e4f32a9cb5c6af62cd15a745dee08b3a1b34d856a83af52adaca42868a2f2dfe4229c9ec40d2b00d5e8e492d0516bec4d094cdc05e
   languageName: node
   linkType: hard
 
-"@tanstack/table-core@npm:8.13.2":
-  version: 8.13.2
-  resolution: "@tanstack/table-core@npm:8.13.2"
-  checksum: 7381147fd9d50905cb581e1498f2924a3b46646872248b25cb4f287419b0819919211da983873921497efb82e4ca40b20db86dac332027a371df4d84cddc9532
+"@tanstack/table-core@npm:8.14.0":
+  version: 8.14.0
+  resolution: "@tanstack/table-core@npm:8.14.0"
+  checksum: 308aa894f39005bda253f84cd6c4ffd9bf1350d0113af7ef24043bf5cc1bf16e9acbfa969ec3065df2a584853b6bf8344f6e37c753e2be54450ee737bb702ba4
   languageName: node
   linkType: hard
 
@@ -2494,7 +2494,7 @@ __metadata:
     "@radix-ui/react-toast": "npm:^1.1.5"
     "@radix-ui/react-toggle": "npm:^1.0.3"
     "@radix-ui/react-tooltip": "npm:^1.0.7"
-    "@tanstack/react-table": "npm:^8.13.2"
+    "@tanstack/react-table": "npm:^8.15.0"
     "@types/node": "npm:^20.11.28"
     "@types/react": "npm:^18.2.67"
     "@types/react-dom": "npm:^18.2.22"
@@ -2521,7 +2521,7 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.15.1"
     eslint-plugin-unicorn: "npm:^51.0.1"
     immer: "npm:^10.0.4"
-    lucide-react: "npm:^0.358.0"
+    lucide-react: "npm:^0.363.0"
     nats.ws: "npm:^1.21.0"
     postcss: "npm:^8.4.36"
     prettier: "npm:^3.2.5"
@@ -2535,7 +2535,7 @@ __metadata:
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.4.2"
-    usehooks-ts: "npm:^3.0.1"
+    usehooks-ts: "npm:^3.0.2"
     vite: "npm:^5.1.6"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.2"
@@ -5455,12 +5455,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.358.0":
-  version: 0.358.0
-  resolution: "lucide-react@npm:0.358.0"
+"lucide-react@npm:^0.363.0":
+  version: 0.363.0
+  resolution: "lucide-react@npm:0.363.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 9adb4a8836bd84a7ea4f71d81d287f69711165f5dcfa92be07c7cc3dbf7bd918ba1bba166741e0ea46565827e77243e4f0438a1e71a96794b5dfa5ebca290bf0
+  checksum: a007e37428c7f99d5c7431703bd6970ce50c62c4592b0a91badd746bdab8ac578f87a67b9d6193d0d36bf1451c432de91795cbdc535dbcb4943510a1752d1cba
   languageName: node
   linkType: hard
 
@@ -7733,14 +7733,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"usehooks-ts@npm:^3.0.1":
-  version: 3.0.1
-  resolution: "usehooks-ts@npm:3.0.1"
+"usehooks-ts@npm:^3.0.2":
+  version: 3.0.2
+  resolution: "usehooks-ts@npm:3.0.2"
   dependencies:
     lodash.debounce: "npm:^4.0.8"
   peerDependencies:
     react: ^16.8.0  || ^17 || ^18
-  checksum: ad80424c4e7613118a1333af63220efb06a63368d1cd0b9baa96bf40615e656ab93429a32821061e86127f8de77058423accc959d7c06aa6e15823f4765d9e5b
+  checksum: 0c8880702c0a306d5481a3968282dc04495e9f51198085ffb3976e069a7e77b2dc82e3f14b74e080a20f0267cb46805d835a8c7ee728335ff26f024aa8e79c42
   languageName: node
   linkType: hard
 
