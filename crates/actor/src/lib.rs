@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 wit_bindgen::generate!("interfaces");
 
 mod wrappers;
