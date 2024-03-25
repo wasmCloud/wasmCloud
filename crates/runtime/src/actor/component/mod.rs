@@ -213,7 +213,7 @@ impl Debug for Ctx {
 #[derive(Clone)]
 pub struct Component {
     engine: wasmtime::Engine,
-    claims: Option<jwt::Claims<jwt::Actor>>,
+    claims: Option<jwt::Claims<jwt::Component>>,
     handler: builtin::HandlerBuilder,
     polyfilled_imports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
@@ -617,7 +617,7 @@ impl Component {
 
     /// [Claims](jwt::Claims) associated with this [Component].
     #[instrument(level = "trace")]
-    pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
+    pub fn claims(&self) -> Option<&jwt::Claims<jwt::Component>> {
         self.claims.as_ref()
     }
 
@@ -631,7 +631,7 @@ impl Component {
     #[instrument]
     pub fn into_instance_claims(
         self,
-    ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
+    ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Component>>)> {
         let instance = instantiate(&self.engine, self.handler, self.ty, self.instance_pre)?;
         Ok((instance, self.claims))
     }
@@ -662,7 +662,7 @@ impl Component {
     }
 }
 
-impl From<Component> for Option<jwt::Claims<jwt::Actor>> {
+impl From<Component> for Option<jwt::Claims<jwt::Component>> {
     fn from(Component { claims, .. }: Component) -> Self {
         claims
     }
