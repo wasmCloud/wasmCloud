@@ -428,8 +428,6 @@ mod test {
             "x86_64-testrunner",
             "-b",
             "./testrunner.so",
-            "-c",
-            "wasmcloud:test",
             "-n",
             "CreateTest",
             "-v",
