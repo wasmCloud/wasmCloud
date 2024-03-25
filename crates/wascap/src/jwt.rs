@@ -337,9 +337,7 @@ impl Claims<CapabilityProvider> {
         ver: Option<String>,
         hashes: HashMap<String, String>,
     ) -> Claims<CapabilityProvider> {
-        Self::with_dates(
-            name, issuer, subject, vendor, rev, ver, hashes, None, None,
-        )
+        Self::with_dates(name, issuer, subject, vendor, rev, ver, hashes, None, None)
     }
 
     /// Creates a new Claims non-expiring wrapper for metadata representing a capability provider, with optional valid before and expiration dates

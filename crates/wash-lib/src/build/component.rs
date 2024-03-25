@@ -143,7 +143,6 @@ pub fn sign_actor_wasm(
             name: Some(common_config.name.clone()),
             ver: Some(common_config.version.to_string()),
             rev: Some(common_config.revision),
-            custom_caps: actor_config.claims.clone(),
             call_alias: actor_config.call_alias.clone(),
             issuer: signing_config.issuer.clone(),
             subject: signing_config.subject.clone(),

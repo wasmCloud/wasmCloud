@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::warn;
 use wascap::{
-    jwt::{Account, Actor, CapabilityProvider, Claims, Operator},
+    jwt::{Account, CapabilityProvider, Claims, Component, Operator},
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
 
@@ -196,10 +196,6 @@ pub struct ProviderMetadata {
     #[clap(short = 'n', long = "name")]
     name: Option<String>,
 
-    /// Capability contract ID that this provider supports
-    #[clap(short = 'c', long = "capid")]
-    capid: Option<String>,
-
     /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
     #[clap(short = 'v', long = "vendor")]
     vendor: Option<String>,
@@ -255,36 +251,15 @@ impl ProviderMetadata {
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ActorMetadata {
-    /// Enable the Key/Value Store standard capability
-    #[clap(short = 'k', long = "keyvalue")]
-    pub keyvalue: bool,
-    /// Enable the Message broker standard capability
-    #[clap(short = 'g', long = "msg")]
-    pub msg_broker: bool,
-    /// Enable the HTTP server standard capability
-    #[clap(short = 'q', long = "http_server")]
-    pub http_server: bool,
-    /// Enable the HTTP client standard capability
-    #[clap(long = "http_client")]
-    pub http_client: bool,
-    /// Enable access to the blob store capability
-    #[clap(short = 'f', long = "blob_store")]
-    pub blob_store: bool,
     /// Enable access to the extras functionality (random nos, guids, etc)
     #[clap(short = 'z', long = "extras")]
     pub extras: bool,
-    /// Enable access to logging capability
-    #[clap(short = 'l', long = "logging")]
-    pub logging: bool,
     /// Enable access to an append-only event stream provider
     #[clap(short = 'e', long = "events")]
     pub eventstream: bool,
     /// A human-readable, descriptive name for the token
     #[clap(short = 'n', long = "name")]
     pub name: Option<String>,
-    /// Add custom capabilities
-    #[clap(short = 'c', long = "cap", name = "capabilities")]
-    pub custom_caps: Vec<String>,
     /// A list of arbitrary tags to be embedded in the token
     #[clap(short = 't', long = "tag")]
     pub tags: Vec<String>,
@@ -327,56 +302,11 @@ impl ActorMetadata {
             _ => ActorConfig::default(),
         };
 
-        let mut standard_caps = HashMap::from([
-            (wascap::caps::KEY_VALUE.to_string(), self.keyvalue),
-            (wascap::caps::MESSAGING.to_string(), self.msg_broker),
-            (wascap::caps::HTTP_CLIENT.to_string(), self.http_client),
-            (wascap::caps::HTTP_SERVER.to_string(), self.http_server),
-            (wascap::caps::BLOB.to_string(), self.blob_store),
-            (wascap::caps::LOGGING.to_string(), self.logging),
-            (wascap::caps::EVENTSTREAMS.to_string(), self.eventstream),
-        ]);
-
-        let mut custom_caps = self
-            .custom_caps
-            .clone()
-            .into_iter()
-            .collect::<BTreeSet<String>>();
-
-        for cap in actor_config.claims.iter() {
-            if let Some(flag) = standard_caps.get_mut(cap) {
-                *flag = true;
-            } else {
-                custom_caps.insert(cap.clone());
-            }
-        }
-
         ActorMetadata {
             name: self.name.or(Some(project_config.common.name.clone())),
             rev: self.rev.or(Some(project_config.common.revision)),
             ver: self.ver.or(Some(project_config.common.version.to_string())),
-            keyvalue: *(standard_caps
-                .get(wascap::caps::KEY_VALUE)
-                .unwrap_or(&self.keyvalue)),
-            msg_broker: *(standard_caps
-                .get(wascap::caps::MESSAGING)
-                .unwrap_or(&self.msg_broker)),
-            http_server: *(standard_caps
-                .get(wascap::caps::HTTP_SERVER)
-                .unwrap_or(&self.http_server)),
-            http_client: *(standard_caps
-                .get(wascap::caps::HTTP_CLIENT)
-                .unwrap_or(&self.http_client)),
-            blob_store: *(standard_caps
-                .get(wascap::caps::BLOB)
-                .unwrap_or(&self.blob_store)),
-            logging: *(standard_caps
-                .get(wascap::caps::LOGGING)
-                .unwrap_or(&self.logging)),
-            eventstream: *(standard_caps
-                .get(wascap::caps::EVENTSTREAMS)
-                .unwrap_or(&self.eventstream)),
-            custom_caps: custom_caps.into_iter().collect(),
+            eventstream: *(&self.eventstream),
             tags: match actor_config.tags.clone() {
                 Some(tags) => tags
                     .clone()
@@ -512,38 +442,13 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
         output_kind,
     )?;
 
-    let mut caps_list = vec![];
-    if actor.keyvalue {
-        caps_list.push(wascap::caps::KEY_VALUE.to_string());
-    }
-    if actor.msg_broker {
-        caps_list.push(wascap::caps::MESSAGING.to_string());
-    }
-    if actor.http_client {
-        caps_list.push(wascap::caps::HTTP_CLIENT.to_string());
-    }
-    if actor.http_server {
-        caps_list.push(wascap::caps::HTTP_SERVER.to_string());
-    }
-    if actor.blob_store {
-        caps_list.push(wascap::caps::BLOB.to_string());
-    }
-    if actor.logging {
-        caps_list.push(wascap::caps::LOGGING.to_string());
-    }
-    if actor.eventstream {
-        caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
-    }
-    caps_list.extend(actor.custom_caps.iter().cloned());
-
-    let claims: Claims<Actor> = Claims::<Actor>::with_dates(
+    let claims = Claims::<Component>::with_dates(
         actor.name.context("actor name is required")?,
         issuer.public_key(),
         subject.public_key(),
-        Some(caps_list),
         Some(actor.tags.clone()),
-        days_from_now_to_jwt_time(actor.common.expires_in_days),
         days_from_now_to_jwt_time(actor.common.not_before_days),
+        days_from_now_to_jwt_time(actor.common.expires_in_days),
         false,
         Some(actor.rev.context("actor revision number is required")?),
         Some(actor.ver.context("actor version is required")?),
@@ -662,7 +567,6 @@ fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Res
         provider.name.context("provider name is required")?,
         issuer.public_key(),
         subject.public_key(),
-        provider.capid.context("capability ID is required")?,
         provider.vendor.context("vendor is required")?,
         provider.revision,
         provider.version.clone(),
@@ -697,30 +601,6 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         output_kind,
     )?;
 
-    let mut caps_list = vec![];
-    if cmd.metadata.keyvalue {
-        caps_list.push(wascap::caps::KEY_VALUE.to_string());
-    }
-    if cmd.metadata.msg_broker {
-        caps_list.push(wascap::caps::MESSAGING.to_string());
-    }
-    if cmd.metadata.http_client {
-        caps_list.push(wascap::caps::HTTP_CLIENT.to_string());
-    }
-    if cmd.metadata.http_server {
-        caps_list.push(wascap::caps::HTTP_SERVER.to_string());
-    }
-    if cmd.metadata.blob_store {
-        caps_list.push(wascap::caps::BLOB.to_string());
-    }
-    if cmd.metadata.logging {
-        caps_list.push(wascap::caps::LOGGING.to_string());
-    }
-    if cmd.metadata.eventstream {
-        caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
-    }
-    caps_list.extend(cmd.metadata.custom_caps.iter().cloned());
-
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.context("actor name is required")?,
         &buf,
@@ -728,7 +608,6 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         &issuer,
         cmd.metadata.common.expires_in_days,
         cmd.metadata.common.not_before_days,
-        caps_list.clone(),
         cmd.metadata.tags.clone(),
         false,
         Some(
@@ -762,10 +641,7 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     map.insert("destination".to_string(), json!(destination));
     map.insert("capabilities".to_string(), json!(caps_list));
     Ok(CommandOutput::new(
-        format!(
-            "Successfully signed {destination} with capabilities: {}",
-            caps_list.join(",")
-        ),
+        format!("Successfully signed {destination}"),
         map,
     ))
 }
@@ -1332,8 +1208,6 @@ mod test {
             ACCOUNT_KEY,
             "--subject",
             PROVIDER_KEY,
-            "--capid",
-            "wasmcloud:test",
             "--vendor",
             "test",
             "--revision",
@@ -1348,7 +1222,6 @@ mod test {
                 issuer,
                 subject,
                 common,
-                capid,
                 vendor,
                 revision,
                 version,
@@ -1367,7 +1240,6 @@ mod test {
                 assert!(common.disable_keygen);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
                 assert_eq!(subject.unwrap(), PROVIDER_KEY);
-                assert_eq!(capid.unwrap(), "wasmcloud:test");
                 assert_eq!(vendor.unwrap(), "test");
                 assert_eq!(revision.unwrap(), 0);
                 assert_eq!(version.unwrap(), "1.2.3");
@@ -1599,8 +1471,6 @@ mod test {
             "provider",
             "--name",
             "TokenName",
-            "--capid",
-            "wasmcloud:test",
             "--vendor",
             "test",
             "--revision",
@@ -1613,7 +1483,6 @@ mod test {
             ClaimsCliCommand::Token(TokenCommand::Provider(provider_metadata)) => {
                 let metadata = provider_metadata.update_with_project_config(&project_config);
                 assert_eq!(metadata.name.unwrap(), "TokenName");
-                assert_eq!(metadata.capid.unwrap(), "wasmcloud:test");
                 assert_eq!(metadata.vendor.unwrap(), "test");
                 assert_eq!(metadata.revision.unwrap(), 777);
                 assert_eq!(metadata.version.unwrap(), "0.2.0");
