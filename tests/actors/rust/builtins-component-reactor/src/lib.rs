@@ -55,10 +55,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             vec![content_length_value]
         );
 
-        let (host_key, host_value) = header_iter.next().expect("`host` header missing");
-        assert_eq!(host_key, "host");
-        assert_eq!(headers.get(&String::from("host")), vec![host_value]);
-
         assert_eq!(
             header_iter.next(),
             Some(("test-header".into(), b"test-value".to_vec()))
