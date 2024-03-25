@@ -139,7 +139,6 @@ fn integration_inspect_provider() {
     let inspect_expected = json!({
         "issuer": HTTP_ISSUER,
         "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
     });
     assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
 
@@ -194,7 +193,6 @@ fn integration_inspect_cached() {
     let expected_output = json!({
         "issuer": HTTP_ISSUER,
         "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
     });
     assert_json_include!(actual: remote_inspect_output, expected: expected_output);
 

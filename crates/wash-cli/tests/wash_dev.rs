@@ -9,11 +9,10 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail};
 #[cfg(target_family = "unix")]
 use anyhow::{Context, Result};
-use serial_test::serial;
 use tokio::{process::Command, sync::RwLock, time::Duration};
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial]
 #[cfg(target_family = "unix")]
 async fn integration_dev_hello_actor_serial() -> Result<()> {
     let test_setup = init(

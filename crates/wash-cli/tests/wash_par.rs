@@ -78,7 +78,6 @@ fn integration_par_inspect() {
     let inspect_expected = json!({
         "issuer": HTTP_ISSUER,
         "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
     });
     assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
 
@@ -140,7 +139,6 @@ fn integration_par_inspect_cached() {
     let expected_output = json!({
         "issuer": HTTP_ISSUER,
         "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
     });
     assert_json_include!(actual: remote_inspect_output, expected: expected_output);
 
@@ -171,8 +169,6 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
             ARCH,
             "-b",
             binary.to_str().unwrap(),
-            "-c",
-            "wasmcloud:testing",
             "-n",
             "Test parJEEzy",
             "-v",
@@ -206,7 +202,6 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     assert!(inspect_created.status.success());
     let output = get_json_output(inspect_created).unwrap();
     let expected = json!({
-        "capability_contract_id": "wasmcloud:testing",
         "name": "Test parJEEzy",
         "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
         "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
@@ -269,7 +264,6 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert!(inspect_after_bin1.status.success());
     let output = get_json_output(inspect_after_bin1).unwrap();
     let expected = json!({
-        "capability_contract_id": "wasmcloud:testing",
         "name": "Test parJEEzy",
         "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
         "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
@@ -323,7 +317,6 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert!(inspect_after_bin2.status.success());
     let output = get_json_output(inspect_after_bin2).unwrap();
     let expected = json!({
-        "capability_contract_id": "wasmcloud:testing",
         "name": "Test parJEEzy",
         "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
         "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
