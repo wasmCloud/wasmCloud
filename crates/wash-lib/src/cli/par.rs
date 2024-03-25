@@ -8,7 +8,6 @@ pub fn detect_arch() -> String {
 }
 
 pub struct ParCreateArgs {
-    pub capid: String,
     pub vendor: String,
     pub revision: Option<i32>,
     pub version: Option<String>,
@@ -19,7 +18,6 @@ pub struct ParCreateArgs {
 
 pub fn create_provider_archive(
     ParCreateArgs {
-        capid,
         vendor,
         revision,
         version,
@@ -29,7 +27,7 @@ pub fn create_provider_archive(
     }: ParCreateArgs,
     binary_bytes: &[u8],
 ) -> Result<ProviderArchive> {
-    let mut par = ProviderArchive::new(&capid, &name, &vendor, revision, version);
+    let mut par = ProviderArchive::new(&name, &vendor, revision, version);
 
     par.add_library(&arch, binary_bytes)
         .map_err(convert_error)?;

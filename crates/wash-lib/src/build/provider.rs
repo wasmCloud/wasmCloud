@@ -84,7 +84,6 @@ pub(crate) async fn build_provider(
 
     let mut par = create_provider_archive(
         ParCreateArgs {
-            capid: provider_config.wit_world.clone().unwrap_or_default(),
             vendor: provider_config.vendor.to_string(),
             revision: Some(common_config.revision),
             version: Some(common_config.version.to_string()),
