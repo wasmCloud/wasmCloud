@@ -579,25 +579,25 @@
     "wasi-preview1-command-component-adapter": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-JmXpAoTp6AQ07x1X91bvOVK/kbed5xun/GVkXAQS+SE=",
+        "narHash": "sha256-GTDtRk1fmYJtCOd1Dd1OKCmckengEnwhnDYLw0LdRH8=",
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.1/wasi_snapshot_preview1.command.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.command.wasm"
       },
       "original": {
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.1/wasi_snapshot_preview1.command.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.command.wasm"
       }
     },
     "wasi-preview1-reactor-component-adapter": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-2csLTHcRAiq5RNviVW3/nAymJWCiKNkgJ0v2bdF1pQo=",
+        "narHash": "sha256-zsV6cKMoJCp3aOYtRsumLg6xgiTGMGGV5rB7fivktJQ=",
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.1/wasi_snapshot_preview1.reactor.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.reactor.wasm"
       },
       "original": {
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.1/wasi_snapshot_preview1.reactor.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.reactor.wasm"
       }
     },
     "wasmcloud-component-adapters": {
@@ -609,16 +609,16 @@
         "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter"
       },
       "locked": {
-        "lastModified": 1708532822,
-        "narHash": "sha256-A3/KGBm4nikHHzRxKYDRIrVnNVzH51O60f5PbXkFv6U=",
+        "lastModified": 1711387649,
+        "narHash": "sha256-3YZCkGUPaX7w+BqCUzyR41vAzchSMak6qRtmMBiOjMw=",
         "owner": "wasmCloud",
         "repo": "wasmcloud-component-adapters",
-        "rev": "efb46c4b45fce117e1122db1a68cacf81be9c455",
+        "rev": "896b9c66f5ca6150cab2a4cb0326ad0081c90a4d",
         "type": "github"
       },
       "original": {
         "owner": "wasmCloud",
-        "ref": "v0.8.0",
+        "ref": "v0.9.0",
         "repo": "wasmcloud-component-adapters",
         "type": "github"
       }
