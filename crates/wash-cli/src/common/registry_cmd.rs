@@ -109,18 +109,13 @@ pub async fn write_artifact(
         SupportedArtifacts::Wasm => WASM_FILE_EXTENSION,
     };
     // Output to provided file, or use artifact_name.file_extension
-    let outfile = output.unwrap_or(format!(
-        "{}{}",
-        image
-            .repository()
-            .to_string()
-            .split('/')
-            .collect::<Vec<_>>()
-            .pop()
-            .unwrap(),
-        file_extension
-    ));
-    let mut f = File::create(outfile.clone()).await?;
+    let outfile = output.unwrap_or_else(|| {
+        format!(
+            "{}{file_extension}",
+            image.repository().split('/').last().unwrap(),
+        )
+    });
+    let mut f = File::create(&outfile).await?;
     f.write_all(artifact).await?;
     // https://github.com/wasmCloud/wash/issues/382 resolved by this
     // Files must be synced to ensure all bytes are written to disk
