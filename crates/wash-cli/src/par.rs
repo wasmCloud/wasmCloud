@@ -245,16 +245,16 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
     f.read_to_end(&mut lib)?;
 
     let issuer = extract_keypair(
-        cmd.issuer.clone(),
-        Some(cmd.binary.clone()),
+        cmd.issuer.as_deref(),
+        Some(&cmd.binary),
         cmd.directory.clone(),
         KeyPairType::Account,
         cmd.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        cmd.subject.clone(),
-        Some(cmd.binary.clone()),
+        cmd.subject.as_deref(),
+        Some(&cmd.binary),
         cmd.directory.clone(),
         KeyPairType::Service,
         cmd.disable_keygen,
@@ -266,7 +266,7 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         Some(path) => path,
         None => format!(
             "{}{}",
-            PathBuf::from(cmd.binary.clone())
+            PathBuf::from(&cmd.binary)
                 .file_stem()
                 .unwrap()
                 .to_str()
@@ -275,15 +275,16 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
         ),
     };
 
-    let mut par = create_provider_archive(cmd.clone().into(), &lib)
+    let compress = cmd.compress;
+    let mut par = create_provider_archive(cmd.into(), &lib)
         .context("failed to create provider archive with built provider")?;
-    par.write(&outfile, &issuer, &subject, cmd.compress)
+    par.write(&outfile, &issuer, &subject, compress)
         .await
-        .map_err(|e| anyhow!("{}", e))
+        .map_err(|e| anyhow!("{e}"))
         .with_context(|| {
             format!(
                 "Error writing PAR. Please ensure directory {:?} exists",
-                PathBuf::from(outfile.clone()).parent().unwrap(),
+                PathBuf::from(&outfile).parent().unwrap(),
             )
         })?;
 
@@ -306,16 +307,16 @@ pub async fn handle_insert(cmd: InsertCommand, output_kind: OutputKind) -> Resul
     f.read_to_end(&mut lib)?;
 
     let issuer = extract_keypair(
-        cmd.issuer.clone(),
-        Some(cmd.binary.clone().to_owned()),
+        cmd.issuer.as_deref(),
+        Some(&cmd.binary),
         cmd.directory.clone(),
         KeyPairType::Account,
         cmd.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        cmd.subject.clone(),
-        Some(cmd.binary.clone().to_owned()),
+        cmd.subject.as_deref(),
+        Some(&cmd.binary),
         cmd.directory.clone(),
         KeyPairType::Service,
         cmd.disable_keygen,

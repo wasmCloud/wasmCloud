@@ -5,7 +5,7 @@ use tokio::time::{Duration, Instant};
 
 use crate::actor::ComponentScaledInfo;
 
-/// Useful parts of a CloudEvent coming in from the wasmbus.
+/// Useful parts of a `CloudEvent` coming in from the wasmbus.
 #[derive(Debug)]
 struct CloudEventData {
     event_type: String,

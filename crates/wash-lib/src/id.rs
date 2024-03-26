@@ -49,7 +49,7 @@ impl<const PREFIX: char> Deref for Id<PREFIX> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
@@ -61,10 +61,12 @@ impl<const PREFIX: char> Display for Id<PREFIX> {
 
 impl<const PREFIX: char> Id<PREFIX> {
     /// Converts the wrapped key back into a plain string
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }
 
+    #[must_use]
     pub fn prefix() -> char {
         PREFIX
     }
@@ -99,7 +101,7 @@ impl<const PREFIX: char> Deref for Seed<PREFIX> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
@@ -113,10 +115,12 @@ impl<const PREFIX: char> FromStr for Seed<PREFIX> {
 
 impl<const PREFIX: char> Seed<PREFIX> {
     /// Converts the wrapped key back into a plain string
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }
 
+    #[must_use]
     pub fn prefix() -> char {
         PREFIX
     }
@@ -199,8 +203,8 @@ mod tests {
 
     #[test]
     fn seed_default() {
-        assert_eq!(ClusterSeed::default(), Seed::<'C'>("".to_string()));
-        assert_eq!(Seed::<'M'>::default(), Seed::<'M'>("".to_string()));
+        assert_eq!(ClusterSeed::default(), Seed::<'C'>(String::new()));
+        assert_eq!(Seed::<'M'>::default(), Seed::<'M'>(String::new()));
     }
 
     #[test]

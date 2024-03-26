@@ -114,7 +114,7 @@ async fn find_id_matches<T: FromStr + ToString + Display>(
         .filter_map(|v| {
             let id_str = v
                 .get(CLAIMS_SUBJECT)
-                .map(|s| s.as_str())
+                .map(String::as_str)
                 .unwrap_or_default();
             // If it doesn't parse to our type, just skip
             let id = match T::from_str(id_str) {
@@ -130,7 +130,7 @@ async fn find_id_matches<T: FromStr + ToString + Display>(
                     .map(|s| s.to_ascii_lowercase())
                     .unwrap_or_default()
                     .contains(&value))
-            .then(|| (id, v.get(CLAIMS_NAME).map(|s| s.to_string())))
+            .then(|| (id, v.get(CLAIMS_NAME).map(ToString::to_string)))
         })
         .collect::<Vec<_>>();
 

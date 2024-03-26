@@ -255,20 +255,20 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
 ///
 /// Returns the loaded or generated keypair
 pub fn extract_keypair(
-    input: Option<String>,
-    module_path: Option<String>,
+    input: Option<&str>,
+    module_path: Option<&str>,
     directory: Option<PathBuf>,
     keygen_type: KeyPairType,
     disable_keygen: bool,
     output_kind: OutputKind,
 ) -> Result<KeyPair> {
     if let Some(input_str) = input {
-        match read_key(&input_str) {
+        match read_key(input_str) {
             // User provided file path to seed as argument
             Ok(k) => Ok(k),
             // User provided seed as an argument
             Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => {
-                KeyPair::from_seed(&input_str).map_err(anyhow::Error::from)
+                KeyPair::from_seed(input_str).map_err(anyhow::Error::from)
             }
             // There was an actual error reading the file
             Err(e) => Err(e.into()),
@@ -287,12 +287,8 @@ pub fn extract_keypair(
                 .unwrap()
                 .to_string(),
         };
-        let keyname = format!(
-            "{}_{}",
-            module_name,
-            keypair_type_to_string(keygen_type.clone())
-        );
-        let path = key_dir.join(format!("{}{}", keyname, ".nk"));
+        let keyname = format!("{module_name}_{}", keypair_type_to_str(&keygen_type));
+        let path = key_dir.join(format!("{keyname}.nk"));
         match key_dir.get(&keyname)? {
             // Default key found
             Some(k) => Ok(k),
@@ -376,16 +372,16 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
+fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
     use KeyPairType::*;
     match keypair_type {
-        Account => "account".to_string(),
-        Cluster => "cluster".to_string(),
-        Service => "service".to_string(),
-        Module => "module".to_string(),
-        Server => "server".to_string(),
-        Operator => "operator".to_string(),
-        User => "user".to_string(),
+        Account => "account",
+        Cluster => "cluster",
+        Service => "service",
+        Module => "module",
+        Server => "server",
+        Operator => "operator",
+        User => "user",
     }
 }
 

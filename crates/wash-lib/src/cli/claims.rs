@@ -6,8 +6,8 @@ use serde_json::json;
 use std::{
     collections::{BTreeSet, HashMap},
     fs::{self, File},
-    io::{Read, Write},
-    path::PathBuf,
+    io::Read,
+    path::{Path, PathBuf},
 };
 use tracing::warn;
 use wascap::{
@@ -482,7 +482,7 @@ fn get_keypair_vec(
     keys.iter()
         .map(|k| {
             extract_keypair(
-                Some(k.to_string()),
+                Some(k),
                 None,
                 keys_dir.clone(),
                 keypair_type.clone(),
@@ -496,16 +496,16 @@ fn get_keypair_vec(
 
 fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
-        actor.issuer.clone(),
-        actor.name.clone(),
+        actor.issuer.as_deref(),
+        actor.name.as_deref(),
         actor.common.directory.clone(),
         KeyPairType::Account,
         actor.common.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        actor.subject.clone(),
-        actor.name.clone(),
+        actor.subject.as_deref(),
+        actor.name.as_deref(),
         actor.common.directory.clone(),
         KeyPairType::Module,
         actor.common.disable_keygen,
@@ -557,15 +557,15 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
 
 fn generate_operator(operator: OperatorMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let self_sign_key = extract_keypair(
-        operator.issuer.clone(),
-        Some(operator.name.clone()),
+        operator.issuer.as_deref(),
+        Some(&operator.name),
         operator.common.directory.clone(),
         KeyPairType::Operator,
         operator.common.disable_keygen,
         output_kind,
     )?;
 
-    let additional_keys = match operator.additional_signing_keys.clone() {
+    let additional_keys = match operator.additional_signing_keys {
         Some(keys) => get_keypair_vec(
             &keys,
             operator.common.directory.clone(),
@@ -596,31 +596,33 @@ fn generate_operator(operator: OperatorMetadata, output_kind: OutputKind) -> Res
 
 fn generate_account(account: AccountMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
-        account.issuer.clone(),
-        Some(account.name.clone()),
+        account.issuer.as_deref(),
+        Some(&account.name),
         account.common.directory.clone(),
         KeyPairType::Operator,
         account.common.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        account.subject.clone(),
-        Some(account.name.clone()),
+        account.subject.as_deref(),
+        Some(&account.name),
         account.common.directory.clone(),
         KeyPairType::Account,
         account.common.disable_keygen,
         output_kind,
     )?;
-    let additional_keys = match account.additional_signing_keys.clone() {
-        Some(keys) => get_keypair_vec(
-            &keys,
-            account.common.directory.clone(),
-            KeyPairType::Account,
-            true,
-            output_kind,
-        ),
-        None => vec![],
-    };
+    let additional_keys = account
+        .additional_signing_keys
+        .map(|keys| {
+            get_keypair_vec(
+                &keys,
+                account.common.directory.clone(),
+                KeyPairType::Account,
+                true,
+                output_kind,
+            )
+        })
+        .unwrap_or_default();
 
     let claims: Claims<Account> = Claims::<Account>::with_dates(
         account.name.clone(),
@@ -640,16 +642,16 @@ fn generate_account(account: AccountMetadata, output_kind: OutputKind) -> Result
 
 fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
-        provider.issuer.clone(),
-        provider.name.clone(),
+        provider.issuer.as_deref(),
+        provider.name.as_deref(),
         provider.common.directory.clone(),
         KeyPairType::Account,
         provider.common.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        provider.subject.clone(),
-        provider.name.clone(),
+        provider.subject.as_deref(),
+        provider.name.as_deref(),
         provider.common.directory.clone(),
         KeyPairType::Service,
         provider.common.disable_keygen,
@@ -679,16 +681,16 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     sfile.read_to_end(&mut buf).unwrap();
 
     let issuer = extract_keypair(
-        cmd.metadata.issuer.clone(),
-        Some(cmd.source.clone()),
+        cmd.metadata.issuer.as_deref(),
+        Some(&cmd.source),
         cmd.metadata.common.directory.clone(),
         KeyPairType::Account,
         cmd.metadata.common.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        cmd.metadata.subject.clone(),
-        Some(cmd.source.clone()),
+        cmd.metadata.subject.as_deref(),
+        Some(&cmd.source),
         cmd.metadata.common.directory.clone(),
         KeyPairType::Module,
         cmd.metadata.common.disable_keygen,
@@ -738,49 +740,34 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         sanitize_alias(cmd.metadata.call_alias)?,
     )?;
 
-    let destination = match cmd.destination.clone() {
-        Some(d) => d,
-        None => {
-            let path_buf = PathBuf::from(cmd.source.clone());
+    let destination = cmd.destination.unwrap_or_else(|| {
+        let source = Path::new(&cmd.source);
 
-            let path = path_buf.parent().unwrap().to_str().unwrap().to_string();
-            let module_name = path_buf.file_stem().unwrap().to_str().unwrap().to_string();
-            // If path is empty, user supplied module in current directory
-            if path.is_empty() {
-                format!("./{}_s.wasm", module_name)
-            } else {
-                format!("{}/{}_s.wasm", path, module_name)
-            }
+        let path = source.parent().unwrap().to_str().unwrap();
+        let module_name = source.file_stem().unwrap().to_str().unwrap();
+        // If path is empty, user supplied module in current directory
+        if path.is_empty() {
+            format!("./{module_name}_s.wasm")
+        } else {
+            format!("{path}/{module_name}_s.wasm")
         }
-    };
+    });
 
-    let destination_path = PathBuf::from(destination.clone());
-
+    let destination_path = Path::new(&destination);
     if let Some(p) = destination_path.parent() {
         fs::create_dir_all(p)?;
     }
-
-    let mut outfile = File::create(destination_path).unwrap();
-
-    let output = match outfile.write(&signed) {
-        Ok(_) => {
-            let mut map = HashMap::new();
-            map.insert("destination".to_string(), json!(destination));
-            map.insert("capabilities".to_string(), json!(caps_list));
-            Ok(CommandOutput::new(
-                format!(
-                    "Successfully signed {} with capabilities: {}",
-                    destination,
-                    caps_list.join(",")
-                ),
-                map,
-            ))
-        }
-
-        Err(e) => Err(e),
-    }?;
-
-    Ok(output)
+    fs::write(destination_path, signed)?;
+    let mut map = HashMap::new();
+    map.insert("destination".to_string(), json!(destination));
+    map.insert("capabilities".to_string(), json!(caps_list));
+    Ok(CommandOutput::new(
+        format!(
+            "Successfully signed {destination} with capabilities: {}",
+            caps_list.join(",")
+        ),
+        map,
+    ))
 }
 
 fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {

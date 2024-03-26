@@ -87,6 +87,7 @@ pub struct WashContext {
 
 impl WashContext {
     /// Create a new default context with the given name
+    #[must_use]
     pub fn named(name: String) -> Self {
         WashContext {
             name,
@@ -132,6 +133,7 @@ fn default_lattice() -> String {
     DEFAULT_LATTICE.to_string()
 }
 
+#[must_use]
 pub fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
