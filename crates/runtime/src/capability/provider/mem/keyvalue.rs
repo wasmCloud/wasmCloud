@@ -124,8 +124,7 @@ impl KeyValueAtomic for KeyValue {
         match bucket.get(&key).context("key not found")? {
             Entry::Atomic(value) => Ok(value
                 .compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed)
-                .map(|value| value == old)
-                .unwrap_or_default()),
+                .is_ok_and(|value| value == old)),
             Entry::Blob(_) => bail!("invalid entry type"),
         }
     }
