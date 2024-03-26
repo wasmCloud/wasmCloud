@@ -470,16 +470,14 @@ fn instantiate(
             _ => {}
         }
 
-        let item = match item {
-            component::types::ComponentItem::ComponentInstance(item) => item,
-            _ => continue,
+        let component::types::ComponentItem::ComponentInstance(item) = item else {
+            continue;
         };
         let exports = item.exports(engine);
         let mut instance = HashMap::with_capacity(exports.len());
         for (func_name, item) in exports {
-            let ty = match item {
-                component::types::ComponentItem::ComponentFunc(ty) => ty,
-                _ => continue,
+            let component::types::ComponentItem::ComponentFunc(ty) = item else {
+                continue;
             };
             instance.insert(func_name.to_string(), ty.results().collect());
         }
@@ -604,6 +602,7 @@ impl Component {
     /// Returns a map of dynamic function export types.
     /// Top level map is keyed by the instance name.
     /// Inner map is keyed by exported function name.
+    #[must_use]
     pub fn exports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
         &self.exports
     }
@@ -611,6 +610,7 @@ impl Component {
     /// Returns a map of dynamic polyfilled function import types.
     /// Top level map is keyed by the instance name.
     /// Inner map is keyed by exported function name.
+    #[must_use]
     pub fn polyfilled_imports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
         &self.polyfilled_imports
     }

@@ -94,6 +94,7 @@ pub struct IncomingInputStreamReader {
 
 impl IncomingInputStreamReader {
     /// Create a new [`IncomingInputStreamReader`]
+    #[must_use]
     pub fn new(stream: IncomingInputStream) -> Self {
         Self {
             stream,
@@ -148,6 +149,7 @@ pub struct BufferedIncomingStream<T> {
 
 impl<T> BufferedIncomingStream<T> {
     /// Create a new [`BufferedIncomingStream`]
+    #[must_use]
     pub fn new(
         stream: Box<dyn Stream<Item = anyhow::Result<Vec<T>>> + Send + Sync + Unpin>,
     ) -> Self {
@@ -165,8 +167,8 @@ where
     type Item = anyhow::Result<T>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.buffer.len() {
-            0 => match self.stream.poll_next_unpin(cx) {
+        if self.buffer.is_empty() {
+            match self.stream.poll_next_unpin(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Ready(Some(Ok(mut values))) => match values.len() {
@@ -183,14 +185,13 @@ where
                     }
                 },
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
-            },
-            _ => {
-                let tail = self.buffer.split_off(1);
-                let item = self.buffer.pop().expect("element missing");
-                assert!(self.buffer.is_empty());
-                self.buffer = tail;
-                Poll::Ready(Some(Ok(item)))
             }
+        } else {
+            let tail = self.buffer.split_off(1);
+            let item = self.buffer.pop().expect("element missing");
+            assert!(self.buffer.is_empty());
+            self.buffer = tail;
+            Poll::Ready(Some(Ok(item)))
         }
     }
 }
