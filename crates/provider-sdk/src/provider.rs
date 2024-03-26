@@ -151,9 +151,7 @@ macro_rules! process_until_quit {
                     __msg = $sub.next() => {
                         match __msg {
                             None => break,
-                            Some($msg) => {
-                                $on_item
-                            }
+                            Some($msg) => $on_item
                         }
                     }
                 }
