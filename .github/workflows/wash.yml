@@ -72,3 +72,32 @@ jobs:
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
+
+  # Regression E2E tests to ensure that `wash new actor` works consistently,
+  # including older (released) versions of `wash`
+  e2e_tests_wash_new_actor:
+    name: E2E Tests (`wash new`)
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        wash-version:
+          - 0.26.0
+          - current
+        template:
+          - hello-world-rust
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ matrix.wash-version == 'current' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-22.04-shared-cache"
+      - name: install wash (previous version)
+        if: ${{ matrix.wash-version != 'current' }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wash-cli@${{ matrix.wash-version }}
+      - name: install wash (current)
+        if: ${{ matrix.wash-version == 'current' }}
+        run: cargo install --path ./crates/wash-cli
+      - name: Ensure `wash new` works
+        run: wash new actor ${{ matrix.template }}  --template-name ${{ matrix.template }}
