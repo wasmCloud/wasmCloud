@@ -90,7 +90,7 @@ fn resolve_relative_file_paths_in_yaml(
                 warn!(
                     "failed to build a file URL from path [{}], is the file missing?",
                     full_path.display()
-                )
+                );
             }
         }
         // If the YAML value is a mapping, recur into it to process more values
@@ -431,7 +431,7 @@ pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest>
                         .context("failed to read model from remote file")?
                         .as_ref(),
                 )
-                .with_context(|| format!("failed to parse YAML from URL [{}]", url))?,
+                .with_context(|| format!("failed to parse YAML from URL [{url}]"))?,
             )),
             AppManifestSource::Model(name) => Ok(AppManifest::ModelName(name)),
         }

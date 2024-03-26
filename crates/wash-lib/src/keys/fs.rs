@@ -29,7 +29,7 @@ impl Deref for KeyDir {
 }
 
 impl KeyDir {
-    /// Creates a new KeyDir, erroring if it is unable to access or create the given directory.
+    /// Creates a new `KeyDir`, erroring if it is unable to access or create the given directory.
     pub fn new(path: impl AsRef<Path>) -> Result<KeyDir> {
         let p = path.as_ref();
         let exists = p.exists();
@@ -103,7 +103,7 @@ impl KeyManager for KeyDir {
 
     fn delete(&self, name: &str) -> Result<()> {
         match std::fs::remove_file(self.generate_file_path(name)) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => Ok(()),
             Err(e) => Err(anyhow::anyhow!("Unable to delete key from disk: {}", e)),
         }
@@ -173,7 +173,7 @@ mod test {
 
         let names = key_dir.list_names().expect("Should be able to list names");
         assert_eq!(names.len(), 2, "Should have listed 2 names");
-        for name in names.into_iter() {
+        for name in names {
             assert!(
                 name == "foobar_account" || name == "foobar_module",
                 "Should only have the newly created keys in the list"

@@ -113,7 +113,7 @@ where
 }
 
 /// Configuration for a NATS server that supports running either in "standalone" or "leaf" mode.
-/// See the respective [NatsConfig::new_standalone] and [NatsConfig::new_leaf] implementations below for more information.
+/// See the respective [`NatsConfig::new_standalone`] and [`NatsConfig::new_leaf`] implementations below for more information.
 #[derive(Clone)]
 pub struct NatsConfig {
     pub host: String,
@@ -159,6 +159,7 @@ impl NatsConfig {
     /// * `js_domain`: Jetstream domain to use, defaults to `core`. See [Configuring Jetstream](https://wasmcloud.dev/reference/lattice/jetstream/) for more information
     /// * `remote_url`: URL of NATS cluster to extend
     /// * `credentials`: Credentials to authenticate to the existing NATS cluster
+    #[must_use]
     pub fn new_leaf(
         host: &str,
         port: u16,
@@ -170,7 +171,7 @@ impl NatsConfig {
         NatsConfig {
             host: host.to_owned(),
             port,
-            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", port)),
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
             js_domain,
             remote_url: Some(remote_url),
             credentials: Some(credentials),
@@ -186,12 +187,12 @@ impl NatsConfig {
     /// * `js_domain`: Jetstream domain to use, defaults to `core`. See [Configuring Jetstream](https://wasmcloud.dev/reference/lattice/jetstream/) for more information
     pub fn new_standalone(host: &str, port: u16, js_domain: Option<String>) -> Self {
         if host == "0.0.0.0" {
-            warn!("Listening on 0.0.0.0 is unsupported on some platforms, use 127.0.0.1 for best results")
+            warn!("Listening on 0.0.0.0 is unsupported on some platforms, use 127.0.0.1 for best results");
         }
         NatsConfig {
             host: host.to_owned(),
             port,
-            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", port)),
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
             js_domain,
             ..Default::default()
         }
@@ -222,7 +223,7 @@ leafnodes {{
                 "#,
             )
         } else {
-            "".to_owned()
+            String::new()
         };
         let websocket_section = match self.websocket_port {
             Some(port) => format!(
@@ -233,7 +234,7 @@ websocket {{
 }}
                 "#
             ),
-            _ => "".to_owned(),
+            _ => String::new(),
         };
         let config = format!(
             r#"
@@ -251,12 +252,12 @@ jetstream {{
     }
 }
 
-/// Helper function to execute a NATS server binary with required wasmCloud arguments, e.g. JetStream
+/// Helper function to execute a NATS server binary with required wasmCloud arguments, e.g. `JetStream`
 /// # Arguments
 ///
 /// * `bin_path` - Path to the nats-server binary to execute
-/// * `stderr` - Specify where NATS stderr logs should be written to. If logs aren't important, use std::process::Stdio::null()
-/// * `config` - Configuration for the NATS server, see [NatsConfig] for options. This config file is written alongside the nats-server binary as `nats.conf`
+/// * `stderr` - Specify where NATS stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
+/// * `config` - Configuration for the NATS server, see [`NatsConfig`] for options. This config file is written alongside the nats-server binary as `nats.conf`
 pub async fn start_nats_server<P, T>(bin_path: P, stderr: T, config: NatsConfig) -> Result<Child>
 where
     P: AsRef<Path>,
@@ -273,7 +274,7 @@ where
     }
     let child = if let Some(parent_path) = bin_path.as_ref().parent() {
         let config_path = parent_path.join(NATS_SERVER_CONF);
-        let host = config.host.to_owned();
+        let host = config.host.clone();
         let port = config.port;
         config.write_to_path(&config_path).await?;
         Command::new(bin_path.as_ref())
@@ -295,7 +296,7 @@ where
     }?;
     wait_for_server(&host_addr, "NATS server")
         .await
-        .map(|_| child)
+        .map(|()| child)
 }
 
 /// Helper function to get the path to the NATS server pid file

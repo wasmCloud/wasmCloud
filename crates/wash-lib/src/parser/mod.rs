@@ -73,6 +73,7 @@ pub struct ActorConfig {
 }
 
 impl RustConfig {
+    #[must_use]
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
@@ -264,6 +265,7 @@ pub struct CommonConfig {
 
 impl CommonConfig {
     /// Helper function to get the Wasm name, falling back to the project name if not specified
+    #[must_use]
     pub fn wasm_bin_name(&self) -> String {
         self.wasm_bin_name
             .clone()
@@ -344,6 +346,7 @@ pub struct TinyGoConfig {
 }
 
 impl TinyGoConfig {
+    #[must_use]
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm",
@@ -571,7 +574,7 @@ impl ProjectConfig {
         &self,
         registry: impl AsRef<str>,
     ) -> Result<RegistryCredential> {
-        let credentials_file = &self.common.registry.credentials.to_owned();
+        let credentials_file = &self.common.registry.credentials.clone();
 
         let Some(credentials_file) = credentials_file else {
             return Ok(RegistryCredential::default());

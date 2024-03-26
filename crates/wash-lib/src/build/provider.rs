@@ -110,16 +110,16 @@ pub(crate) async fn build_provider(
         tokio::fs::create_dir_all(parent).await?;
     }
     let issuer = extract_keypair(
-        sign_config.issuer.clone(),
-        Some(provider_path_buf.to_string_lossy().to_string()),
+        sign_config.issuer.as_deref(),
+        Some(&provider_path_buf.to_string_lossy()),
         sign_config.keys_directory.clone(),
         KeyPairType::Account,
         sign_config.disable_keygen,
         OutputKind::Json,
     )?;
     let subject = extract_keypair(
-        sign_config.subject.clone(),
-        Some(provider_path_buf.to_string_lossy().to_string()),
+        sign_config.subject.as_deref(),
+        Some(&provider_path_buf.to_string_lossy()),
         sign_config.keys_directory.clone(),
         KeyPairType::Service,
         sign_config.disable_keygen,
