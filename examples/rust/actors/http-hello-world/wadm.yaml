@@ -1,0 +1,33 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: rust-http-hello-world
+  annotations:
+    version: v0.0.1
+    description: "HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    experimental: true
+spec:
+  components:
+    - name: http-hello-world
+      type: actor
+      properties:
+        image: file://./build/http_hello_world_s.wasm
+      traits:
+        # Govern the spread/scheduling of the actor
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        # Link the HTTP server, and inform it to listen on port 8080
+        # on the local machine
+        - type: linkdef
+          properties:
+            target: httpserver
+            values:
+              ADDRESS: 127.0.0.1:8080
+
+    # Add a capability provider that mediates HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: wasmcloud.azurecr.io/httpserver:0.19.1
+        contract: wasmcloud:httpserver
