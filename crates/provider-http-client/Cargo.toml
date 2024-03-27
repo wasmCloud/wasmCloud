@@ -18,11 +18,6 @@ status = "actively-developed"
 anyhow = { workspace = true }
 futures = { workspace = true }
 hyper-util = { workspace = true, features = ["client-legacy"] }
-hyper-rustls = { workspace = true, features = [
-    "http2",
-    "ring",
-    "webpki-tokio",
-] }
 tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }

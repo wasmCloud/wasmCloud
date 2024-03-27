@@ -16,6 +16,7 @@ use wadm::server::{
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use url::Url;
+use wasmcloud_core::tls;
 
 use crate::config::DEFAULT_LATTICE;
 
@@ -421,18 +422,20 @@ pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest>
 
                 Ok(manifest)
             }
-            AppManifestSource::Url(url) => Ok(AppManifest::SerializedModel(
-                serde_yaml::from_str(
-                    reqwest::get(url.clone())
-                        .await
-                        .context("request to remote model file failed")?
-                        .text()
-                        .await
-                        .context("failed to read model from remote file")?
-                        .as_ref(),
-                )
-                .with_context(|| format!("failed to parse YAML from URL [{url}]"))?,
-            )),
+            AppManifestSource::Url(url) => {
+                let res = tls::DEFAULT_REQWEST_CLIENT
+                    .get(url.clone())
+                    .send()
+                    .await
+                    .context("request to remote model file failed")?;
+                let text = res
+                    .text()
+                    .await
+                    .context("failed to read model from remote file")?;
+                serde_yaml::from_str(&text)
+                    .with_context(|| format!("failed to parse YAML from URL [{url}]"))
+                    .map(AppManifest::SerializedModel)
+            }
             AppManifestSource::Model(name) => Ok(AppManifest::ModelName(name)),
         }
     };

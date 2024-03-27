@@ -16,6 +16,7 @@ use provider_archive::ProviderArchive;
 use regex::RegexBuilder;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use wasmcloud_core::tls;
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
@@ -126,6 +127,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
         } else {
             ClientProtocol::Https
         },
+        extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         ..Default::default()
     });
 

@@ -24,12 +24,11 @@ hex = { workspace = true, features = ["std"] }
 http = { workspace = true }
 http-body = { workspace = true }
 humantime = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
 names = { workspace = true }
 nkeys = { workspace = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"] }
 opentelemetry-nats = { workspace = true }
 provider-archive = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, features = ["std"] }
@@ -51,7 +50,11 @@ url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
-wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-core = { workspace = true, features = [
+    "oci-distribution",
+    "otel",
+    "rustls-native-certs",
+] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wasmtime-wasi-http = { workspace = true }

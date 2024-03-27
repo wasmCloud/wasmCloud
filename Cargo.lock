@@ -2331,20 +2331,19 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.26.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0bea761b46ae2b24eb4aef630d8d1c398157b6fc29e6350ecf090a0b70c952c"
+checksum = "736f15a50e749d033164c56c09783b6102c4ff8da79ad77dbddbbaea0f8567f7"
 dependencies = [
  "futures-util",
  "http 1.1.0",
  "hyper 1.2.0",
  "hyper-util",
- "rustls 0.22.2",
+ "rustls 0.23.4",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.25.0",
+ "tokio-rustls 0.26.0",
  "tower-service",
- "webpki-roots 0.26.1",
 ]
 
 [[package]]
@@ -4006,6 +4005,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c4d6d8ad9f2492485e13453acbb291dd08f64441b6609c491f1c2cd2c6b4fe1"
+dependencies = [
+ "once_cell",
+ "ring",
+ "rustls-pki-types",
+ "rustls-webpki 0.102.2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "rustls-native-certs"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4843,6 +4856,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "775e0c0f0adb3a2f22a00c4745d728b479985fc15ee7ca6a2608388c5569860f"
 dependencies = [
  "rustls 0.22.2",
+ "rustls-pki-types",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
+dependencies = [
+ "rustls 0.23.4",
  "rustls-pki-types",
  "tokio",
 ]
@@ -5785,7 +5809,14 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
+ "hyper-rustls 0.27.0",
+ "hyper-util",
  "nkeys",
+ "oci-distribution",
+ "once_cell",
+ "reqwest",
+ "rustls 0.23.4",
+ "rustls-native-certs 0.7.0",
  "serde",
  "serde_bytes",
  "sha2",
@@ -5795,6 +5826,7 @@ dependencies = [
  "ulid",
  "uuid",
  "wascap",
+ "webpki-roots 0.26.1",
  "wrpc-transport",
  "wrpc-transport-nats",
 ]
@@ -5819,7 +5851,6 @@ dependencies = [
  "oci-distribution",
  "opentelemetry-nats",
  "provider-archive",
- "reqwest",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -5891,6 +5922,7 @@ dependencies = [
  "futures",
  "hyper-rustls 0.25.0",
  "rand",
+ "rustls 0.22.2",
  "serde",
  "serde_json",
  "simple_env_load",
@@ -5908,7 +5940,6 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "futures",
- "hyper-rustls 0.26.0",
  "hyper-util",
  "tokio",
  "tracing",
@@ -5938,7 +5969,6 @@ dependencies = [
  "toml 0.8.12",
  "tower-http",
  "tracing",
- "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "wrpc-interface-http",
 ]
