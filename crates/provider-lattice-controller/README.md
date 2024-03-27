@@ -33,7 +33,7 @@ async fn start_component(ctx: &Context) -> RpcResult<CtlOperationAck> {
         user_seed: None
     }).await;
 
-    let cmd = StartActorCommand {
+    let cmd = StartComponentCommand {
         lattice_id: "default".to_string(),
         actor_ref: "wasmcloud.azurecr.io/echo:0.3.4".to_string(),
         annotations: None,

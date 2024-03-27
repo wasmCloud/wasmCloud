@@ -22,7 +22,7 @@ async fn integration_stop_actor_serial() -> Result<()> {
         success,
         ..
     } = wash_instance
-        .start_actor(HELLO_OCI_REF, "hello_actor_id_from_start")
+        .start(HELLO_OCI_REF, "hello_actor_id_from_start")
         .await?;
     assert!(success, "start command returned success");
 
@@ -51,7 +51,7 @@ async fn integration_stop_provider_serial() -> Result<()> {
         success,
         ..
     } = wash_instance
-        .start_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_stop")
+        .start(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_stop")
         .await?;
     assert!(success, "start command returned success");
 

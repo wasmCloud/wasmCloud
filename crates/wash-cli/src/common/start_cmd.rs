@@ -1,7 +1,7 @@
 use crate::appearance::spinner::Spinner;
 
 use anyhow::Result;
-use wash_lib::cli::start::{handle_start_component, StartCommand};
+use wash_lib::cli::start::{handle_start, StartCommand};
 use wash_lib::cli::{CommandOutput, OutputKind};
 
 pub async fn handle_command(
@@ -14,7 +14,7 @@ pub async fn handle_command(
 
         sp.update_spinner_message(format!(" Starting component {component_ref} ... "));
 
-        handle_start_component(command).await?
+        handle_start(command).await?
     };
 
     Ok(out)

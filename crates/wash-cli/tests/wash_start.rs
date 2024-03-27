@@ -14,9 +14,7 @@ async fn integration_start_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     // Start the actor via OCI ref
-    wash_instance
-        .start_actor(HELLO_OCI_REF, "hello_actor_id")
-        .await?;
+    wash_instance.start(HELLO_OCI_REF, "hello_actor_id").await?;
 
     wash_instance.stop_actor("hello_actor_id", None).await?;
 
@@ -33,15 +31,13 @@ async fn integration_start_stop_component_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     // Start the actor via OCI ref
-    wash_instance
-        .start_component(HELLO_OCI_REF, "hello_actor_id")
-        .await?;
+    wash_instance.start(HELLO_OCI_REF, "hello_actor_id").await?;
 
     wash_instance.stop_actor("hello_actor_id", None).await?;
 
     // Start the provider via OCI ref
     wash_instance
-        .start_component(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
+        .start(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
         .await?;
 
     wash_instance
@@ -57,7 +53,7 @@ async fn integration_start_stop_provider_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     wash_instance
-        .start_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
+        .start(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
         .await?;
 
     // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied

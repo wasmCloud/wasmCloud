@@ -4,8 +4,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use provider_archive::*;
 use tokio::time::Duration;
-use wascap::jwt::{validate_token, Actor};
-use wascap::wasm::extract_claims;
 
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
@@ -99,7 +97,7 @@ pub struct StartCommand {
     pub no_cache: bool,
 }
 
-pub async fn handle_start_component(cmd: StartCommand) -> Result<CommandOutput> {
+pub async fn handle_start(cmd: StartCommand) -> Result<CommandOutput> {
     // TODO: absolutize the path if it's a relative file
     let component_ref = if cmd.component_ref.starts_with('/') {
         format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
@@ -127,46 +125,28 @@ pub async fn handle_start_component(cmd: StartCommand) -> Result<CommandOutput> 
         .await?;
     }
 
-    let provider = ProviderArchive::try_load(&buf).await;
-
-    if provider.is_ok() {
-        return handle_start_provider(cmd)
-            .await
-            .with_context(|| format!("Failed to start provider component: {}", component_ref));
-    }
-
     let actor = match wasmparser::Parser::new(0).parse_all(&buf).next() {
-        // Inspect claims inside of Wasm
         Some(Ok(wasmparser::Payload::Version {
             encoding: wasmparser::Encoding::Component,
             ..
-        })) => {
-            let caps = extract_claims(&buf)?;
-            let token = caps.with_context(|| {
-                format!(
-                    "No capabilities discovered in actor component: {}",
-                    component_ref
-                )
-            })?;
-
-            validate_token::<Actor>(&token.jwt).with_context(|| {
-                format!(
-                    "capabilities token validation failed for actor component: {}",
-                    component_ref
-                )
-            })?;
-
-            Ok(())
-        }
+        })) => Ok(()),
         _ => Err(anyhow!(
             "The provided actor component couldn't be parsed as a wasm component",
         )),
     };
 
     if actor.is_ok() {
-        return handle_start_actor(cmd)
+        return handle_start_component(cmd)
             .await
             .with_context(|| format!("Failed to start actor component: {}", component_ref));
+    }
+
+    let provider = ProviderArchive::try_load(&buf).await;
+
+    if provider.is_ok() {
+        return handle_start_provider(cmd)
+            .await
+            .with_context(|| format!("Failed to start provider component: {}", component_ref));
     }
 
     Err(anyhow!(
@@ -177,7 +157,7 @@ pub async fn handle_start_component(cmd: StartCommand) -> Result<CommandOutput> 
     ))
 }
 
-async fn handle_start_actor(cmd: StartCommand) -> Result<CommandOutput> {
+async fn handle_start_component(cmd: StartCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_ACTOR_TIMEOUT_MS
