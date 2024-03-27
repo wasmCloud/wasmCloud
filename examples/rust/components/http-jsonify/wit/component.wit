@@ -1,0 +1,14 @@
+package wamscloud:components;
+
+/// This WIT serves as an example of a minimal component which echos the input it receives via HTTP.
+///
+/// For requests received via HTTP (i.e. `wasi:http/incoming-handler`), this component will
+/// return the headers, body (streaming) and trailers as received.
+///
+/// For more infomration, see the relevant docs on the WIT format and standards:
+/// - https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
+/// - https://github.com/WebAssembly/wasi-http
+
+world component {
+  export wasi:http/incoming-handler@0.2.0;
+}
