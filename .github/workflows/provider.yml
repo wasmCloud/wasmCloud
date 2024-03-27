@@ -118,13 +118,6 @@ jobs:
         WASH_REG_USER: ${{ github.repository_owner }}
         WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Push `${{ inputs.name }}` provider `latest` tag to GitHub Container Registry
-      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) && !steps.ctx.outputs.prerelease
-      run: ./wash push ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:latest "${{ inputs.name }}.par.gz"
-      env:
-        WASH_REG_USER: ${{ github.repository_owner }}
-        WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-
     # wasmCloud AzureCR
 
     - name: Push `${{ inputs.name }}` provider `${{ github.sha }}` tag to wasmCloud Azure Container Registry
@@ -155,14 +148,6 @@ jobs:
       if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name))
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.version }} "${{ inputs.name }}.par.gz"
-      env:
-        WASH_REG_USER: ${{ secrets.azurecr_username }}
-        WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
-
-    - name: Push `${{ inputs.name }}` provider `latest` tag to wasmCloud Azure Container Registry
-      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) && !steps.ctx.outputs.prerelease
-      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
-      run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:latest "${{ inputs.name }}.par.gz"
       env:
         WASH_REG_USER: ${{ secrets.azurecr_username }}
         WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
