@@ -1,0 +1,10 @@
+package wamscloud:components;
+
+/// This WIT serves as an example of a minimal component which receives and handles web requests.
+///
+/// For more infomration on the WIT format and standards:
+/// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
+
+world component {
+  export wasi:http/incoming-handler@0.2.0;
+}

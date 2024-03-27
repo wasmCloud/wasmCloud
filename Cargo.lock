@@ -5759,6 +5759,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-component-echo-http"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "wasmcloud-control-interface"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
