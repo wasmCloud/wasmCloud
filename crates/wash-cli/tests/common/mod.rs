@@ -287,7 +287,7 @@ impl TestWashInstance {
         })
     }
 
-    /// Trigger the equivalent of `wash start actor` on a [`TestWashInstance`]
+    /// Trigger the equivalent of `wash start` on a [`TestWashInstance`]
     pub(crate) async fn start_actor(
         &self,
         oci_ref: impl AsRef<str>,
@@ -296,7 +296,6 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "actor",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
@@ -314,7 +313,7 @@ impl TestWashInstance {
             .context("failed to parse output of `wash start actor`")
     }
 
-    /// Trigger the equivalent of `wash start provider` on a [`TestWashInstance`]
+    /// Trigger the equivalent of `wash start` on a [`TestWashInstance`]
     pub(crate) async fn start_provider(
         &self,
         oci_ref: impl AsRef<str>,
@@ -323,7 +322,6 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "provider",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
@@ -342,7 +340,7 @@ impl TestWashInstance {
             .context("failed to parse output of `wash start provider`")
     }
 
-    /// Trigger the equivalent of `wash start component ` on a [`TestWashInstance`]
+    /// Trigger the equivalent of `wash startn` on a [`TestWashInstance`]
     pub(crate) async fn start_component(
         &self,
         oci_ref: impl AsRef<str>,
@@ -351,7 +349,6 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "component",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",

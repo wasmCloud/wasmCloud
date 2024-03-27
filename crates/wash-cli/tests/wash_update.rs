@@ -24,7 +24,6 @@ async fn integration_update_actor_serial() -> Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
-            "component",
             OLD_HELLO_OCI_REF,
             "hello",
             "--output",
