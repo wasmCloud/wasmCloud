@@ -1,23 +1,17 @@
-use core::future::Future;
-use core::pin::pin;
 use core::str;
 
 use std::collections::{hash_map, HashMap};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use async_nats::HeaderMap;
 use async_trait::async_trait;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use tokio::sync::RwLock;
-use tokio::{select, spawn};
-use tracing::{debug, error, instrument, warn};
-use wasmcloud_provider_sdk::provider::invocation_context;
-use wasmcloud_provider_sdk::{
-    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult,
-};
+use tracing::{debug, error, instrument};
+use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
+use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 pub(crate) mod client;
@@ -38,9 +32,8 @@ pub struct KvVaultProvider {
 
 impl KvVaultProvider {
     /// Retrieve a client for a given context (determined by source_id)
-    async fn get_client(&self, ctx: Option<&HeaderMap>) -> Result<Arc<Client>> {
+    async fn get_client(&self, ctx: Option<Context>) -> Result<Arc<Client>> {
         let ctx = ctx.context("invocation context missing")?;
-        let ctx = invocation_context(ctx);
         // get the actor ID
         let source_id = ctx
             .actor
@@ -58,301 +51,6 @@ impl KvVaultProvider {
         Ok(client)
     }
 
-    #[instrument(level = "trace", skip_all)]
-    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
-        let connection = get_connection();
-        let wrpc = connection.get_wrpc_client(connection.provider_key());
-        let mut commands = pin!(commands);
-        'outer: loop {
-            use wrpc_interface_keyvalue::{Atomic as _, Eventual as _};
-            let delete_invocations = wrpc
-                .serve_delete()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.delete` invocations")?;
-            let mut delete_invocations = pin!(delete_invocations);
-
-            let exists_invocations = wrpc
-                .serve_exists()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.exists` invocations")?;
-            let mut exists_invocations = pin!(exists_invocations);
-
-            let get_invocations = wrpc
-                .serve_get()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.get` invocations")?;
-            let mut get_invocations = pin!(get_invocations);
-
-            let set_invocations = wrpc
-                .serve_set()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.set` invocations")?;
-            let mut set_invocations = pin!(set_invocations);
-
-            let compare_and_swap_invocations = wrpc
-                .serve_compare_and_swap()
-                .await
-                .context("failed to serve `wrpc:keyvalue/atomic.compare-and-swap` invocations")?;
-            let mut compare_and_swap_invocations = pin!(compare_and_swap_invocations);
-
-            let increment_invocations = wrpc
-                .serve_increment()
-                .await
-                .context("failed to serve `wrpc:keyvalue/atomic.increment` invocations")?;
-            let mut increment_invocations = pin!(increment_invocations);
-            loop {
-                select! {
-                    invocation = delete_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_delete(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.delete` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.delete` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = exists_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_exists(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.exists` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.exists` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = get_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_get(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.get` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.get` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = set_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_set(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.set` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.set` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = compare_and_swap_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_compare_and_swap(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.compare-and-swamp` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/atomic.compare-and-swamp` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = increment_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_increment(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.increment` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/atomic.increment` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    _ = &mut commands => {
-                        debug!("shutdown command received");
-                        return Ok(())
-                    }
-                }
-            }
-        }
-    }
-
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
-    ) {
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.del(context.as_ref(), bucket, key).await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_exists<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
-    ) {
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.contains(context.as_ref(), bucket, key).await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
-    ) {
-        let value = match self.get(context.as_ref(), bucket, key).await {
-            Ok(Some(value)) => Ok(Some(Some(value))),
-            Ok(None) => Ok(None),
-            Err(err) => Err(err),
-        };
-        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
-    #[instrument(
-        level = "debug",
-        skip(self, result_subject, error_subject, value, transmitter)
-    )]
-    async fn serve_set<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            error_subject,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<HeaderMap>,
-            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
-            Tx,
-        >,
-    ) {
-        let value: BytesMut = match value.try_collect().await {
-            Ok(value) => value,
-            Err(err) => {
-                error!(?err, "failed to receive value");
-                if let Err(err) = transmitter
-                    .transmit_static(error_subject, err.to_string())
-                    .await
-                {
-                    error!(?err, "failed to transmit error")
-                }
-                return;
-            }
-        };
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.set(context.as_ref(), bucket, key, value.freeze())
-                    .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_compare_and_swap<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, old, new),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64, u64), Tx>,
-    ) {
-        // TODO: Use bucket
-        _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, Err::<(), _>("not supported"))
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
-    /// Increments a numeric value, returning the new value
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_increment<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64), Tx>,
-    ) {
-        // TODO: Use bucket
-        _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, Err::<(), _>("not supported"))
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
     /// Gets a value for a specified key. Deserialize the value as json
     /// If it's any other map, the entire map is returned as a serialized json string
     /// If the stored value is a plain string, returns the plain value
@@ -360,7 +58,7 @@ impl KvVaultProvider {
     #[instrument(level = "debug", skip(ctx, self))]
     async fn get(
         &self,
-        ctx: Option<&HeaderMap>,
+        ctx: Option<Context>,
         path: String,
         key: String,
     ) -> anyhow::Result<Option<Vec<u8>>> {
@@ -393,7 +91,7 @@ impl KvVaultProvider {
     #[instrument(level = "debug", skip(ctx, self))]
     async fn contains(
         &self,
-        ctx: Option<&HeaderMap>,
+        ctx: Option<Context>,
         path: String,
         key: String,
     ) -> anyhow::Result<bool> {
@@ -416,7 +114,7 @@ impl KvVaultProvider {
 
     /// Deletes a key from a secret
     #[instrument(level = "debug", skip(ctx, self))]
-    async fn del(&self, ctx: Option<&HeaderMap>, path: String, key: String) -> anyhow::Result<()> {
+    async fn del(&self, ctx: Option<Context>, path: String, key: String) -> anyhow::Result<()> {
         let client = match self.get_client(ctx).await {
             Ok(client) => client,
             Err(e) => {
@@ -457,7 +155,7 @@ impl KvVaultProvider {
     #[instrument(level = "debug", skip(ctx, self))]
     async fn set(
         &self,
-        ctx: Option<&HeaderMap>,
+        ctx: Option<Context>,
         path: String,
         key: String,
         value: Bytes,
@@ -501,6 +199,155 @@ impl KvVaultProvider {
                 error!(error = %e, "failed to set secret");
                 bail!(anyhow!(e).context("failed to set secret"))
             }
+        }
+    }
+}
+
+impl Eventual for KvVaultProvider {
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_delete<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, self.del(context, bucket, key).await)
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_exists<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
+    ) {
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, self.contains(context, bucket, key).await)
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_get<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
+    ) {
+        let value = match self.get(context, bucket, key).await {
+            Ok(Some(value)) => Ok(Some(Some(value))),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    #[instrument(
+        level = "debug",
+        skip(self, result_subject, error_subject, value, transmitter)
+    )]
+    async fn serve_set<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            error_subject,
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<
+            Option<Context>,
+            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
+            Tx,
+        >,
+    ) {
+        let value: BytesMut = match value.try_collect().await {
+            Ok(value) => value,
+            Err(err) => {
+                error!(?err, "failed to receive value");
+                if let Err(err) = transmitter
+                    .transmit_static(error_subject, err.to_string())
+                    .await
+                {
+                    error!(?err, "failed to transmit error")
+                }
+                return;
+            }
+        };
+        if let Err(err) = transmitter
+            .transmit_static(
+                result_subject,
+                self.set(context, bucket, key, value.freeze()).await,
+            )
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+}
+
+impl Atomic for KvVaultProvider {
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_compare_and_swap<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, old, new),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<Context>, (String, String, u64, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, Err::<(), _>("not supported"))
+            .await
+        {
+            error!(?err, "failed to transmit result")
+        }
+    }
+
+    /// Increments a numeric value, returning the new value
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
+    async fn serve_increment<Tx: Transmitter>(
+        &self,
+        AcceptedInvocation {
+            context,
+            params: (bucket, key, value),
+            result_subject,
+            transmitter,
+            ..
+        }: AcceptedInvocation<Option<Context>, (String, String, u64), Tx>,
+    ) {
+        // TODO: Use bucket
+        _ = bucket;
+        if let Err(err) = transmitter
+            .transmit_static(result_subject, Err::<(), _>("not supported"))
+            .await
+        {
+            error!(?err, "failed to transmit result")
         }
     }
 }

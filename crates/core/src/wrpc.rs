@@ -9,7 +9,7 @@
 //! Most logic is delegated to the underlying `wrpc_transport_nats` client, which provides the
 //! actual NATS-based transport implementation.
 
-use core::pin::Pin;
+use core::future::Future;
 use core::time::Duration;
 
 use std::sync::Arc;
@@ -17,10 +17,10 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use async_nats::HeaderMap;
 use bytes::Bytes;
-use futures::{Future, Stream, StreamExt};
+use tower::ServiceExt;
 use tracing::instrument;
 use wrpc_transport::{AcceptedInvocation, Encode, IncomingInvocation, OutgoingInvocation};
-use wrpc_transport_nats::{InvocationSubscription, Subject, Subscriber, Transmission};
+use wrpc_transport_nats::{Subject, Subscriber, Transmission};
 
 /// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
 /// passing invocation and trace context.
@@ -165,56 +165,40 @@ impl wrpc_transport::Client for Client {
     type Transmission = Transmission;
     type Acceptor = AcceptorWithHeaders;
     type Invocation = InvocationWithHeaders;
-    type InvocationStream<T> = Pin<
-        Box<
-            dyn Stream<
-                    Item = anyhow::Result<
-                        AcceptedInvocation<Option<HeaderMap>, T, TransmitterWithHeaders>,
-                    >,
-                > + Send,
-        >,
-    >;
+    type InvocationStream<Ctx, T, Tx: wrpc_transport::Transmitter> =
+        <wrpc_transport_nats::Client as wrpc_transport::Client>::InvocationStream<Ctx, T, Tx>;
 
     #[instrument(level = "trace", skip(self, svc))]
-    async fn serve<T, S, Fut>(
+    fn serve<Ctx, T, Tx, S, Fut>(
         &self,
         instance: &str,
         name: &str,
         svc: S,
-    ) -> anyhow::Result<Self::InvocationStream<T>>
+    ) -> impl Future<Output = anyhow::Result<Self::InvocationStream<Ctx, T, Tx>>> + Send
     where
+        Tx: wrpc_transport::Transmitter,
         S: tower::Service<
-                IncomingInvocation<Option<HeaderMap>, Subscriber, AcceptorWithHeaders>,
+                IncomingInvocation<Self::Context, Self::Subscriber, Self::Acceptor>,
                 Future = Fut,
             > + Send
             + Clone
             + 'static,
-        Fut: Future<
-                Output = anyhow::Result<
-                    AcceptedInvocation<Option<HeaderMap>, T, TransmitterWithHeaders>,
-                >,
-            > + Send,
+        Fut: Future<Output = anyhow::Result<AcceptedInvocation<Ctx, T, Tx>>> + Send,
     {
-        // Map invocations in the stream to construct an `IncomingInvocation` and `Acceptor` with headers.
-        let invocations = self
-            .inner
-            .subscribe(instance, name)
-            .await
-            .map(InvocationSubscription::into_invocations)?;
-        Ok(Box::pin(invocations.then({
-            move |invocation| {
-                let mut svc = svc.clone();
-                async move {
-                    let IncomingInvocation {
-                        context,
-                        payload,
-                        param_subject,
-                        error_subject,
-                        handshake_subject,
-                        subscriber,
-                        acceptor,
-                    } = invocation?;
-                    svc.call(IncomingInvocation {
+        self.inner.serve(
+            instance,
+            name,
+            svc.map_request(
+                |IncomingInvocation {
+                     context,
+                     payload,
+                     param_subject,
+                     error_subject,
+                     handshake_subject,
+                     subscriber,
+                     acceptor,
+                 }: IncomingInvocation<Self::Context, _, _>| {
+                    IncomingInvocation {
                         context: context.clone(),
                         payload,
                         param_subject,
@@ -225,11 +209,10 @@ impl wrpc_transport::Client for Client {
                             inner: acceptor,
                             headers: context.unwrap_or_default(),
                         },
-                    })
-                    .await
-                }
-            }
-        })))
+                    }
+                },
+            ),
+        )
     }
 
     fn new_invocation(

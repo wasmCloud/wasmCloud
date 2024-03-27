@@ -5892,7 +5892,6 @@ name = "wasmcloud-provider-blobstore-fs"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "async-nats",
  "async-trait",
  "bytes",
  "futures",
@@ -5912,7 +5911,6 @@ name = "wasmcloud-provider-blobstore-s3"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "async-nats",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
@@ -5940,6 +5938,7 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "futures",
+ "hyper-rustls 0.27.0",
  "hyper-util",
  "tokio",
  "tracing",
@@ -6001,7 +6000,6 @@ name = "wasmcloud-provider-keyvalue-vault"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "async-nats",
  "async-trait",
  "base64 0.21.7",
  "bytes",
@@ -6071,6 +6069,7 @@ dependencies = [
  "async-nats",
  "async-trait",
  "base64 0.21.7",
+ "bytes",
  "futures",
  "nkeys",
  "once_cell",
@@ -6081,6 +6080,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.22.0",
@@ -6088,6 +6088,9 @@ dependencies = [
  "uuid",
  "wasmcloud-core",
  "wasmcloud-tracing",
+ "wrpc-interface-blobstore",
+ "wrpc-interface-http",
+ "wrpc-interface-keyvalue",
  "wrpc-transport",
  "wrpc-transport-nats",
  "wrpc-types",
@@ -7004,9 +7007,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b45eef4b8c1689effb470be3df41c18600e608e7ef6eca09315286373711cc1"
+checksum = "913beea52dd0d7d783c34480a6598abb056b3f01cd4b4b85f9a3551e07736c81"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7018,9 +7021,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-http"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e965b43e2de9cccc9385b155dfd91aa903f3ca8ef1ffb4f41b811377b8df5fc0"
+checksum = "24be1a72b7653cd4434cdef8a45319dc0aeb0c453ac66342a5139ec340307ea0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7039,9 +7042,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-keyvalue"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d064efe78473ddfa349b3510876d39b368ab434bbfce3a58e47b45a267d03956"
+checksum = "8af1b3134d173fd1abbc5d88033ab8f15a97d4578202d578fe6e57f4ce4b68a4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7052,9 +7055,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5266fd9d2b155d20d93c39f8cf2351e06b2292148d59435dc4e0ff7bf42b900d"
+checksum = "1d0575fb8aae371caecdf1d5b0f7c211b32f2f8ff61b168a6d5db2295a33efa8"
 dependencies = [
  "anyhow",
  "futures",
@@ -7066,9 +7069,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf176e1b78206cdd00c8afa4a825b81023d1f933f219d97a45381f07b1a00c45"
+checksum = "b551cf90e43a1a331ec13af1ad244c9605956fd2c3d535ff857f5978ae963518"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -7113,9 +7116,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c597de4984d2da564c95695a6ef783f50b20345c24d87c9f7b3be31f94963f9b"
+checksum = "d0d7401a0771e00936b57519e5c1627a174ae05d979a5f8a961e264f0e6f99f1"
 dependencies = [
  "anyhow",
  "async-nats",
