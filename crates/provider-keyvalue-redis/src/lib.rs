@@ -86,7 +86,7 @@ impl KvRedisProvider {
                 DefaultConnection::Conn(conn) => Ok(conn.clone()),
                 DefaultConnection::Client(client) => {
                     let conn = client
-                        .get_tokio_connection_manager()
+                        .get_connection_manager()
                         .await
                         .context("failed to construct Redis connection manager")?;
                     *default_conn = DefaultConnection::Conn(conn.clone());
@@ -357,15 +357,15 @@ impl KvRedisProvider {
     ) {
         // TODO: Use bucket
         _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<Bytes>(context.as_ref(), &mut Cmd::get(key))
-                    .await
-                    .map(Some),
-            )
+        let value = match self
+            .exec_cmd::<redis::Value>(context.as_ref(), &mut Cmd::get(key))
             .await
         {
+            Ok(redis::Value::Nil) => Ok(None),
+            Ok(redis::Value::Data(buf)) => Ok(Some(Some(buf))),
+            _ => Err("failed to get data from Redis"),
+        };
+        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
             error!(?err, "failed to transmit result")
         }
     }
@@ -482,7 +482,7 @@ impl ProviderHandler for KvRedisProvider {
         let source_id = link_config.get_source_id();
         let conn = if let Some(url) = link_config.get_config().get(CONFIG_REDIS_URL_KEY) {
             match redis::Client::open(url.to_string()) {
-                Ok(client) => match client.get_tokio_connection_manager().await {
+                Ok(client) => match client.get_connection_manager().await {
                     Ok(conn) => {
                         info!(url, "established link");
                         conn

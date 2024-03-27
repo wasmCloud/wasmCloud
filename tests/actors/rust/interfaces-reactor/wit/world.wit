@@ -1,0 +1,15 @@
+package test-wrpc:pinger;
+
+world actor {
+  import wasi:sockets/instance-network@0.2.0;
+  import wasi:sockets/tcp-create-socket@0.2.0;
+  import wasi:sockets/tcp@0.2.0;
+  import wasi:sockets/udp-create-socket@0.2.0;
+  import wasi:sockets/udp@0.2.0;
+
+  import test-actors:testing/busybox;
+  import test-actors:testing/pingpong;
+
+  export wasi:http/incoming-handler@0.2.0;
+  export wasmcloud:messaging/handler;
+}

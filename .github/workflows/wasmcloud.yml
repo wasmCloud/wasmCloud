@@ -22,8 +22,26 @@ on:
       - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-http-server-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-redis-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-keyvalue-vault-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-wit-bindgen-macro-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-wit-bindgen-macro-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-wit-bindgen-v[0-9].[0-9]+.[0-9]+'
       - 'provider-wit-bindgen-v[0-9].[0-9]+.[0-9]+-*'
       - 'runtime-v[0-9].[0-9]+.[0-9]+'
@@ -38,6 +56,10 @@ on:
       - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
+      - 'wrpc-transport-derive-macro-v[0-9].[0-9]+.[0-9]+'
+      - 'wrpc-transport-derive-macro-v[0-9].[0-9]+.[0-9]+-*'
+      - 'wrpc-transport-derive-v[0-9].[0-9]+.[0-9]+'
+      - 'wrpc-transport-derive-v[0-9].[0-9]+.[0-9]+-*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -122,6 +144,12 @@ jobs:
     runs-on: windows-latest-8-cores
     steps:
       - uses: actions/checkout@v4.1.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-latest-8-cores-shared-cache
+        if: ${{ !startswith(github.ref, format('refs/tags')) && github.ref != 'refs/heads/main' }}
+
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
       - run: move "target/release/blobstore-fs.exe" "artifact/bin/blobstore-fs.exe"
@@ -208,8 +236,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
       - uses: ./.github/actions/install-nix
-        # need to run condition inside job steps so that job will pass if all steps are skipped
-        # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
         with:
           cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
       - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
@@ -239,6 +265,58 @@ jobs:
         with:
           path: doc
 
+  providers:
+    strategy:
+      matrix:
+        include:
+          - name: blobstore-fs
+            capability: wrpc:blobstore
+            subject: BLOBSTORE_S3_SUBJECT
+
+          - name: blobstore-s3
+            capability: wrpc:blobstore
+            subject: BLOBSTORE_FS_SUBJECT
+
+          - name: keyvalue-redis
+            capability: wrpc:keyvalue
+            subject: KEYVALUE_REDIS_SUBJECT
+
+          - name: keyvalue-vault
+            capability: wrpc:keyvalue
+            subject: KEYVALUE_VAULT_SUBJECT
+
+          - name: http-client
+            capability: wrpc:http/outgoing-handler
+            subject: HTTP_CLIENT_SUBJECT
+
+          - name: http-server
+            capability: wrpc:http/incoming-handler
+            subject: HTTP_SERVER_SUBJECT
+
+          - name: messaging-kafka
+            capability: wasmcloud:messaging
+            subject: MESSAGING_KAFKA_SUBJECT
+
+          - name: messaging-nats
+            capability: wasmcloud:messaging
+            subject: MESSAGING_NATS_SUBJECT
+
+    needs:
+      - build-bin
+      - build-windows
+      - test-linux
+    permissions:
+      packages: write
+    uses: ./.github/workflows/provider.yml
+    with:
+      name: ${{ matrix.name }}
+      capability: ${{ matrix.capability }}
+    secrets:
+      issuer: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
+      subject: ${{ secrets[matrix.subject] }}
+      azurecr_username: ${{ secrets.AZURECR_PUSH_USER }}
+      azurecr_password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
+
   deploy-doc:
     runs-on: ubuntu-22.04-16-cores
     needs: build-doc
@@ -252,6 +330,29 @@ jobs:
     steps:
       - uses: actions/deploy-pages@v4.0.5
         id: deployment
+
+  docker:
+    runs-on: ubuntu-22.04-16-cores
+    needs:
+      - build-bin
+      - test-linux
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build wasmCloud
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+      - name: Build wash
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./crates/wash-cli/Dockerfile
+          push: false
+          platforms: linux/amd64,linux/arm64
 
   oci:
     strategy:
@@ -526,6 +627,8 @@ jobs:
           - crate: provider-sdk
             workspace-dependencies: true
 
+          - crate: provider-wit-bindgen-macro
+
           - crate: provider-wit-bindgen
             workspace-dependencies: true
 
@@ -541,6 +644,11 @@ jobs:
             workspace-dependencies: true
 
           - crate: wash-lib
+            workspace-dependencies: true
+
+          - crate: wrpc-transport-derive-macro
+
+          - crate: wrpc-transport-derive
             workspace-dependencies: true
 
     name: publish ${{ matrix.crate }} to crates.io

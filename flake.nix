@@ -20,7 +20,7 @@
   inputs.nixify.url = "github:rvolosatovs/nixify";
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
-  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.8.0";
+  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.9.0";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
   inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5";
@@ -171,12 +171,6 @@
                 ++ optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
 
               depsBuildBuild = depsBuildBuild';
-
-              nativeBuildInputs =
-                nativeBuildInputs
-                ++ [
-                  pkgs.protobuf # prost build dependency
-                ];
             }
             // optionalAttrs (args ? cargoArtifacts) {
               depsBuildBuild =
@@ -436,18 +430,16 @@
           ...
         }:
           extendDerivations {
-            buildInputs =
-              [
-                pkgs.buildah
-                pkgs.cargo-audit
-                pkgs.minio
-                pkgs.nats-server
-                pkgs.protobuf # prost build dependency
-                pkgs.redis
-                pkgs.vault
-                pkgs.wit-deps
-              ]
-              ++ optional (!(pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64)) pkgs.tinygo; # TinyGo currently fails to buid due to GDB not being supported on aarch64-darwin
+            buildInputs = [
+              pkgs.buildah
+              pkgs.cargo-audit
+              pkgs.minio
+              pkgs.nats-server
+              pkgs.redis
+              pkgs.tinygo
+              pkgs.vault
+              pkgs.wit-deps
+            ];
           }
           devShells;
       };

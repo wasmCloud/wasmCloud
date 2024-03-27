@@ -16,6 +16,7 @@ use provider_archive::ProviderArchive;
 use regex::RegexBuilder;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use wasmcloud_core::tls;
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
@@ -71,7 +72,7 @@ pub enum SupportedArtifacts {
 // and pusher structs that can take optional implementations of a `Cache` trait that does all the
 // cached file handling. But for now, this should be good enough
 
-/// Attempts to return a local artifact, then a cached file (if cache_file is set).
+/// Attempts to return a local artifact, then a cached file (if `cache_file` is set).
 ///
 /// Falls back to pull from registry if neither is found.
 pub async fn get_oci_artifact(
@@ -126,6 +127,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
         } else {
             ClientProtocol::Https
         },
+        extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         ..Default::default()
     });
 
@@ -235,9 +237,9 @@ pub async fn push_oci_artifact(
 /// a supported artifact type
 pub async fn validate_artifact(artifact: &[u8]) -> Result<SupportedArtifacts> {
     match validate_actor_module(artifact) {
-        Ok(_) => Ok(SupportedArtifacts::Wasm),
+        Ok(()) => Ok(SupportedArtifacts::Wasm),
         Err(_) => match validate_provider_archive(artifact).await {
-            Ok(_) => Ok(SupportedArtifacts::Par),
+            Ok(()) => Ok(SupportedArtifacts::Par),
             Err(_) => bail!("Unsupported artifact type"),
         },
     }

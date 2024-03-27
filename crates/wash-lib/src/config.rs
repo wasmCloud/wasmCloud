@@ -106,7 +106,7 @@ impl WashConnectionOptions {
         Ok(ctl_client)
     }
 
-    /// Create a NATS client from WashConnectionOptions
+    /// Create a NATS client from `WashConnectionOptions`
     pub async fn into_nats_client(self) -> Result<Client> {
         let ctl_host = self.ctl_host.unwrap_or_else(|| self.ctx.ctl_host.clone());
         let ctl_port = self
@@ -125,7 +125,8 @@ impl WashConnectionOptions {
         Ok(nc)
     }
 
-    /// Either returns the opts.lattice or opts.ctx.lattice... if both are absent/None,  returns the default lattice prefix (DEFAULT_LATTICE).
+    /// Either returns the opts.lattice or opts.ctx.lattice... if both are absent/None,  returns the default lattice prefix (`DEFAULT_LATTICE`).
+    #[must_use]
     pub fn get_lattice(&self) -> String {
         self.lattice
             .clone()

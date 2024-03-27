@@ -87,7 +87,11 @@ wascap = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
-wasmcloud-core = { workspace = true }
+wasmcloud-core = { workspace = true, features = [
+    "oci-distribution",
+    "reqwest",
+    "rustls-native-certs",
+] }
 wasmparser = { workspace = true }
 wat = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }

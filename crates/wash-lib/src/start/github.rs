@@ -9,6 +9,7 @@ use std::{ffi::OsStr, io::Cursor};
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
+use wasmcloud_core::tls;
 
 /// Reusable function to download a release tarball from GitHub and extract an embedded binary to a specified directory
 ///
@@ -34,7 +35,7 @@ where
 {
     let bin_path = dir.as_ref().join(bin_name);
     // Download release tarball
-    let body = match reqwest::get(url).await {
+    let body = match tls::DEFAULT_REQWEST_CLIENT.get(url).send().await {
         Ok(resp) => resp.bytes().await?,
         Err(e) => bail!("Failed to request release tarball: {:?}", e),
     };

@@ -1,33 +1,22 @@
 [workspace]
 members = [
     "builtins-component-reactor",
-    "lattice-control-http-smithy", 
-    "messaging-invoker",
+    "interfaces-handler-reactor",
+    "interfaces-reactor",
     "pinger-config-component",
     "ponger-config-component",
-    "wrpc-pinger-component",
-    "wrpc-ponger-component",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
 async-trait = { version = "0.1", default-features = false }
-axum = { version = "0.6", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = true }
-rmp-serde = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 uuid = { version = "1", default-features = false }
-wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
-wasmcloud-interface-blobstore = { version = "0.9", default-features = false }
-wasmcloud-interface-httpserver = { version = "0.12", default-features = false }
-wasmcloud-interface-keyvalue = { version = "0.12", default-features = false }
-wasmcloud-interface-lattice-control = { version = "0.20", default-feature = false }
-wasmcloud-interface-logging = { version = "0.11", default-features = false }
-wasmcloud-interface-messaging = { version = "0.11", default-features = false }
-wit-bindgen = { version = "0.16", default-features = false }
+wit-bindgen = { version = "0.22", default-features = false }

@@ -205,7 +205,7 @@ pub struct LatticeInterfaceTarget {
 
 impl std::fmt::Display for LatticeInterfaceTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (wit_ns, wit_pkg, wit_iface, _) = self.interface.as_parts();
+        let (wit_ns, wit_pkg, wit_iface) = self.interface.as_parts();
         let link_name = &self.link_name;
         let id = &self.id;
         write!(f, "{link_name}/{id}/{wit_ns}:{wit_pkg}/{wit_iface}")
@@ -296,6 +296,24 @@ pub trait Blobstore {
 
     /// Handle `wasi:blobstore/container.clear`
     async fn clear_container(&self, container: &str) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.copy-object`
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.move-object`
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -325,9 +343,6 @@ pub trait Bus {
         target: String,
         interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()>;
-
-    /// Get the current link name
-    async fn get_link_name(&self) -> anyhow::Result<String>;
 
     /// Handle `wasmcloud:bus/config.get`
     async fn get(
@@ -554,6 +569,32 @@ impl Blobstore for Handler {
             .clear_container(container)
             .await
     }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.copy-object")?
+            .copy_object(src_container, src_name, dest_container, dest_name)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.move-object")?
+            .move_object(src_container, src_name, dest_container, dest_name)
+            .await
+    }
 }
 
 #[async_trait]
@@ -580,13 +621,6 @@ impl Bus for Handler {
     ) -> anyhow::Result<()> {
         self.proxy_bus("wasmcloud:bus/lattice.set-link-name")?
             .set_link_name(link_name, interfaces)
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn get_link_name(&self) -> anyhow::Result<String> {
-        self.proxy_bus("wasmcloud:bus/lattice.get-link-name")?
-            .get_link_name()
             .await
     }
 

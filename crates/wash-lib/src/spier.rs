@@ -38,13 +38,14 @@ impl std::fmt::Display for ObservedMessage {
         match self {
             ObservedMessage::Raw(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
             ObservedMessage::Parsed(v) => {
-                write!(f, "{}", v)
+                write!(f, "{v}")
             }
         }
     }
 }
 
 impl ObservedMessage {
+    #[must_use]
     pub fn parse(data: Vec<u8>) -> Self {
         // Try parsing with msgpack and then with cbor. If neither work, then just return the raw
         // NOTE(thomastaylor312): I don't think anyone else does their own encoding, but if that
@@ -55,7 +56,7 @@ impl ObservedMessage {
             &mut serializer,
         ) {
             // SAFETY: We know that JSON writes to valid UTF-8
-            Ok(_) => String::from_utf8(serializer.into_inner()).unwrap(),
+            Ok(()) => String::from_utf8(serializer.into_inner()).unwrap(),
             Err(_) => {
                 // Reset the buffer in case we wrote some data on previous failure
                 let mut serializer = serde_json::Serializer::pretty(Vec::new());
@@ -63,7 +64,7 @@ impl ObservedMessage {
                     &mut serde_cbor::Deserializer::from_reader(&data[..]),
                     &mut serializer,
                 ) {
-                    Ok(_) => String::from_utf8(serializer.into_inner()).unwrap(),
+                    Ok(()) => String::from_utf8(serializer.into_inner()).unwrap(),
                     Err(_) => return Self::Raw(data),
                 }
             }
@@ -146,11 +147,11 @@ impl Stream for Spier {
                     // Attempt to get the source from the message header
                     let from = msg
                         .headers
-                        .and_then(|headers| headers.get("source-id").map(|s| s.to_string()))
+                        .and_then(|headers| headers.get("source-id").map(ToString::to_string))
                         .unwrap_or_else(|| "linked component".to_string());
-                    (from, component_id.to_string())
+                    (from, (*component_id).to_string())
                 } else {
-                    (self.component_id.to_string(), component_id.to_string())
+                    (self.component_id.to_string(), (*component_id).to_string())
                 };
 
                 // NOTE(thomastaylor312): Ideally we'd consume `msg.payload` above with a

@@ -132,7 +132,7 @@ pub struct WadmConfig {
 /// # Arguments
 ///
 /// * `bin_path` - Path to the wadm binary to execute
-/// * `stderr` - Specify where wadm stderr logs should be written to. If logs aren't important, use std::process::Stdio::null()
+/// * `stderr` - Specify where wadm stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
 /// * `config` - Optional configuration for wadm
 pub async fn start_wadm<P, T>(bin_path: P, stderr: T, config: Option<WadmConfig>) -> Result<Child>
 where
@@ -162,7 +162,7 @@ where
 
     let child = cmd.spawn().map_err(anyhow::Error::from);
 
-    let pid = child.as_ref().map(|c| c.id());
+    let pid = child.as_ref().map(Child::id);
     if let (Ok(Some(wadm_pid)), Some(pid_path)) = (pid, pid_file) {
         if let Err(e) = tokio::fs::write(pid_path, wadm_pid.to_string()).await {
             warn!("Couldn't write wadm pidfile: {e}");

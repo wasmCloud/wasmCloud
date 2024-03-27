@@ -41,7 +41,7 @@ use wasmcloud_control_interface::{
     ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateActorCommand, WitInterface,
 };
-use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, LinkName, OtelConfig};
+use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, OtelConfig};
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
@@ -177,8 +177,8 @@ struct Handler {
     lattice: String,
     /// The identifier of the component that this handler is associated with
     component_id: String,
-    /// The current link name to use for interface targets, overridable in actor code via set_target()
-    interface_link_name: Arc<RwLock<LinkName>>,
+    /// The current link targets. `instance:interface` -> `link-name`
+    targets: Arc<RwLock<HashMap<CallTargetInterface, String>>>,
 
     /// Map of link names -> WIT ns & package -> WIT interface -> Target
     ///
@@ -191,7 +191,7 @@ struct Handler {
     /// - Some other opaque string
     #[allow(clippy::type_complexity)]
     interface_links:
-        Arc<RwLock<HashMap<LinkName, HashMap<String, HashMap<WitInterface, LatticeTarget>>>>>,
+        Arc<RwLock<HashMap<String, HashMap<String, HashMap<WitInterface, LatticeTarget>>>>>,
     /// Map of interface -> function name -> function result types
     ///
     /// When invoking a function that the component imports, this map is consulted to determine the
@@ -215,6 +215,62 @@ impl Handler {
             self.invocation_timeout,
         )
     }
+
+    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let LatticeInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "blobstore",
+                "blobstore",
+            )))
+            .await
+            .context("unknown `wasi:blobstore/blobstore` target")?;
+        Ok(self.wrpc_client(&id))
+    }
+
+    async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let LatticeInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi",
+                "http",
+                "outgoing-handler",
+            )))
+            .await
+            .context("unknown `wasi:http/outgoing-handler` target")?;
+        Ok(self.wrpc_client(&id))
+    }
+
+    async fn wrpc_keyvalue_atomic(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let LatticeInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "atomic",
+            )))
+            .await
+            .context("unknown `wasi:keyvalue/atomic` target")?;
+        Ok(self.wrpc_client(&id))
+    }
+
+    async fn wrpc_keyvalue_eventual(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let LatticeInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasi", "keyvalue", "eventual",
+            )))
+            .await
+            .context("unknown `wasi:keyvalue/eventual` target")?;
+        Ok(self.wrpc_client(&id))
+    }
+
+    async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let LatticeInterfaceTarget { id, .. } = self
+            .identify_wrpc_target(&CallTargetInterface::from_parts((
+                "wasmcloud",
+                "messaging",
+                "consumer",
+            )))
+            .await
+            .context("unknown `wasmcloud:messaging/consumer` target")?;
+        Ok(self.wrpc_client(&id))
+    }
 }
 
 #[async_trait]
@@ -223,16 +279,7 @@ impl Blobstore for Handler {
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_create_container(name)
             .await
@@ -247,16 +294,7 @@ impl Blobstore for Handler {
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_container_exists(name)
             .await
@@ -271,16 +309,7 @@ impl Blobstore for Handler {
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_delete_container(name)
             .await
@@ -298,16 +327,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
         use wrpc_interface_blobstore::{Blobstore, ContainerMetadata};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_container_info(name)
             .await
@@ -331,16 +351,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<IncomingInputStream> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_container_data(
                 &ObjectId {
@@ -362,16 +373,7 @@ impl Blobstore for Handler {
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_has_object(&ObjectId {
                 container: container.to_string(),
@@ -394,16 +396,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let mut buf = vec![];
         value
             .read_to_end(&mut buf)
@@ -429,16 +422,7 @@ impl Blobstore for Handler {
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_delete_objects(container, names.iter().map(String::as_str))
             .await
@@ -457,16 +441,7 @@ impl Blobstore for Handler {
     {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         // TODO: implement a stream with limit and offset
         let (res, tx) = wrpc
             .invoke_list_container_objects(container, None, None)
@@ -485,16 +460,7 @@ impl Blobstore for Handler {
     ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
         use wrpc_interface_blobstore::{Blobstore, ObjectId, ObjectMetadata};
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_get_object_info(&ObjectId {
                 container: container.to_string(),
@@ -518,20 +484,71 @@ impl Blobstore for Handler {
     async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
         use wrpc_interface_blobstore::Blobstore;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
         let (res, tx) = wrpc
             .invoke_clear_container(container)
             .await
             .context("failed to invoke `wrpc:blobstore/blobstore.clear-container`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn copy_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
+        let (res, tx) = wrpc
+            .invoke_copy_object(
+                &ObjectId {
+                    container: src_container,
+                    object: src_name,
+                },
+                &ObjectId {
+                    container: dest_container,
+                    object: dest_name,
+                },
+            )
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.copy-object`")?;
+        // TODO: return a result directly
+        res.map_err(|err| anyhow!(err).context("function failed"))?;
+        tx.await.context("failed to transmit parameters")?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn move_object(
+        &self,
+        src_container: String,
+        src_name: String,
+        dest_container: String,
+        dest_name: String,
+    ) -> anyhow::Result<()> {
+        use wrpc_interface_blobstore::{Blobstore, ObjectId};
+
+        let wrpc = self.wrpc_blobstore_blobstore().await?;
+        let (res, tx) = wrpc
+            .invoke_move_object(
+                &ObjectId {
+                    container: src_container,
+                    object: src_name,
+                },
+                &ObjectId {
+                    container: dest_container,
+                    object: dest_name,
+                },
+            )
+            .await
+            .context("failed to invoke `wrpc:blobstore/blobstore.move-object`")?;
         // TODO: return a result directly
         res.map_err(|err| anyhow!(err).context("function failed"))?;
         tx.await.context("failed to transmit parameters")?;
@@ -547,12 +564,16 @@ impl Bus for Handler {
         target_interface: &CallTargetInterface,
     ) -> Option<TargetEntity> {
         let links = self.interface_links.read().await;
-        let link_name = self.interface_link_name.read().await.clone();
-        let (namespace, package, interface, _) = target_interface.as_parts();
+        let targets = self.targets.read().await;
+        let link_name = targets
+            .get(target_interface)
+            .map(String::as_str)
+            .unwrap_or("default");
+        let (namespace, package, interface) = target_interface.as_parts();
 
         // Determine the lattice target ID we should be sending to
         let lattice_target_id = links
-            .get(self.interface_link_name.read().await.as_str())
+            .get(link_name)
             .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
             .and_then(|interfaces| interfaces.get(interface));
 
@@ -561,27 +582,21 @@ impl Bus for Handler {
             TargetEntity::Lattice(LatticeInterfaceTarget {
                 id: id.clone(),
                 interface: target_interface.clone(),
-                link_name,
+                link_name: link_name.to_string(),
             })
         });
 
         if target_entity.is_none() {
             debug!(
+                ?links,
+                interface,
                 namespace,
                 package,
-                interface,
                 ?self.component_id,
                 "component is not linked to a lattice target for the given interface"
             );
         }
-
         target_entity
-    }
-
-    /// Get the current link name
-    #[instrument(level = "debug", skip_all)]
-    async fn get_link_name(&self) -> anyhow::Result<String> {
-        Ok(self.interface_link_name.read().await.deref().clone())
     }
 
     /// Set the current link name in use by the handler, which is otherwise "default".
@@ -591,10 +606,19 @@ impl Bus for Handler {
     #[instrument(level = "debug", skip(self))]
     async fn set_link_name(
         &self,
-        link_name: LinkName,
-        _interfaces: Vec<CallTargetInterface>,
+        link_name: String,
+        interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()> {
-        *self.interface_link_name.write().await = link_name;
+        let mut targets = self.targets.write().await;
+        if link_name == "default" {
+            for interface in interfaces {
+                targets.remove(&interface);
+            }
+        } else {
+            for interface in interfaces {
+                targets.insert(interface, link_name.clone());
+            }
+        }
         Ok(())
     }
 
@@ -660,13 +684,7 @@ impl KeyValueAtomic for Handler {
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
         use wrpc_interface_keyvalue::Atomic;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "atomic", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_atomic().await?;
         let (res, tx) = wrpc
             .invoke_increment(bucket, &key, delta)
             .await
@@ -687,13 +705,7 @@ impl KeyValueAtomic for Handler {
     ) -> anyhow::Result<bool> {
         use wrpc_interface_keyvalue::Atomic;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "atomic", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_atomic().await?;
         let (res, tx) = wrpc
             .invoke_compare_and_swap(bucket, &key, old, new)
             .await
@@ -711,13 +723,7 @@ impl KeyValueEventual for Handler {
     async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
         use wrpc_interface_keyvalue::Eventual;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "eventual", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_eventual().await?;
         let (res, tx) = wrpc
             .invoke_get(bucket, &key)
             .await
@@ -737,13 +743,7 @@ impl KeyValueEventual for Handler {
     ) -> anyhow::Result<()> {
         use wrpc_interface_keyvalue::Eventual;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "eventual", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_eventual().await?;
         // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
         let mut buf = vec![];
         value
@@ -764,13 +764,7 @@ impl KeyValueEventual for Handler {
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
         use wrpc_interface_keyvalue::Eventual;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "eventual", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_eventual().await?;
         // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
         let (res, tx) = wrpc
             .invoke_delete(bucket, &key)
@@ -786,13 +780,7 @@ impl KeyValueEventual for Handler {
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
         use wrpc_interface_keyvalue::Eventual;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "eventual", None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_keyvalue_eventual().await?;
         let (res, tx) = wrpc
             .invoke_exists(bucket, &key)
             .await
@@ -949,16 +937,7 @@ impl Messaging for Handler {
         body: Vec<u8>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasmcloud",
-                "messaging",
-                "consumer",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_messaging_consumer().await?;
         let (res, tx) = wrpc
             .invoke_static::<Result<_, String>>(
                 "wasmcloud:messaging/consumer",
@@ -975,16 +954,7 @@ impl Messaging for Handler {
 
     #[instrument(level = "trace", skip_all)]
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasmcloud",
-                "messaging",
-                "consumer",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_messaging_consumer().await?;
         let (res, tx) = wrpc
             .invoke_static::<Result<(), String>>(
                 "wasmcloud:messaging/consumer",
@@ -1014,16 +984,7 @@ impl OutgoingHttp for Handler {
     > {
         use wrpc_interface_http::OutgoingHandler;
 
-        let LatticeInterfaceTarget { id, .. } = self
-            .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "http",
-                "outgoing-handler",
-                None,
-            )))
-            .await
-            .context("unknown target")?;
-        let wrpc = self.wrpc_client(&id);
+        let wrpc = self.wrpc_http_outgoing_handler().await?;
         let (res, body_errors, tx) = wrpc
             .invoke_handle_wasmtime(request)
             .await
@@ -2294,7 +2255,7 @@ impl Host {
             config_data: Arc::new(RwLock::new(config)),
             lattice: self.host_config.lattice.clone(),
             component_id: actor_id.clone(),
-            interface_link_name: Arc::new(RwLock::new("default".to_string())),
+            targets: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfilled_imports: imports,
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable

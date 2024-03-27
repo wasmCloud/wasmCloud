@@ -1,8 +1,6 @@
+#![allow(clippy::missing_safety_doc)]
+
 wit_bindgen::generate!({
-    exports: {
-        world: Actor,
-        "wasi:http/incoming-handler": Actor,
-    },
     with: {
         "wasi:io/streams@0.2.0": wasmcloud_actor::wasi::io::streams,
     }
@@ -56,10 +54,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             headers.get(&String::from("content-length")),
             vec![content_length_value]
         );
-
-        let (host_key, host_value) = header_iter.next().expect("`host` header missing");
-        assert_eq!(host_key, "host");
-        assert_eq!(headers.get(&String::from("host")), vec![host_value]);
 
         assert_eq!(
             header_iter.next(),
@@ -166,7 +160,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 "wasmcloud",
                 "messaging",
                 "consumer",
-                None,
             )],
         );
         messaging::consumer::publish(&messaging::types::BrokerMessage {
@@ -188,7 +181,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         bus::lattice::set_link_name(
             "keyvalue",
             vec![bus::lattice::CallTargetInterface::new(
-                "wasi", "keyvalue", "eventual", None,
+                "wasi", "keyvalue", "eventual",
             )],
         );
         let foo_key = String::from("foo");
@@ -277,7 +270,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         bus::lattice::set_link_name(
             "keyvalue",
             vec![bus::lattice::CallTargetInterface::new(
-                "wasi", "keyvalue", "atomic", None,
+                "wasi", "keyvalue", "atomic",
             )],
         );
         let counter_key = String::from("counter");
@@ -300,7 +293,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 "wasi",
                 "blobstore",
                 "blobstore",
-                None,
             )],
         );
 
@@ -366,7 +358,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 "test-actors",
                 "foobar",
                 "foobar",
-                None,
             )],
         );
         // TODO: Verify that this does not succeed, currently this invocation would trap
@@ -378,7 +369,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 "test-actors",
                 "foobar",
                 "foobar",
-                None,
             )],
         );
         assert_eq!(test_actors::foobar::foobar::foobar("foo"), "foobar");
@@ -389,7 +379,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 "wasi",
                 "http",
                 "outgoing-handler",
-                None,
             )],
         );
         let request = http::types::OutgoingRequest::new(http::types::Fields::new());
@@ -490,3 +479,5 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         .expect_err("should not be able to bind to any IPv6 address on UDP");
     }
 }
+
+export!(Actor);

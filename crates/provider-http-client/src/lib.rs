@@ -6,6 +6,7 @@ use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{get_connection, ProviderHandler};
 use wrpc_interface_http::try_http_to_outgoing_response;
 use wrpc_transport::AcceptedInvocation;
@@ -76,13 +77,8 @@ impl ProviderHandler for HttpClientProvider {}
 pub async fn serve(commands: impl Future<Output = ()>) -> anyhow::Result<()> {
     let connection = get_connection();
     let wrpc = connection.get_wrpc_client(connection.provider_key());
-    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(
-        hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_all_versions()
-            .build(),
-    );
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .build(tls::DEFAULT_HYPER_CONNECTOR.clone());
     let mut commands = pin!(commands);
     'outer: loop {
         use wrpc_interface_http::OutgoingHandler as _;

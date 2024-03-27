@@ -5,7 +5,6 @@
 use core::future::Future;
 use core::pin::pin;
 
-use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -19,7 +18,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
 use tokio::fs::{self, create_dir_all, File};
-use tokio::io::AsyncSeekExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio::sync::RwLock;
 use tokio::{select, spawn};
 use tokio_stream::wrappers::ReadDirStream;
@@ -30,13 +29,6 @@ use wasmcloud_provider_sdk::{
     get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
 use wrpc_transport::{AcceptedInvocation, Transmitter};
-
-#[allow(unused)]
-const CAPABILITY_ID: &str = "wasmcloud:blobstore";
-#[allow(unused)]
-const FIRST_SEQ_NBR: u64 = 0;
-
-pub type ChunkOffsetKey = (String, usize);
 
 #[derive(Default, Debug, Clone)]
 struct FsProviderConfig {
@@ -121,7 +113,7 @@ impl FsProvider {
         resolve_subpath(&container, object).context("failed to resolve subpath")
     }
 
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
         let connection = get_connection();
         let wrpc = connection.get_wrpc_client(connection.provider_key());
@@ -425,10 +417,8 @@ impl FsProvider {
             }
         }
     }
-}
 
-impl FsProvider {
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_clear_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -476,7 +466,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_container_exists<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -504,7 +494,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_create_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -532,7 +522,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_container<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -560,7 +550,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_container_info<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -598,7 +588,7 @@ impl FsProvider {
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_list_container_objects<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -623,6 +613,7 @@ impl FsProvider {
                             |entry| async move {
                                 let entry = entry.context("failed to lookup directory entry")?;
                                 let name = entry.file_name().to_string_lossy().to_string();
+                                trace!(name, "list file name");
                                 // TODO: Remove the need for this wrapping
                                 Ok(vec![Some(wrpc_transport::Value::String(name))])
                             },
@@ -637,7 +628,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_copy_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -683,7 +674,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -715,7 +706,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete_objects<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -752,7 +743,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_container_data<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -774,41 +765,25 @@ impl FsProvider {
                     let limit = end
                         .checked_sub(start)
                         .context("`end` must be greater than `start`")?;
-                    debug!(limit, "compute limit");
-                    let limit = Arc::new(AtomicUsize::new(limit.try_into().unwrap_or(usize::MAX)));
                     let path = self.get_object(context.as_ref(), id).await?;
                     debug!(path = ?path.display(), "open file");
                     let mut object = File::open(path).await.context("failed to open file")?;
-                    object
-                        .seek(SeekFrom::Start(start))
-                        .await
-                        .context("failed to seek from start")?;
-                    let data = ReaderStream::new(object)
-                        .take_while({
-                            let limit = Arc::clone(&limit);
-                            move |_| {
-                                let limit = Arc::clone(&limit);
-                                async move { limit.load(Ordering::Relaxed) > 0 }
-                            }
-                        })
-                        .map(move |buf| {
-                            let mut buf = buf.context("failed to read file")?;
-                            let n = limit.load(Ordering::Relaxed);
-                            trace!(n, len = buf.len(), "read byte chunk");
-                            if buf.len() > n {
-                                trace!(n, len = buf.len(), "byte chunk exceeds limit, truncate");
-                                buf.truncate(n);
-                                limit.store(0, Ordering::Relaxed);
-                            } else {
-                                limit.fetch_sub(buf.len(), Ordering::Relaxed);
-                            }
-                            // TODO: Remove the need for this wrapping
-                            Ok(buf
-                                .into_iter()
-                                .map(wrpc_transport::Value::U8)
-                                .map(Some)
-                                .collect())
-                        });
+                    if start > 0 {
+                        debug!("seek file");
+                        object
+                            .seek(SeekFrom::Start(start))
+                            .await
+                            .context("failed to seek from start")?;
+                    }
+                    let data = ReaderStream::new(object.take(limit)).map(move |buf| {
+                        let buf = buf.context("failed to read file")?;
+                        // TODO: Remove the need for this wrapping
+                        Ok(buf
+                            .into_iter()
+                            .map(wrpc_transport::Value::U8)
+                            .map(Some)
+                            .collect())
+                    });
                     anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
                 }
                 .await,
@@ -819,7 +794,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_get_object_info<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -861,7 +836,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_has_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -889,7 +864,7 @@ impl FsProvider {
         }
     }
 
-    #[instrument(level = "trace", skip(self, result_subject, transmitter))]
+    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_move_object<Tx: Transmitter>(
         &self,
         AcceptedInvocation {
@@ -924,7 +899,9 @@ impl FsProvider {
                         .context("failed to resolve destination container path")?;
                     let dest = resolve_subpath(&dest_container, dest.object)
                         .context("failed to resolve destination object path")?;
+                    debug!("copy `{}` to `{}`", src.display(), dest.display());
                     fs::copy(&src, dest).await.context("failed to copy")?;
+                    debug!("remove `{}`", src.display());
                     fs::remove_file(src)
                         .await
                         .context("failed to remove source")
@@ -938,7 +915,7 @@ impl FsProvider {
     }
 
     #[instrument(
-        level = "trace",
+        level = "debug",
         skip(self, result_subject, error_subject, transmitter, data)
     )]
     async fn serve_write_container_data<Tx: Transmitter>(

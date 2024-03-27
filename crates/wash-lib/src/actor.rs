@@ -109,8 +109,7 @@ pub async fn scale_component(
     .await
     .with_context(|| {
         format!(
-            "Timed out waiting for start event for component [{}] on host [{}]",
-            component_ref, host_id
+            "Timed out waiting for start event for component [{component_ref}] on host [{host_id}]"
         )
     })?;
 

@@ -105,7 +105,7 @@ pub struct WriteCapture {
 }
 
 impl WriteCapture {
-    /// Create a new WriteCapture that will write the capture tarball to the given path with the
+    /// Create a new `WriteCapture` that will write the capture tarball to the given path with the
     /// expected inventory
     pub async fn start(inventory: Vec<HostInventory>, path: impl AsRef<Path>) -> Result<Self> {
         let file = File::create(path).await?;

@@ -16,29 +16,23 @@ pub const RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED: &str = concat!(
     "/rust-builtins-component-reactor-preview2.signed.wasm"
 );
 
-pub const RUST_LATTICE_CONTROL_HTTP_SMITHY: &str =
-    concat!(env!("OUT_DIR"), "/rust-lattice-control-http-smithy.wasm");
-pub const RUST_LATTICE_CONTROL_HTTP_SMITHY_SIGNED: &str = concat!(
+pub const RUST_INTERFACES_REACTOR: &str = concat!(env!("OUT_DIR"), "/rust-interfaces-reactor.wasm");
+pub const RUST_INTERFACES_REACTOR_PREVIEW2: &str =
+    concat!(env!("OUT_DIR"), "/rust-interfaces-reactor-preview2.wasm");
+pub const RUST_INTERFACES_REACTOR_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
-    "/rust-lattice-control-http-smithy.signed.wasm"
+    "/rust-interfaces-reactor-preview2.signed.wasm"
 );
 
-pub const RUST_WRPC_PINGER_COMPONENT: &str =
-    concat!(env!("OUT_DIR"), "/rust-wrpc-pinger-component.wasm");
-pub const RUST_WRPC_PINGER_COMPONENT_PREVIEW2: &str =
-    concat!(env!("OUT_DIR"), "/rust-wrpc-pinger-component-preview2.wasm");
-pub const RUST_WRPC_PINGER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
+pub const RUST_INTERFACES_HANDLER_REACTOR: &str =
+    concat!(env!("OUT_DIR"), "/rust-interfaces-handler-reactor.wasm");
+pub const RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2: &str = concat!(
     env!("OUT_DIR"),
-    "/rust-wrpc-pinger-component-preview2.signed.wasm"
+    "/rust-interfaces-handler-reactor-preview2.wasm"
 );
-
-pub const RUST_WRPC_PONGER_COMPONENT: &str =
-    concat!(env!("OUT_DIR"), "/rust-wrpc-ponger-component.wasm");
-pub const RUST_WRPC_PONGER_COMPONENT_PREVIEW2: &str =
-    concat!(env!("OUT_DIR"), "/rust-wrpc-ponger-component-preview2.wasm");
-pub const RUST_WRPC_PONGER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
+pub const RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
-    "/rust-wrpc-ponger-component-preview2.signed.wasm"
+    "/rust-interfaces-handler-reactor-preview2.signed.wasm"
 );
 
 pub const RUST_PINGER_CONFIG_COMPONENT: &str =
@@ -61,13 +55,4 @@ pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2: &str = concat!(
 pub const RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
     env!("OUT_DIR"),
     "/rust-ponger-config-component-preview2.signed.wasm"
-);
-
-pub const RUST_MESSAGING_INVOKER_COMPONENT: &str =
-    concat!(env!("OUT_DIR"), "/rust-messaging-invoker.wasm");
-pub const RUST_MESSAGING_INVOKER_COMPONENT_PREVIEW2: &str =
-    concat!(env!("OUT_DIR"), "/rust-messaging-invoker-preview2.wasm");
-pub const RUST_MESSAGING_INVOKER_COMPONENT_PREVIEW2_SIGNED: &str = concat!(
-    env!("OUT_DIR"),
-    "/rust-messaging-invoker-preview2.signed.wasm"
 );

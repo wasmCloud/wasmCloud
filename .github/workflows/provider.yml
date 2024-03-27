@@ -1,0 +1,153 @@
+name: Build and, optionally, release a capability provider
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: Provider name
+        required: true
+        type: string
+      capability:
+        description: Capability implemented by the provider
+        required: true
+        type: string
+    secrets:
+      subject:
+        description: Capability provider issuer subject key
+      issuer:
+        description: Capability provider issuer key
+      azurecr_username:
+        description: wasmCloud AzureCR username
+      azurecr_password:
+        description: wasmCloud AzureCR password
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04-16-cores
+    steps:
+    - uses: actions/checkout@v4.1.1
+    - name: Extract tag context
+      id: ctx
+      run: |
+        sha_short=$(git rev-parse --short HEAD)
+        echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+        echo "sha_short=${sha_short}" >> "$GITHUB_OUTPUT"
+
+        if [[ ${GITHUB_REF} == refs/tags/provider-${{ inputs.name }}-v* ]]; then
+          version=${GITHUB_REF_NAME#provider-${{ inputs.name }}-v}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tagged version is ${version}"
+          if [[ $version == *"-"* ]]; then
+            echo "tagged version ${version} is a pre-release"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+        else
+          version=$(cargo metadata --manifest-path "./crates/provider-${{ inputs.name }}/Cargo.toml" --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wasmcloud-provider-${{ inputs.name }}") | .version')
+          echo "untagged version is ${version}"
+          echo "untagged version ${version} is a pre-release"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - run: chmod +x "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}"
+    - run: chmod +x "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}.exe"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}"
+
+    - run: mv "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/wash" wash
+    - run: chmod +x wash
+
+    - run: |
+        if [ "${{ secrets.issuer }}" != '' ]; then
+          export WASH_ISSUER_KEY="${{ secrets.issuer }}"
+        fi
+        if [ "${{ secrets.subject }}" != '' ]; then
+          export WASH_SUBJECT_KEY="${{ secrets.subject }}"
+        fi
+        ./wash par create \
+              --binary "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}" \
+              --capid "${{ inputs.capability }}" \
+              --compress \
+              --destination "${{ inputs.name }}.par.gz" \
+              --name "${{ inputs.name }}" \
+              --vendor wasmcloud \
+              --version ${{ steps.ctx.outputs.version }}
+        ./wash par insert --arch aarch64-linux  --binary "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch aarch64-macos  --binary "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch x86_64-macos   --binary "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch x86_64-windows --binary "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}.exe" "${{ inputs.name }}.par.gz"
+        ./wash par inspect "${{ inputs.name }}.par.gz"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}.par.gz
+        path: ${{ inputs.name }}.par.gz
+
+    # GitHub Container Registry
+
+    - name: Push `${{ inputs.name }}` provider `${{ github.sha }}` tag to GitHub Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
+      run: ./wash push ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ github.sha }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ github.repository_owner }}
+        WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Push `${{ inputs.name }}` provider `${{ steps.ctx.outputs.sha_short }}` tag to GitHub Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
+      run: ./wash push ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.sha_short }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ github.repository_owner }}
+        WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Push `${{ inputs.name }}` provider `canary` tag to GitHub Container Registry
+      if: github.ref == 'refs/heads/main'
+      run: ./wash push ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:canary "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ github.repository_owner }}
+        WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Push `${{ inputs.name }}` provider version tag to GitHub Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name))
+      run: ./wash push ghcr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.version }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ github.repository_owner }}
+        WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+    # wasmCloud AzureCR
+
+    - name: Push `${{ inputs.name }}` provider `${{ github.sha }}` tag to wasmCloud Azure Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
+      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+      run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ github.sha }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ secrets.azurecr_username }}
+        WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+
+    - name: Push `${{ inputs.name }}` provider `${{ steps.ctx.outputs.sha_short }}` tag to wasmCloud Azure Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name)) || github.ref == 'refs/heads/main'
+      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+      run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.sha_short }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ secrets.azurecr_username }}
+        WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+
+    - name: Push `${{ inputs.name }}` provider `canary` tag to wasmCloud Azure Container Registry
+      if: github.ref == 'refs/heads/main'
+      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+      run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:canary "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ secrets.azurecr_username }}
+        WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+
+    - name: Push `${{ inputs.name }}` provider version tag to wasmCloud Azure Container Registry
+      if: startswith(github.ref, format('refs/tags/provider-{0}-v', inputs.name))
+      continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
+      run: ./wash push wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ inputs.name }}:${{ steps.ctx.outputs.version }} "${{ inputs.name }}.par.gz"
+      env:
+        WASH_REG_USER: ${{ secrets.azurecr_username }}
+        WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}

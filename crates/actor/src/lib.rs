@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 wit_bindgen::generate!("interfaces");
 
 mod wrappers;
@@ -25,22 +27,6 @@ mod test {
             );
             let _: Vec<u8> = wasi::random::random::get_random_bytes(4);
             let _: u64 = wasi::random::random::get_random_u64();
-            // TODO: Add support for HTTP
-            //outgoing_http::handle(
-            //    types::new_outgoing_request(
-            //        types::MethodParam::Get,
-            //        "path",
-            //        "query",
-            //        Some(types::SchemeParam::Https),
-            //        "authority",
-            //        types::new_fields(&[("myheader", "myvalue")]),
-            //    ),
-            //    Some(types::RequestOptions {
-            //        connect_timeout_ms: Some(42),
-            //        first_byte_timeout_ms: Some(42),
-            //        between_bytes_timeout_ms: Some(42),
-            //    }),
-            //);
 
             wasmcloud::bus::lattice::set_link_name(
                 "default",
@@ -49,19 +35,15 @@ mod test {
                         "wasi",
                         "blobstore",
                         "blobstore",
-                        None,
                     ),
                     wasmcloud::bus::lattice::CallTargetInterface::new(
-                        "wasi", "keyvalue", "eventual", None,
+                        "wasi", "keyvalue", "eventual",
                     ),
-                    wasmcloud::bus::lattice::CallTargetInterface::new(
-                        "wasi", "logging", "logging", None,
-                    ),
+                    wasmcloud::bus::lattice::CallTargetInterface::new("wasi", "logging", "logging"),
                     wasmcloud::bus::lattice::CallTargetInterface::new(
                         "wasmcloud",
                         "messaging",
                         "consumer",
-                        None,
                     ),
                 ],
             );

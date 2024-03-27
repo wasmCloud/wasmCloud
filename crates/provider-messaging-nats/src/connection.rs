@@ -10,6 +10,7 @@ const CONFIG_NATS_SUBSCRIPTION: &str = "subscriptions";
 const CONFIG_NATS_URI: &str = "cluster_uris";
 const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
 const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
+const CONFIG_NATS_TLS_CA: &str = "tls_ca";
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
@@ -31,6 +32,12 @@ pub struct ConnectionConfig {
     /// Auth seed to use (if necessary)
     #[serde(default)]
     pub auth_seed: Option<String>,
+
+    #[serde(default)]
+    pub tls_ca: Option<String>,
+
+    #[serde(default)]
+    pub tls_ca_file: Option<String>,
 
     /// ping interval in seconds
     #[serde(default)]
@@ -57,6 +64,12 @@ impl ConnectionConfig {
         if extra.auth_seed.is_some() {
             out.auth_seed = extra.auth_seed.clone()
         }
+        if extra.tls_ca.is_some() {
+            out.tls_ca = extra.tls_ca.clone()
+        }
+        if extra.tls_ca_file.is_some() {
+            out.tls_ca_file = extra.tls_ca_file.clone()
+        }
         if extra.ping_interval_sec.is_some() {
             out.ping_interval_sec = extra.ping_interval_sec
         }
@@ -71,6 +84,8 @@ impl Default for ConnectionConfig {
             cluster_uris: vec![DEFAULT_NATS_URI.to_string()],
             auth_jwt: None,
             auth_seed: None,
+            tls_ca: None,
+            tls_ca_file: None,
             ping_interval_sec: None,
         }
     }
@@ -94,6 +109,9 @@ impl ConnectionConfig {
         }
         if let Some(seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
             config.auth_seed = Some(seed.clone());
+        }
+        if let Some(tls_ca) = values.get(CONFIG_NATS_TLS_CA) {
+            config.tls_ca = Some(tls_ca.clone());
         }
         if config.auth_jwt.is_some() && config.auth_seed.is_none() {
             bail!("if you specify jwt, you must also specify a seed");

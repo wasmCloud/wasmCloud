@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tokio::fs;
 use tokio::io::stderr;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::oneshot;
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
@@ -52,8 +52,6 @@ struct Handler {
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     outgoing_http: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
     config: HashMap<String, Vec<u8>>,
-
-    link_name: Arc<RwLock<String>>,
 }
 
 #[async_trait]
@@ -97,15 +95,7 @@ impl capability::Bus for Handler {
  "foobar" => {},
             (link_name, interfaces) => panic!("`set_link_name` with link name `{link_name:?}` and interfaces `{interfaces:?}` should not have been called")
         }
-
-        let mut current_link_name = self.link_name.write().await;
-        *current_link_name = link_name;
-
         Ok(())
-    }
-
-    async fn get_link_name(&self) -> anyhow::Result<String> {
-        Ok(self.link_name.read().await.clone())
     }
 
     async fn get(
@@ -219,7 +209,6 @@ fn new_runtime(
         messaging: published,
         outgoing_http: sent,
         config,
-        link_name: Arc::new(RwLock::new("default".into())),
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))

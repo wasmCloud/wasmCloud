@@ -4,11 +4,11 @@ use crate::capability::bus::{guest_config, lattice};
 use crate::capability::Bus;
 
 use std::sync::Arc;
-use wasmcloud_core::CallTargetInterface;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
 use tracing::instrument;
+use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
 
 impl Instance {
@@ -18,9 +18,6 @@ impl Instance {
         self
     }
 }
-
-/// Name of a link on the wasmCloud lattice
-pub type LinkName = String;
 
 #[async_trait]
 impl lattice::Host for Ctx {
@@ -40,15 +37,6 @@ impl lattice::Host for Ctx {
             .context("failed to set link name")?;
         Ok(())
     }
-
-    async fn get_link_name(&mut self) -> anyhow::Result<LinkName> {
-        let link_name = self
-            .handler
-            .get_link_name()
-            .await
-            .context("failed to get link name")?;
-        Ok(link_name)
-    }
 }
 
 #[async_trait]
@@ -58,14 +46,12 @@ impl lattice::HostCallTargetInterface for Ctx {
         namespace: String,
         package: String,
         interface: String,
-        function: Option<String>,
     ) -> anyhow::Result<Resource<lattice::CallTargetInterface>> {
         self.table
             .push(CallTargetInterface {
                 namespace,
                 package,
                 interface,
-                function,
             })
             .context("failed to push target interface")
     }

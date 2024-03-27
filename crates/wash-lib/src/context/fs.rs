@@ -31,7 +31,7 @@ impl Deref for ContextDir {
 }
 
 impl ContextDir {
-    /// Creates and initializes a new ContextDir at ~/.wash/contexts
+    /// Creates and initializes a new `ContextDir` at ~/.wash/contexts
     pub fn new() -> Result<ContextDir> {
         Self::from_dir(None::<&Path>)
     }
@@ -256,7 +256,7 @@ mod test {
         let filenames: std::collections::HashSet<String> = contexts_path
             .read_dir()
             .unwrap()
-            .filter_map(|entry| entry.unwrap().file_name().to_os_string().into_string().ok())
+            .filter_map(|entry| entry.unwrap().file_name().clone().into_string().ok())
             .collect();
         let expected_filenames = std::collections::HashSet::from([
             "default".to_string(),
@@ -327,7 +327,7 @@ mod test {
             .list_contexts()
             .expect("Should be able to list contexts");
         assert_eq!(list.len(), 3, "Should only list 3 contexts");
-        for ctx in list.into_iter() {
+        for ctx in list {
             assert!(
                 ctx == "happy_path" || ctx == "happy_gilmore" || ctx == "host_config",
                 "Should have found only the contexts we created"

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.6.0"
+version = "0.7.0"
 description = """
 Hashicorp Vault capability provider for the 'wrpc:keyvalue' capability contract
 """
@@ -13,9 +13,19 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+simple_env_load = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-vaultrs = { workspace = true, features = [ "rustls" ] }
-wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }
+vaultrs = { workspace = true, features = ["rustls"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wrpc-interface-keyvalue = { workspace = true }
+wrpc-transport = { workspace = true }
