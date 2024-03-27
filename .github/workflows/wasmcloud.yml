@@ -40,6 +40,8 @@ on:
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-wit-bindgen-macro-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-wit-bindgen-macro-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-wit-bindgen-v[0-9].[0-9]+.[0-9]+'
       - 'provider-wit-bindgen-v[0-9].[0-9]+.[0-9]+-*'
       - 'runtime-v[0-9].[0-9]+.[0-9]+'
@@ -54,6 +56,10 @@ on:
       - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
+      - 'wrpc-transport-derive-macro-v[0-9].[0-9]+.[0-9]+'
+      - 'wrpc-transport-derive-macro-v[0-9].[0-9]+.[0-9]+-*'
+      - 'wrpc-transport-derive-v[0-9].[0-9]+.[0-9]+'
+      - 'wrpc-transport-derive-v[0-9].[0-9]+.[0-9]+-*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -621,6 +627,8 @@ jobs:
           - crate: provider-sdk
             workspace-dependencies: true
 
+          - crate: provider-wit-bindgen-macro
+
           - crate: provider-wit-bindgen
             workspace-dependencies: true
 
@@ -636,6 +644,11 @@ jobs:
             workspace-dependencies: true
 
           - crate: wash-lib
+            workspace-dependencies: true
+
+          - crate: wrpc-transport-derive-macro
+
+          - crate: wrpc-transport-derive
             workspace-dependencies: true
 
     name: publish ${{ matrix.crate }} to crates.io
