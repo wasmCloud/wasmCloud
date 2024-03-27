@@ -3227,7 +3227,11 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_label_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
+    async fn handle_label_put(
+        &self,
+        host_id: &str,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<()>> {
         let HostLabel { key, value } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize put label request")?;
         let mut labels = self.labels.write().await;
@@ -3241,19 +3245,41 @@ impl Host {
                 entry.insert(value);
             }
         }
+
+        self.publish_event(
+            "labels_changed",
+            event::labels_changed(host_id, labels.clone()),
+        )
+        .await
+        .context("failed to publish labels_changed event")?;
+
         Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_label_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
+    async fn handle_label_del(
+        &self,
+        host_id: &str,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<CtlResponse<()>> {
         let HostLabel { key, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize delete label request")?;
         let mut labels = self.labels.write().await;
-        if labels.remove(&key).is_some() {
-            info!(key, "removed label");
-        } else {
+        let value = labels.remove(&key);
+
+        if value.is_none() {
             warn!(key, "could not remove unset label");
-        }
+            return Ok(CtlResponse::success());
+        };
+
+        info!(key, "removed label");
+        self.publish_event(
+            "labels_changed",
+            event::labels_changed(host_id, labels.clone()),
+        )
+        .await
+        .context("failed to publish labels_changed event")?;
+
         Ok(CtlResponse::success())
     }
 
@@ -3579,13 +3605,13 @@ impl Host {
                 .map(Some)
                 .map(serialize_ctl_response),
             // Label commands
-            (Some("label"), Some("del"), Some(_host_id), None) => self
-                .handle_label_del(message.payload)
+            (Some("label"), Some("del"), Some(host_id), None) => self
+                .handle_label_del(host_id, message.payload)
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),
-            (Some("label"), Some("put"), Some(_host_id), None) => self
-                .handle_label_put(message.payload)
+            (Some("label"), Some("put"), Some(host_id), None) => self
+                .handle_label_put(host_id, message.payload)
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),

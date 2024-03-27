@@ -1,6 +1,6 @@
 use core::num::NonZeroUsize;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Context;
 use cloudevents::{EventBuilder, EventBuilderV10};
@@ -226,6 +226,16 @@ pub fn config_set(config_name: impl AsRef<str>) -> serde_json::Value {
 pub fn config_deleted(config_name: impl AsRef<str>) -> serde_json::Value {
     json!({
         "config_name": config_name.as_ref(),
+    })
+}
+
+pub fn labels_changed(
+    host_id: impl AsRef<str>,
+    labels: impl Into<HashMap<String, String>>,
+) -> serde_json::Value {
+    json!({
+        "host_id": host_id.as_ref(),
+        "labels": labels.into(),
     })
 }
 
