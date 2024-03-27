@@ -37,6 +37,7 @@ use tokio::sync::RwLock;
 use tokio::{fs, select, spawn};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::provider::invocation_context;
 use wasmcloud_provider_sdk::{
     get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
@@ -210,7 +211,15 @@ impl StorageClient {
                 .http_client(
                     HyperClientBuilder::new().build(
                         hyper_rustls::HttpsConnectorBuilder::new()
-                            .with_webpki_roots()
+                            .with_tls_config(
+                                // use `tls::DEFAULT_CLIENT_CONFIG` directly once `rustls` versions
+                                // are in sync
+                                rustls::ClientConfig::builder()
+                                    .with_root_certificates(rustls::RootCertStore {
+                                        roots: tls::DEFAULT_ROOTS.roots.clone(),
+                                    })
+                                    .with_no_client_auth(),
+                            )
                             .https_or_http()
                             .enable_all_versions()
                             .build(),

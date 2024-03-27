@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use wascap::jwt;
+use wasmcloud_core::tls;
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
@@ -177,11 +178,11 @@ impl Fetcher {
         } else {
             ClientProtocol::Https
         };
-        let config = ClientConfig {
+        let mut c = Client::new(ClientConfig {
             protocol,
+            extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
             ..Default::default()
-        };
-        let mut c = Client::new(config);
+        });
 
         // In case of a cache miss where the file does not exist, pull a fresh OCI Image
         if fs::metadata(&cache_file).await.is_ok() {

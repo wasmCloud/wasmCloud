@@ -46,7 +46,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
-use wasmcloud_core::LatticeTarget;
+use wasmcloud_provider_sdk::core::LatticeTarget;
 use wasmcloud_provider_sdk::{
     get_connection, LinkConfig, ProviderHandler, ProviderOperationResult,
 };
@@ -151,7 +151,7 @@ pub struct HttpServerCore {
 
 #[derive(Clone, Debug)]
 struct RequestContext {
-    wrpc: Arc<wasmcloud_core::wrpc::Client>,
+    wrpc: Arc<wasmcloud_provider_sdk::core::wrpc::Client>,
     settings: Arc<ServiceSettings>,
     scheme: http::uri::Scheme,
 }

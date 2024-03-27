@@ -33,7 +33,12 @@ tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 ulid = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-core = { workspace = true, features = [
+    "hyper-rustls",
+    "otel",
+    "rustls-native-certs",
+    "webpki-roots",
+] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }

@@ -17,6 +17,7 @@ use tokio::time::sleep;
 use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
+use wasmcloud_core::tls::NativeRootsExt as _;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
 use wasmcloud_test_util::{
@@ -444,6 +445,7 @@ async fn interfaces() -> anyhow::Result<()> {
     .context("failed to set `foo` key in Vault")?;
 
     let http_client = reqwest::Client::builder()
+        .with_native_certificates()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(20))
         .build()

@@ -3,6 +3,7 @@
 pub mod chunking;
 pub mod logging;
 pub mod nats;
+pub mod tls;
 
 pub mod host;
 pub use host::*;

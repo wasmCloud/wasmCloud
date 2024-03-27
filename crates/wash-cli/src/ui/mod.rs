@@ -12,6 +12,7 @@ use wash_lib::{
     cli::{CommandOutput, OutputKind},
     config::downloads_dir,
 };
+use wasmcloud_core::tls;
 
 const DEFAULT_WASHBOARD_VERSION: &str = "v0.1.0";
 
@@ -67,7 +68,9 @@ async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> 
     );
 
     // Download tarball
-    let resp = reqwest::get(release_url)
+    let resp = tls::DEFAULT_REQWEST_CLIENT
+        .get(&release_url)
+        .send()
         .await
         .context("failed to request washboard tarball")?;
 
