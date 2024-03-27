@@ -9,6 +9,7 @@ use provider::ProviderInitState;
 use tracing::{error, info, warn};
 
 pub mod error;
+pub mod interfaces;
 pub mod provider;
 
 /// Re-export of types from [`wasmcloud_core`]

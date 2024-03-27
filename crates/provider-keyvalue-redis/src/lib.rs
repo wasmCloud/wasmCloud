@@ -12,29 +12,23 @@
 //! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
 //!
 //!
-use core::future::Future;
 use core::ops::{Deref as _, DerefMut as _};
-use core::pin::pin;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
-use async_nats::HeaderMap;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue, Script, ScriptInvocation};
-use tokio::spawn;
-use tokio::{select, sync::RwLock};
-use tracing::{debug, error, info, instrument, warn};
+use tokio::sync::RwLock;
+use tracing::{error, info, instrument, warn};
 
-use wasmcloud_provider_sdk::provider::invocation_context;
-use wasmcloud_provider_sdk::{
-    get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
-};
+use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
+use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 /// Default URL to use to connect to Redis
@@ -97,14 +91,8 @@ impl KvRedisProvider {
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn invocation_conn(
-        &self,
-        headers: Option<&HeaderMap>,
-    ) -> anyhow::Result<ConnectionManager> {
-        if let Some(ref source_id) = headers
-            .map(invocation_context)
-            .and_then(|Context { actor, .. }| actor)
-        {
+    async fn invocation_conn(&self, context: Option<Context>) -> anyhow::Result<ConnectionManager> {
+        if let Some(ref source_id) = context.and_then(|Context { actor, .. }| actor) {
             let sources = self.sources.read().await;
             let Some(conn) = sources.get(source_id) else {
                 error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");
@@ -122,10 +110,10 @@ impl KvRedisProvider {
     /// Execute Redis async command
     async fn exec_cmd<T: FromRedisValue>(
         &self,
-        headers: Option<&HeaderMap>,
+        context: Option<Context>,
         cmd: &mut Cmd,
     ) -> anyhow::Result<T> {
-        let mut conn = self.invocation_conn(headers).await?;
+        let mut conn = self.invocation_conn(context).await?;
         match cmd.query_async(&mut conn).await {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -138,10 +126,10 @@ impl KvRedisProvider {
     /// Execute Redis async script
     async fn exec_script<T: FromRedisValue>(
         &self,
-        headers: Option<&HeaderMap>,
+        context: Option<Context>,
         cmd: &mut ScriptInvocation<'_>,
     ) -> anyhow::Result<T> {
-        let mut conn = self.invocation_conn(headers).await?;
+        let mut conn = self.invocation_conn(context).await?;
         match cmd.invoke_async(&mut conn).await {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -150,150 +138,9 @@ impl KvRedisProvider {
             }
         }
     }
+}
 
-    #[instrument(level = "trace", skip_all)]
-    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
-        let connection = get_connection();
-        let wrpc = connection.get_wrpc_client(connection.provider_key());
-        let mut commands = pin!(commands);
-        'outer: loop {
-            use wrpc_interface_keyvalue::{Atomic as _, Eventual as _};
-            let delete_invocations = wrpc
-                .serve_delete()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.delete` invocations")?;
-            let mut delete_invocations = pin!(delete_invocations);
-
-            let exists_invocations = wrpc
-                .serve_exists()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.exists` invocations")?;
-            let mut exists_invocations = pin!(exists_invocations);
-
-            let get_invocations = wrpc
-                .serve_get()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.get` invocations")?;
-            let mut get_invocations = pin!(get_invocations);
-
-            let set_invocations = wrpc
-                .serve_set()
-                .await
-                .context("failed to serve `wrpc:keyvalue/eventual.set` invocations")?;
-            let mut set_invocations = pin!(set_invocations);
-
-            let compare_and_swap_invocations = wrpc
-                .serve_compare_and_swap()
-                .await
-                .context("failed to serve `wrpc:keyvalue/atomic.compare-and-swap` invocations")?;
-            let mut compare_and_swap_invocations = pin!(compare_and_swap_invocations);
-
-            let increment_invocations = wrpc
-                .serve_increment()
-                .await
-                .context("failed to serve `wrpc:keyvalue/atomic.increment` invocations")?;
-            let mut increment_invocations = pin!(increment_invocations);
-            loop {
-                select! {
-                    invocation = delete_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_delete(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.delete` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.delete` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = exists_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_exists(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.exists` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.exists` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = get_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_get(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.get` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.get` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = set_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_set(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/eventual.set` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/eventual.set` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = compare_and_swap_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_compare_and_swap(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.compare-and-swamp` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/atomic.compare-and-swamp` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    invocation = increment_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_increment(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:keyvalue/atomic.increment` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:keyvalue/atomic.increment` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    }
-                    _ = &mut commands => {
-                        debug!("shutdown command received");
-                        return Ok(())
-                    }
-                }
-            }
-        }
-    }
-
+impl Eventual for KvRedisProvider {
     #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_delete<Tx: Transmitter>(
         &self,
@@ -303,15 +150,14 @@ impl KvRedisProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
     ) {
         // TODO: Use bucket
         _ = bucket;
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
-                self.exec_cmd::<()>(context.as_ref(), &mut Cmd::del(key))
-                    .await,
+                self.exec_cmd::<()>(context, &mut Cmd::del(key)).await,
             )
             .await
         {
@@ -328,15 +174,14 @@ impl KvRedisProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
     ) {
         // TODO: Use bucket
         _ = bucket;
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
-                self.exec_cmd::<bool>(context.as_ref(), &mut Cmd::exists(key))
-                    .await,
+                self.exec_cmd::<bool>(context, &mut Cmd::exists(key)).await,
             )
             .await
         {
@@ -353,12 +198,12 @@ impl KvRedisProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
     ) {
         // TODO: Use bucket
         _ = bucket;
         let value = match self
-            .exec_cmd::<redis::Value>(context.as_ref(), &mut Cmd::get(key))
+            .exec_cmd::<redis::Value>(context, &mut Cmd::get(key))
             .await
         {
             Ok(redis::Value::Nil) => Ok(None),
@@ -384,7 +229,7 @@ impl KvRedisProvider {
             transmitter,
             ..
         }: AcceptedInvocation<
-            Option<HeaderMap>,
+            Option<Context>,
             (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
             Tx,
         >,
@@ -407,7 +252,7 @@ impl KvRedisProvider {
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
-                self.exec_cmd::<()>(context.as_ref(), &mut Cmd::set(key, value.deref()))
+                self.exec_cmd::<()>(context, &mut Cmd::set(key, value.deref()))
                     .await,
             )
             .await
@@ -415,7 +260,9 @@ impl KvRedisProvider {
             error!(?err, "failed to transmit result")
         }
     }
+}
 
+impl Atomic for KvRedisProvider {
     #[instrument(level = "debug", skip(self, result_subject, transmitter))]
     async fn serve_compare_and_swap<Tx: Transmitter>(
         &self,
@@ -425,14 +272,14 @@ impl KvRedisProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64, u64), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, String, u64, u64), Tx>,
     ) {
         // TODO: Use bucket
         _ = bucket;
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
-                self.exec_script::<bool>(context.as_ref(), CAS.key(key).arg(old).arg(new))
+                self.exec_script::<bool>(context, CAS.key(key).arg(old).arg(new))
                     .await,
             )
             .await
@@ -451,14 +298,14 @@ impl KvRedisProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, String, u64), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, String, u64), Tx>,
     ) {
         // TODO: Use bucket
         _ = bucket;
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
-                self.exec_cmd::<u64>(context.as_ref(), &mut Cmd::incr(key, value))
+                self.exec_cmd::<u64>(context, &mut Cmd::incr(key, value))
                     .await,
             )
             .await

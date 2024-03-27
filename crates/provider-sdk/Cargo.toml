@@ -18,6 +18,7 @@ anyhow = { workspace = true }
 async-nats = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 nkeys = { workspace = true }
 once_cell = { workspace = true }
@@ -28,6 +29,7 @@ serde_bytes = { workspace = true, features = ["default"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
@@ -40,6 +42,9 @@ wasmcloud-core = { workspace = true, features = [
     "webpki-roots",
 ] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wrpc-interface-blobstore = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
+wrpc-interface-keyvalue = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
