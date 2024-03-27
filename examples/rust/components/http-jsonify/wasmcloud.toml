@@ -1,0 +1,8 @@
+name = "echo-http"
+language = "rust"
+type = "actor"
+version = "0.1.0"
+
+[actor]
+wit_world = "component"
+wasm_target = "wasm32-wasi-preview2"

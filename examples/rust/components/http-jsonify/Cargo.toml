@@ -1,0 +1,21 @@
+[package]
+name = "wasmcloud-component-http-jsonify"
+version = "0.1.0"
+edition = "2021"
+authors = ["The wasmCloud Team"]
+categories = ["wasm"]
+license = "Apache-2.0"
+repository = "https://github.com/wasmCloud/wasmCloud"
+description = """
+A simple WebAssembly component which implements wasi:http and returns the details of the incoming HTTP request as JSON.
+"""
+
+[workspace]
+
+[lib]
+crate-type = [ "cdylib" ]
+
+[dependencies]
+anyhow = { version = "1",  default-features = false }
+serde_json = { version = "1", features = [ "std" ] }
+wit-bindgen = { version = "0.24.0", features = [ "macros" ] }
