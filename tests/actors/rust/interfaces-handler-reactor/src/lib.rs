@@ -3,7 +3,7 @@
 wit_bindgen::generate!({
     world: "actor",
     with: {
-        "wasmcloud:messaging/types":  wasmcloud_actor::wasmcloud::messaging::types,
+        "wasmcloud:messaging/types@0.2.0":  wasmcloud_actor::wasmcloud::messaging::types,
     }
 });
 

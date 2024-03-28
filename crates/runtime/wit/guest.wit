@@ -9,5 +9,5 @@ world incoming-http {
 }
 
 world messaging-handler {
-    export wasmcloud:messaging/handler;
+    export wasmcloud:messaging/handler@0.2.0;
 }

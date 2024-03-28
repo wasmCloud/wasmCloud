@@ -4,5 +4,5 @@ world actor {
   export test-actors:testing/pingpong;
   export test-actors:testing/busybox;
 
-  export wasmcloud:messaging/handler;
+  export wasmcloud:messaging/handler@0.2.0;
 }

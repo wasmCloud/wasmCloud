@@ -16,7 +16,7 @@ pub mod messaging_handler_bindings {
         world: "messaging-handler",
         async: true,
         with: {
-           "wasmcloud:messaging/types": crate::capability::messaging::types,
+           "wasmcloud:messaging/types@0.2.0": crate::capability::messaging::types,
         },
     });
 }

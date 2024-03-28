@@ -1,11 +1,4 @@
-// Message broker interface
-// This is a phase 1 interface, and is subject to change
-// This interface is used to send and receive messages from a message broker
-
-// Note that in this phase 1 interface, subscriptions are defined out of band from this
-// component. Components themselves cannot establish or terminate subscriptions. This may
-// change for phase 2.
-package wasmcloud:messaging;
+package wasmcloud:messaging@0.2.0;
 
 // Types common to message broker interactions
 interface types {

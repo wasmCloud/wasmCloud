@@ -289,9 +289,9 @@ where
             | "wasi:sockets/udp-create-socket@0.2.0"
             | "wasi:sockets/udp@0.2.0"
             | "wasmcloud:bus/lattice"
-            | "wasmcloud:messaging/consumer"
-            | "wasmcloud:messaging/handler"
-            | "wasmcloud:messaging/types" => continue,
+            | "wasmcloud:messaging/consumer@0.2.0"
+            | "wasmcloud:messaging/handler@0.2.0"
+            | "wasmcloud:messaging/types@0.2.0" => continue,
             _ => {}
         }
         let wit_parser::WorldItem::Interface(interface) = item else {
@@ -445,7 +445,9 @@ fn instantiate(
     let mut custom_result_types = HashMap::with_capacity(imports.len());
     for (instance_name, item) in imports {
         match instance_name {
-            "wasi:config/runtime@0.2.0-draft"
+            "wasi:blobstore/blobstore@0.2.0-draft"
+            | "wasi:blobstore/container@0.2.0-draft"
+            | "wasi:blobstore/types@0.2.0-draft"
             | "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
@@ -458,6 +460,7 @@ fn instantiate(
             | "wasi:cli/terminal-stdout@0.2.0"
             | "wasi:clocks/monotonic-clock@0.2.0"
             | "wasi:clocks/wall-clock@0.2.0"
+            | "wasi:config/runtime@0.2.0-draft"
             | "wasi:filesystem/preopens@0.2.0"
             | "wasi:filesystem/types@0.2.0"
             | "wasi:http/incoming-handler@0.2.0"
@@ -466,8 +469,21 @@ fn instantiate(
             | "wasi:io/error@0.2.0"
             | "wasi:io/poll@0.2.0"
             | "wasi:io/streams@0.2.0"
+            | "wasi:keyvalue/atomic@0.2.0-draft"
+            | "wasi:keyvalue/eventual@0.2.0-draft"
+            | "wasi:keyvalue/types@0.2.0-draft"
+            | "wasi:keyvalue/wasi-keyvalue-error@0.2.0-draft"
+            | "wasi:logging/logging"
+            | "wasi:random/random@0.2.0"
+            | "wasi:sockets/instance-network@0.2.0"
+            | "wasi:sockets/network@0.2.0"
+            | "wasi:sockets/tcp-create-socket@0.2.0"
             | "wasi:sockets/tcp@0.2.0"
-            | "wasmcloud:bus/lattice" => continue,
+            | "wasi:sockets/udp-create-socket@0.2.0"
+            | "wasi:sockets/udp@0.2.0"
+            | "wasmcloud:messaging/consumer@0.2.0"
+            | "wasmcloud:messaging/handler@0.2.0"
+            | "wasmcloud:messaging/types@0.2.0" => continue,
             _ => {}
         }
 
