@@ -7,10 +7,6 @@ on:
         description: Provider name
         required: true
         type: string
-      capability:
-        description: Capability implemented by the provider
-        required: true
-        type: string
     secrets:
       subject:
         description: Capability provider issuer subject key
@@ -71,7 +67,6 @@ jobs:
         fi
         ./wash par create \
               --binary "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}" \
-              --capid "${{ inputs.capability }}" \
               --compress \
               --destination "${{ inputs.name }}.par.gz" \
               --name "${{ inputs.name }}" \

@@ -270,35 +270,27 @@ jobs:
       matrix:
         include:
           - name: blobstore-fs
-            capability: wrpc:blobstore
             subject: BLOBSTORE_S3_SUBJECT
 
           - name: blobstore-s3
-            capability: wrpc:blobstore
             subject: BLOBSTORE_FS_SUBJECT
 
           - name: keyvalue-redis
-            capability: wrpc:keyvalue
             subject: KEYVALUE_REDIS_SUBJECT
 
           - name: keyvalue-vault
-            capability: wrpc:keyvalue
             subject: KEYVALUE_VAULT_SUBJECT
 
           - name: http-client
-            capability: wrpc:http/outgoing-handler
             subject: HTTP_CLIENT_SUBJECT
 
           - name: http-server
-            capability: wrpc:http/incoming-handler
             subject: HTTP_SERVER_SUBJECT
 
           - name: messaging-kafka
-            capability: wasmcloud:messaging
             subject: MESSAGING_KAFKA_SUBJECT
 
           - name: messaging-nats
-            capability: wasmcloud:messaging
             subject: MESSAGING_NATS_SUBJECT
 
     needs:
@@ -310,7 +302,6 @@ jobs:
     uses: ./.github/workflows/provider.yml
     with:
       name: ${{ matrix.name }}
-      capability: ${{ matrix.capability }}
     secrets:
       issuer: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
       subject: ${{ secrets[matrix.subject] }}
