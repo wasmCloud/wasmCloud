@@ -10,14 +10,15 @@ use tokio::process::Command;
 use tracing::{error, warn};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::{
-    cfg_dir, create_nats_client_from_opts, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+    create_nats_client_from_opts, downloads_dir, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+    WASMCLOUD_PID_FILE,
 };
 use wash_lib::id::ServerId;
 use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
 use crate::up::{
-    DEFAULT_LATTICE, DOWNLOADS_DIR, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
+    DEFAULT_LATTICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
     WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE,
 };
 
@@ -68,7 +69,7 @@ pub async fn handle_command(
 }
 
 pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let install_dir = cfg_dir()?.join(DOWNLOADS_DIR);
+    let install_dir = downloads_dir()?;
     let sp = Spinner::new(&output_kind)?;
     sp.update_spinner_message(" Stopping wasmCloud ...".to_string());
 
@@ -97,6 +98,8 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
                 "🛁 Exiting without stopping NATS or wadm, there are still hosts running",
             );
             return Ok(CommandOutput::new(out_text, out_json));
+        } else {
+            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
         }
     } else {
         warn!("Couldn't connect to NATS, unable to stop running hosts")
