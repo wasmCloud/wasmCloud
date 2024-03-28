@@ -59,21 +59,29 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
             format!("Host `{}` unlabeled with `{}`", friendly_name, key),
         ))
     } else {
-        if value.is_empty() {
-            bail!("No value provided");
+        let labels_map: HashMap<_, _> = cmd.labels.into_iter()
+            .map(|label| {
+                let (key, value) = label.split_once('=').unwrap_or((label.as_str(), ""));
+                if value.is_empty() {
+                    bail!("No value provided for label '{}'", key);
+                }
+                (key.to_string(), value.to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        
+        for (key, value) in labels_map.iter() {
+            let ack = client
+                .put_label(&host_id, key, value)
+                .await
+                .map_err(boxed_err_to_anyhow)?;
+            if !ack.accepted {
+                bail!("Operation failed: {}", ack.error);
+            }
         }
-
-        let ack = client
-            .put_label(&host_id, key, value)
-            .await
-            .map_err(boxed_err_to_anyhow)?;
-        if !ack.success {
-            bail!("Operation failed: {}", ack.message);
-        }
-
+      
         Ok(CommandOutput::from_key_and_text(
             "result",
-            format!("Host `{}` labeled with `{}={}`", friendly_name, key, value),
+            format!("Host `{}` labeled with provided labels", friendly_name),
         ))
-    }
+      }
 }
