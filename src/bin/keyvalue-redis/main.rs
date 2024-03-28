@@ -10,8 +10,8 @@
 use anyhow::Context as _;
 use wasmcloud_core::HostData;
 use wasmcloud_provider_keyvalue_redis::{retrieve_default_url, DefaultConnection, KvRedisProvider};
-use wasmcloud_provider_sdk::interfaces::keyvalue::serve_keyvalue;
-use wasmcloud_provider_sdk::{load_host_data, run_provider_handler};
+use wasmcloud_provider_sdk::interfaces::keyvalue::run;
+use wasmcloud_provider_sdk::load_host_data;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,11 +23,12 @@ async fn main() -> anyhow::Result<()> {
     } else {
         DefaultConnection::Client(client)
     };
-    let provider = KvRedisProvider::new(default_connection);
-    let fut = run_provider_handler(provider.clone(), "kv-redis-provider")
-        .await
-        .context("failed to run provider")?;
-    serve_keyvalue(provider, fut).await?;
+    run(
+        KvRedisProvider::new(default_connection),
+        "kv-redis-provider",
+    )
+    .await
+    .context("failed to run provider")?;
     eprintln!("KVRedis provider exiting");
     Ok(())
 }

@@ -7,7 +7,8 @@ use core::future::Future;
 use tower::ServiceExt;
 use wrpc_transport::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
 
-use crate::{provider::invocation_context, Context};
+use crate::provider::invocation_context;
+use crate::Context;
 
 pub(crate) struct WrpcContextClient(wasmcloud_core::wrpc::Client);
 
