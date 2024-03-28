@@ -43,12 +43,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-Selector labels
+Selector labels wasmcloud_host
 */}}
 {{- define "wasmcloud_host.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "wasmcloud_host.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Selector labels wadm
+*/}}
+{{- define "wadm.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "wasmcloud_host.name" . }}
+app.kubernetes.io/instance: wadm
+{{- end }}
+
 
 {{/*
 Create the name of the service account to use

@@ -39,15 +39,26 @@ $ helm install wasmcloud oci://ghcr.io/wasmcloud/wasmcloud-chart --version 0.7.2
 This will get you up and going with a wasmCloud Host and NATS server so you can kick the tires and
 try things out.
 
-In order to access the dashboard and NATS, you'll need to forward the ports locally
+In order to access NATS locally, you'll need to forward the port
 (using the `RELEASE_NAME` you chose above as the `RELEASE_NAME` below)
 
 ```console
 # In a second terminal
-$ kubectl port-forward deployment/${RELEASE_NAME} 4222
+$ kubectl port-forward deployment/${RELEASE_NAME}-wasmcloud-chart 4222
 ```
 
+If you also want to see the wasmCloud host from Kubernetes in your local dashboard, you need to set `nats.insecureWebhook.enabled: true` in [`values.yaml`][values-yaml] (please note that this should only be done for testing/development purposes), and you'll need to forward the websocket port locally
+(using the `RELEASE_NAME` you chose above as the `RELEASE_NAME` below)
+
+```console
+# In a third terminal
+$ kubectl port-forward deployment/${RELEASE_NAME}-wasmcloud-chart 4001
+```
+
+If your dashboard is not showing the Kubernetes wasmCloud host, it might be that you have no local version of [wadm](wadm) running. You can spin it up in Kubernetes by setting `wadm.enabled: true` in [`values.yaml`][values-yaml]. This also allows you to execute commands like `wash app deploy [...]` from your local machine to deploy to the Kubernetes wasmCloud host.
+
 [artifacthub-wasmcloud]: https://artifacthub.io/packages/helm/wasmcloud-chart/wasmcloud-chart
+[wadm]: https://github.com/wasmCloud/wadm
 [wasmcloud-v0.81.0]: https://github.com/wasmCloud/wasmCloud/tree/v0.81.0
 [wasmcloud-docker-tags]: https://hub.docker.com/r/wasmcloud/wasmcloud/tags
 [values-yaml]: ./values.yaml
