@@ -384,10 +384,10 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
     nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
-    if tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE))
-        .await
-        .is_ok_and(|exists| exists)
-        && !cmd.wasmcloud_opts.multi_local
+    if !cmd.wasmcloud_opts.multi_local
+        && tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE))
+            .await
+            .is_ok_and(|exists| exists)
     {
         bail!("Pid file {:?} exists. There are still hosts running, please stop them before starting new ones or use --multi-local to start more",
             install_dir.join(WASMCLOUD_PID_FILE));

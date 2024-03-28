@@ -491,6 +491,7 @@ impl TestWashInstance {
             .output()
             .await
             .context("failed to stop host")?;
+        // Remove the lock file if it exists
         let install_dir = downloads_dir()?;
         let lock_file_exists = tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE)).await?;
         if lock_file_exists {
