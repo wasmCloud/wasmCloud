@@ -51,7 +51,6 @@ fn integration_claims_sign() {
             "0.1.0",
             "--rev",
             "1",
-            "--http_server",
             "--issuer",
             ISSUER,
             "--subject",
@@ -66,7 +65,7 @@ fn integration_claims_sign() {
     assert_eq!(
         output_to_string(sign_echo).unwrap(),
         format!(
-            "\nSuccessfully signed {} with capabilities: wasmcloud:httpserver\n",
+            "\nSuccessfully signed {}\n",
             signed_wasm_path.to_str().unwrap()
         )
     );
@@ -108,7 +107,6 @@ fn integration_claims_sign() {
             // "0.1.0",
             "--rev",
             "1",
-            "--http_server",
             "--issuer",
             ISSUER,
             "--subject",
@@ -129,11 +127,6 @@ fn integration_claims_sign() {
             echo.to_str().unwrap(),
             "--name",
             "EchoSigned",
-            // "--ver",
-            // "0.1.0",
-            // "--rev",
-            // "1",
-            "--http_server",
             "--issuer",
             ISSUER,
             "--subject",

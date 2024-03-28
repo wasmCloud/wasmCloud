@@ -30,10 +30,6 @@ pub enum ParCliCommand {
 
 #[derive(Parser, Debug, Clone)]
 pub struct CreateCommand {
-    /// Capability contract ID (e.g. wasmcloud:messaging or wasmcloud:keyvalue).
-    #[clap(short = 'c', long = "capid")]
-    capid: String,
-
     /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, wasmcloud, etc). Not unique.
     #[clap(short = 'v', long = "vendor")]
     vendor: String,
@@ -213,7 +209,6 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
 impl From<CreateCommand> for par::ParCreateArgs {
     fn from(cmd: CreateCommand) -> Self {
         par::ParCreateArgs {
-            capid: cmd.capid,
             vendor: cmd.vendor,
             revision: cmd.revision,
             version: cmd.version,
@@ -374,8 +369,6 @@ mod test {
             "x86_64-testrunner",
             "--binary",
             "./testrunner.so",
-            "--capid",
-            "wasmcloud:test",
             "--name",
             "CreateTest",
             "--vendor",
@@ -398,7 +391,6 @@ mod test {
         .unwrap();
         match create_long.par {
             ParCliCommand::Create(CreateCommand {
-                capid,
                 vendor,
                 revision,
                 version,
@@ -413,7 +405,6 @@ mod test {
                 compress,
                 disable_keygen,
             }) => {
-                assert_eq!(capid, "wasmcloud:test");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
                 assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));
@@ -437,8 +428,6 @@ mod test {
             "x86_64-testrunner",
             "-b",
             "./testrunner.so",
-            "-c",
-            "wasmcloud:test",
             "-n",
             "CreateTest",
             "-v",
@@ -459,7 +448,6 @@ mod test {
         .unwrap();
         match create_short.par {
             ParCliCommand::Create(CreateCommand {
-                capid,
                 vendor,
                 revision,
                 version,
@@ -474,7 +462,6 @@ mod test {
                 compress,
                 disable_keygen,
             }) => {
-                assert_eq!(capid, "wasmcloud:test");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
                 assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));

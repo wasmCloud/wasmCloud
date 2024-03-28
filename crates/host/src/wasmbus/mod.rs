@@ -1279,7 +1279,7 @@ pub struct Host {
     queue: AbortHandle,
     // Component ID -> All Links
     links: RwLock<HashMap<String, Vec<InterfaceLinkDefinition>>>,
-    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Component>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
 }
@@ -1317,14 +1317,14 @@ impl ComponentSpecification {
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
 enum Claims {
-    Actor(jwt::Claims<jwt::Actor>),
+    Component(jwt::Claims<jwt::Component>),
     Provider(jwt::Claims<jwt::CapabilityProvider>),
 }
 
 impl Claims {
     fn subject(&self) -> &str {
         match self {
-            Claims::Actor(claims) => &claims.subject,
+            Claims::Component(claims) => &claims.subject,
             Claims::Provider(claims) => &claims.subject,
         }
     }
@@ -1333,17 +1333,15 @@ impl Claims {
 impl From<StoredClaims> for Claims {
     fn from(claims: StoredClaims) -> Self {
         match claims {
-            StoredClaims::Actor(claims) => {
+            StoredClaims::Component(claims) => {
                 let name = (!claims.name.is_empty()).then_some(claims.name);
                 let rev = claims.revision.parse().ok();
                 let ver = (!claims.version.is_empty()).then_some(claims.version);
                 let tags = (!claims.tags.is_empty()).then_some(claims.tags);
-                let caps = (!claims.capabilities.is_empty()).then_some(claims.capabilities);
                 let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
-                let metadata = jwt::Actor {
+                let metadata = jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
@@ -1354,7 +1352,7 @@ impl From<StoredClaims> for Claims {
                     .issuer(&claims.issuer)
                     .with_metadata(metadata)
                     .build();
-                Claims::Actor(claims)
+                Claims::Component(claims)
             }
             StoredClaims::Provider(claims) => {
                 let name = (!claims.name.is_empty()).then_some(claims.name);
@@ -1365,7 +1363,6 @@ impl From<StoredClaims> for Claims {
                     .and_then(|schema| serde_json::from_str(&schema).ok());
                 let metadata = jwt::CapabilityProvider {
                     name,
-                    capid: claims.contract_id,
                     rev,
                     ver,
                     config_schema,
@@ -1963,7 +1960,7 @@ impl Host {
                     revision: actor
                         .claims()
                         .and_then(|claims| claims.metadata.as_ref())
-                        .and_then(|jwt::Actor { rev, .. }| *rev)
+                        .and_then(|jwt::Component { rev, .. }| *rev)
                         .unwrap_or_default(),
                     name,
                 })
@@ -2223,7 +2220,7 @@ impl Host {
         let annotations = annotations.into();
         let claims = component.claims();
         if let Some(claims) = claims {
-            self.store_claims(Claims::Actor(claims.clone()))
+            self.store_claims(Claims::Component(claims.clone()))
                 .await
                 .context("failed to store claims")?;
         }
@@ -2403,7 +2400,7 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Actor>) -> anyhow::Result<()> {
+    async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Component>) -> anyhow::Result<()> {
         let mut actor_claims = self.actor_claims.write().await;
         actor_claims.insert(claims.subject.clone(), claims);
         Ok(())
@@ -2687,7 +2684,7 @@ impl Host {
             let new_actor = self.fetch_actor(new_actor_ref).await?;
             let new_claims = new_actor.claims();
             if let Some(claims) = new_claims.cloned() {
-                self.store_claims(Claims::Actor(claims))
+                self.store_claims(Claims::Component(claims))
                     .await
                     .context("failed to store claims")?;
             }
@@ -3135,10 +3132,7 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            child,
-            annotations,
-            claims,
-            ..
+            child, annotations, ..
         } = entry.remove();
 
         // Send a request to the provider, requesting a graceful shutdown
@@ -3170,7 +3164,7 @@ impl Host {
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
-            event::provider_stopped(claims, &annotations, host_id, provider_id, "stop"),
+            event::provider_stopped(&annotations, host_id, provider_id, "stop"),
         )
         .await?;
         Ok(CtlResponse::success())
@@ -3189,7 +3183,7 @@ impl Host {
 
         let (actor_claims, provider_claims) =
             join!(self.actor_claims.read(), self.provider_claims.read());
-        let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
+        let actor_claims = actor_claims.values().cloned().map(Claims::Component);
         let provider_claims = provider_claims.values().cloned().map(Claims::Provider);
         let claims: Vec<StoredClaims> = actor_claims
             .chain(provider_claims)
@@ -3805,7 +3799,7 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn store_claims(&self, claims: Claims) -> anyhow::Result<()> {
         match &claims {
-            Claims::Actor(claims) => {
+            Claims::Component(claims) => {
                 self.store_actor_claims(claims.clone()).await?;
             }
             Claims::Provider(claims) => {
@@ -3815,7 +3809,7 @@ impl Host {
         };
         let claims: StoredClaims = claims.try_into()?;
         let subject = match &claims {
-            StoredClaims::Actor(claims) => &claims.subject,
+            StoredClaims::Component(claims) => &claims.subject,
             StoredClaims::Provider(claims) => &claims.subject,
         };
         let key = format!("CLAIMS_{subject}");
@@ -3888,7 +3882,7 @@ impl Host {
 
         ensure!(claims.subject() == pubkey, "subject mismatch");
         match claims {
-            Claims::Actor(claims) => self.store_actor_claims(claims).await,
+            Claims::Component(claims) => self.store_actor_claims(claims).await,
             Claims::Provider(claims) => {
                 let mut provider_claims = self.provider_claims.write().await;
                 provider_claims.insert(claims.subject.clone(), claims);
@@ -3914,7 +3908,7 @@ impl Host {
         ensure!(claims.subject() == pubkey, "subject mismatch");
 
         match claims {
-            Claims::Actor(claims) => {
+            Claims::Component(claims) => {
                 let mut actor_claims = self.actor_claims.write().await;
                 actor_claims.remove(&claims.subject);
             }
@@ -4052,15 +4046,13 @@ fn serialize_ctl_response<T: Serialize>(
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum StoredClaims {
-    Actor(StoredActorClaims),
+    Component(StoredComponentClaims),
     Provider(StoredProviderClaims),
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct StoredActorClaims {
+struct StoredComponentClaims {
     call_alias: String,
-    #[serde(alias = "caps", deserialize_with = "deserialize_messy_vec")]
-    capabilities: Vec<String>,
     #[serde(alias = "iss")]
     issuer: String,
     name: String,
@@ -4075,7 +4067,6 @@ struct StoredActorClaims {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StoredProviderClaims {
-    contract_id: String,
     #[serde(alias = "iss")]
     issuer: String,
     name: String,
@@ -4093,24 +4084,22 @@ impl TryFrom<Claims> for StoredClaims {
 
     fn try_from(claims: Claims) -> Result<Self, Self::Error> {
         match claims {
-            Claims::Actor(jwt::Claims {
+            Claims::Component(jwt::Claims {
                 issuer,
                 subject,
                 metadata,
                 ..
             }) => {
-                let jwt::Actor {
+                let jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
                     ..
                 } = metadata.context("no metadata found on actor claims")?;
-                Ok(StoredClaims::Actor(StoredActorClaims {
+                Ok(StoredClaims::Component(StoredComponentClaims {
                     call_alias: call_alias.unwrap_or_default(),
-                    capabilities: caps.unwrap_or_default(),
                     issuer,
                     name: name.unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4127,14 +4116,12 @@ impl TryFrom<Claims> for StoredClaims {
             }) => {
                 let jwt::CapabilityProvider {
                     name,
-                    capid: contract_id,
                     rev,
                     ver,
                     config_schema,
                     ..
                 } = metadata.context("no metadata found on provider claims")?;
                 Ok(StoredClaims::Provider(StoredProviderClaims {
-                    contract_id,
                     issuer,
                     name: name.unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4152,16 +4139,15 @@ impl TryFrom<&Claims> for StoredClaims {
 
     fn try_from(claims: &Claims) -> Result<Self, Self::Error> {
         match claims {
-            Claims::Actor(jwt::Claims {
+            Claims::Component(jwt::Claims {
                 issuer,
                 subject,
                 metadata,
                 ..
             }) => {
-                let jwt::Actor {
+                let jwt::Component {
                     name,
                     tags,
-                    caps,
                     rev,
                     ver,
                     call_alias,
@@ -4169,9 +4155,8 @@ impl TryFrom<&Claims> for StoredClaims {
                 } = metadata
                     .as_ref()
                     .context("no metadata found on actor claims")?;
-                Ok(StoredClaims::Actor(StoredActorClaims {
+                Ok(StoredClaims::Component(StoredComponentClaims {
                     call_alias: call_alias.clone().unwrap_or_default(),
-                    capabilities: caps.clone().unwrap_or_default(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4188,7 +4173,6 @@ impl TryFrom<&Claims> for StoredClaims {
             }) => {
                 let jwt::CapabilityProvider {
                     name,
-                    capid: contract_id,
                     rev,
                     ver,
                     config_schema,
@@ -4197,7 +4181,6 @@ impl TryFrom<&Claims> for StoredClaims {
                     .as_ref()
                     .context("no metadata found on provider claims")?;
                 Ok(StoredClaims::Provider(StoredProviderClaims {
-                    contract_id: contract_id.clone(),
                     issuer: issuer.clone(),
                     name: name.clone().unwrap_or_default(),
                     revision: rev.unwrap_or_default().to_string(),
@@ -4214,10 +4197,8 @@ impl TryFrom<&Claims> for StoredClaims {
 impl From<StoredClaims> for HashMap<String, String> {
     fn from(claims: StoredClaims) -> Self {
         match claims {
-            StoredClaims::Actor(claims) => HashMap::from([
+            StoredClaims::Component(claims) => HashMap::from([
                 ("call_alias".to_string(), claims.call_alias),
-                ("caps".to_string(), claims.capabilities.clone().join(",")), // TODO: remove in #1093
-                ("capabilities".to_string(), claims.capabilities.join(",")),
                 ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
                 ("issuer".to_string(), claims.issuer),
                 ("name".to_string(), claims.name),
@@ -4229,7 +4210,6 @@ impl From<StoredClaims> for HashMap<String, String> {
                 ("version".to_string(), claims.version),
             ]),
             StoredClaims::Provider(claims) => HashMap::from([
-                ("contract_id".to_string(), claims.contract_id),
                 ("iss".to_string(), claims.issuer.clone()), // TODO: remove in #1093
                 ("issuer".to_string(), claims.issuer),
                 ("name".to_string(), claims.name),

@@ -54,7 +54,6 @@ The following is a list of the custom claims that will appear in the `wascap` se
 * `hashes` - This is a map where the key is an `[arch]-[os]` string and the value is the hash for that particular file. Having these hashes inside the signed token means we can verify that the plugin binaries have not been tampered with.
 * `name` - Friendly name of the capability provider.
 * `vendor` - A vendor string helping to identify the provider (e.g. `Redis` or `Cassandra` or `PostgreSQL` etc). This is an information-only field and is not used as any kind of key or unique identifier.
-* `capid` - The capability contract ID (e.g. `wasmcloud:messaging` or `wasmcloud:keyvalue`, etc). Note that the plugin itself is required to expose this information to the runtime when it receives the "query descriptor" message. This value is to allow processes other than the wasmCloud runtime to interrogate the core metadata.
 * `version` - Friendly version string
 * `revision` - A monotonically increasing revision value. This value will be used to retrieve / store version-specific files.
 * `config_schema` - An optional JSON schema that describes the configuration structure for this capability provider. 

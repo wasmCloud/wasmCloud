@@ -11,14 +11,13 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
-fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
+fn format_actor_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
     let not_before_human = "TODO";
     let expires_human = "TODO";
     if let Some(actor) = &claims.metadata {
         json!({
             "call_alias": actor.call_alias,
-            "caps": actor.caps,
             "issuer": issuer,
             "tags": actor.tags,
             "name": actor.name,
@@ -37,7 +36,7 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
 }
 
 pub fn actor_scaled(
-    claims: Option<&jwt::Claims<jwt::Actor>>,
+    claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     max_instances: impl Into<usize>,
@@ -66,7 +65,7 @@ pub fn actor_scaled(
 }
 
 pub fn actor_scale_failed(
-    claims: Option<&jwt::Claims<jwt::Actor>>,
+    claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
@@ -151,7 +150,6 @@ pub fn provider_started(
             "instance_id": provider_id.as_ref(),
             "public_key": provider_id.as_ref(),
             "link_name": "default",
-            "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
         })
     } else {
         json!({
@@ -178,33 +176,21 @@ pub fn provider_start_failed(
 }
 
 pub fn provider_stopped(
-    claims: Option<jwt::Claims<jwt::CapabilityProvider>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     provider_id: impl AsRef<str>,
     reason: impl AsRef<str>,
 ) -> serde_json::Value {
-    if let Some(claims) = claims {
-        let metadata = claims.metadata.as_ref();
-        json!({
-            "host_id": host_id.as_ref(),
-            "provider_id": provider_id.as_ref(),
-            "annotations": annotations,
-            "reason": reason.as_ref(),
-            // TODO(#1548): remove these fields when we don't depend on them
-            "instance_id": provider_id.as_ref(),
-            "public_key": provider_id.as_ref(),
-            "link_name": "default",
-            "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
-        })
-    } else {
-        json!({
-            "host_id": host_id.as_ref(),
-            "provider_id": provider_id.as_ref(),
-            "annotations": annotations,
-            "reason": reason.as_ref(),
-        })
-    }
+    json!({
+        "host_id": host_id.as_ref(),
+        "provider_id": provider_id.as_ref(),
+        "annotations": annotations,
+        "reason": reason.as_ref(),
+        // TODO(#1548): remove these fields when we don't depend on them
+        "instance_id": provider_id.as_ref(),
+        "public_key": provider_id.as_ref(),
+        "link_name": "default",
+    })
 }
 
 pub fn provider_health_check(

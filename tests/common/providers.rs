@@ -17,8 +17,8 @@ pub struct Provider {
 }
 
 impl Provider {
-    pub async fn new(capid: &str, name: &str, bin: &str) -> anyhow::Result<Self> {
-        let mut par = ProviderArchive::new(capid, name, "test", None, None);
+    pub async fn new(name: &str, bin: &str) -> anyhow::Result<Self> {
+        let mut par = ProviderArchive::new(name, "test", None, None);
         let bin = fs::read(bin)
             .await
             .with_context(|| format!("failed to read binary at `{bin}`"))?;
@@ -42,7 +42,6 @@ pub async fn rust_blobstore_fs() -> &'static Provider {
     RUST_BLOBSTORE_FS
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:blobstore",
                 "wasmcloud-provider-blobstore-fs",
                 env!("CARGO_BIN_EXE_blobstore-fs"),
             )
@@ -57,7 +56,6 @@ pub async fn rust_blobstore_s3() -> &'static Provider {
     RUST_BLOBSTORE_S3
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:blobstore",
                 "wasmcloud-provider-blobstore-s3",
                 env!("CARGO_BIN_EXE_blobstore-s3"),
             )
@@ -72,7 +70,6 @@ pub async fn rust_http_client() -> &'static Provider {
     RUST_HTTP_CLIENT
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:http/outgoing-handler",
                 "wasmcloud-provider-http-client",
                 env!("CARGO_BIN_EXE_http-client"),
             )
@@ -87,7 +84,6 @@ pub async fn rust_http_server() -> &'static Provider {
     RUST_HTTP_SERVER
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:http/incoming-handler",
                 "wasmcloud-provider-http-server",
                 env!("CARGO_BIN_EXE_http-server"),
             )
@@ -102,7 +98,6 @@ pub async fn rust_lattice_controller() -> &'static Provider {
     RUST_LATTICE_CONTROLLER
         .get_or_init(|| async {
             Provider::new(
-                "wasmcloud:latticecontrol",
                 "wasmcloud-provider-lattice-controller",
                 env!("CARGO_BIN_EXE_lattice-controller"),
             )
@@ -117,7 +112,6 @@ pub async fn rust_keyvalue_redis() -> &'static Provider {
     RUST_KEYVALUE_REDIS
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:keyvalue",
                 "wasmcloud-provider-keyvalue-redis",
                 env!("CARGO_BIN_EXE_keyvalue-redis"),
             )
@@ -132,7 +126,6 @@ pub async fn rust_keyvalue_vault() -> &'static Provider {
     RUST_KEYVALUE_VAULT
         .get_or_init(|| async {
             Provider::new(
-                "wrpc:keyvalue",
                 "wasmcloud-provider-keyvalue-vault",
                 env!("CARGO_BIN_EXE_keyvalue-vault"),
             )
@@ -147,7 +140,6 @@ pub async fn rust_messaging_kafka() -> &'static Provider {
     RUST_MESSAGING_KAFKA
         .get_or_init(|| async {
             Provider::new(
-                "wasmcloud:messaging",
                 "wasmcloud-provider-messaging-kafka",
                 env!("CARGO_BIN_EXE_messaging-kafka"),
             )
@@ -162,7 +154,6 @@ pub async fn rust_messaging_nats() -> &'static Provider {
     RUST_MESSAGING_NATS
         .get_or_init(|| async {
             Provider::new(
-                "wasmcloud:messaging",
                 "wasmcloud-provider-messaging-nats",
                 env!("CARGO_BIN_EXE_messaging-nats"),
             )

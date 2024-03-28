@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 use term_table::{row::Row, table_cell::*, Table};
-use wascap::jwt::{Actor, Claims, Token, TokenValidation, WascapEntity};
+use wascap::jwt::{Claims, Component, Token, TokenValidation, WascapEntity};
 
 #[derive(Debug, Parser, Clone)]
 pub struct InspectCliCommand {
@@ -128,7 +128,7 @@ pub async fn handle_command(
             if jwt_only {
                 CommandOutput::from_key_and_text("token", token.jwt)
             } else {
-                let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
+                let validation = wascap::jwt::validate_token::<Component>(&token.jwt)?;
                 let is_component = matches!(
                     wit_parsed,
                     Some(Ok(wasmparser::Payload::Version {
@@ -146,7 +146,10 @@ pub async fn handle_command(
 }
 
 /// Extracts claims for a given OCI artifact
-async fn get_caps(cmd: InspectCliCommand, artifact_bytes: &[u8]) -> Result<Option<Token<Actor>>> {
+async fn get_caps(
+    cmd: InspectCliCommand,
+    artifact_bytes: &[u8],
+) -> Result<Option<Token<Component>>> {
     let _cache_path = (!cmd.no_cache).then(|| cached_oci_file(&cmd.target));
     // Extract will return an error if it encounters an invalid hash in the claims
     Ok(wascap::wasm::extract_claims(artifact_bytes)?)
@@ -154,7 +157,7 @@ async fn get_caps(cmd: InspectCliCommand, artifact_bytes: &[u8]) -> Result<Optio
 
 /// Renders actor claims into provided output format
 pub fn render_component_claims(
-    claims: Claims<Actor>,
+    claims: Claims<Component>,
     validation: TokenValidation,
     is_component: bool,
 ) -> CommandOutput {
@@ -291,7 +294,6 @@ pub(crate) async fn render_provider_claims(
     map.insert("name".to_string(), json!(name));
     map.insert("issuer".to_string(), json!(claims.issuer));
     map.insert("service".to_string(), json!(claims.subject));
-    map.insert("capability_contract_id".to_string(), json!(metadata.capid));
     map.insert("vendor".to_string(), json!(metadata.vendor));
     map.insert("version".to_string(), json!(friendly_ver));
     map.insert("revision".to_string(), json!(friendly_rev));
@@ -317,10 +319,6 @@ pub(crate) async fn render_provider_claims(
         table.add_row(Row::new(vec![
             TableCell::new("Service"),
             TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new("Capability Contract ID"),
-            TableCell::new_with_alignment(metadata.capid, 1, Alignment::Right),
         ]));
         table.add_row(Row::new(vec![
             TableCell::new("Vendor"),
