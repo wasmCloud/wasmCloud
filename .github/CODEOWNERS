@@ -30,12 +30,12 @@ Cargo.* @wasmCloud/host-maintainers
 # shared crates
 crates/control-interface @wasmCloud/control-interface-maintainers
 crates/core @wasmCloud/org-maintainers
-crates/opentelemetry-nats @wasmcloud/observability-maintainers
+crates/opentelemetry-nats @wasmCloud/observability-maintainers
 crates/provider-archive @wasmCloud/capability-provider-maintainers
 crates/provider-sdk @wasmCloud/capability-provider-sdk-maintainers
 crates/provider-wit-bindgen @wasmCloud/capability-provider-wit-bindgen-maintainers
 crates/provider-wit-bindgen-macro @wasmCloud/capability-provider-wit-bindgen-maintainers
-crates/tracing @wasmcloud/observability-maintainers
+crates/tracing @wasmCloud/observability-maintainers
 crates/wascap @wasmCloud/wascap-maintainers
 
 # projects
