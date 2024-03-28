@@ -7007,9 +7007,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913beea52dd0d7d783c34480a6598abb056b3f01cd4b4b85f9a3551e07736c81"
+checksum = "0526bd1f01310ab7a30f28b4e19e6d075317835a5462a0b20b0a504413fa3c98"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7042,9 +7042,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-keyvalue"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8af1b3134d173fd1abbc5d88033ab8f15a97d4578202d578fe6e57f4ce4b68a4"
+checksum = "5ac76053f7710e9416f90f00641bd35d94486bb3b810284707b74560f73090c1"
 dependencies = [
  "anyhow",
  "bytes",
