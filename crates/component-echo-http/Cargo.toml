@@ -1,0 +1,19 @@
+[package]
+name = "wasmcloud-component-echo-http"
+version = "0.1.0"
+description = """
+A simple WebAssembly component that returns all information received over HTTP request in it's response.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = [ "cdylib" ]
+
+[dependencies]
+serde_json = { workspace = true, features = [ "std" ] }
+wit-bindgen = { workspace = true, features = [ "macros" ] }
