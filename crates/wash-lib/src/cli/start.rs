@@ -1,40 +1,31 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use provider_archive::*;
 use tokio::time::Duration;
 
 use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
+    cli::{cached_oci_file, input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
         DEFAULT_START_PROVIDER_TIMEOUT_MS,
     },
     context::default_timeout_ms,
+    registry::{get_oci_artifact, OciPullOptions},
     wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
 };
 
 use super::validate_component_id;
 
 #[derive(Debug, Clone, Parser)]
-pub enum StartCommand {
-    /// Launch a component in a host
-    #[clap(name = "component", alias = "actor")]
-    Component(StartComponentCommand),
-
-    /// Launch a provider in a host
-    #[clap(name = "provider")]
-    Provider(StartProviderCommand),
-}
-
-#[derive(Debug, Clone, Parser)]
-pub struct StartComponentCommand {
+pub struct StartCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host or a string to match on the friendly name of a host. if omitted the actor will be
+    /// Id of host or a string to match on the friendly name of a host. if omitted the actor or provider component will be
     /// auctioned in the lattice to find a suitable host. If a string is supplied to match against,
     /// then the matching host ID will be used. If more than one host matches, then an error will be
     /// returned
@@ -42,12 +33,20 @@ pub struct StartComponentCommand {
     pub host_id: Option<String>,
 
     /// Component reference, e.g. the absolute file path or OCI URL.
-    #[clap(name = "component-ref")]
+    #[clap(name = "component-ref", alias = "ref")]
     pub component_ref: String,
 
     /// Unique ID to use for the component
-    #[clap(name = "component-id", value_parser = validate_component_id)]
+    #[clap(name = "component-id", alias = "id", value_parser = validate_component_id)]
     pub component_id: String,
+
+    /// Link name of provider component
+    #[clap(short = 'l', long = "link-name", default_value = "default")]
+    pub link_name: String,
+
+    /// List of named configuration to apply to the provider component, may be empty
+    #[clap(long = "config")]
+    pub config: Vec<String>,
 
     /// Maximum number of instances this component can run concurrently.
     #[clap(
@@ -72,9 +71,93 @@ pub struct StartComponentCommand {
     /// If this flag is omitted, the timeout will be adjusted to 5 seconds to account for component download times
     #[clap(long = "skip-wait")]
     pub skip_wait: bool,
+
+    /// Digest to verify artifact against (if OCI URL is provided for <target>)
+    #[clap(short = 'd', long = "digest")]
+    pub digest: Option<String>,
+
+    /// Allow latest artifact tags (if OCI URL is provided for <target>)
+    #[clap(long = "allow-latest")]
+    pub allow_latest: bool,
+
+    /// OCI username, if omitted anonymous authentication will be used
+    #[clap(long = "user", env = "WASH_REG_USER", hide_env_values = true)]
+    pub user: Option<String>,
+
+    /// OCI password, if omitted anonymous authentication will be used
+    #[clap(long = "password", env = "WASH_REG_PASSWORD", hide_env_values = true)]
+    pub password: Option<String>,
+
+    /// Allow insecure (HTTP) registry connections
+    #[clap(long = "insecure")]
+    pub insecure: bool,
+
+    /// skip the local OCI cache and pull the artifact from the registry to inspect
+    #[clap(long = "no-cache")]
+    pub no_cache: bool,
 }
 
-pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
+pub async fn handle_start(cmd: StartCommand) -> Result<CommandOutput> {
+    // TODO: absolutize the path if it's a relative file
+    let component_ref = if cmd.component_ref.starts_with('/') {
+        format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
+    } else {
+        cmd.component_ref.to_string()
+    };
+
+    let mut buf = Vec::new();
+    if PathBuf::from(component_ref.clone()).as_path().is_dir() {
+        let mut f = File::open(component_ref.clone())?;
+        f.read_to_end(&mut buf)?;
+    } else {
+        let cache_file = (!cmd.no_cache).then(|| cached_oci_file(&cmd.component_ref.clone()));
+        buf = get_oci_artifact(
+            component_ref.clone(),
+            cache_file,
+            OciPullOptions {
+                digest: cmd.digest.clone(),
+                allow_latest: cmd.allow_latest,
+                user: cmd.user.clone(),
+                password: cmd.password.clone(),
+                insecure: cmd.insecure,
+            },
+        )
+        .await?;
+    }
+
+    let actor = match wasmparser::Parser::new(0).parse_all(&buf).next() {
+        Some(Ok(wasmparser::Payload::Version {
+            encoding: wasmparser::Encoding::Component,
+            ..
+        })) => Ok(()),
+        _ => Err(anyhow!(
+            "The provided actor component couldn't be parsed as a wasm component",
+        )),
+    };
+
+    if actor.is_ok() {
+        return handle_start_component(cmd)
+            .await
+            .with_context(|| format!("Failed to start actor component: {}", component_ref));
+    }
+
+    let provider = ProviderArchive::try_load(&buf).await;
+
+    if provider.is_ok() {
+        return handle_start_provider(cmd)
+            .await
+            .with_context(|| format!("Failed to start provider component: {}", component_ref));
+    }
+
+    Err(anyhow!(
+        "The provided component {} is not a valid actor or provider component. Failed with errors: {} and {}", 
+        component_ref,
+        provider.err().unwrap(),
+        actor.err().unwrap()
+    ))
+}
+
+async fn handle_start_component(cmd: StartCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_ACTOR_TIMEOUT_MS
@@ -160,50 +243,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
     ))
 }
 
-#[derive(Debug, Clone, Parser)]
-pub struct StartProviderCommand {
-    #[clap(flatten)]
-    pub opts: CliConnectionOpts,
-
-    /// Id of host or a string to match on the friendly name of a host. if omitted the provider will
-    /// be auctioned in the lattice to find a suitable host. If a string is supplied to match
-    /// against, then the matching host ID will be used. If more than one host matches, then an
-    /// error will be returned
-    #[clap(long = "host-id")]
-    pub host_id: Option<String>,
-
-    /// Provider reference, e.g. the OCI URL for the provider
-    #[clap(name = "provider-ref")]
-    pub provider_ref: String,
-
-    /// Unique provider ID to use for the provider
-    #[clap(name = "provider-id", value_parser = validate_component_id)]
-    pub provider_id: String,
-
-    /// Link name of provider
-    #[clap(short = 'l', long = "link-name", default_value = "default")]
-    pub link_name: String,
-
-    /// Constraints for provider auction in the form of "label=value". If host-id is supplied, this list is ignored
-    #[clap(short = 'c', long = "constraint", name = "constraints")]
-    pub constraints: Option<Vec<String>>,
-
-    /// Timeout to await an auction response, defaults to 2000 milliseconds
-    #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
-    pub auction_timeout_ms: u64,
-
-    /// List of named configuration to apply to the provider, may be empty
-    #[clap(long = "config")]
-    pub config: Vec<String>,
-
-    /// By default, the command will wait until the provider has been started.
-    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the provider to start.
-    /// If this flag is omitted, the timeout will be adjusted to 30 seconds to account for provider download times
-    #[clap(long = "skip-wait")]
-    pub skip_wait: bool,
-}
-
-pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> {
+async fn handle_start_provider(cmd: StartCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting provider
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_PROVIDER_TIMEOUT_MS
@@ -214,10 +254,10 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
-    let provider_ref = if cmd.provider_ref.starts_with('/') {
-        format!("file://{}", &cmd.provider_ref) // prefix with file:// if it's an absolute path
+    let provider_ref = if cmd.component_ref.starts_with('/') {
+        format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
     } else {
-        cmd.provider_ref.to_string()
+        cmd.component_ref.to_string()
     };
 
     let host = match cmd.host_id {
@@ -262,13 +302,13 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .context("Failed to get lattice event channel")?;
 
     let ack = client
-        .start_provider(&host, &provider_ref, &cmd.provider_id, None, cmd.config)
+        .start_provider(&host, &provider_ref, &cmd.component_id, None, cmd.config)
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(
                 "Failed to start provider {} on host {:?}",
-                &cmd.provider_id, &host
+                &cmd.component_id, &host
             )
         })?;
 

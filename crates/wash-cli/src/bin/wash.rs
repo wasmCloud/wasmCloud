@@ -186,7 +186,7 @@ enum CliCommand {
     #[clap(name = "scale", subcommand)]
     Scale(ScaleCommand),
     /// Start a component or capability provider
-    #[clap(name = "start", subcommand)]
+    #[clap(name = "start")]
     Start(StartCommand),
     /// Stop a component, capability provider, or host
     #[clap(name = "stop", subcommand)]

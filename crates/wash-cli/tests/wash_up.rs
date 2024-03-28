@@ -68,7 +68,6 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
-            "actor",
             HELLO_OCI_REF,
             "hello_actor_id",
             "--ctl-port",
