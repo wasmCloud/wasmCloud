@@ -965,7 +965,7 @@ impl Messaging for Handler {
         let wrpc = self.wrpc_messaging_consumer().await?;
         let (res, tx) = wrpc
             .invoke_static::<Result<_, String>>(
-                "wasmcloud:messaging/consumer",
+                "wasmcloud:messaging/consumer@0.2.0",
                 "request",
                 (subject, body, timeout),
             )
@@ -982,7 +982,7 @@ impl Messaging for Handler {
         let wrpc = self.wrpc_messaging_consumer().await?;
         let (res, tx) = wrpc
             .invoke_static::<Result<(), String>>(
-                "wasmcloud:messaging/consumer",
+                "wasmcloud:messaging/consumer@0.2.0",
                 "publish",
                 BrokerMessage(msg),
             )

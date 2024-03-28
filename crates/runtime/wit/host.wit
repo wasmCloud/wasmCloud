@@ -10,5 +10,5 @@ world interfaces {
     import wasi:keyvalue/eventual@0.2.0-draft;
     import wasi:logging/logging;
 
-    import wasmcloud:messaging/consumer;
+    import wasmcloud:messaging/consumer@0.2.0;
 }

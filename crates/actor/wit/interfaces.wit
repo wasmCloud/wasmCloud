@@ -12,5 +12,5 @@ world interfaces {
     import wasi:logging/logging;
     import wasi:random/random@0.2.0;
 
-    import wasmcloud:messaging/consumer;
+    import wasmcloud:messaging/consumer@0.2.0;
 }
