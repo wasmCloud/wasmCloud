@@ -9,7 +9,7 @@ use crate::{
     actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id, get_all_inventories, FindIdError, Match},
-    config::WashConnectionOptions,
+    config::{downloads_dir, WashConnectionOptions, WASMCLOUD_PID_FILE},
     context::default_timeout_ms,
     id::ServerId,
     wait::{wait_for_provider_stop_event, FindEventOutcome, ProviderStoppedInfo},
@@ -241,8 +241,12 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
 pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
+    let install_dir = downloads_dir()?;
 
-    stop_hosts(client, Some(&cmd.host_id), false).await?;
+    let (_, hosts_remain) = stop_hosts(client, Some(&cmd.host_id), false).await?;
+    if !hosts_remain {
+        tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    }
 
     Ok(CommandOutput::from_key_and_text(
         "result",

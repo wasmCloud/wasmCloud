@@ -15,7 +15,7 @@ use wash_lib::{
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::{sanitize_component_id, CommandOutput},
-    config::downloads_dir,
+    config::{downloads_dir, WASMCLOUD_PID_FILE},
     generate::emoji,
     id::{ModuleId, ServerId},
     parser::get_config,
@@ -93,7 +93,7 @@ pub async fn handle_command(
     output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
     // Check if host is running
-    let pid_file = downloads_dir()?;
+    let pid_file = downloads_dir()?.join(WASMCLOUD_PID_FILE);
     let existing_instance = tokio::fs::metadata(pid_file).await.is_ok();
 
     let mut host_subprocess: Option<HostSubprocess> = None;
