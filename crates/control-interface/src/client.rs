@@ -166,7 +166,7 @@ impl Client {
     /// _timeout_.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<CtlResponse<Host>>> {
-        let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::queries::hosts(&self.topic_prefix, &self.lattice);
         debug!("get_hosts:publish {}", &subject);
         self.publish_and_wait(subject, Vec::new()).await
     }
@@ -174,7 +174,7 @@ impl Client {
     /// Retrieves the contents of a running host
     #[instrument(level = "debug", skip_all)]
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<CtlResponse<HostInventory>> {
-        let subject = broker::queries::host_inventory(
+        let subject = broker::v1::queries::host_inventory(
             &self.topic_prefix,
             &self.lattice,
             parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
@@ -189,7 +189,7 @@ impl Client {
     /// Retrieves the full set of all cached claims in the lattice.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<CtlResponse<Vec<HashMap<String, String>>>> {
-        let subject = broker::queries::claims(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::queries::claims(&self.topic_prefix, &self.lattice);
         debug!("get_claims:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -209,7 +209,7 @@ impl Client {
         actor_id: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<CtlResponse<ActorAuctionAck>>> {
-        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::actor_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
             actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
@@ -231,7 +231,7 @@ impl Client {
         provider_id: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<CtlResponse<ProviderAuctionAck>>> {
-        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::provider_auction_subject(&self.topic_prefix, &self.lattice);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
             provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
@@ -266,7 +266,7 @@ impl Client {
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
-            broker::commands::scale_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
+            broker::v1::commands::scale_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             max_instances,
@@ -294,7 +294,7 @@ impl Client {
         &self,
         registries: HashMap<String, RegistryCredential>,
     ) -> Result<CtlResponse<()>> {
-        let subject = broker::publish_registries(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::publish_registries(&self.topic_prefix, &self.lattice);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
         let resp = self
@@ -320,7 +320,7 @@ impl Client {
         parse_identifier(&IdentifierKind::ComponentId, &link.target)?;
         parse_identifier(&IdentifierKind::LinkName, &link.name)?;
 
-        let subject = broker::put_link(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::put_link(&self.topic_prefix, &self.lattice);
         debug!("put_link:request {}", &subject);
 
         let bytes = crate::json_serialize(&link)?;
@@ -340,7 +340,7 @@ impl Client {
         wit_namespace: &str,
         wit_package: &str,
     ) -> Result<CtlResponse<()>> {
-        let subject = broker::delete_link(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::delete_link(&self.topic_prefix, &self.lattice);
         let ld = DeleteInterfaceLinkDefinitionRequest {
             source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
             name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
@@ -359,7 +359,7 @@ impl Client {
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_links(&self) -> Result<CtlResponse<Vec<InterfaceLinkDefinition>>> {
-        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice);
+        let subject = broker::v1::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("get_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -376,7 +376,7 @@ impl Client {
         config_name: &str,
         config: impl Into<HashMap<String, String>>,
     ) -> Result<CtlResponse<()>> {
-        let subject = broker::put_config(&self.topic_prefix, &self.lattice, config_name);
+        let subject = broker::v1::put_config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Putting config");
         let data = serde_json::to_vec(&config.into())?;
         match self.request_timeout(subject, data, self.timeout).await {
@@ -390,7 +390,7 @@ impl Client {
     /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_config(&self, config_name: &str) -> Result<CtlResponse<()>> {
-        let subject = broker::delete_config(&self.topic_prefix, &self.lattice, config_name);
+        let subject = broker::v1::delete_config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Delete config");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -411,7 +411,7 @@ impl Client {
         &self,
         config_name: &str,
     ) -> Result<CtlResponse<HashMap<String, String>>> {
-        let subject = broker::queries::config(&self.topic_prefix, &self.lattice, config_name);
+        let subject = broker::v1::queries::config(&self.topic_prefix, &self.lattice, config_name);
         debug!(%subject, %config_name, "Getting config");
         match self
             .request_timeout(subject, Vec::default(), self.timeout)
@@ -433,7 +433,7 @@ impl Client {
         key: &str,
         value: &str,
     ) -> Result<CtlResponse<()>> {
-        let subject = broker::put_label(&self.topic_prefix, &self.lattice, host_id);
+        let subject = broker::v1::put_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "putting label");
         let bytes = json_serialize(HostLabel {
             key: key.to_string(),
@@ -451,7 +451,7 @@ impl Client {
     ///
     /// Will return an error if there is a communication problem with the host
     pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlResponse<()>> {
-        let subject = broker::delete_label(&self.topic_prefix, &self.lattice, host_id);
+        let subject = broker::v1::delete_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "removing label");
         let bytes = json_serialize(HostLabel {
             key: key.to_string(),
@@ -481,7 +481,7 @@ impl Client {
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
-            broker::commands::update_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
+            broker::v1::commands::update_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id,
@@ -513,8 +513,11 @@ impl Client {
         provider_configuration: Vec<String>,
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject =
-            broker::commands::start_provider(&self.topic_prefix, &self.lattice, host_id.as_str());
+        let subject = broker::v1::commands::start_provider(
+            &self.topic_prefix,
+            &self.lattice,
+            host_id.as_str(),
+        );
         debug!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
             host_id,
@@ -538,8 +541,11 @@ impl Client {
     pub async fn stop_provider(&self, host_id: &str, provider_id: &str) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
 
-        let subject =
-            broker::commands::stop_provider(&self.topic_prefix, &self.lattice, host_id.as_str());
+        let subject = broker::v1::commands::stop_provider(
+            &self.topic_prefix,
+            &self.lattice,
+            host_id.as_str(),
+        );
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id,
@@ -564,7 +570,7 @@ impl Client {
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
-            broker::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
+            broker::v1::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
             host_id,

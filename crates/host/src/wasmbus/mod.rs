@@ -41,7 +41,7 @@ use wasmcloud_control_interface::{
     ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateActorCommand, WitInterface,
 };
-use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, OtelConfig};
+use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, OtelConfig, CTL_API_VERSION_1};
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
@@ -137,24 +137,38 @@ impl Queue {
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
         let streams = futures::future::join_all([
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.registry.put",))),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.host.ping",))),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.*.auction",))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.registry.put",
+            ))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.host.ping",
+            ))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.*.auction",
+            ))),
             Either::Right(nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.link.*"),
-                format!("{topic_prefix}.{lattice}.link",),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.link.*"),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.link",),
             )),
             Either::Right(nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.claims.get"),
-                format!("{topic_prefix}.{lattice}.claims"),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.claims.get"),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.claims"),
             )),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.actor.*.{host_id}"))),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.provider.*.{host_id}"))),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.label.*.{host_id}"))),
-            Either::Left(nats.subscribe(format!("{topic_prefix}.{lattice}.host.*.{host_id}"))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.actor.*.{host_id}"
+            ))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.provider.*.{host_id}"
+            ))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.label.*.{host_id}"
+            ))),
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.host.*.{host_id}"
+            ))),
             Either::Right(nats.queue_subscribe(
-                format!("{topic_prefix}.{lattice}.config.>"),
-                format!("{topic_prefix}.{lattice}.config"),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config.>"),
+                format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config"),
             )),
         ])
         .await
@@ -3517,15 +3531,15 @@ impl Host {
         // disabled. In most cases that's fine, since we aren't aware of any control interface
         // requests including a trace context
         opentelemetry_nats::attach_span_context(&message);
-        // Skip the topic prefix and then the lattice prefix
-        // e.g. `wasmbus.ctl.{prefix}`
+        // Skip the topic prefix, the version, and the lattice
+        // e.g. `wasmbus.ctl.v1.{prefix}`
         let subject = message.subject;
         let mut parts = subject
             .trim()
             .trim_start_matches(&self.ctl_topic_prefix)
             .trim_start_matches('.')
             .split('.')
-            .skip(1);
+            .skip(2);
         trace!(%subject, "handling control interface request");
 
         // This response is a wrapped Result<Option<Result<Vec<u8>>>> for a good reason.
