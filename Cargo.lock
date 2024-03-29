@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 dependencies = [
  "anyhow",
  "async-nats",
