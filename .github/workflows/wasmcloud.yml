@@ -609,6 +609,7 @@ jobs:
             workspace-dependencies: true
 
           - crate: control-interface
+            workspace-dependencies: true
 
           - crate: core
             workspace-dependencies: true

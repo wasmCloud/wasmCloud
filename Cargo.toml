@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.0.0-alpha.2"
+version = "1.0.0-alpha.3"
 description = "wasmCloud host runtime"
 default-run = "wasmcloud"
 
@@ -276,7 +276,7 @@ wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
 wasmcloud-component-adapters = { version = "0.9", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0-alpha.1", path = "./crates/control-interface", default-features = false }
-wasmcloud-core = { version = "0.3", path = "./crates/core", default-features = false }
+wasmcloud-core = { version = "0.4", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
