@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
 use tokio::time::Duration;
+use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::{
@@ -240,14 +241,8 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
 pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
-    let ack = client
-        .stop_host(&cmd.host_id, Some(cmd.host_shutdown_timeout))
-        .await
-        .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.success {
-        bail!("Operation failed: {}", ack.message);
-    }
+    stop_hosts(client, Some(&cmd.host_id), false).await?;
 
     Ok(CommandOutput::from_key_and_text(
         "result",
@@ -297,5 +292,70 @@ where
     } else {
         // SAFETY: We know there is exactly one match at this point
         Ok(all_matching.into_iter().next().unwrap().0)
+    }
+}
+
+/// Stop running wasmCloud hosts, returns a vector of host IDs that were stopped and
+/// a boolean indicating whether any hosts remain running
+pub async fn stop_hosts(
+    client: wasmcloud_control_interface::client::Client,
+    host_id: Option<&String>,
+    all: bool,
+) -> Result<(Vec<String>, bool)> {
+    let hosts = client
+        .get_hosts()
+        .await
+        .map_err(|e| anyhow!(e))?
+        .into_iter()
+        .filter_map(|r| r.response)
+        .collect::<Vec<_>>();
+
+    // If a host ID was supplied, stop only that host
+    if let Some(host_id) = host_id {
+        let host_id_string = host_id.to_string();
+        client.stop_host(&host_id_string, None).await.map_err(|e| {
+            anyhow!(
+                "Could not stop host, ensure a host with that ID is running: {:?}",
+                e
+            )
+        })?;
+
+        Ok((vec![host_id_string], hosts.len() > 1))
+    } else if hosts.is_empty() {
+        Ok((vec![], false))
+    } else if hosts.len() == 1 {
+        let host_id = &hosts[0].id;
+        client
+            .stop_host(host_id, None)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Ok((vec![host_id.to_string()], false))
+    } else if all {
+        let host_stops = hosts
+            .iter()
+            .map(|host| async {
+                let host_id = &host.id;
+                match client.stop_host(host_id, None).await {
+                    Ok(_) => Some(host_id.to_owned()),
+                    Err(e) => {
+                        error!("Could not stop host {}: {:?}", host_id, e);
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let all_stops = futures::future::join_all(host_stops).await;
+        let host_ids = all_stops
+            .iter()
+            // Remove any host IDs that ran into errors
+            .filter_map(|host_id| host_id.to_owned())
+            .collect::<Vec<_>>();
+        let hosts_remaining = all_stops.len() > host_ids.len();
+
+        Ok((host_ids, hosts_remaining))
+    } else {
+        bail!(
+                "More than one host is running, please specify a host ID or use --all\nRunning hosts: {:?}", hosts.into_iter().map(|h| h.id).collect::<Vec<_>>()
+            )
     }
 }
