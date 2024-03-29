@@ -75,7 +75,6 @@ async fn integration_stop_provider_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_stop_host_serial() -> Result<()> {
-    println!("stop host");
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
