@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use anyhow::{anyhow, bail, Result};
-use async_nats::Client;
+use anyhow::Result;
 use clap::Parser;
 use serde_json::json;
 use tokio::process::Command;
-use tracing::{error, warn};
-use wash_lib::cli::{CommandOutput, OutputKind};
+use tracing::warn;
+use wash_lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
 use wash_lib::config::{
     create_nats_client_from_opts, downloads_dir, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
     WASMCLOUD_PID_FILE,
@@ -88,7 +87,13 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     )
     .await
     {
-        let (hosts, hosts_remain) = stop_hosts(client, &cmd.lattice, &cmd.host_id, cmd.all).await?;
+        let ctl_client = wasmcloud_control_interface::ClientBuilder::new(client)
+            .lattice(&cmd.lattice)
+            .auction_timeout(std::time::Duration::from_secs(2))
+            .build();
+        let host_id_string = cmd.host_id.map(|id| id.to_string());
+        let (hosts, hosts_remain) =
+            stop_hosts(ctl_client, host_id_string.as_ref(), cmd.all).await?;
         out_json.insert("hosts_stopped".to_string(), json!(hosts));
         out_text.push_str("✅ wasmCloud hosts stopped successfully\n");
         if hosts_remain {
@@ -136,77 +141,6 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
 
     sp.finish_and_clear();
     Ok(CommandOutput::new(out_text, out_json))
-}
-
-/// Stop running wasmCloud hosts, returns a vector of host IDs that were stopped and
-/// a boolean indicating whether any hosts remain running
-async fn stop_hosts(
-    nats_client: Client,
-    lattice: &str,
-    host_id: &Option<ServerId>,
-    all: bool,
-) -> Result<(Vec<String>, bool)> {
-    let client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
-        .lattice(lattice)
-        .auction_timeout(std::time::Duration::from_secs(2))
-        .build();
-
-    let hosts = client
-        .get_hosts()
-        .await
-        .map_err(|e| anyhow!(e))?
-        .into_iter()
-        .filter_map(|r| r.response)
-        .collect::<Vec<_>>();
-
-    // If a host ID was supplied, stop only that host
-    if let Some(host_id) = host_id {
-        let host_id_string = host_id.to_string();
-        client.stop_host(&host_id_string, None).await.map_err(|e| {
-            anyhow!(
-                "Could not stop host, ensure a host with that ID is running: {:?}",
-                e
-            )
-        })?;
-
-        Ok((vec![host_id_string], hosts.len() > 1))
-    } else if hosts.is_empty() {
-        Ok((vec![], false))
-    } else if hosts.len() == 1 {
-        let host_id = &hosts[0].id;
-        client
-            .stop_host(host_id, None)
-            .await
-            .map_err(|e| anyhow!(e))?;
-        Ok((vec![host_id.to_string()], false))
-    } else if all {
-        let host_stops = hosts
-            .iter()
-            .map(|host| async {
-                let host_id = &host.id;
-                match client.stop_host(host_id, None).await {
-                    Ok(_) => Some(host_id.to_owned()),
-                    Err(e) => {
-                        error!("Could not stop host {}: {:?}", host_id, e);
-                        None
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        let all_stops = futures::future::join_all(host_stops).await;
-        let host_ids = all_stops
-            .iter()
-            // Remove any host IDs that ran into errors
-            .filter_map(|host_id| host_id.to_owned())
-            .collect::<Vec<_>>();
-        let hosts_remaining = all_stops.len() > host_ids.len();
-
-        Ok((host_ids, hosts_remaining))
-    } else {
-        bail!(
-                "More than one host is running, please specify a host ID or use --all\nRunning hosts: {:?}", hosts.into_iter().map(|h| h.id).collect::<Vec<_>>()
-            )
-    }
 }
 
 /// Helper function to send the nats-server the stop command

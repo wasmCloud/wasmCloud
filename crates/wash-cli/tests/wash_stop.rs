@@ -1,8 +1,8 @@
 mod common;
 
-use common::{TestWashInstance, HELLO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
+use common::{wait_for_no_hosts, TestWashInstance, HELLO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serial_test::serial;
 use wash_lib::cli::output::StartCommandOutput;
 
@@ -75,6 +75,10 @@ async fn integration_stop_provider_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_stop_host_serial() -> Result<()> {
+    println!("stop host");
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
     let wash_instance = TestWashInstance::create().await?;
     wash_instance.stop_host().await?;
     Ok(())

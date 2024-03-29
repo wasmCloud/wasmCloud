@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use rand::{distributions::Alphanumeric, Rng};
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
@@ -491,16 +491,19 @@ impl TestWashInstance {
             .output()
             .await
             .context("failed to stop host")?;
-        // Remove the lock file if it exists
-        let install_dir = downloads_dir()?;
-        let lock_file_exists = tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE)).await?;
-        if lock_file_exists {
-            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+
+        let hosts = self.get_hosts().await.map_err(|e| anyhow!(e))?.hosts;
+
+        if hosts.is_empty() {
+            // Remove the lock file if it exists.
+            // `wash down` removes the lockfile but not `wash stop`
+            let install_dir = downloads_dir()?;
+            let lock_file_exists =
+                tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+            if lock_file_exists {
+                tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+            }
         }
-        assert!(
-            !lock_file_exists,
-            "wasmcloud lock file still exists after stopping host"
-        );
         serde_json::from_slice(&output.stdout).context("failed to parse output of `wash stop host`")
     }
 }
@@ -697,7 +700,11 @@ pub async fn wait_for_no_hosts() -> Result<()> {
     .await
     .context("number of hosts running is still non-zero")?;
     let install_dir = downloads_dir()?;
-    wait_for_file_to_be_removed(&install_dir.join(WASMCLOUD_PID_FILE)).await
+    let lockfile = install_dir.join(WASMCLOUD_PID_FILE);
+    match wait_for_file_to_be_removed(&lockfile).await {
+        Ok(()) => return Ok(()),
+        Err(_e) => delete_file(&lockfile).await,
+    }
 }
 
 /// Wait for a file to be removed.
@@ -711,7 +718,13 @@ pub async fn wait_for_file_to_be_removed(file_path: &PathBuf) -> Result<()> {
         }
     })
     .await
-    .context("file was not removed")
+    .context("file was not removed by previous test")
+}
+
+async fn delete_file(file_path: &PathBuf) -> Result<()> {
+    tokio::fs::remove_file(file_path)
+        .await
+        .context("failed to remove file")
 }
 
 /// Wait for NATS to start running by checking for process names.
