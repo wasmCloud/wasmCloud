@@ -78,7 +78,7 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
                 bail!("Operation failed: {}", ack.error);
             }
         }
-      
+    
         Ok(CommandOutput::from_key_and_text(
             "result",
             format!("Host `{}` labeled with provided labels", friendly_name),
