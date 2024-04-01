@@ -328,6 +328,10 @@ fn minimal_rust_actor() {
 
     let config = assert_ok!(result);
 
+    let mut expected_key_dir =
+        dirs::home_dir().expect("Unable to determine the user's home directory");
+    expected_key_dir.push(".wash/keys");
+
     assert_eq!(
         config.language,
         LanguageConfig::Rust(RustConfig {
@@ -342,7 +346,7 @@ fn minimal_rust_actor() {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
-            key_directory: PathBuf::from("./keys"),
+            key_directory: expected_key_dir,
             destination: None,
             call_alias: None,
             wasi_preview2_adapter_path: None,
@@ -377,6 +381,10 @@ fn cargo_toml_actor() {
 
     let config = assert_ok!(result);
 
+    let mut expected_default_key_dir =
+        dirs::home_dir().expect("Unable to determine the user's home directory");
+    expected_default_key_dir.push(".wash/keys");
+
     assert_eq!(
         config.language,
         LanguageConfig::Rust(RustConfig {
@@ -391,7 +399,7 @@ fn cargo_toml_actor() {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
-            key_directory: PathBuf::from("./keys"),
+            key_directory: expected_default_key_dir,
             destination: None,
             call_alias: None,
             wasi_preview2_adapter_path: None,
@@ -427,11 +435,16 @@ fn minimal_rust_actor_preview2() {
     );
 
     let config = assert_ok!(result);
+
+    let mut expected_default_key_dir =
+        dirs::home_dir().expect("Unable to determine the user's home directory");
+    expected_default_key_dir.push(".wash/keys");
+
     assert_eq!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
-            key_directory: PathBuf::from("./keys"),
+            key_directory: expected_default_key_dir,
             wasm_target: WasmTarget::WasiPreview2,
             wit_world: Some("test-world".to_string()),
             ..Default::default()
