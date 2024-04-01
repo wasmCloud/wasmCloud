@@ -102,6 +102,7 @@ struct Args {
         env = "WASMCLOUD_STRUCTURED_LOGGING_ENABLED"
     )]
     enable_structured_logging: bool,
+    /// Start the host with a set of labels, can be specified multiple times. This can alternatively be specified via environment variables prefixed with `WASMCLOUD_LABEL_`, e.g. `WASMCLOUD_LABEL_foo=bar`
     #[clap(short = 'l', long = "label")]
     label: Option<Vec<String>>,
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
