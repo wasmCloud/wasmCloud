@@ -2911,41 +2911,31 @@ impl Host {
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
             };
             let config_generator = self.config_generator.clone();
-            // Prepare startup links by generating the source and target configs
-            let link_definitions =
-                self.links
-                    .read()
-                    .await
-                    .get(provider_id)
-                    .cloned()
-                    .map(|links| async {
-                        futures::future::join_all(links.into_iter().map(|link| async {
-                            // Taking the penalty to clone two strings here with the benefit of a much
-                            // better error message if the link fails to resolve
-                            let source_id = link.source_id.clone();
-                            let target = link.target.clone();
-                            if let Ok(provider_link) =
-                                resolve_link_config(&config_generator, link).await
-                            {
-                                Some(provider_link)
-                            } else {
-                                error!(
-                                    provider_id,
-                                    source_id,
-                                    target,
-                                    "failed to resolve link config, skipping link"
-                                );
-                                None
-                            }
-                        }))
-                        .await
-                    });
 
-            let link_definitions = if let Some(links) = link_definitions {
-                links.await.into_iter().flatten().collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
+            // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
+            // or target of a link, we need to iterate over all links to find the ones that involve the provider.
+            let link_definitions = stream::iter(self.links.read().await.values().flatten())
+                .filter_map(|link| async {
+                    if link.source_id == provider_id || link.target == provider_id {
+                        if let Ok(provider_link) =
+                            resolve_link_config(&config_generator, link.clone()).await
+                        {
+                            Some(provider_link)
+                        } else {
+                            error!(
+                                provider_id,
+                                source_id = link.source_id,
+                                target = link.target,
+                                "failed to resolve link config, skipping link"
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<wasmcloud_core::InterfaceLinkDefinition>>()
+                .await;
 
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
