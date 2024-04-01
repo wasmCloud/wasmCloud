@@ -35,9 +35,9 @@
     "build": "tsup"
   },
   "devDependencies": {
-    "@types/eslint": "~8.56.5",
-    "@types/react": "^18.2.67",
-    "@types/react-dom": "^18.2.22",
+    "@types/eslint": "~8.56.7",
+    "@types/react": "^18.2.73",
+    "@types/react-dom": "^18.2.23",
     "@wasmcloud/tsconfig": "workspace:^"
   },
   "dependencies": {
