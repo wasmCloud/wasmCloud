@@ -621,7 +621,7 @@ impl Client {
     ///                 .timeout(std::time::Duration::from_millis(1000))
     ///                 .auction_timeout(std::time::Duration::from_millis(1000))
     ///                 .build();
-    ///   let mut receiver = client.events_receiver(vec!["actor_scaled".to_string()]).await.unwrap();
+    ///   let mut receiver = client.events_receiver(vec!["component_scaled".to_string()]).await.unwrap();
     ///   while let Some(evt) = receiver.recv().await {
     ///       println!("Event received: {:?}", evt);
     ///   }

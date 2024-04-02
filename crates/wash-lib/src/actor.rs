@@ -7,7 +7,7 @@ use wasmcloud_control_interface::{Client as CtlClient, CtlResponse};
 use crate::{
     common::boxed_err_to_anyhow,
     config::DEFAULT_START_ACTOR_TIMEOUT_MS,
-    wait::{wait_for_actor_scaled_event, FindEventOutcome},
+    wait::{wait_for_component_scaled_event, FindEventOutcome},
 };
 
 /// Information related to a component scale
@@ -69,6 +69,8 @@ pub async fn scale_component(
         .events_receiver(vec![
             "actor_scaled".to_string(),
             "actor_scale_failed".to_string(),
+            "component_scaled".to_string(),
+            "component_scale_failed".to_string(),
         ])
         .await
         .map_err(boxed_err_to_anyhow)
@@ -100,7 +102,7 @@ pub async fn scale_component(
     }
 
     // Wait for the component to start
-    let event = wait_for_actor_scaled_event(
+    let event = wait_for_component_scaled_event(
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host_id.into(),

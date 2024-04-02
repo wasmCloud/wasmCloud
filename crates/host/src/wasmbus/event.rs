@@ -35,7 +35,7 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Valu
     }
 }
 
-pub fn actor_scaled(
+pub fn component_scaled(
     claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
@@ -60,11 +60,12 @@ pub fn actor_scaled(
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances.into(),
             "actor_id": actor_id.as_ref(),
+            "component_id": actor_id.as_ref(),
         })
     }
 }
 
-pub fn actor_scale_failed(
+pub fn component_scale_failed(
     claims: Option<&jwt::Claims<jwt::Component>>,
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
