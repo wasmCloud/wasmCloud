@@ -53,26 +53,26 @@ impl CtlResponse<()> {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ScaleActorCommand {
-    /// Image reference for the actor.
+pub struct ScaleComponentCommand {
+    /// Image reference for the component.
     #[serde(default)]
-    pub actor_ref: String,
-    /// Unique identifier of the actor to scale.
-    pub actor_id: ComponentId,
-    /// Optional set of annotations used to describe the nature of this actor scale command. For
+    pub component_ref: String,
+    /// Unique identifier of the component to scale.
+    pub component_id: ComponentId,
+    /// Optional set of annotations used to describe the nature of this component scale command. For
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<HashMap<String, String>>,
-    /// The maximum number of concurrent executing instances of this actor. Setting this to `0` will
-    /// stop the actor.
+    /// The maximum number of concurrent executing instances of this component. Setting this to `0` will
+    /// stop the component.
     // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
     #[serde(default, alias = "count", rename = "count")]
     pub max_instances: u32,
-    /// Host ID on which to scale this actor
+    /// Host ID on which to scale this component
     #[serde(default)]
     pub host_id: String,
-    /// A list of named configs to use for this actor. It is not required to specify a config.
-    /// Configs are merged together before being given to the actor, with values from the right-most
+    /// A list of named configs to use for this component. It is not required to specify a config.
+    /// Configs are merged together before being given to the component, with values from the right-most
     /// config in the list taking precedence. For example, given ordered configs foo {a: 1, b: 2},
     /// bar {b: 3, c: 4}, and baz {c: 5, d: 6}, the resulting config will be: {a: 1, b: 3, c: 5, d:
     /// 6}
@@ -128,22 +128,22 @@ pub struct StopProviderCommand {
 }
 
 /// A command instructing a specific host to perform a live update
-/// on the indicated actor by supplying a new image reference. Note that
+/// on the indicated component by supplying a new image reference. Note that
 /// live updates are only possible through image references
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UpdateActorCommand {
-    /// The actor's 56-character unique ID
+pub struct UpdateComponentCommand {
+    /// The component's 56-character unique ID
     #[serde(default)]
-    pub actor_id: ComponentId,
+    pub component_id: ComponentId,
     /// Optional set of annotations used to describe the nature of this
-    /// update request. Only actor instances that have matching annotations
+    /// update request. Only component instances that have matching annotations
     /// will be upgraded, allowing for instance isolation by
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<HashMap<String, String>>,
     /// The host ID of the host to perform the live update
     #[serde(default)]
     pub host_id: String,
-    /// The new image reference of the upgraded version of this actor
+    /// The new image reference of the upgraded version of this component
     #[serde(default)]
-    pub new_actor_ref: String,
+    pub new_component_ref: String,
 }

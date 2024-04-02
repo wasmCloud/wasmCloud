@@ -14,14 +14,14 @@ use tracing::{debug, error, instrument, trace};
 use crate::types::link::InterfaceLinkDefinition;
 
 use crate::types::ctl::{
-    CtlResponse, ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand,
+    CtlResponse, ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateComponentCommand,
 };
 use crate::types::host::{Host, HostInventory, HostLabel};
 use crate::types::registry::RegistryCredential;
 use crate::types::rpc::{
-    ActorAuctionAck, ActorAuctionRequest, DeleteInterfaceLinkDefinitionRequest, ProviderAuctionAck,
-    ProviderAuctionRequest,
+    ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
+    ProviderAuctionAck, ProviderAuctionRequest,
 };
 use crate::{
     broker, json_deserialize, json_serialize, otel, parse_identifier, IdentifierKind, Result,
@@ -197,25 +197,25 @@ impl Client {
         }
     }
 
-    /// Performs an actor auction within the lattice, publishing a set of constraints and the
-    /// metadata for the actor in question. This will always wait for the full period specified by
+    /// Performs an component auction within the lattice, publishing a set of constraints and the
+    /// metadata for the component in question. This will always wait for the full period specified by
     /// _duration_, and then return the set of gathered results. It is then up to the client to
-    /// choose from among the "auction winners" to issue the appropriate command to start an actor.
+    /// choose from among the "auction winners" to issue the appropriate command to start an component.
     /// Clients cannot assume that auctions will always return at least one result.
     #[instrument(level = "debug", skip_all)]
-    pub async fn perform_actor_auction(
+    pub async fn perform_component_auction(
         &self,
-        actor_ref: &str,
-        actor_id: &str,
+        component_ref: &str,
+        component_id: &str,
         constraints: HashMap<String, String>,
-    ) -> Result<Vec<CtlResponse<ActorAuctionAck>>> {
-        let subject = broker::v1::actor_auction_subject(&self.topic_prefix, &self.lattice);
-        let bytes = json_serialize(ActorAuctionRequest {
-            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
-            actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
+    ) -> Result<Vec<CtlResponse<ComponentAuctionAck>>> {
+        let subject = broker::v1::component_auction_subject(&self.topic_prefix, &self.lattice);
+        let bytes = json_serialize(ComponentAuctionRequest {
+            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
+            component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
             constraints,
         })?;
-        debug!("actor_auction:publish {}", &subject);
+        debug!("component_auction:publish {}", &subject);
         self.publish_and_wait(subject, bytes).await
     }
 
@@ -241,44 +241,47 @@ impl Client {
         self.publish_and_wait(subject, bytes).await
     }
 
-    /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of
-    /// _receipt_ of the command, not a confirmation that the actor scaled. An acknowledgement will
+    /// Sends a request to the given host to scale a given component. This returns an acknowledgement of
+    /// _receipt_ of the command, not a confirmation that the component scaled. An acknowledgement will
     /// either indicate some form of validation failure, or, if no failure occurs, the receipt of
-    /// the command. To avoid blocking consumers, wasmCloud hosts will acknowledge the scale actor
-    /// command prior to fetching the actor's OCI bytes. If a client needs deterministic results as
-    /// to whether the actor completed its startup process, the client will have to monitor the
+    /// the command. To avoid blocking consumers, wasmCloud hosts will acknowledge the scale component
+    /// command prior to fetching the component's OCI bytes. If a client needs deterministic results as
+    /// to whether the component completed its startup process, the client will have to monitor the
     /// appropriate event in the control event stream
     ///
     /// # Arguments
-    /// `host_id`: The ID of the host to scale the actor on
-    /// `actor_ref`: The OCI reference of the actor to scale
-    /// `max_instances`: The maximum number of instances this actor can run concurrently. Specifying `0` will stop the actor.
-    /// `annotations`: Optional annotations to apply to the actor
+    /// `host_id`: The ID of the host to scale the component on
+    /// `component_ref`: The OCI reference of the component to scale
+    /// `max_instances`: The maximum number of instances this component can run concurrently. Specifying `0` will stop the component.
+    /// `annotations`: Optional annotations to apply to the component
     #[instrument(level = "debug", skip_all)]
-    pub async fn scale_actor(
+    pub async fn scale_component(
         &self,
         host_id: &str,
-        actor_ref: &str,
-        actor_id: &str,
+        component_ref: &str,
+        component_id: &str,
         max_instances: u32,
         annotations: Option<HashMap<String, String>>,
         config: Vec<String>,
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject =
-            broker::v1::commands::scale_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
-        debug!("scale_actor:request {}", &subject);
-        let bytes = json_serialize(ScaleActorCommand {
+        let subject = broker::v1::commands::scale_component(
+            &self.topic_prefix,
+            &self.lattice,
+            host_id.as_str(),
+        );
+        debug!("scale_component:request {}", &subject);
+        let bytes = json_serialize(ScaleComponentCommand {
             max_instances,
-            actor_ref: parse_identifier(&IdentifierKind::ActorRef, actor_ref)?,
-            actor_id: parse_identifier(&IdentifierKind::ComponentId, actor_id)?,
+            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
+            component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
             host_id,
             annotations,
             config,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive scale actor acknowledgement: {e}").into()),
+            Err(e) => Err(format!("Did not receive scale component acknowledgement: {e}").into()),
         }
     }
 
@@ -463,35 +466,38 @@ impl Client {
         }
     }
 
-    /// Issue a command to a host instructing that it replace an existing actor (indicated by its
-    /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
-    /// this request as soon as it verifies that the target actor is running. This acknowledgement
-    /// occurs **before** the new bytes are downloaded. Live-updating an actor can take a long time
+    /// Issue a command to a host instructing that it replace an existing component (indicated by its
+    /// public key) with a new component indicated by an OCI image reference. The host will acknowledge
+    /// this request as soon as it verifies that the target component is running. This acknowledgement
+    /// occurs **before** the new bytes are downloaded. Live-updating an component can take a long time
     /// and control clients cannot block waiting for a reply that could come several seconds later.
-    /// If you need to verify that the actor has been updated, you will want to set up a listener
+    /// If you need to verify that the component has been updated, you will want to set up a listener
     /// for the appropriate **PublishedEvent** which will be published on the control events channel
     /// in JSON
     #[instrument(level = "debug", skip_all)]
-    pub async fn update_actor(
+    pub async fn update_component(
         &self,
         host_id: &str,
-        existing_actor_id: &str,
-        new_actor_ref: &str,
+        existing_component_id: &str,
+        new_component_ref: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlResponse<()>> {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
-        let subject =
-            broker::v1::commands::update_actor(&self.topic_prefix, &self.lattice, host_id.as_str());
-        debug!("update_actor:request {}", &subject);
-        let bytes = json_serialize(UpdateActorCommand {
+        let subject = broker::v1::commands::update_component(
+            &self.topic_prefix,
+            &self.lattice,
+            host_id.as_str(),
+        );
+        debug!("update_component:request {}", &subject);
+        let bytes = json_serialize(UpdateComponentCommand {
             host_id,
-            actor_id: parse_identifier(&IdentifierKind::ComponentId, existing_actor_id)?,
-            new_actor_ref: parse_identifier(&IdentifierKind::ActorRef, new_actor_ref)?,
+            component_id: parse_identifier(&IdentifierKind::ComponentId, existing_component_id)?,
+            new_component_ref: parse_identifier(&IdentifierKind::ActorRef, new_component_ref)?,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
-            Err(e) => Err(format!("Did not receive update actor acknowledgement: {e}").into()),
+            Err(e) => Err(format!("Did not receive update component acknowledgement: {e}").into()),
         }
     }
 
@@ -738,15 +744,16 @@ mod tests {
             .to_string()
             .contains("Provider OCI reference cannot be empty"));
         assert!(parse_identifier(&IdentifierKind::HostId, "host_id").is_ok());
-        let actor_id = parse_identifier(&IdentifierKind::ComponentId, "            iambatman  ")?;
-        assert_eq!(actor_id, "iambatman");
+        let component_id =
+            parse_identifier(&IdentifierKind::ComponentId, "            iambatman  ")?;
+        assert_eq!(component_id, "iambatman");
 
         Ok(())
     }
 
     #[tokio::test]
     #[ignore]
-    /// Test after large 1.0 refactors to ensure all return types are formatted as [CtlResponse] types, and that
+    /// Test after large 1.0 refcomponents to ensure all return types are formatted as [CtlResponse] types, and that
     /// the host can handle all of the requests.
     ///
     /// You must run NATS and one host locally to run this test successfully.
@@ -772,45 +779,48 @@ mod tests {
         ////
         // Actor Auction
         let auction_response = client
-            .perform_actor_auction(
+            .perform_component_auction(
                 "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0",
                 "echo",
                 HashMap::new(),
             )
             .await
-            .expect("should be able to auction an actor");
+            .expect("should be able to auction an component");
         assert_eq!(auction_response.len(), 1);
-        let first_ack = auction_response.first().expect("a single actor ack");
+        let first_ack = auction_response.first().expect("a single component ack");
         let auction_ack = first_ack.response.as_ref().unwrap();
-        let (actor_ref, actor_id) = (&auction_ack.actor_ref, &auction_ack.actor_id);
+        let (component_ref, component_id) = (&auction_ack.component_ref, &auction_ack.component_id);
         // Actor Scale
         let scale_response = client
-            .scale_actor(
+            .scale_component(
                 &host.id,
-                actor_ref,
-                actor_id,
+                component_ref,
+                component_id,
                 1,
                 None,
                 Vec::with_capacity(0),
             )
             .await
-            .expect("should be able to scale actor");
+            .expect("should be able to scale component");
         assert!(scale_response.success);
         assert!(scale_response.message.is_empty());
         assert!(scale_response.response.is_none());
         // Actor Update (TODO(brooksmtownsend): we should test this with a real update, but I'm using a failure case)
-        let update_actor_resp = client
-            .update_actor(
+        let update_component_resp = client
+            .update_component(
                 &host.id,
-                "nonexistantactorID",
+                "nonexistantcomponentID",
                 "wasmcloud.azurecr.io/kvcounter:0.4.0",
                 None,
             )
             .await
-            .expect("should be able to issue update actor request");
-        assert!(!update_actor_resp.success);
-        assert_eq!(update_actor_resp.message, "actor not found".to_string());
-        assert_eq!(update_actor_resp.response, None);
+            .expect("should be able to issue update component request");
+        assert!(!update_component_resp.success);
+        assert_eq!(
+            update_component_resp.message,
+            "component not found".to_string()
+        );
+        assert_eq!(update_component_resp.response, None);
 
         ////
         // Provider operations
@@ -985,7 +995,7 @@ mod tests {
         assert!(inventory.message.is_empty());
         assert!(inventory.response.is_some());
         let host_inventory = inventory.response.unwrap();
-        assert!(host_inventory.actors.iter().all(|a| a.id == "echo"));
+        assert!(host_inventory.components.iter().all(|a| a.id == "echo"));
         assert!(host_inventory.labels.get("idk").is_none());
         assert!(host_inventory
             .labels

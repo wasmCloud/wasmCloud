@@ -19,7 +19,7 @@ pub mod client;
 pub use client::{collect_sub_timeout, Client, ClientBuilder};
 
 mod types;
-pub use types::actor::*;
+pub use types::component::*;
 pub use types::ctl::*;
 pub use types::host::*;
 pub use types::link::InterfaceLinkDefinition;

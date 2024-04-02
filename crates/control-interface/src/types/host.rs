@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::actor::ActorDescription;
+use crate::types::component::ComponentDescription;
 use crate::types::provider::ProviderDescription;
 
 /// A summary representation of a host
@@ -50,8 +50,9 @@ pub struct Host {
 /// a query. Also used as a payload for the host heartbeat
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostInventory {
-    /// Actors running on this host.
-    pub actors: Vec<ActorDescription>,
+    /// Components running on this host.
+    #[serde(alias = "actors")]
+    pub components: Vec<ComponentDescription>,
     /// Providers running on this host
     pub providers: Vec<ProviderDescription>,
     /// The host's unique ID
