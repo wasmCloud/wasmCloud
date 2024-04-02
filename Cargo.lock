@@ -5466,7 +5466,7 @@ dependencies = [
  "warp",
  "wascap",
  "wash-lib",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5530,7 +5530,7 @@ dependencies = [
  "wascap",
  "wasm-encoder 0.202.0",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core",
  "wasmparser",
  "wat",
@@ -5703,7 +5703,7 @@ dependencies = [
  "uuid",
  "vaultrs",
  "wascap",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-fs",
@@ -5780,7 +5780,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5864,7 +5864,7 @@ dependencies = [
  "url",
  "uuid",
  "wascap",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
@@ -5988,7 +5988,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wrpc-interface-keyvalue",
@@ -6026,7 +6026,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wascap",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -6185,7 +6185,7 @@ dependencies = [
  "tracing",
  "url",
  "wascap",
- "wasmcloud-control-interface 1.0.0-alpha.1",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-host",
 ]
 
