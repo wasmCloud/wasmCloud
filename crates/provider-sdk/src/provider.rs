@@ -827,17 +827,43 @@ impl ProviderConnection {
         })
     }
 
-    /// Used for fetching the RPC client in order to make RPC calls
+    /// Retrieve a wRPC client that can be used based on the NATS client of this connection
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target ID to which invocations will be sent
     pub fn get_wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
-        let mut headers = HeaderMap::new();
-        headers.insert("source-id", self.provider_key.as_str());
-        headers.insert("target-id", target);
+        self.get_wrpc_client_custom(target, None, None)
+    }
+
+    /// Retrieve a wRPC client that can be used based on the NATS client of this connection,
+    /// customized with headers and duration
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target ID to which invocations will be sent
+    /// * `headers` - Additional headers (other than `source-id`, `target-id`) to be placed on the client
+    /// * `timeout` - Timeout to be set on the client (by default if this is unset it will be 10 seconds)
+    pub fn get_wrpc_client_custom(
+        &self,
+        target: &str,
+        headers: Option<HashMap<String, String>>,
+        timeout: Option<Duration>,
+    ) -> wasmcloud_core::wrpc::Client {
+        let mut hmap = HeaderMap::new();
+        if let Some(values) = headers {
+            for (k, v) in values.iter() {
+                hmap.insert(k.as_str(), v.as_str());
+            }
+        }
+        hmap.insert("source-id", self.provider_key.as_str());
+        hmap.insert("target-id", target);
         wasmcloud_core::wrpc::Client::new(
             Arc::clone(&self.nats),
             &self.lattice,
             target,
-            headers,
-            Duration::from_secs(10), // TODO: Make this configurable
+            hmap,
+            timeout.unwrap_or_else(|| Duration::from_secs(10)),
         )
     }
 
