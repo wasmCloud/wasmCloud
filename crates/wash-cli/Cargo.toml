@@ -63,7 +63,7 @@ wadm = { workspace = true }
 warp = { workspace = true }
 wascap = { workspace = true }
 wash-lib = { workspace = true, features = ["cli", "parser", "nats", "start"] }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = { version = "1.0.0-alpha.2" }
 wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }

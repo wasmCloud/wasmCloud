@@ -86,7 +86,7 @@ walkdir = { workspace = true }
 wascap = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = { version = "1.0.0-alpha.2" }
 wasmcloud-core = { workspace = true, features = [
     "oci-distribution",
     "reqwest",
