@@ -2286,8 +2286,8 @@ impl Host {
 
         info!(actor_ref, "actor started");
         self.publish_event(
-            "actor_scaled",
-            event::actor_scaled(
+            "component_scaled",
+            event::component_scaled(
                 claims,
                 &annotations,
                 &self.host_key.public_key(),
@@ -2308,8 +2308,8 @@ impl Host {
         actor.calls.abort();
 
         self.publish_event(
-            "actor_scaled",
-            event::actor_scaled(
+            "component_scaled",
+            event::component_scaled(
                 actor.claims(),
                 &actor.annotations,
                 host_id,
@@ -2534,8 +2534,8 @@ impl Host {
                     .await
                 {
                     self.publish_event(
-                        "actor_scale_failed",
-                        event::actor_scale_failed(
+                        "component_scale_failed",
+                        event::component_scale_failed(
                             claims,
                             &annotations,
                             host_id,
@@ -2558,8 +2558,8 @@ impl Host {
                     .context("failed to stop actor in response to scale to zero")
                 {
                     self.publish_event(
-                        "actor_scale_failed",
-                        event::actor_scale_failed(
+                        "component_scale_failed",
+                        event::component_scale_failed(
                             claims,
                             &actor.annotations,
                             host_id,
@@ -2575,8 +2575,8 @@ impl Host {
 
                 info!(actor_ref, "actor stopped");
                 self.publish_event(
-                    "actor_scaled",
-                    event::actor_scaled(
+                    "component_scaled",
+                    event::component_scaled(
                         claims,
                         &actor.annotations,
                         host_id,
@@ -2613,8 +2613,8 @@ impl Host {
                     let publish_result = match actor.max_instances.cmp(&max) {
                         std::cmp::Ordering::Less | std::cmp::Ordering::Greater => {
                             self.publish_event(
-                                "actor_scaled",
-                                event::actor_scaled(
+                                "component_scaled",
+                                event::component_scaled(
                                     actor.claims(),
                                     &actor.annotations,
                                     host_id,
@@ -2722,8 +2722,8 @@ impl Host {
 
             info!(%new_actor_ref, "actor updated");
             self.publish_event(
-                "actor_scaled",
-                event::actor_scaled(
+                "component_scaled",
+                event::component_scaled(
                     new_claims,
                     &actor.annotations,
                     host_id,
@@ -2739,8 +2739,8 @@ impl Host {
                 .await
                 .context("failed to stop old actor")?;
             self.publish_event(
-                "actor_scaled",
-                event::actor_scaled(
+                "component_scaled",
+                event::component_scaled(
                     actor.claims(),
                     &actor.annotations,
                     host_id,
