@@ -189,15 +189,19 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         let inventories = get_all_inventories(&client).await?;
         inventories
             .into_iter()
-            .find(|inv| inv.actors.iter().any(|actor| actor.id == component_id))
+            .find(|inv| {
+                inv.components
+                    .iter()
+                    .any(|component| component.id == component_id)
+            })
             .ok_or_else(|| anyhow::anyhow!("No host found running component [{}]", component_id))?
     };
 
     let Some((host_id, component_ref)) = inventory
-        .actors
+        .components
         .iter()
-        .find(|actor| actor.id == component_id)
-        .map(|actor| (inventory.host_id.clone(), actor.image_ref.clone()))
+        .find(|component| component.id == component_id)
+        .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
     else {
         bail!(
             "No component with id [{component_id}] found on host [{}]",

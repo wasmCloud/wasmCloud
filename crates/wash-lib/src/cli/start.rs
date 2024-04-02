@@ -96,7 +96,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         Some(host) => find_host_id(&host, &client).await?.0,
         None => {
             let suitable_hosts = client
-                .perform_actor_auction(
+                .perform_component_auction(
                     &component_ref,
                     &cmd.component_id,
                     input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,

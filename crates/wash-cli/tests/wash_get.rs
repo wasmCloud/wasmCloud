@@ -107,8 +107,8 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
     );
     let inventory = &cmd_output.inventories[0];
     assert!(
-        inventory.actors.is_empty(),
-        "host inventory contains no actors "
+        inventory.components.is_empty(),
+        "host inventory contains no components "
     );
     assert_eq!(
         inventory.host_id, wash_instance.host_id,

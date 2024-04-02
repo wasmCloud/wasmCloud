@@ -33,7 +33,7 @@ First, try starting a component that wasn't signed by wasmCloud:
 
 ```bash
 export HOST_ID=$(nats req "wasmbus.ctl.default.host.ping" '{}' --raw | jq -r '.response.id')
-nats req "wasmbus.ctl.default.actor.scale.$HOST_ID" '{"actor_id": "hello_world", "actor_ref": "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0", "count": 1}'
+nats req "wasmbus.ctl.default.component.scale.$HOST_ID" '{"component_id": "hello_world", "component_ref": "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0", "count": 1}'
 ```
 
 You'll get a success message from the control interface telling you the request was received, but in the host logs you'll see:

@@ -141,13 +141,13 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             4,
             Alignment::Center,
         )]));
-        if !inv.actors.is_empty() {
+        if !inv.components.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
             ]));
-            inv.actors.iter().for_each(|a| {
+            inv.components.iter().for_each(|a| {
                 let a = a.clone();
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(a.id, 1, Alignment::Left),
@@ -157,7 +157,7 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             });
         } else {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
-                "No actors found",
+                "No components found",
                 4,
                 Alignment::Left,
             )]));
