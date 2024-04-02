@@ -72,7 +72,7 @@ async fn integration_update_actor_serial() -> Result<()> {
             .inventories
             .into_iter()
             .next()
-            .map(|i| i.actors)
+            .map(|i| i.components)
             .unwrap_or_default();
         if actors.is_empty() && retries > 4 {
             panic!("Should have started the actor")
@@ -142,7 +142,7 @@ async fn integration_update_actor_serial() -> Result<()> {
             .inventories
             .into_iter()
             .next()
-            .map(|i| i.actors)
+            .map(|i| i.components)
             .unwrap_or_default();
         if actors[0].image_ref != HELLO_OCI_REF && retries > 4 {
             panic!("Should have started the actor")

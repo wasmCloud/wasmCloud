@@ -77,7 +77,7 @@ pub async fn scale_component(
         .context("Failed to get lattice event channel")?;
 
     let ack = client
-        .scale_actor(
+        .scale_component(
             host_id,
             component_ref,
             component_id,
@@ -130,7 +130,7 @@ pub async fn update_actor(
     actor_ref: &str,
 ) -> Result<CtlResponse<()>> {
     client
-        .update_actor(host_id, actor_id, actor_ref, None)
+        .update_component(host_id, actor_id, actor_ref, None)
         .await
         .map_err(boxed_err_to_anyhow)
 }
