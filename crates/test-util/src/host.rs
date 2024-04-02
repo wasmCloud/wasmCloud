@@ -10,6 +10,7 @@ use nkeys::KeyPair;
 use url::Url;
 
 use wasmcloud_control_interface::{Client as WasmcloudCtlClient, ClientBuilder};
+use wasmcloud_host::wasmbus::host_config::PolicyService;
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
 /// Add a host label, and ensure that it has been added
@@ -65,13 +66,14 @@ impl WasmCloudTestHost {
         lattice_name: impl AsRef<str>,
         cluster_key: Option<KeyPair>,
         host_key: Option<KeyPair>,
+        policy_service_config: Option<PolicyService>,
     ) -> Result<Self> {
         let nats_url = nats_url.into();
         let lattice_name = lattice_name.as_ref();
         let cluster_key = Arc::new(cluster_key.unwrap_or(KeyPair::new_cluster()));
         let host_key = Arc::new(host_key.unwrap_or(KeyPair::new_server()));
 
-        let (host, shutdown_hook) = Host::new(HostConfig {
+        let mut host_config = HostConfig {
             ctl_nats_url: nats_url.clone(),
             rpc_nats_url: nats_url.clone(),
             lattice: lattice_name.into(),
@@ -81,9 +83,14 @@ impl WasmCloudTestHost {
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
             ..Default::default()
-        })
-        .await
-        .context("failed to initialize host")?;
+        };
+        if let Some(psc) = policy_service_config {
+            host_config.policy_service_config = psc;
+        }
+
+        let (host, shutdown_hook) = Host::new(host_config)
+            .await
+            .context("failed to initialize host")?;
 
         Ok(Self {
             cluster_key,
