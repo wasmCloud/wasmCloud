@@ -517,13 +517,37 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
 
         impl InvocationHandler {
-            pub fn new(target: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::ComponentId) -> Self {
+            /// Create a new invocation handler, directed at a given component on the lattice.
+            ///
+            /// By default the invocation handler will have a timeout duration of 10 seconds,
+            /// and no additional headers passed to the invocation target.
+            ///
+            /// To further customize headers or timeout duration, see `InvocationHandler::custom`.
+            ///
+            /// # Arguments
+            ///
+            /// * `target` - Target ID to which invocations will be sent
+            pub fn new(
+                target: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::ComponentId,
+            ) -> Self {
+                Self::custom(target, None, None)
+            }
+
+            /// Create a new InvocationHandler, directed at a given component on the lattice, and customized
+            /// with settings specified for the underlying [`wrpc::Client`].
+            ///
+            /// # Arguments
+            ///
+            /// * `target` - Target ID to which invocations will be sent
+            /// * `headers` - Additional headers (other than `source-id`, `target-id`) to be placed on the invocation
+            /// * `invocation_timeout` - Timeout on the invocation itself, which will be used by the internal wRPC client. The default invocation timeout (if `None` is provided) is 10 seconds.
+            pub fn custom(
+                target: ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::core::ComponentId,
+                headers: ::std::option::Option<HashMap<String, String>>,
+                invocation_timeout: ::std::option::Option<::std::time::Duration>,
+            ) -> Self {
                 let connection = ::wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::get_connection();
-                // NOTE: The link definition that is used here is likely (source_id=?, target=<provider>)
-                //
-                // todo(vados-cosmonic): This invocation handler should arguably create a uni-directional
-                // "return" link to anything it wants to call, since links are uni-directional now.
-                Self { wrpc_client: connection.get_wrpc_client(&target) }
+                Self { wrpc_client: connection.get_wrpc_client_custom(&target, headers, invocation_timeout) }
             }
 
             #(
