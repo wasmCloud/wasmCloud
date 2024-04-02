@@ -35,11 +35,11 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorAuctionRequest, ActorDescription, CtlResponse,
+    ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
     DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, InterfaceLinkDefinition,
     ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
-    ScaleActorCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand, WitInterface,
+    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateComponentCommand, WitInterface,
 };
 use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, OtelConfig, CTL_API_VERSION_1};
 use wasmcloud_runtime::capability::{
@@ -154,7 +154,7 @@ impl Queue {
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.claims"),
             )),
             Either::Left(nats.subscribe(format!(
-                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.actor.*.{host_id}"
+                "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.component.*.{host_id}"
             ))),
             Either::Left(nats.subscribe(format!(
                 "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.provider.*.{host_id}"
@@ -815,7 +815,7 @@ impl Logging for Handler {
             logging::Level::Trace => {
                 tracing::event!(
                     tracing::Level::TRACE,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -824,7 +824,7 @@ impl Logging for Handler {
             logging::Level::Debug => {
                 tracing::event!(
                     tracing::Level::DEBUG,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -833,7 +833,7 @@ impl Logging for Handler {
             logging::Level::Info => {
                 tracing::event!(
                     tracing::Level::INFO,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -842,7 +842,7 @@ impl Logging for Handler {
             logging::Level::Warn => {
                 tracing::event!(
                     tracing::Level::WARN,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -851,7 +851,7 @@ impl Logging for Handler {
             logging::Level::Error => {
                 tracing::event!(
                     tracing::Level::ERROR,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -860,7 +860,7 @@ impl Logging for Handler {
             logging::Level::Critical => {
                 tracing::event!(
                     tracing::Level::ERROR,
-                    actor_id = self.component_id,
+                    component_id = self.component_id,
                     ?level,
                     context,
                     "{message}"
@@ -1015,20 +1015,19 @@ type Annotations = BTreeMap<String, String>;
 #[derive(Debug)]
 struct Actor {
     component: wasmcloud_runtime::Component,
-    /// Unique component identifier for this actor
+    /// Unique component identifier for this component
     id: String,
     calls: AbortHandle,
     handler: Handler,
     annotations: Annotations,
-    /// Maximum number of instances of this actor that can be running at once
+    /// Maximum number of instances of this component that can be running at once
     max_instances: NonZeroUsize,
     image_reference: String,
     metrics: Arc<HostMetrics>,
     // TODO(#1220): implement issuer verification
-    /// Cluster issuers that this actor should accept invocations from
+    /// Cluster issuers that this component should accept invocations from
     #[allow(unused)]
     valid_issuers: Vec<String>,
-    // TODO(#1548): ensure we are validating actor start and invocations
     #[allow(unused)]
     policy_manager: Arc<PolicyManager>,
 }
@@ -1069,7 +1068,7 @@ impl std::fmt::Debug for InvocationParams {
 }
 
 impl Actor {
-    /// Handle an incoming wRPC request to invoke an export on this actor instance.
+    /// Handle an incoming wRPC request to invoke an export on this component instance.
     #[instrument(
         level = "info",
         skip(self, context, result_subject, transmitter),
@@ -1136,7 +1135,9 @@ impl Actor {
         }
 
         // Instantiate component with expected handlers
-        let mut actor = self.instantiate().context("failed to instantiate actor")?;
+        let mut actor = self
+            .instantiate()
+            .context("failed to instantiate component")?;
         actor
             .stderr(stderr())
             .await
@@ -1152,7 +1153,7 @@ impl Actor {
 
         // TODO(metrics): insert information about the source once we have concrete context data
         let mut attributes = vec![
-            KeyValue::new("actor.ref", self.image_reference.clone()),
+            KeyValue::new("component.ref", self.image_reference.clone()),
             KeyValue::new("lattice", self.metrics.lattice_id.clone()),
             KeyValue::new("host", self.metrics.host_id.clone()),
         ];
@@ -1167,7 +1168,7 @@ impl Actor {
                 let res = actor
                     .call(&instance, &name, params)
                     .await
-                    .context("failed to call actor");
+                    .context("failed to call component");
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
                 attributes.push(KeyValue::new("operation", format!("{instance}/{name}")));
                 self.metrics
@@ -1258,7 +1259,6 @@ struct Provider {
 
 /// wasmCloud Host
 pub struct Host {
-    // TODO: Clean up actors after stop
     /// The actor map is a map of actor component ID to actor
     actors: RwLock<HashMap<String, Arc<Actor>>>,
     cluster_key: Arc<KeyPair>,
@@ -1956,14 +1956,14 @@ impl Host {
     async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
         let actors = self.actors.read().await;
-        let actors: Vec<_> = stream::iter(actors.iter())
+        let components: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
                 let name = actor
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
                     .and_then(|metadata| metadata.name.as_ref())
                     .cloned();
-                Some(ActorDescription {
+                Some(ComponentDescription {
                     id: id.into(),
                     image_ref: actor.image_reference.clone(),
                     annotations: Some(actor.annotations.clone().into_iter().collect()),
@@ -2015,7 +2015,7 @@ impl Host {
             .collect();
         let uptime = self.start_at.elapsed();
         HostInventory {
-            actors,
+            components,
             providers,
             friendly_name: self.friendly_name.clone(),
             labels: self.labels.read().await.clone(),
@@ -2051,18 +2051,18 @@ impl Host {
     async fn instantiate_actor(
         &self,
         annotations: &Annotations,
-        actor_ref: String,
-        actor_id: String,
+        component_ref: String,
+        component_id: String,
         max_instances: NonZeroUsize,
         component: wasmcloud_runtime::Component,
         handler: Handler,
     ) -> anyhow::Result<Arc<Actor>> {
-        trace!(actor_ref, max_instances, "instantiating actor");
+        trace!(component_ref, max_instances, "instantiating component");
 
         let wrpc = wasmcloud_core::wrpc::Client::new(
             self.rpc_nats.clone(),
             &self.host_config.lattice,
-            &actor_id,
+            &component_id,
             // NOTE(brooksmtownsend): We only use this client for serving functions,
             // and the headers will be set by the incoming invocation.
             async_nats::HeaderMap::new(),
@@ -2071,14 +2071,14 @@ impl Host {
         let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
         let actor = Arc::new(Actor {
             component: component.clone(),
-            id: actor_id,
+            id: component_id,
             calls: calls_abort,
             handler: handler.clone(),
             annotations: annotations.clone(),
             max_instances,
             valid_issuers: self.cluster_issuers.clone(),
             policy_manager: Arc::clone(&self.policy_manager),
-            image_reference: actor_ref,
+            image_reference: component_ref,
             metrics: Arc::clone(&self.metrics),
         });
 
@@ -2220,13 +2220,13 @@ impl Host {
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
         component: wasmcloud_runtime::Component,
-        actor_ref: String,
-        actor_id: String,
+        component_ref: String,
+        component_id: String,
         max_instances: NonZeroUsize,
         annotations: impl Into<Annotations>,
         config: ConfigBundle,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        debug!(actor_ref, ?max_instances, "starting new actor");
+        debug!(component_ref, ?max_instances, "starting new component");
 
         let annotations = annotations.into();
         let claims = component.claims();
@@ -2236,24 +2236,25 @@ impl Host {
                 .context("failed to store claims")?;
         }
 
-        let component_spec = if let Ok(Some(mut spec)) = self.get_component_spec(&actor_id).await {
-            // If the component didn't start yet, the URL will be empty but the spec may contain links.
-            // Populate the URL and store the updated spec.
-            if spec.url.is_empty() {
-                spec.url = actor_ref.to_string();
-            } else if spec.url != actor_ref {
-                // Ensure another actor isn't already running with the same ID
-                bail!(
-                    "component spec URL does not match actor reference: {} != {}",
-                    spec.url,
-                    actor_ref
-                );
-            }
-            spec
-        } else {
-            ComponentSpecification::new(&actor_ref)
-        };
-        self.store_component_spec(&actor_id, &component_spec)
+        let component_spec =
+            if let Ok(Some(mut spec)) = self.get_component_spec(&component_id).await {
+                // If the component didn't start yet, the URL will be empty but the spec may contain links.
+                // Populate the URL and store the updated spec.
+                if spec.url.is_empty() {
+                    spec.url = component_ref.to_string();
+                } else if spec.url != component_ref {
+                    // Ensure another actor isn't already running with the same ID
+                    bail!(
+                        "component spec URL does not match component reference: {} != {}",
+                        spec.url,
+                        component_ref
+                    );
+                }
+                spec
+            } else {
+                ComponentSpecification::new(&component_ref)
+            };
+        self.store_component_spec(&component_id, &component_spec)
             .await?;
 
         // Map the imports to pull out the result types of the functions for lookup when invoking them
@@ -2262,7 +2263,7 @@ impl Host {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
             lattice: self.host_config.lattice.clone(),
-            component_id: actor_id.clone(),
+            component_id: component_id.clone(),
             targets: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfilled_imports: imports,
@@ -2272,16 +2273,16 @@ impl Host {
         let actor = self
             .instantiate_actor(
                 &annotations,
-                actor_ref.clone(),
-                actor_id.clone(),
+                component_ref.clone(),
+                component_id.clone(),
                 max_instances,
                 component.clone(),
                 handler.clone(),
             )
             .await
-            .context("failed to instantiate actor")?;
+            .context("failed to instantiate component")?;
 
-        info!(actor_ref, "actor started");
+        info!(component_ref, "component started");
         self.publish_event(
             "component_scaled",
             event::component_scaled(
@@ -2289,8 +2290,8 @@ impl Host {
                 &annotations,
                 &self.host_key.public_key(),
                 max_instances,
-                &actor_ref,
-                &actor_id,
+                &component_ref,
+                &component_id,
             ),
         )
         .await?;
@@ -2300,7 +2301,7 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     async fn stop_actor(&self, actor: &Actor, host_id: &str) -> anyhow::Result<()> {
-        trace!(actor_id = %actor.id, "stopping actor");
+        trace!(component_id = %actor.id, "stopping component");
 
         actor.calls.abort();
 
@@ -2324,32 +2325,32 @@ impl Host {
     async fn handle_auction_actor(
         &self,
         payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<Option<CtlResponse<ActorAuctionAck>>> {
-        let ActorAuctionRequest {
-            actor_ref,
-            actor_id,
+    ) -> anyhow::Result<Option<CtlResponse<ComponentAuctionAck>>> {
+        let ComponentAuctionRequest {
+            component_ref,
+            component_id,
             constraints,
         } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor auction command")?;
+            .context("failed to deserialize component auction command")?;
 
         info!(
-            actor_ref,
-            actor_id,
+            component_ref,
+            component_id,
             ?constraints,
-            "handling auction for actor"
+            "handling auction for component"
         );
 
         let host_labels = self.labels.read().await;
         let constraints_satisfied = constraints
             .iter()
             .all(|(k, v)| host_labels.get(k).map(|hv| hv == v).unwrap_or(false));
-        let actor_id_running = self.actors.read().await.contains_key(&actor_id);
+        let component_id_running = self.actors.read().await.contains_key(&component_id);
 
         // This host can run the actor if all constraints are satisfied and the actor is not already running
-        if constraints_satisfied && !actor_id_running {
-            Ok(Some(CtlResponse::ok(ActorAuctionAck {
-                actor_ref,
-                actor_id,
+        if constraints_satisfied && !component_id_running {
+            Ok(Some(CtlResponse::ok(ComponentAuctionAck {
+                component_ref,
+                component_id,
                 constraints,
                 host_id: self.host_key.public_key(),
             })))
@@ -2396,17 +2397,20 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Component> {
+    async fn fetch_actor(
+        &self,
+        component_ref: &str,
+    ) -> anyhow::Result<wasmcloud_runtime::Component> {
         let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
-            actor_ref,
+            component_ref,
             self.host_config.allow_file_load,
             &registry_config,
         )
         .await
-        .context("failed to fetch actor")?;
+        .context("failed to fetch component")?;
         let actor = wasmcloud_runtime::Component::new(&self.runtime, actor)
-            .context("failed to initialize actor")?;
+            .context("failed to initialize component")?;
         Ok(actor)
     }
 
@@ -2444,25 +2448,28 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let ScaleActorCommand {
-            actor_ref,
-            actor_id,
+        let ScaleComponentCommand {
+            component_ref,
+            component_id,
             annotations,
             max_instances,
             config,
             ..
         } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor scale command")?;
+            .context("failed to deserialize component scale command")?;
 
-        debug!(actor_ref, max_instances, actor_id, "handling scale actor");
+        debug!(
+            component_ref,
+            max_instances, component_id, "handling scale component"
+        );
 
         let host_id = host_id.to_string();
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         spawn(async move {
             if let Err(e) = self
                 .handle_scale_actor_task(
-                    &actor_ref,
-                    &actor_id,
+                    &component_ref,
+                    &component_id,
                     &host_id,
                     max_instances,
                     annotations,
@@ -2470,7 +2477,7 @@ impl Host {
                 )
                 .await
             {
-                error!(%actor_ref, %actor_id, err = ?e, "failed to scale actor");
+                error!(%component_ref, %component_id, err = ?e, "failed to scale component");
             }
         });
         Ok(CtlResponse::success())
@@ -2481,32 +2488,38 @@ impl Host {
     /// Supplying `0` will result in stopping that actor instance.
     async fn handle_scale_actor_task(
         &self,
-        actor_ref: &str,
-        actor_id: &str,
+        component_ref: &str,
+        component_id: &str,
         host_id: &str,
         max_instances: u32,
         annotations: Annotations,
         config: Vec<String>,
     ) -> anyhow::Result<()> {
-        trace!(actor_ref, max_instances, "scale actor task");
+        trace!(component_ref, max_instances, "scale component task");
 
-        let actor = self.fetch_actor(actor_ref).await?;
+        let actor = self.fetch_actor(component_ref).await?;
         let claims = actor.claims();
         let resp = self
             .policy_manager
-            .evaluate_start_component(actor_id, actor_ref, max_instances, &annotations, claims)
+            .evaluate_start_component(
+                component_id,
+                component_ref,
+                max_instances,
+                &annotations,
+                claims,
+            )
             .await?;
         if !resp.permitted {
             bail!(
-                "Policy denied request to scale actor `{}`: `{:?}`",
+                "Policy denied request to scale component `{}`: `{:?}`",
                 resp.request_id,
                 resp.message
             )
         };
 
-        let actor_ref = actor_ref.to_string();
+        let component_ref = component_ref.to_string();
         match (
-            self.actors.write().await.entry(actor_id.to_string()),
+            self.actors.write().await.entry(component_id.to_string()),
             NonZeroUsize::new(max_instances as usize),
         ) {
             // No actor is running and we requested to scale to zero, noop
@@ -2522,8 +2535,8 @@ impl Host {
                     .start_actor(
                         entry,
                         actor.clone(),
-                        actor_ref.clone(),
-                        actor_id.to_string(),
+                        component_ref.clone(),
+                        component_id.to_string(),
                         max,
                         annotations.clone(),
                         config,
@@ -2536,8 +2549,8 @@ impl Host {
                             claims,
                             &annotations,
                             host_id,
-                            &actor_ref,
-                            actor_id,
+                            &component_ref,
+                            component_id,
                             max,
                             &e,
                         ),
@@ -2552,7 +2565,7 @@ impl Host {
                 if let Err(err) = self
                     .stop_actor(&actor, host_id)
                     .await
-                    .context("failed to stop actor in response to scale to zero")
+                    .context("failed to stop component in response to scale to zero")
                 {
                     self.publish_event(
                         "component_scale_failed",
@@ -2560,7 +2573,7 @@ impl Host {
                             claims,
                             &actor.annotations,
                             host_id,
-                            actor_ref,
+                            component_ref,
                             &actor.id,
                             actor.max_instances,
                             &err,
@@ -2570,7 +2583,7 @@ impl Host {
                     return Err(err);
                 };
 
-                info!(actor_ref, "actor stopped");
+                info!(component_ref, "component stopped");
                 self.publish_event(
                     "component_scaled",
                     event::component_scaled(
@@ -2599,14 +2612,14 @@ impl Host {
                     let instance = self
                         .instantiate_actor(
                             &annotations,
-                            actor_ref.to_string(),
+                            component_ref.to_string(),
                             actor.id.to_string(),
                             max,
                             actor.component.clone(),
                             handler,
                         )
                         .await
-                        .context("failed to instantiate actor")?;
+                        .context("failed to instantiate component")?;
                     let publish_result = match actor.max_instances.cmp(&max) {
                         std::cmp::Ordering::Less | std::cmp::Ordering::Greater => {
                             self.publish_event(
@@ -2627,9 +2640,9 @@ impl Host {
                     let actor = entry.insert(instance);
                     self.stop_actor(&actor, host_id)
                         .await
-                        .context("failed to stop actor after scaling")?;
+                        .context("failed to stop component after scaling")?;
 
-                    info!(actor_ref, ?max, "actor scaled");
+                    info!(component_ref, ?max, "component scaled");
 
                     // Wait to unwrap the event publish result until after we've processed the instances
                     publish_result?;
@@ -2639,7 +2652,7 @@ impl Host {
         Ok(())
     }
 
-    // TODO(#1548): With actor IDs, new actor references, configuration, etc, we're going to need to do some
+    // TODO(#1548): With component IDs, new actor references, configuration, etc, we're going to need to do some
     // design thinking around how update actor should work. Should it be limited to a single host or latticewide?
     // Should it also update configuration, or is that separate? Should scaling be done via an update?
     #[instrument(level = "debug", skip_all)]
@@ -2648,30 +2661,30 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let UpdateActorCommand {
-            actor_id,
+        let UpdateComponentCommand {
+            component_id,
             annotations,
-            new_actor_ref,
+            new_component_ref,
             ..
         } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor update command")?;
+            .context("failed to deserialize component update command")?;
 
         debug!(
-            actor_id,
-            new_actor_ref,
+            component_id,
+            new_component_ref,
             ?annotations,
-            "handling update actor"
+            "handling update component"
         );
 
-        let actor_id = actor_id.to_string();
-        let new_actor_ref = new_actor_ref.to_string();
+        let component_id = component_id.to_string();
+        let new_component_ref = new_component_ref.to_string();
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(e) = self
-                .handle_update_actor_task(&actor_id, &new_actor_ref, &host_id, annotations)
+                .handle_update_actor_task(&component_id, &new_component_ref, &host_id, annotations)
                 .await
             {
-                error!(%new_actor_ref, %actor_id, err = ?e, "failed to update actor");
+                error!(%new_component_ref, %component_id, err = ?e, "failed to update component");
             }
         });
 
@@ -2680,8 +2693,8 @@ impl Host {
 
     async fn handle_update_actor_task(
         &self,
-        actor_id: &str,
-        new_actor_ref: &str,
+        component_id: &str,
+        new_component_ref: &str,
         host_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> anyhow::Result<()> {
@@ -2689,10 +2702,10 @@ impl Host {
         // we attempt to grab a write lock.
         let new_actor = {
             let actors = self.actors.read().await;
-            let actor = actors.get(actor_id).context("actor not found")?;
+            let actor = actors.get(component_id).context("component not found")?;
             let annotations = annotations.unwrap_or_default().into_iter().collect();
 
-            let new_actor = self.fetch_actor(new_actor_ref).await?;
+            let new_actor = self.fetch_actor(new_component_ref).await?;
             let new_claims = new_actor.claims();
             if let Some(claims) = new_claims.cloned() {
                 self.store_claims(Claims::Component(claims))
@@ -2706,18 +2719,18 @@ impl Host {
             let Ok(new_actor) = self
                 .instantiate_actor(
                     &annotations,
-                    new_actor_ref.to_string(),
-                    actor_id.to_string(),
+                    new_component_ref.to_string(),
+                    component_id.to_string(),
                     max,
                     new_actor.clone(),
                     handler,
                 )
                 .await
             else {
-                bail!("failed to instantiate actor from new reference");
+                bail!("failed to instantiate component from new reference");
             };
 
-            info!(%new_actor_ref, "actor updated");
+            info!(%new_component_ref, "component updated");
             self.publish_event(
                 "component_scaled",
                 event::component_scaled(
@@ -2725,8 +2738,8 @@ impl Host {
                     &actor.annotations,
                     host_id,
                     max,
-                    new_actor_ref,
-                    actor_id,
+                    new_component_ref,
+                    component_id,
                 ),
             )
             .await?;
@@ -2734,7 +2747,7 @@ impl Host {
             // TODO(#1548): If this errors, we need to rollback
             self.stop_actor(actor, host_id)
                 .await
-                .context("failed to stop old actor")?;
+                .context("failed to stop old component")?;
             self.publish_event(
                 "component_scaled",
                 event::component_scaled(
@@ -2754,7 +2767,7 @@ impl Host {
         self.actors
             .write()
             .await
-            .insert(actor_id.to_string(), new_actor);
+            .insert(component_id.to_string(), new_actor);
         Ok(())
     }
 
@@ -3532,17 +3545,17 @@ impl Host {
         //    should never fail but it's a result we must handle.
         // And finally, the Vec<u8> is the serialized [CtlResponse] that we'll send back to the client
         let ctl_response = match (parts.next(), parts.next(), parts.next(), parts.next()) {
-            // Actor commands
-            (Some("actor"), Some("auction"), None, None) => self
+            // Component commands
+            (Some("component"), Some("auction"), None, None) => self
                 .handle_auction_actor(message.payload)
                 .await
                 .map(serialize_ctl_response),
-            (Some("actor"), Some("scale"), Some(host_id), None) => Arc::clone(&self)
+            (Some("component"), Some("scale"), Some(host_id), None) => Arc::clone(&self)
                 .handle_scale_actor(message.payload, host_id)
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),
-            (Some("actor"), Some("update"), Some(host_id), None) => Arc::clone(&self)
+            (Some("component"), Some("update"), Some(host_id), None) => Arc::clone(&self)
                 .handle_update_actor(message.payload, host_id)
                 .await
                 .map(Some)
@@ -3862,7 +3875,7 @@ impl Host {
         debug!(id, "process component delete");
         // TODO: TBD: stop actor if spec deleted?
         if let Some(_actor) = self.actors.write().await.get(id) {
-            warn!("Component spec deleted but actor {} still running", id);
+            warn!("Component spec deleted but component {} still running", id);
         }
         Ok(())
     }
@@ -4098,7 +4111,7 @@ impl TryFrom<Claims> for StoredClaims {
                     ver,
                     call_alias,
                     ..
-                } = metadata.context("no metadata found on actor claims")?;
+                } = metadata.context("no metadata found on component claims")?;
                 Ok(StoredClaims::Component(StoredComponentClaims {
                     call_alias: call_alias.unwrap_or_default(),
                     issuer,
@@ -4155,7 +4168,7 @@ impl TryFrom<&Claims> for StoredClaims {
                     ..
                 } = metadata
                     .as_ref()
-                    .context("no metadata found on actor claims")?;
+                    .context("no metadata found on component claims")?;
                 Ok(StoredClaims::Component(StoredComponentClaims {
                     call_alias: call_alias.clone().unwrap_or_default(),
                     issuer: issuer.clone(),

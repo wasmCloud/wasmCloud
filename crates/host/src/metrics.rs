@@ -6,10 +6,10 @@ use wasmcloud_tracing::{Counter, Histogram, KeyValue, Meter, Unit};
 pub struct HostMetrics {
     /// Represents the time it took for each handle_rpc_message invocation in nanoseconds.
     pub handle_rpc_message_duration_ns: Histogram<u64>,
-    /// The count of the number of times an actor was invoked.
-    pub actor_invocations: Counter<u64>,
-    /// The count of the number of times an actor invocation resulted in an error.
-    pub actor_errors: Counter<u64>,
+    /// The count of the number of times an component was invoked.
+    pub component_invocations: Counter<u64>,
+    /// The count of the number of times an component invocation resulted in an error.
+    pub component_errors: Counter<u64>,
 
     /// The host's ID.
     // TODO this is actually configured as an InstrumentationScope attribute on the global meter,
@@ -32,20 +32,20 @@ impl HostMetrics {
             .with_unit(Unit::new("nanoseconds"))
             .init();
 
-        let actor_invocation_count = meter
-            .u64_counter("wasmcloud_host.actor.invocations")
-            .with_description("Number of actor invocations")
+        let component_invocation_count = meter
+            .u64_counter("wasmcloud_host.component.invocations")
+            .with_description("Number of component invocations")
             .init();
 
-        let actor_error_count = meter
-            .u64_counter("wasmcloud_host.actor.invocation.errors")
-            .with_description("Number of actor errors")
+        let component_error_count = meter
+            .u64_counter("wasmcloud_host.component.invocation.errors")
+            .with_description("Number of component errors")
             .init();
 
         Self {
             handle_rpc_message_duration_ns: wasmcloud_host_handle_rpc_message_duration_ns,
-            actor_invocations: actor_invocation_count,
-            actor_errors: actor_error_count,
+            component_invocations: component_invocation_count,
+            component_errors: component_error_count,
             host_id,
             lattice_id,
         }
@@ -60,9 +60,9 @@ impl HostMetrics {
     ) {
         self.handle_rpc_message_duration_ns
             .record(elapsed, attributes);
-        self.actor_invocations.add(1, attributes);
+        self.component_invocations.add(1, attributes);
         if error {
-            self.actor_errors.add(1, attributes);
+            self.component_errors.add(1, attributes);
         }
     }
 }

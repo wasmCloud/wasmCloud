@@ -53,7 +53,7 @@ pub async fn assert_start_actor(
     let CtlResponse {
         success, message, ..
     } = ctl_client
-        .scale_actor(
+        .scale_component(
             &host_key.public_key(),
             url.as_ref(),
             actor_id.as_ref(),
@@ -101,7 +101,7 @@ pub async fn assert_scale_actor(
     let CtlResponse {
         success, message, ..
     } = ctl_client
-        .scale_actor(
+        .scale_component(
             &host_key.public_key(),
             url.as_ref(),
             actor_id.as_ref(),
