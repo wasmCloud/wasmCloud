@@ -110,7 +110,7 @@ async fn find_event<T>(
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub async fn wait_for_actor_scaled_event(
+pub async fn wait_for_component_scaled_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
@@ -124,7 +124,7 @@ pub async fn wait_for_actor_scaled_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_scaled" => {
+            "com.wasmcloud.lattice.component_scaled" | "com.wasmcloud.lattice.actor_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == actor_ref {
@@ -136,7 +136,8 @@ pub async fn wait_for_actor_scaled_event(
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_scale_failed" => {
+            "com.wasmcloud.lattice.component_scale_failed"
+            | "com.wasmcloud.lattice.actor_scale_failed" => {
                 let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if returned_actor_ref == actor_ref {
@@ -335,7 +336,7 @@ pub async fn wait_for_actor_stop_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_stopped" | "com.wasmcloud.lattice.actor_scaled" => {
+            "com.wasmcloud.lattice.actor_stopped" | "com.wasmcloud.lattice.component_scaled" => {
                 let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
                 if returned_actor_id == actor_id {
                     return Ok(EventCheckOutcome::Success(ActorStoppedInfo {
@@ -345,7 +346,7 @@ pub async fn wait_for_actor_stop_event(
                 }
             }
             "com.wasmcloud.lattice.actor_stop_failed"
-            | "com.wasmcloud.lattice.actor_scale_failed" => {
+            | "com.wasmcloud.lattice.component_scale_failed" => {
                 let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
 
                 if returned_actor_id == actor_id {

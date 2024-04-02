@@ -44,7 +44,7 @@ pub async fn assert_start_actor(
     let ctl_client = ctl_client.into();
 
     let mut receiver = ctl_client
-        .events_receiver(vec!["actor_scaled".into()])
+        .events_receiver(vec!["component_scaled".into()])
         .await
         .map_err(|e| anyhow!(e))?;
 
@@ -91,7 +91,7 @@ pub async fn assert_scale_actor(
     let ctl_client = ctl_client.into();
 
     let mut receiver = ctl_client
-        .events_receiver(vec!["actor_scaled".into()])
+        .events_receiver(vec!["component_scaled".into()])
         .await
         .map_err(|e| anyhow!(e))?;
 
