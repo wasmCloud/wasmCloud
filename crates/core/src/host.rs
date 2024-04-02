@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::lattice::ClusterIssuerKey;
 use crate::link::InterfaceLinkDefinition;
 use crate::logging::Level;
 use crate::otel::OtelConfig;
@@ -42,7 +41,7 @@ pub struct HostData {
     /// initial list of links for provider
     pub link_definitions: Vec<InterfaceLinkDefinition>,
     /// list of cluster issuers
-    pub cluster_issuers: Vec<ClusterIssuerKey>,
+    pub cluster_issuers: Vec<String>,
     /// Merged named configuration set for this provider at runtime
     #[serde(default)]
     pub config: HashMap<String, String>,

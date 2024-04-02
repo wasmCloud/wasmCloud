@@ -1,15 +1,11 @@
 #![forbid(clippy::unwrap_used)]
 
-pub mod chunking;
 pub mod logging;
 pub mod nats;
 pub mod tls;
 
 pub mod host;
 pub use host::*;
-
-pub mod lattice;
-pub use lattice::*;
 
 pub mod link;
 pub use link::*;

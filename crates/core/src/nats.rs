@@ -1,8 +1,7 @@
 use async_nats::HeaderMap;
 use std::collections::HashMap;
 
-/// Convert a [`async_nats::HeaderMap`] to a [`HashMap`] of the kind that is used in the smithy contract
-/// This method of converting takes the last known value of a given header and uses that as the final value
+/// Convert a [`async_nats::HeaderMap`] to a [`HashMap`] used in trace contexts
 pub fn convert_header_map_to_hashmap(map: &HeaderMap) -> HashMap<String, String> {
     map.iter()
         .flat_map(|(key, value)| {

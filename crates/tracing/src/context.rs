@@ -1,6 +1,6 @@
 //! Contains helpers and code for enabling [OpenTelemetry](https://opentelemetry.io/) tracing for
-//! wasmbus-rpc calls. Please note that right now this is only supported for providers. This module
-//! is only available with the `otel` feature enabled
+//! wasmcloud. Please note that right now this is only supported for providers. This module is only
+//! available with the `otel` feature enabled
 
 use std::collections::HashMap;
 use std::ops::Deref;
