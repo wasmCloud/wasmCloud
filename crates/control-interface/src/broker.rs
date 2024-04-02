@@ -21,9 +21,9 @@ pub mod v1 {
         )
     }
 
-    pub fn actor_auction_subject(topic_prefix: &Option<String>, lattice: &str) -> String {
+    pub fn component_auction_subject(topic_prefix: &Option<String>, lattice: &str) -> String {
         format!(
-            "{}.actor.auction",
+            "{}.component.auction",
             prefix(topic_prefix, lattice, CTL_API_VERSION_1)
         )
     }
@@ -86,9 +86,13 @@ pub mod v1 {
 
         use super::prefix;
 
-        pub fn scale_actor(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        pub fn scale_component(
+            topic_prefix: &Option<String>,
+            lattice: &str,
+            host_id: &str,
+        ) -> String {
             format!(
-                "{}.actor.scale.{host_id}",
+                "{}.component.scale.{host_id}",
                 prefix(topic_prefix, lattice, CTL_API_VERSION_1)
             )
         }
@@ -115,9 +119,13 @@ pub mod v1 {
             )
         }
 
-        pub fn update_actor(topic_prefix: &Option<String>, lattice: &str, host_id: &str) -> String {
+        pub fn update_component(
+            topic_prefix: &Option<String>,
+            lattice: &str,
+            host_id: &str,
+        ) -> String {
             format!(
-                "{}.actor.update.{host_id}",
+                "{}.component.update.{host_id}",
                 prefix(topic_prefix, lattice, CTL_API_VERSION_1)
             )
         }

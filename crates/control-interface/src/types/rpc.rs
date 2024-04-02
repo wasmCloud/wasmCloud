@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, LinkName, WitNamespace, WitPackage};
 
-/// A host response to a request to start an actor, confirming the host
-/// has enough capacity to start the actor
+/// A host response to a request to start an component, confirming the host
+/// has enough capacity to start the component
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ActorAuctionAck {
-    /// The original actor reference used for the auction
+pub struct ComponentAuctionAck {
+    /// The original component reference used for the auction
     #[serde(default)]
-    pub actor_ref: String,
-    /// The unique component identifier that the auctioner can use for this actor
+    pub component_ref: String,
+    /// The unique component identifier that the auctioner can use for this component
     #[serde(default)]
-    pub actor_id: String,
+    pub component_id: String,
     /// The host ID of the "bidder" for this auction.
     #[serde(default)]
     pub host_id: String,
@@ -24,15 +24,15 @@ pub struct ActorAuctionAck {
     pub constraints: HashMap<String, String>,
 }
 
-/// A request to locate suitable hosts for a given actor
+/// A request to locate suitable hosts for a given component
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ActorAuctionRequest {
-    /// The image reference, file or OCI, for this actor.
+pub struct ComponentAuctionRequest {
+    /// The image reference, file or OCI, for this component.
     #[serde(default)]
-    pub actor_ref: String,
-    /// The unique identifier to be used for this actor. The host will ensure
-    /// that no other actor with the same ID is running on the host
-    pub actor_id: ComponentId,
+    pub component_ref: String,
+    /// The unique identifier to be used for this component. The host will ensure
+    /// that no other component with the same ID is running on the host
+    pub component_id: ComponentId,
     /// The set of constraints that must match the labels of a suitable target host
     pub constraints: HashMap<String, String>,
 }
@@ -71,7 +71,7 @@ pub struct ProviderAuctionRequest {
     pub provider_id: ComponentId,
 }
 
-/// A request to remove a link definition and detach the relevant actor
+/// A request to remove a link definition and detach the relevant component
 /// from the given provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeleteInterfaceLinkDefinitionRequest {
