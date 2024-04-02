@@ -14,8 +14,8 @@ pub mod provider;
 
 /// Re-export of types from [`wasmcloud_core`]
 pub use core::{
-    HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WasmCloudEntity, WitFunction,
-    WitInterface, WitNamespace, WitPackage,
+    HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WitFunction, WitInterface,
+    WitNamespace, WitPackage,
 };
 pub use provider::{
     get_connection, load_host_data, run_provider, run_provider_handler, start_provider,
@@ -78,38 +78,6 @@ pub const URL_SCHEME: &str = "wasmbus";
 pub(crate) const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 /// The default timeout for a request to the lattice, in milliseconds
 pub const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
-
-/// Returns the rpc topic (subject) name for sending to an actor or provider.
-/// A provider entity must have the public_key and link_name fields filled in.
-/// An actor entity must have a public_key and an empty link_name.
-pub fn rpc_topic(entity: &WasmCloudEntity, lattice: &str) -> String {
-    if !entity.link_name.is_empty() {
-        // provider target
-        format!(
-            "wasmbus.rpc.{}.{}.{}",
-            lattice, entity.public_key, entity.link_name
-        )
-    } else {
-        // actor target
-        format!("wasmbus.rpc.{}.{}", lattice, entity.public_key)
-    }
-}
-
-/// Generates a fully qualified wasmbus URL for use in wascap claims. The optional method parameter is used for generating URLs for targets being invoked
-// todo(vados-cosmonic): we can remove this entire function once claim signing is removed
-// see: https://github.com/wasmCloud/wasmCloud/issues/1219
-pub fn url(entity: &WasmCloudEntity, method: Option<&str>) -> String {
-    // NOTE: for wRPC, a couple fields in WasmCloudEntity take on separate meanings:
-    // - public_key -> target_id
-    // - contract_id -> interface
-    format!(
-        "wrpc://{}/{}/{}{}",
-        entity.contract_id,
-        entity.link_name,
-        entity.public_key,
-        method.map(|m| ["/", m].join("")).unwrap_or_default(),
-    )
-}
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
 pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {

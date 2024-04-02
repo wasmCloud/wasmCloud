@@ -1,8 +1,8 @@
 // COPIED DIRECTLY FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/otel.rs (minus unused functionality)
 
 //! Contains helpers and code for enabling [OpenTelemetry](https://opentelemetry.io/) tracing for
-//! wasmbus-rpc calls. Please note that right now this is only supported for providers. This module
-//! is only available with the `otel` feature enabled
+//! wasmcloud-invocations. Please note that right now this is only supported for providers. This
+//! module is only available with the `otel` feature enabled
 
 use async_nats::header::HeaderMap;
 use opentelemetry::propagation::{Injector, TextMapPropagator};
