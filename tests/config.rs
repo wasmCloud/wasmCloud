@@ -143,7 +143,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     );
     let wrpc_client = Arc::new(wrpc_client);
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None)
+    let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None, None)
         .await
         .context("failed to start test host")?;
 
