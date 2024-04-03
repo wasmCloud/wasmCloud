@@ -1,7 +1,7 @@
-package wasmcloud:host;
+package wasmcloud:host@1.0.0;
 
 world interfaces {
-    import wasmcloud:bus/lattice;
+    import wasmcloud:bus/lattice@1.0.0;
 
     import wasi:blobstore/blobstore@0.2.0-draft;
     import wasi:config/runtime@0.2.0-draft;
