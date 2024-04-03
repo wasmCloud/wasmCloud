@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context as _, Result};
 use proc_macro2::{Span, TokenStream};
-use quote::format_ident;
+use quote::{format_ident, quote};
 use syn::{Fields, FieldsNamed, FieldsUnnamed, Ident, LitInt};
 use tracing::warn;
 
@@ -53,17 +53,24 @@ fn derive_encode_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
             .clone()
             .context("unexpectedly missing field name in struct")?;
         members.push(member_name.clone());
-        encode_lines.push(quote::quote!(
+        encode_lines.push(quote!(
             #member_name.encode(&mut payload).await.context("failed to encode member `#member_name`")?;
         ));
     }
 
+    let otel_instrument_phrase = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
     // Build the generated impl
-    Ok(quote::quote!(
+    Ok(quote!(
         #[automatically_derived]
         #[#crate_path::deps::async_trait::async_trait]
         impl #crate_path::deps::wrpc_transport::Encode for #struct_name
         {
+            #otel_instrument_phrase
             async fn encode(
                 self,
                 mut payload: &mut (impl #crate_path::deps::bytes::buf::BufMut + Send)
@@ -119,12 +126,12 @@ fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                         .clone()
                         .context("unexpectedly missing named field")?;
                     args.push(named_field_name.clone());
-                    named_field_encode_lines.push(quote::quote!(
+                    named_field_encode_lines.push(quote!(
                         #named_field_name.encode(&mut payload).await?;
                     ));
                 }
 
-                variant_encode_lines.push(quote::quote!(
+                variant_encode_lines.push(quote!(
                     Self::#name { #( #args ),* } => {
                         #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
                         #( #named_field_encode_lines );*
@@ -154,12 +161,12 @@ fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                     // - build a line that does the encode sync
                     let unnamed_field_arg_name = format_ident!("arg{}", unnamed_field_idx);
                     args.push(unnamed_field_arg_name.clone());
-                    unnamed_field_encode_lines.push(quote::quote!(
+                    unnamed_field_encode_lines.push(quote!(
                         #unnamed_field_arg_name.encode(&mut payload).await?;
                     ));
                 }
 
-                variant_encode_lines.push(quote::quote!(
+                variant_encode_lines.push(quote!(
                     Self::#name( #( #args ),* ) => {
                         #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
                         #( #unnamed_field_encode_lines );*
@@ -167,7 +174,7 @@ fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 ))
             }
             // If there are no fields we can just encode the discriminant
-            Fields::Unit => variant_encode_lines.push(quote::quote!(
+            Fields::Unit => variant_encode_lines.push(quote!(
                 Self::#name => {
                     #crate_path::deps::wrpc_transport::encode_discriminant(&mut payload, #idx_ident)?;
                 }
@@ -175,11 +182,18 @@ fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
         }
     }
 
-    Ok(quote::quote!(
+    let otel_instrument_phrase = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
+    Ok(quote!(
         #[automatically_derived]
         #[#crate_path::deps::async_trait::async_trait]
         impl #crate_path::deps::wrpc_transport::Encode for #enum_name
         {
+            #otel_instrument_phrase
             async fn encode(
                 self,
                 mut payload: &mut (impl #crate_path::deps::bytes::buf::BufMut + Send)
@@ -198,12 +212,13 @@ fn derive_encode_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use quote::quote;
 
     use crate::wrpc_transport::encode::derive_encode_inner;
 
     #[test]
     fn encode_struct_simple() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -216,7 +231,7 @@ mod tests {
 
     #[test]
     fn encode_struct_with_option() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -230,7 +245,7 @@ mod tests {
 
     #[test]
     fn encode_struct_with_vec() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             struct Test {
                 byte: u8,
                 string: String,
@@ -244,7 +259,7 @@ mod tests {
 
     #[test]
     fn encode_enum_simple() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             enum Simple {
                 A,
                 B,
@@ -258,7 +273,7 @@ mod tests {
 
     #[test]
     fn encode_enum_unnamed_variant_args() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             enum UnnamedVariants {
                 A,
                 B(String, String),
@@ -272,7 +287,7 @@ mod tests {
 
     #[test]
     fn encode_enum_named_variant_args() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             enum NamedVariants {
                 A,
                 B { first: String, second: String },
@@ -286,7 +301,7 @@ mod tests {
 
     #[test]
     fn encode_enum_mixed_variant_args() -> Result<()> {
-        let derived = derive_encode_inner(quote::quote!(
+        let derived = derive_encode_inner(quote!(
             enum MixedVariants {
                 A,
                 B { first: String, second: String },
@@ -295,6 +310,48 @@ mod tests {
         ))?;
         let parsed_item = syn::parse2::<syn::Item>(derived);
         assert!(matches!(parsed_item, Ok(syn::Item::Impl(_))));
+        Ok(())
+    }
+
+    /// Ensure that a mixed variant enum properly gets instrument attributes w/ otel enabled
+    #[test]
+    #[cfg(feature = "otel")]
+    fn encode_enum_mixed_variant_args_otel() -> Result<()> {
+        use anyhow::bail;
+        use quote::{quote, ToTokens};
+        use syn::ImplItem;
+
+        let derived = derive_encode_inner(quote!(
+            #[wrpc_transport_derive::deps::wrpc_transport::tracing::instrument(
+                level = "trace",
+                skip_all
+            )]
+            enum MixedVariants {
+                A,
+                B { first: String, second: String },
+                C(String, String),
+            }
+        ))?;
+        let parsed_item = syn::parse2::<syn::Item>(derived);
+        let Ok(syn::Item::Impl(impl_item)) = parsed_item else {
+            bail!("unexpected parsed item");
+        };
+
+        for item in impl_item.items.iter() {
+            // All functions inside should be annotated
+            if let ImplItem::Fn(f) = item {
+                // At least once attribute is the otel one
+                assert!(f
+                    .attrs
+                    .iter()
+                    .find(|attr| attr
+                        .to_token_stream()
+                        .to_string()
+                        .contains("tracing :: instrument"))
+                    .is_some())
+            }
+        }
+
         Ok(())
     }
 }

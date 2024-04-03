@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context as _, Result};
 use proc_macro2::{Span, TokenStream};
-use quote::format_ident;
+use quote::{format_ident, quote};
 use syn::{Fields, FieldsNamed, FieldsUnnamed, Ident, LitInt, LitStr};
 use tracing::warn;
 
@@ -68,11 +68,18 @@ fn derive_subscribe_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
 
     let AttrOptions { crate_path } = AttrOptions::try_from_attributes(s.attrs)?;
 
+    let otel_instrument = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
     // Build the generated impl
-    Ok(quote::quote!(
+    Ok(quote!(
         #[automatically_derived]
         impl #crate_path::deps::wrpc_transport::Subscribe for #struct_name
         {
+            #otel_instrument
             async fn subscribe<T: #crate_path::deps::wrpc_transport::Subscriber + Send + Sync>(
                 subscriber: &T,
                 subject: T::Subject,
@@ -93,10 +100,16 @@ fn derive_subscribe_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 
     let AttrOptions { crate_path } = AttrOptions::try_from_attributes(e.attrs)?;
 
-    Ok(quote::quote!(
+    let otel_instrument = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
+    Ok(quote!(
         #[automatically_derived]
-        impl #crate_path::deps::wrpc_transport::Subscribe for #enum_name
-        {
+        impl #crate_path::deps::wrpc_transport::Subscribe for #enum_name {
+            #otel_instrument
             async fn subscribe<T: #crate_path::deps::wrpc_transport::Subscriber + Send + Sync>(
                 subscriber: &T,
                 subject: T::Subject,
@@ -130,19 +143,25 @@ fn derive_receive_inner_for_struct(item: syn::Item) -> Result<TokenStream> {
         let member_name_lit_str = LitStr::new(member_name.to_string().as_ref(), Span::call_site());
         members.push(member_name.clone());
         // Add a line that receives this member
-        receive_lines.push(quote::quote!(
+        receive_lines.push(quote!(
             let (#member_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                 .await
                 .with_context(|| format!("failed to receive member `{}`", #member_name_lit_str))?;
         ));
     }
 
+    let otel_instrument = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
     // Build the generated impl
-    Ok(quote::quote!(
+    Ok(quote!(
         #[automatically_derived]
         #[#crate_path::deps::async_trait::async_trait]
-        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #struct_name
-        {
+        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #struct_name {
+            #otel_instrument
             async fn receive<T>(
                 payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>>  + Send + Sync + Unpin),
@@ -204,7 +223,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                         .clone()
                         .context("unexpectedly missing named field")?;
                     args.push(named_field_name.clone());
-                    named_field_receive_lines.push(quote::quote!(
+                    named_field_receive_lines.push(quote!(
                         let (#named_field_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                             .await
                             .context("failed to receive enum discriminant inner value")?;
@@ -212,7 +231,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 }
 
                 // Generate match statement block
-                variant_receive_match_blocks.push(quote::quote!(
+                variant_receive_match_blocks.push(quote!(
                     #idx_ident => {
                         #( #named_field_receive_lines );*
                         Ok((Self::#name { #( #args ),* }, Box::new(payload)))
@@ -244,7 +263,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                     // - build a line that does the receive sync
                     let unnamed_field_arg_name = format_ident!("arg{}", unnamed_field_idx);
                     args.push(unnamed_field_arg_name.clone());
-                    unnamed_field_receive_lines.push(quote::quote!(
+                    unnamed_field_receive_lines.push(quote!(
                         let (#unnamed_field_arg_name, payload) = #crate_path::deps::wrpc_transport::Receive::receive_sync(payload, rx)
                             .await
                             .context("failed to receive enum discriminant inner value")?;
@@ -252,7 +271,7 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 }
 
                 // Generate match statement block
-                variant_receive_match_blocks.push(quote::quote!(
+                variant_receive_match_blocks.push(quote!(
                     #idx_ident => {
                         #( #unnamed_field_receive_lines );*
                         Ok((Self::#name(#( #args ),*), Box::new(payload)))
@@ -260,16 +279,22 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
                 ))
             }
             // If there are no fields we can just receive the discriminant
-            Fields::Unit => variant_receive_match_blocks.push(quote::quote!(
+            Fields::Unit => variant_receive_match_blocks.push(quote!(
                 #idx_ident => Ok((Self::#name, Box::new(payload)))
             )),
         }
     }
 
-    Ok(quote::quote!(
+    let otel_instrument = if cfg!(feature = "otel") {
+        quote!(#[#crate_path::deps::wrpc_transport::tracing::instrument(level = "trace", skip_all)])
+    } else {
+        TokenStream::new()
+    };
+
+    Ok(quote!(
         #[#crate_path::deps::async_trait::async_trait]
-        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #enum_name
-        {
+        impl<'a> #crate_path::deps::wrpc_transport::Receive<'a> for #enum_name {
+            #otel_instrument
             async fn receive<T>(
                 payload: impl #crate_path::deps::bytes::buf::Buf + Send + 'a,
                 rx: &mut (impl #crate_path::deps::futures::Stream<Item=#crate_path::deps::anyhow::Result<#crate_path::deps::bytes::Bytes>> + Send + Sync + Unpin),
@@ -298,12 +323,13 @@ fn derive_receive_inner_for_enum(item: syn::Item) -> Result<TokenStream> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use quote::quote;
 
     use crate::wrpc_transport::receive::derive_receive_inner;
 
     #[test]
     fn derive_receive_inner_works() -> Result<()> {
-        let tokens = quote::quote!(
+        let tokens = quote!(
             struct Test {
                 byte: u8,
             }

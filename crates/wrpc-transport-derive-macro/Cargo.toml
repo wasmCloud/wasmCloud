@@ -17,10 +17,14 @@ status = "actively-developed"
 [lib]
 proc-macro = true
 
+[features]
+default = []
+otel = []
+
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
-syn = { workspace = true, features = [ "full", "parsing", "extra-traits", "printing", "clone-impls" ] }
 proc-macro2 = { workspace = true, features = [ "proc-macro" ] }
 quote = { workspace = true }
+syn = { workspace = true, features = [ "full", "parsing", "extra-traits", "printing", "clone-impls" ] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "fmt", "env-filter" ] }

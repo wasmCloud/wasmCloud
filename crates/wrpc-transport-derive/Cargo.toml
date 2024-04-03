@@ -14,6 +14,10 @@ repository.workspace = true
 [badges.maintenance]
 status = "actively-developed"
 
+[features]
+default = []
+otel = [ "wrpc-transport-derive-macro/otel" ]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
