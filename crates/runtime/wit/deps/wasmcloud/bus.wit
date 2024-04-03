@@ -1,15 +1,14 @@
-package wasmcloud:bus;
+package wasmcloud:bus@1.0.0;
 
 interface lattice {
     /// Interface target. This represents an interface, which can be selected by `set-link-name`.
-    /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
-    /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
     resource call-target-interface {
         constructor(namespace: string, %package: string, %interface: string);
     }
 
-    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
-    /// todo(vados-cosmonic): the list of interfaces should not be necessary once signing is removed
-    /// see: https://github.com/wasmCloud/wasmCloud/issues/1219
+    /// Set an optional link name to use for all interfaces specified. This is advanced
+    /// functionality only available within wasmcloud and, as such, is exposed here as part of the
+    /// wasmcloud:bus package. This is used when you are linking multiple of the same interfaces
+    /// (i.e. a keyvalue implementation for caching and another one for secrets) to a component
     set-link-name: func(name: string, interfaces: list<call-target-interface>);
 }
