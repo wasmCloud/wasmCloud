@@ -225,32 +225,53 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
 
 #[cfg(test)]
 mod tests {
-    use crate::common::registry_cmd::{RegistryPullCommand, RegistryPushCommand};
+    use anyhow::{ensure, Context as _, Result};
     use clap::Parser;
-    use wash_lib::cli::registry::RegistryCommand;
+    use wash_lib::cli::registry::{RegistryCommand, RegistryPullCommand};
+
+    use crate::common::registry_cmd::RegistryPushCommand;
 
     const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const LOCAL_REGISTRY: &str = "localhost:5001";
+    const TESTDIR: &str = "./tests/fixtures";
 
+    // Partial wash command
     #[derive(Debug, Parser)]
     struct Cmd {
         #[clap(subcommand)]
-        reg: RegistryCommand,
+        sub: RegistryCommand,
     }
 
     #[test]
     /// Enumerates multiple options of the `pull` command to ensure API doesn't
     /// change between versions. This test will fail if `wash reg pull`
     /// changes syntax, ordering of required elements, or flags.
-    fn test_pull_comprehensive() {
-        // Not explicitly used, just a placeholder for a directory
-        const TESTDIR: &str = "./tests/fixtures";
+    fn test_pull_comprehensive() -> Result<()> {
+        // test basic `wash reg pull`
+        let pull_basic: Cmd = Parser::try_parse_from(["wash", "pull", ECHO_WASM])
+            .context("failed to perform reg pull")?;
+        ensure!(matches!(
+            pull_basic.sub,
+            RegistryCommand::Pull(RegistryPullCommand { url, .. }) if url == ECHO_WASM,
+        ));
 
-        let pull_basic: Cmd = Parser::try_parse_from(["reg", "pull", ECHO_WASM]).unwrap();
+        // test `wash reg pull`
         let pull_all_flags: Cmd =
-            Parser::try_parse_from(["reg", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
-                .unwrap();
+            Parser::try_parse_from(["wash", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
+                .context("failed to pull with all flags")?;
+        ensure!(matches!(
+            pull_all_flags.sub,
+            RegistryCommand::Pull(RegistryPullCommand {
+                url,
+                allow_latest,
+                opts,
+                ..
+            }) if url == ECHO_WASM && allow_latest && opts.insecure
+        ));
+
+        // test `wash pull`
         let pull_all_options: Cmd = Parser::try_parse_from([
+            "wash",
             "pull",
             ECHO_WASM,
             "--destination",
@@ -262,47 +283,23 @@ mod tests {
             "--user",
             "user",
         ])
-        .unwrap();
-        match pull_basic.reg {
-            RegistryCommand::Pull(RegistryPullCommand { url, .. }) => {
-                assert_eq!(url, ECHO_WASM);
-            }
-            _ => panic!("`reg pull` constructed incorrect command"),
-        };
-
-        match pull_all_flags.reg {
-            RegistryCommand::Pull(RegistryPullCommand {
-                url,
-                allow_latest,
-                opts,
-                ..
-            }) => {
-                assert_eq!(url, ECHO_WASM);
-                assert!(allow_latest);
-                assert!(opts.insecure);
-            }
-            _ => panic!("`reg pull` constructed incorrect command"),
-        };
-
-        match pull_all_options.reg {
+        .context("wash pull with all options failed")?;
+        ensure!(matches!(
+            pull_all_options.sub,
             RegistryCommand::Pull(RegistryPullCommand {
                 url,
                 destination,
                 digest,
                 opts,
                 ..
-            }) => {
-                assert_eq!(url, ECHO_WASM);
-                assert_eq!(destination.unwrap(), TESTDIR);
-                assert_eq!(
-                    digest.unwrap(),
-                    "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3"
-                );
-                assert_eq!(opts.user.unwrap(), "user");
-                assert_eq!(opts.password.unwrap(), "password");
-            }
-            _ => panic!("`reg pull` constructed incorrect command"),
-        };
+            }) if url == ECHO_WASM
+                && destination == Some(TESTDIR.into())
+                && digest == Some("sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3".into())
+                && opts.user == Some("user".into())
+                && opts.password == Some("password".into())
+        ));
+
+        Ok(())
     }
 
     #[test]
@@ -316,13 +313,14 @@ mod tests {
         // Push echo.wasm and pull from local registry
         let echo_push_basic = &format!("{LOCAL_REGISTRY}/echo:pushbasic");
         let push_basic: Cmd = Parser::try_parse_from([
+            "wash",
             "push",
             echo_push_basic,
             &format!("{TESTDIR}/echopush.wasm"),
             "--insecure",
         ])
         .unwrap();
-        match push_basic.reg {
+        match push_basic.sub {
             RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
@@ -339,6 +337,7 @@ mod tests {
         // Push logging.par.gz and pull from local registry
         let logging_push_all_flags = &format!("{LOCAL_REGISTRY}/logging:allflags");
         let push_all_flags: Cmd = Parser::try_parse_from([
+            "wash",
             "push",
             logging_push_all_flags,
             &format!("{TESTDIR}/logging.par.gz"),
@@ -346,7 +345,7 @@ mod tests {
             "--allow-latest",
         ])
         .unwrap();
-        match push_all_flags.reg {
+        match push_all_flags.sub {
             RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
@@ -365,6 +364,7 @@ mod tests {
         // Push logging.par.gz to different tag and pull to confirm successful push
         let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
         let push_all_options: Cmd = Parser::try_parse_from([
+            "wash",
             "push",
             logging_push_all_options,
             &format!("{TESTDIR}/logging.par.gz"),
@@ -378,7 +378,7 @@ mod tests {
             "localuser",
         ])
         .unwrap();
-        match push_all_options.reg {
+        match push_all_options.sub {
             RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
