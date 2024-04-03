@@ -26,6 +26,7 @@ use wasmcloud_core::CallTargetInterface;
 pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     bus: Option<Arc<dyn Bus + Sync + Send>>,
+    config: Option<Arc<dyn Config + Send + Sync>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
     keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
@@ -39,6 +40,7 @@ impl Debug for Handler {
         f.debug_struct("Handler")
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
+            .field("config", &format_opt(&self.config))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
             .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
@@ -69,6 +71,10 @@ impl Handler {
         proxy(&self.blobstore, "Blobstore", method)
     }
 
+    fn proxy_config(&self, method: &str) -> anyhow::Result<&Arc<dyn Config + Sync + Send>> {
+        proxy(&self.config, "Config", method)
+    }
+
     fn proxy_keyvalue_atomic(
         &self,
         method: &str,
@@ -93,6 +99,14 @@ impl Handler {
         blobstore: Arc<dyn Blobstore + Send + Sync>,
     ) -> Option<Arc<dyn Blobstore + Send + Sync>> {
         self.blobstore.replace(blobstore)
+    }
+
+    /// Replace [`Config`] handler returning the old one, if such was set
+    pub fn replace_config(
+        &mut self,
+        config: Arc<dyn Config + Send + Sync>,
+    ) -> Option<Arc<dyn Config + Send + Sync>> {
+        self.config.replace(config)
     }
 
     /// Replace [`Bus`] handler returning the old one, if such was set
@@ -316,6 +330,23 @@ pub trait Blobstore {
     ) -> anyhow::Result<()>;
 }
 
+/// `wasi:config/runtime` implementation
+#[async_trait]
+pub trait Config {
+    /// Handle `wasi:config/runtime.get`
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<String>, super::bindgen::wasi::config::runtime::ConfigError>>;
+
+    /// Handle `wasi:config/runtime.get_all`
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<
+        Result<Vec<(String, String)>, super::bindgen::wasi::config::runtime::ConfigError>,
+    >;
+}
+
 #[async_trait]
 /// `wasmcloud:bus/host` implementation
 pub trait Bus {
@@ -343,17 +374,6 @@ pub trait Bus {
         target: String,
         interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()>;
-
-    /// Handle `wasmcloud:bus/config.get`
-    async fn get(
-        &self,
-        key: &str,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>, super::guest_config::ConfigError>>;
-
-    /// Handle `wasmcloud:bus/config.get_all`
-    async fn get_all(
-        &self,
-    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>>;
 
     // TODO: Remove
     /// Handle `wasmcloud:bus/host.call` without streaming
@@ -625,23 +645,6 @@ impl Bus for Handler {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn get(
-        &self,
-        key: &str,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>, super::guest_config::ConfigError>> {
-        self.proxy_bus("wasmcloud:bus/config.get")?.get(key).await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn get_all(
-        &self,
-    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, super::guest_config::ConfigError>> {
-        self.proxy_bus("wasmcloud:bus/config.get_all")?
-            .get_all()
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
     async fn call(
         &self,
         target: TargetEntity,
@@ -651,6 +654,29 @@ impl Bus for Handler {
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         self.proxy_bus("wasmcloud:bus/host.call")?
             .call(target, instance, name, params)
+            .await
+    }
+}
+
+#[async_trait]
+impl Config for Handler {
+    #[instrument(level = "trace", skip(self))]
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<String>, super::bindgen::wasi::config::runtime::ConfigError>>
+    {
+        self.proxy_config("wasi:config/runtime.get")?.get(key).await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<
+        Result<Vec<(String, String)>, super::bindgen::wasi::config::runtime::ConfigError>,
+    > {
+        self.proxy_config("wasi:config/runtime.get-all")?
+            .get_all()
             .await
     }
 }
@@ -805,6 +831,8 @@ pub(crate) struct HandlerBuilder {
     pub blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     /// [`Bus`] handler
     pub bus: Option<Arc<dyn Bus + Sync + Send>>,
+    /// [`Config`] handler
+    pub config: Option<Arc<dyn Config + Sync + Send>>,
     /// [`IncomingHttp`] handler
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     /// [`KeyValueAtomic`] handler
@@ -832,6 +860,14 @@ impl HandlerBuilder {
     pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
         Self {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// Set [`Config`] handler
+    pub fn config(self, config: Arc<impl Config + Sync + Send + 'static>) -> Self {
+        Self {
+            config: Some(config),
             ..self
         }
     }
@@ -902,6 +938,7 @@ impl Debug for HandlerBuilder {
         f.debug_struct("HandlerBuilder")
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
+            .field("config", &format_opt(&self.config))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
             .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
@@ -917,6 +954,7 @@ impl From<Handler> for HandlerBuilder {
         Handler {
             blobstore,
             bus,
+            config,
             incoming_http,
             keyvalue_atomic,
             keyvalue_eventual,
@@ -928,6 +966,7 @@ impl From<Handler> for HandlerBuilder {
         Self {
             blobstore,
             bus,
+            config,
             incoming_http,
             keyvalue_atomic,
             keyvalue_eventual,
@@ -943,6 +982,7 @@ impl From<HandlerBuilder> for Handler {
         HandlerBuilder {
             blobstore,
             bus,
+            config,
             incoming_http,
             keyvalue_atomic,
             keyvalue_eventual,
@@ -954,6 +994,7 @@ impl From<HandlerBuilder> for Handler {
         Self {
             blobstore,
             bus,
+            config,
             incoming_http,
             outgoing_http,
             keyvalue_atomic,

@@ -1,4 +1,5 @@
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
+config = "https://github.com/WebAssembly/wasi-runtime-config/archive/main.tar.gz"
 io = "https://github.com/WebAssembly/wasi-io/archive/v0.2.0.tar.gz"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"

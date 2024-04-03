@@ -631,7 +631,7 @@ fn build_lattice_methods_by_wit_interface(
 fn is_ignored_invocation_handler_pkg(pkg: &wit_parser::PackageName) -> bool {
     matches!(
         (pkg.namespace.as_ref(), pkg.name.as_ref()),
-        ("wasmcloud", "bus") | ("wasi", "io")
+        ("wasmcloud", "bus") | ("wasi", "io") | ("wasi", "config")
     )
 }
 

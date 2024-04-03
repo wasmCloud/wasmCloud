@@ -28,6 +28,9 @@ mod test {
             let _: Vec<u8> = wasi::random::random::get_random_bytes(4);
             let _: u64 = wasi::random::random::get_random_u64();
 
+            let _ = wasi::config::runtime::get("foo");
+            let _ = wasi::config::runtime::get_all();
+
             wasmcloud::bus::lattice::set_link_name(
                 "default",
                 vec![

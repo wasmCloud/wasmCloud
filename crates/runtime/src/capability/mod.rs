@@ -4,7 +4,7 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual,
+    ActorIdentifier, Blobstore, Bus, Config, IncomingHttp, KeyValueAtomic, KeyValueEventual,
     LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
     OutgoingHttpRequest, TargetEntity,
 };
@@ -63,8 +63,8 @@ mod bindgen {
     });
 }
 
-pub use bindgen::wasi::{blobstore, keyvalue, logging};
-pub use bindgen::wasmcloud::bus::{self, guest_config};
+pub use bindgen::wasi::{blobstore, config, keyvalue, logging};
+pub use bindgen::wasmcloud::bus;
 pub use bindgen::wasmcloud::messaging;
 pub use bindgen::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;

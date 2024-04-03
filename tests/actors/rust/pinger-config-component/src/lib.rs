@@ -46,8 +46,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let pong = pingpong::ping();
 
         let res = json!({
-            "single_val": wasmcloud::bus::guest_config::get(&config_key).expect("failed to get config value").map(|s| String::from_utf8(s).expect("Config value should be a string")),
-            "multi_val": wasmcloud::bus::guest_config::get_all().expect("failed to get config value").into_iter().map(|(k, v)| (k, String::from_utf8(v).expect("Config value should be a string"))).collect::<HashMap<String, String>>(),
+            "single_val": wasi::config::runtime::get(&config_key).expect("failed to get config value"),
+            "multi_val": wasi::config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
             "pong": pong,
         });
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");

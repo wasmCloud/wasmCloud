@@ -1,13 +1,12 @@
 use super::{Ctx, Instance, TableResult};
 
-use crate::capability::bus::{guest_config, lattice};
+use crate::capability::bus::lattice;
 use crate::capability::Bus;
 
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use tracing::instrument;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
 
@@ -59,23 +58,5 @@ impl lattice::HostCallTargetInterface for Ctx {
     fn drop(&mut self, interface: Resource<lattice::CallTargetInterface>) -> anyhow::Result<()> {
         self.table.delete(interface)?;
         Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl guest_config::Host for Ctx {
-    #[instrument]
-    async fn get(
-        &mut self,
-        key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
-        self.handler.get(&key).await
-    }
-
-    #[instrument]
-    async fn get_all(
-        &mut self,
-    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, guest_config::ConfigError>> {
-        self.handler.get_all().await
     }
 }

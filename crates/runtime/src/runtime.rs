@@ -10,6 +10,7 @@ use core::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::Context;
+use builtin::Config;
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
 const KB: u64 = 1024;
@@ -69,6 +70,15 @@ impl RuntimeBuilder {
     pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
         Self {
             handler: self.handler.bus(bus),
+            ..self
+        }
+    }
+
+    /// Set a [`Config`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn config(self, config: Arc<impl Config + Sync + Send + 'static>) -> Self {
+        Self {
+            handler: self.handler.config(config),
             ..self
         }
     }

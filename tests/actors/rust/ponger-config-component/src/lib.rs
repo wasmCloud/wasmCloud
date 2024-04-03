@@ -8,9 +8,8 @@ struct Actor;
 
 impl pingpong::Guest for Actor {
     fn ping() -> String {
-        wasmcloud::bus::guest_config::get("pong")
+        wasi::config::runtime::get("pong")
             .expect("Unable to fetch value")
-            .map(|val| String::from_utf8(val).expect("config value should be valid string"))
             .unwrap_or_else(|| "config value not set".to_string())
     }
 }

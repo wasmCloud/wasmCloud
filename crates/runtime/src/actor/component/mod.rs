@@ -33,6 +33,7 @@ use wrpc_types::{function_exports, DynamicFunction};
 
 mod blobstore;
 mod bus;
+mod config;
 mod http;
 mod keyvalue;
 mod logging;
@@ -254,6 +255,7 @@ where
             "wasi:blobstore/blobstore@0.2.0-draft"
             | "wasi:blobstore/container@0.2.0-draft"
             | "wasi:blobstore/types@0.2.0-draft"
+            | "wasi:config/runtime@0.2.0-draft"
             | "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
@@ -286,7 +288,6 @@ where
             | "wasi:sockets/tcp@0.2.0"
             | "wasi:sockets/udp-create-socket@0.2.0"
             | "wasi:sockets/udp@0.2.0"
-            | "wasmcloud:bus/guest-config"
             | "wasmcloud:bus/lattice"
             | "wasmcloud:messaging/consumer"
             | "wasmcloud:messaging/handler"
@@ -444,7 +445,8 @@ fn instantiate(
     let mut custom_result_types = HashMap::with_capacity(imports.len());
     for (instance_name, item) in imports {
         match instance_name {
-            "wasi:cli/environment@0.2.0"
+            "wasi:config/runtime@0.2.0-draft"
+            | "wasi:cli/environment@0.2.0"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/stderr@0.2.0"
             | "wasi:cli/stdin@0.2.0"
@@ -465,8 +467,7 @@ fn instantiate(
             | "wasi:io/poll@0.2.0"
             | "wasi:io/streams@0.2.0"
             | "wasi:sockets/tcp@0.2.0"
-            | "wasmcloud:bus/lattice"
-            | "wasmcloud:bus/guest-config" => continue,
+            | "wasmcloud:bus/lattice" => continue,
             _ => {}
         }
 
