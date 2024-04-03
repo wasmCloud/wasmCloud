@@ -58,7 +58,6 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
 
     match config.project_type {
         TypeConfig::Actor(ref actor_config) => {
-            print!("Inside wash build of an actor");
             let sign_config = if command.build_only {
                 None
             } else {
