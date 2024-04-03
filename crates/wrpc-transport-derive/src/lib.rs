@@ -39,6 +39,11 @@ pub mod deps {
     pub use bytes;
     pub use futures;
     pub use wrpc_transport;
+
+    // Tracing only needs to be made available to the macro underneath
+    // if otel is enabled here (and there)
+    #[cfg(feature = "otel")]
+    pub use tracing;
 }
 
 pub use wrpc_transport_derive_macro::{Encode, Receive, Subscribe};
