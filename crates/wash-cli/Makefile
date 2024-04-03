@@ -45,7 +45,7 @@ test-integration: ## Run the entire integration test suite (with docker compose)
 	@$(DOCKER) compose -f ./tools/docker-compose.yml down
 
 test-integration-ci: ## Run the entire integration test suite only
-	@$(CARGO) nextest run --profile ci -E 'kind(test)'
+	@$(CARGO) nextest run --profile ci -E 'kind(test)' --nocapture
 
 test-integration-watch: ## Run integration test suite continuously
 	@$(CARGO) watch -- $(MAKE) test-integration

@@ -78,7 +78,7 @@ async fn integration_stop_host_serial() -> Result<()> {
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
-    let wash_instance = TestWashInstance::create().await?;
+    let wash_instance = TestWashInstance::create_with_extra_args(["--disable-wadm"]).await?;
     wash_instance.stop_host().await?;
     Ok(())
 }
