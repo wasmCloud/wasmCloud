@@ -7188,6 +7188,7 @@ dependencies = [
  "quote",
  "syn 2.0.57",
  "tokio",
+ "tracing",
  "wrpc-transport",
  "wrpc-transport-derive-macro",
 ]
