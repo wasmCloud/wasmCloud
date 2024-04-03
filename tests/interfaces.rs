@@ -464,6 +464,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .text()
         .await
         .context("failed to get response text")?;
+
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     // NOTE: If values are truly random, we have nothing to assert for some of these fields
@@ -478,8 +479,8 @@ async fn interfaces() -> anyhow::Result<()> {
         random_32: u32,
         #[allow(dead_code)]
         long_value: String,
-        config_value: Option<Vec<u8>>,
-        all_config: Vec<(String, Vec<u8>)>,
+        config_value: Option<String>,
+        all_config: Vec<(String, String)>,
         ping: String,
         meaning_of_universe: u8,
         split: Vec<String>,

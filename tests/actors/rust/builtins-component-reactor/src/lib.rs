@@ -132,8 +132,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             "random_32": HostRng::random32(),
             "random_in_range": HostRng::random_in_range(min, max),
             "long_value": "1234567890".repeat(1000),
-            "config_value": wasmcloud::bus::guest_config::get(&config_key).expect("failed to get config value"),
-            "all_config": wasmcloud::bus::guest_config::get_all().expect("failed to get all config values"),
+            "config_value": wasi::config::runtime::get(&config_key).expect("failed to get config value"),
+            "all_config": wasi::config::runtime::get_all().expect("failed to get all config values").into_iter().collect::<Vec<(String, String)>>(),
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");

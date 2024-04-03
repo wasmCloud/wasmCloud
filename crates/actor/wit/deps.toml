@@ -1,4 +1,5 @@
 blobstore = "../../runtime/wit/deps/blobstore"
+config = "../../runtime/wit/deps/config"
 cli = "../../runtime/wit/deps/cli"
 clocks = "../../runtime/wit/deps/clocks"
 filesystem = "../../runtime/wit/deps/filesystem"

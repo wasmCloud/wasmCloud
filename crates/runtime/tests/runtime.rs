@@ -20,9 +20,7 @@ use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
-use wasmcloud_runtime::capability::{
-    self, guest_config, messaging, IncomingHttp, LatticeInterfaceTarget,
-};
+use wasmcloud_runtime::capability::{self, messaging, IncomingHttp, LatticeInterfaceTarget};
 use wasmcloud_runtime::{Component, Runtime};
 use wasmtime_wasi_http::body::HyperIncomingBody;
 
@@ -51,7 +49,6 @@ struct Handler {
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     outgoing_http: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
-    config: HashMap<String, Vec<u8>>,
 }
 
 #[async_trait]
@@ -96,19 +93,6 @@ impl capability::Bus for Handler {
             (link_name, interfaces) => panic!("`set_link_name` with link name `{link_name:?}` and interfaces `{interfaces:?}` should not have been called")
         }
         Ok(())
-    }
-
-    async fn get(
-        &self,
-        key: &str,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
-        Ok(Ok(self.config.get(key).cloned()))
-    }
-
-    async fn get_all(
-        &self,
-    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, guest_config::ConfigError>> {
-        Ok(Ok(self.config.clone().into_iter().collect()))
     }
 
     async fn call(
@@ -195,24 +179,44 @@ impl capability::OutgoingHttp for Handler {
     }
 }
 
+struct TestConfig {
+    pub config: HashMap<String, String>,
+}
+
+#[async_trait]
+impl capability::Config for TestConfig {
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<String>, capability::config::runtime::ConfigError>> {
+        Ok(Ok(self.config.get(key).cloned()))
+    }
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, String)>, capability::config::runtime::ConfigError>>
+    {
+        Ok(Ok(self.config.clone().into_iter().collect()))
+    }
+}
+
 fn new_runtime(
     blobstore: Arc<MemoryBlobstore>,
     keyvalue: Arc<MemoryKeyValue>,
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     sent: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
-    config: HashMap<String, Vec<u8>>,
+    config: HashMap<String, String>,
 ) -> Runtime {
     let handler = Arc::new(Handler {
         blobstore: Arc::clone(&blobstore),
         logging: logs,
         messaging: published,
         outgoing_http: sent,
-        config,
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))
         .blobstore(Arc::clone(&blobstore))
+        .config(Arc::new(TestConfig { config }))
         .keyvalue_atomic(Arc::clone(&keyvalue))
         .keyvalue_eventual(Arc::clone(&keyvalue))
         .logging(Arc::clone(&handler))
@@ -224,8 +228,8 @@ fn new_runtime(
 
 struct RunResult {
     logs: Vec<(logging::Level, String, String)>,
-    config_value: Vec<u8>,
-    all_config: HashMap<String, Vec<u8>>,
+    config_value: String,
+    all_config: HashMap<String, String>,
 }
 
 async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
@@ -242,10 +246,13 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
     let published = Arc::default();
     let sent = Arc::default();
     let config = HashMap::from([
-        ("test-config-key".to_string(), b"test-config-value".to_vec()),
+        (
+            "test-config-key".to_string(),
+            "test-config-value".to_string(),
+        ),
         (
             "test-config-key2".to_string(),
-            b"test-config-value2".to_vec(),
+            "test-config-value2".to_string(),
         ),
     ]);
 
@@ -395,8 +402,8 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
         random_32: u32,
         #[allow(dead_code)]
         long_value: String,
-        config_value: Vec<u8>,
-        all_config: Vec<(String, Vec<u8>)>,
+        config_value: String,
+        all_config: Vec<(String, String)>,
     }
     let Response {
         get_random_bytes: _,
@@ -474,16 +481,19 @@ async fn builtins() -> anyhow::Result<()> {
         ]
     );
     ensure!(
-        config_value == b"test-config-value",
+        config_value == "test-config-value",
         "should have returned the correct config value"
     );
     ensure!(
         all_config.into_iter().collect::<HashMap<_, _>>()
             == HashMap::from([
-                ("test-config-key".to_string(), b"test-config-value".to_vec()),
+                (
+                    "test-config-key".to_string(),
+                    "test-config-value".to_string()
+                ),
                 (
                     "test-config-key2".to_string(),
-                    b"test-config-value2".to_vec(),
+                    "test-config-value2".to_string(),
                 ),
             ]),
         "should have returned all config values"

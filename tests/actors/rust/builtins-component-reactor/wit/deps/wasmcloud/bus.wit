@@ -13,20 +13,3 @@ interface lattice {
     /// see: https://github.com/wasmCloud/wasmCloud/issues/1219
     set-link-name: func(name: string, interfaces: list<call-target-interface>);
 }
-
-/// An interface for getting configuration data for a wasm module
-interface guest-config {
-    /// Errors that can be returned from config sources
-    variant config-error {
-        /// An error occurred on the config source when fetching data
-        upstream(string),
-        /// I/O or connection failure
-        io(string),
-    }
-
-    /// Gets a single opaque config value set at the given key if it exists
-    get: func(key: string) -> result<option<list<u8>>, config-error>;
-
-    /// Gets a list of all set config data
-    get-all: func() -> result<list<tuple<string, list<u8>>>, config-error>;
-}

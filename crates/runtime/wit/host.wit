@@ -2,9 +2,9 @@ package wasmcloud:host;
 
 world interfaces {
     import wasmcloud:bus/lattice;
-    import wasmcloud:bus/guest-config;
 
     import wasi:blobstore/blobstore@0.2.0-draft;
+    import wasi:config/runtime@0.2.0-draft;
     import wasi:http/outgoing-handler@0.2.0;
     import wasi:keyvalue/atomic@0.2.0-draft;
     import wasi:keyvalue/eventual@0.2.0-draft;

@@ -42,11 +42,10 @@ use wasmcloud_control_interface::{
     UpdateActorCommand, WitInterface,
 };
 use wasmcloud_core::{HealthCheckResponse, HostData, LatticeTarget, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
-    blobstore, guest_config, messaging, Blobstore, Bus, CallTargetInterface, IncomingHttp as _,
-    KeyValueAtomic, KeyValueEventual, LatticeInterfaceTarget, Logging, Messaging,
-    MessagingHandler as _, OutgoingHttp, TargetEntity,
+    blobstore, config::runtime::ConfigError, logging::logging, messaging, Blobstore, Bus,
+    CallTargetInterface, Config, IncomingHttp as _, KeyValueAtomic, KeyValueEventual,
+    LatticeInterfaceTarget, Logging, Messaging, MessagingHandler as _, OutgoingHttp, TargetEntity,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -636,33 +635,6 @@ impl Bus for Handler {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all)]
-    async fn get(
-        &self,
-        key: &str,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>, guest_config::ConfigError>> {
-        let lock = self.config_data.read().await;
-        let conf = lock.get_config().await;
-        let data = conf.get(key).cloned().map(|val| val.into_bytes());
-        Ok(Ok(data))
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn get_all(
-        &self,
-    ) -> anyhow::Result<Result<Vec<(String, Vec<u8>)>, guest_config::ConfigError>> {
-        Ok(Ok(self
-            .config_data
-            .read()
-            .await
-            .get_config()
-            .await
-            .clone()
-            .into_iter()
-            .map(|(key, val)| (key, val.into_bytes()))
-            .collect::<Vec<_>>()))
-    }
-
     #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
     async fn call(
         &self,
@@ -689,6 +661,30 @@ impl Bus for Handler {
         } else {
             bail!("component attempted to invoke a function on an unknown target")
         }
+    }
+}
+
+#[async_trait]
+impl Config for Handler {
+    #[instrument(level = "debug", skip_all)]
+    async fn get(&self, key: &str) -> anyhow::Result<Result<Option<String>, ConfigError>> {
+        let lock = self.config_data.read().await;
+        let conf = lock.get_config().await;
+        let data = conf.get(key).cloned();
+        Ok(Ok(data))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn get_all(&self) -> anyhow::Result<Result<Vec<(String, String)>, ConfigError>> {
+        Ok(Ok(self
+            .config_data
+            .read()
+            .await
+            .get_config()
+            .await
+            .clone()
+            .into_iter()
+            .collect()))
     }
 }
 
@@ -1147,6 +1143,7 @@ impl Actor {
             .context("failed to set stderr")?
             .blobstore(Arc::new(self.handler.clone()))
             .bus(Arc::new(self.handler.clone()))
+            .config(Arc::new(self.handler.clone()))
             .keyvalue_atomic(Arc::new(self.handler.clone()))
             .keyvalue_eventual(Arc::new(self.handler.clone()))
             .logging(Arc::new(self.handler.clone()))

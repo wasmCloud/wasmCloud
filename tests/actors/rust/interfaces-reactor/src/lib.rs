@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::json;
 use test_actors::testing::*;
 use wasi::sockets::{instance_network, network, tcp_create_socket, udp_create_socket};
+use wasmcloud_actor::wasi::config;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::wasmcloud::bus;
@@ -81,8 +82,8 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "random_32": HostRng::random32(),
         "random_in_range": HostRng::random_in_range(min, max),
         "long_value": "1234567890".repeat(5000),
-        "config_value": bus::guest_config::get(&config_key).expect("failed to get config value"),
-        "all_config": bus::guest_config::get_all().expect("failed to get all config values"),
+        "config_value": config::runtime::get(&config_key).expect("failed to get config value"),
+        "all_config": config::runtime::get_all().expect("failed to get all config values"),
         "ping": pong,
         "meaning_of_universe": meaning_of_universe,
         "split": other,
