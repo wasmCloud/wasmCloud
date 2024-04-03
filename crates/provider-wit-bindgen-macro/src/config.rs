@@ -3,15 +3,12 @@ use syn::{braced, parse::Parse, punctuated::Punctuated, Ident, LitStr, Token};
 
 use crate::vendor::wasmtime_component_macro::bindgen::Config as WitBindgenConfig;
 use crate::wit::{WitFnList, WitNamespaceName, WitPackageName};
-use crate::{ImplStructName, LatticeExposedInterface, WasmcloudContract};
+use crate::{ImplStructName, LatticeExposedInterface};
 
 /// Inputs to the wit_bindgen_wasmcloud::provider::binary::generate! macro
 pub(crate) struct ProviderBindgenConfig {
     /// The struct that will contain the implementation of the provider
     pub(crate) impl_struct: ImplStructName,
-
-    /// The wasmCloud contract that the provider fulfills
-    pub(crate) contract: WasmcloudContract,
 
     /// WIT namespace of the provider WIT
     pub(crate) wit_ns: Option<WitNamespaceName>,
@@ -57,7 +54,6 @@ impl Parse for ProviderBindgenConfig {
             Punctuated::<ProviderBindgenConfigOption, Token![,]>::parse_terminated(&values)?;
 
         // Gather members of bindgen
-        let mut contract: Option<WasmcloudContract> = None;
         let mut impl_struct: Option<ImplStructName> = None;
         let mut wit_ns: Option<WitNamespaceName> = None;
         let mut wit_pkg: Option<WitPackageName> = None;
@@ -69,9 +65,6 @@ impl Parse for ProviderBindgenConfig {
         // For each successfully parsed configuration entry in the map, build the appropriate bindgen option
         for entry in entries.into_pairs() {
             match entry.into_value() {
-                ProviderBindgenConfigOption::Contract(c) => {
-                    contract = Some(c.value());
-                }
                 ProviderBindgenConfigOption::WitNamespace(ns) => {
                     wit_ns = Some(ns.value());
                 }
@@ -105,15 +98,6 @@ impl Parse for ProviderBindgenConfig {
                     ),
                 )
             })?,
-            contract: contract.ok_or_else(|| {
-                syn::Error::new(
-                    call_site,
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "missing/invalid 'contract' bindgen option",
-                    ),
-                )
-            })?,
             wit_ns,
             wit_pkg,
             exposed_interface_allow_list: exposed_interface_allow_list.unwrap_or_default().into(),
@@ -134,7 +118,6 @@ impl Parse for ProviderBindgenConfig {
 
 /// Keywords that are used by this macro
 mod keywords {
-    syn::custom_keyword!(contract);
     syn::custom_keyword!(wit_namespace);
     syn::custom_keyword!(wit_package);
     syn::custom_keyword!(impl_struct);
@@ -147,9 +130,6 @@ mod keywords {
 /// Options that can be used to perform bindgen
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ProviderBindgenConfigOption {
-    /// Wasmcloud contract that should be the generated provider
-    Contract(LitStr),
-
     /// Struct that will implement the WIT world
     ImplStruct(Ident),
 
@@ -183,11 +163,7 @@ pub(crate) enum ProviderBindgenConfigOption {
 impl Parse for ProviderBindgenConfigOption {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let l = input.lookahead1();
-        if l.peek(keywords::contract) {
-            input.parse::<keywords::contract>()?;
-            input.parse::<Token![:]>()?;
-            Ok(ProviderBindgenConfigOption::Contract(input.parse()?))
-        } else if l.peek(keywords::impl_struct) {
+        if l.peek(keywords::impl_struct) {
             input.parse::<keywords::impl_struct>()?;
             input.parse::<Token![:]>()?;
             Ok(ProviderBindgenConfigOption::ImplStruct(input.parse()?))

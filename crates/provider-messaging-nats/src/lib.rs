@@ -24,7 +24,6 @@ use connection::ConnectionConfig;
 
 wasmcloud_provider_wit_bindgen::generate!({
     impl_struct: NatsMessagingProvider,
-    contract: "wasmcloud:messaging",
     wit_bindgen_cfg: "provider-messaging-nats"
 });
 

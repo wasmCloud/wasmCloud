@@ -381,21 +381,14 @@ pub(crate) fn translate_export_fn_for_lattice(
 /// Note that the lists do not necessarily match, for example an interface with only one method with no arguments,
 /// there is no extra structs that need to be made, but there is one function (the method) that needs to be crafted.
 pub(crate) fn translate_import_fn_for_lattice(
-    iface: &wit_parser::Interface,
-    iface_fn_name: &String,
+    interface_id: &str,
+    iface_name: &str,
+    iface_fn_name: &str,
     iface_fn: &wit_parser::Function,
     cfg: &ProviderBindgenConfig,
 ) -> anyhow::Result<TokenStream> {
     let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
-    // Derive the WIT instance (<ns>:<pkg>/<iface>) & fn name
-    let iface_name = iface
-        .name
-        .clone()
-        .context("unexpectedly missing iface name")?;
-    let instance_lit_str = LitStr::new(
-        format!("{}/{iface_name}", cfg.contract).as_str(),
-        Span::call_site(),
-    );
+    let instance_lit_str = LitStr::new(interface_id, Span::call_site());
     let fn_name_lit_str = LitStr::new(iface_fn_name, Span::call_site());
 
     // Convert the WIT result type into a Rust type
@@ -404,8 +397,7 @@ pub(crate) fn translate_import_fn_for_lattice(
     } else {
         iface_fn.results.to_rust_type(cfg).with_context(|| {
             format!(
-                "Failed to convert WIT function results (returns) while parsing interface [{}]",
-                iface.name.clone().unwrap_or("<unknown>".into()),
+                "Failed to convert WIT function results (returns) while parsing interface [{iface_name}]",
             )
         })?
     };

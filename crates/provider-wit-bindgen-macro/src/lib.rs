@@ -1,19 +1,22 @@
 //! Macro for building [wasmCloud capability providers](https://wasmcloud.com/docs/fundamentals/capabilities/create-provider/)
-//! from [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) contracts.
+//! with [WebAssembly Interface Types ("WIT")](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md).
 //!
-//! For example, to build a capability provider for the [wasmcloud:keyvalue contract](https://github.com/wasmCloud/interfaces/tree/main/keyvalue):
+//! For example, when building a capability provider to satisfy a WIT interface, assuming the relevant worlds
+//! and dependencies are in the top level `wit/` folder, in `src/lib.rs` you should have:
 //!
 //! ```rust,ignore
 //! wasmcloud_provider_wit_bindgen::generate!({
-//!     impl_struct: KvRedisProvider,
-//!     contract: "wasmcloud:keyvalue",
+//!     impl_struct: YourProvider,
 //!     wit_bindgen_cfg: "provider-kvredis"
 //! });
 //!
 //! struct YourProvider;
 //! ```
 //!
-//! All content after `wit_bindgen_cfg: ` is fed to the underlying bindgen (wasmtime::component::macro). In this example, "provider-kvredis" refers to the WIT world that your component will inhabit -- expected to be found at `<project root>/wit/<your world name>.wit`. An example world file:
+//! All content after `wit_bindgen_cfg: ` is fed to the underlying bindgen (wasmtime::component::macro), this means that any configuration that can be used
+//! in that macro can be used here. For more information on the options available to underlying bindgen, see the [wasmtime-component-bindgen documentation](https://docs.rs/wasmtime/latest/wasmtime/component/macro.bindgen.html).
+//!
+//! In this example, "provider-kvredis" refers to the WIT world that your component will inhabit -- expected to be found at `<project root>/wit/<your world name>.wit`. An example world file:
 //!
 //! ```rust,ignore
 //! package wasmcloud:provider-kvredis
@@ -22,8 +25,6 @@
 //!     import wasmcloud:keyvalue/key-value
 //! }
 //! ```
-//!
-//! For more information on the options available to underlying bindgen, see the [wasmtime-component-bindgen documentation](https://docs.rs/wasmtime/latest/wasmtime/component/macro.bindgen.html).
 //!
 
 use std::collections::HashMap;
@@ -65,7 +66,6 @@ mod wrpc;
 const EXPORTS_MODULE_NAME: &str = "exports";
 
 type ImplStructName = String;
-type WasmcloudContract = String;
 
 /// Information related to an interface function that will be eventually exposed on the lattice
 type LatticeExposedInterface = (WitNamespaceName, WitPackageName, WitFunctionName);
@@ -110,7 +110,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Parse the provider bindgen macro configuration
     let cfg = parse_macro_input!(input as ProviderBindgenConfig);
-    let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
 
     // Extract the parsed upstream WIT bindgen configuration, which (once successfully parsed)
     // contains metadata extracted from WIT files
@@ -134,13 +133,25 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 //
                 // For example, the wasmcloud:bus interface should not be interpreted
                 // as an InvocationHandler generation target
-                if iface
+                let pkg = match iface
                     .package
                     .map(|p| &wit_bindgen_cfg.resolve.packages[p].name)
-                    .is_some_and(is_ignored_invocation_handler_pkg)
                 {
-                    continue;
-                }
+                    Some(p) if is_ignored_invocation_handler_pkg(p) => {
+                        continue;
+                    }
+                    Some(p) => p,
+                    None => unreachable!("unexpectedly missing package name on interface"),
+                };
+
+                // Get the name of the interface
+                let iface_name = iface
+                    .name
+                    .clone()
+                    .expect("iface unexpectedly missing a name");
+
+                // Build the interface ID ("<ns>:<pkg>[@<version>]/<iface>")
+                let interface_id = pkg.interface_id(&iface_name);
 
                 // All other interfaces should have their functions processed in order to generate
                 // InvocationHandlers in the resulting bindgen output code
@@ -160,8 +171,14 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 for (iface_fn_name, iface_fn) in iface.functions.iter() {
                     debug!("processing imported interface function: [{iface_fn_name}]");
                     imported_iface_invocation_methods.push(
-                        translate_import_fn_for_lattice(iface, iface_fn_name, iface_fn, &cfg)
-                            .expect("failed to translate export fn"),
+                        translate_import_fn_for_lattice(
+                            &interface_id,
+                            &iface_name,
+                            iface_fn_name,
+                            iface_fn,
+                            &cfg,
+                        )
+                        .expect("failed to translate export fn"),
                     );
                 }
             }
@@ -257,10 +274,6 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         iface_tokens.append_all(quote!(
             #[::wasmcloud_provider_wit_bindgen::deps::async_trait::async_trait]
             pub trait #wit_iface {
-                fn contract_id() -> &'static str {
-                    #contract_ident
-                }
-
                 #(
                     async fn #func_names (
                         &self,
@@ -719,7 +732,6 @@ mod tests {
         );
         let bindgen_cfg = ProviderBindgenConfig {
             impl_struct: "None".into(),
-            contract: "wasmcloud:test".into(),
             wit_ns: Some("test".into()),
             wit_pkg: Some("foo".into()),
             exposed_interface_allow_list: Default::default(),

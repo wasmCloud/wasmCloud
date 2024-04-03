@@ -30,7 +30,6 @@
 
 // wasmcloud_provider_wit_bindgen::generate!({
 //     impl_struct: LatticeControllerProvider,
-//     contract: "wasmcloud:latticecontrol",
 //     replace_witified_maps: true,
 //     wit_bindgen_cfg: "provider"
 // });
