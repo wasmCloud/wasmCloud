@@ -123,7 +123,6 @@ impl TryFrom<RawActorConfig> for ActorConfig {
                 .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
             home_dir.join(".wash/keys")
         };
-        print!("User's key directory: {}", key_dir.display());
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
             push_insecure: raw_config.push_insecure.unwrap_or(false),
