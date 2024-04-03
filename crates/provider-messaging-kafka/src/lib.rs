@@ -18,7 +18,6 @@ use wasmcloud_provider_wit_bindgen::deps::{
 
 wasmcloud_provider_wit_bindgen::generate!({
     impl_struct: KafkaMessagingProvider,
-    contract: "wasmcloud:messaging",
     wit_bindgen_cfg: "provider-messaging-kafka"
 });
 
