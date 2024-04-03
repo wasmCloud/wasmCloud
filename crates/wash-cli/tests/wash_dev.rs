@@ -15,6 +15,9 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 #[serial_test::serial]
 #[cfg(target_family = "unix")]
 async fn integration_dev_hello_actor_serial() -> Result<()> {
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
     let test_setup = init(
         /* actor_name= */ "hello",
         /* template_name= */ "hello-world-rust",
