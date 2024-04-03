@@ -1,0 +1,119 @@
+name: wasmCloud example components
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/examples.yml
+      - crates/wash-lib/**
+      - crates/wash-cli/**
+      - examples/rust/components/**
+      - examples/golang/components/**
+      - examples/python/components/**
+      - examples/typescript/components/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wash-cli:
+    name: Build wash CLI
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        wash-version:
+          - 0.26.0
+          - current
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ matrix.wash-version == 'current' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-22.04-shared-cache"
+      - name: install wash (previous version)
+        if: ${{ matrix.wash-version != 'current' }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wash-cli@${{ matrix.wash-version }}
+      - name: build wash (current)
+        if: ${{ matrix.wash-version == 'current' }}
+        run: cargo build -p wash-cli --release
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.wash-version == 'current' }}
+        with:
+          name: wash-${{ matrix.wash-version }}
+          path: ./target/release/wash
+      - uses: actions/upload-artifact@v4
+        if: ${{ matrix.wash-version != 'current' }}
+        with:
+          name: wash-${{ matrix.wash-version }}
+          path: ~/.cargo/bin/wash
+
+  # Ensure that `wash build` works for all example projects below
+  wash-build:
+    name: build
+    runs-on: ubuntu-22.04
+    needs: [ build-wash-cli ]
+    strategy:
+      fail-fast: false
+      matrix:
+        wash-version:
+          - 0.26.0
+          - current
+        project:
+          - { lang: "golang", lang_version: "1.20", name: "http-echo-tinygo" }
+          - { lang: "golang", lang_version: "1.20", name: "http-hello-world" }
+          - { lang: "rust", name: "blobby" }
+          - { lang: "rust", name: "http-hello-world" }
+          - { lang: "rust", name: "http-jsonify" }
+          - { lang: "python", lang_version: "3.10", name: "http-hello-world" }
+          - { lang: "typescript", lang_version: "20.x", name: "http-hello-world" }
+    steps:
+      - uses: actions/checkout@v4
+      # Download wash binary & install to path
+      - uses: actions/download-artifact@v4
+        with:
+          name: wash-${{ matrix.wash-version }}
+          path: artifacts
+      - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
+        shell: bash
+        run: |
+          chmod +x ./artifacts/wash;
+          echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
+      # Language specific setup
+      - uses: actions/setup-go@v4
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          go-version: ${{ matrix.project.lang_version }}
+      - uses: acifani/setup-tinygo@v2
+        if: ${{ matrix.project.lang == 'golang' }}
+        with:
+          tinygo-version: "0.30.0"
+          install-binaryen: "false"
+      - uses: actions/setup-python@v5
+        if: ${{ matrix.project.lang == 'python' }}
+        with:
+          python-version: ${{ matrix.project.lang_version }}
+      - name: install python reqs
+        if: ${{ matrix.project.lang == 'python' }}
+        run: |
+          pip install componentize-py
+      - uses: actions/setup-node@v4
+        if: ${{ matrix.project.lang == 'typescript' }}
+        with:
+          node-version: ${{ matrix.project.lang_version }}
+      - name: install node reqs
+        if: ${{ matrix.project.lang == 'typescript' }}
+        run: |
+          npm install -g @bytecodealliance/jco
+          npm install -g @bytecodealliance/componentize-js
+      # Build example project(s)
+      - name: build project
+        run: wash build
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
