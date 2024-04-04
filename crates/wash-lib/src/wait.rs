@@ -169,8 +169,6 @@ pub struct ProviderStartedInfo {
     pub host_id: String,
     pub provider_ref: String,
     pub provider_id: String,
-    pub link_name: String,
-    pub contract_id: String,
 }
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
@@ -197,16 +195,12 @@ pub async fn wait_for_provider_start_event(
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == provider_ref {
-                    let provider_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
-                    let contract_id = get_string_data_from_json(&cloud_event.data, "contract_id")?;
-                    let link_name = get_string_data_from_json(&cloud_event.data, "link_name")?;
+                    let provider_id = get_string_data_from_json(&cloud_event.data, "provider_id")?;
 
                     return Ok(EventCheckOutcome::Success(ProviderStartedInfo {
                         host_id: host_id.as_str().into(),
                         provider_ref: provider_ref.as_str().into(),
                         provider_id,
-                        contract_id,
-                        link_name,
                     }));
                 }
             }
@@ -242,8 +236,6 @@ pub async fn wait_for_provider_start_event(
 pub struct ProviderStoppedInfo {
     pub host_id: String,
     pub provider_id: String,
-    pub link_name: String,
-    pub contract_id: String,
 }
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
@@ -268,17 +260,12 @@ pub async fn wait_for_provider_stop_event(
         match cloud_event.event_type.as_str() {
             "com.wasmcloud.lattice.provider_stopped" => {
                 let returned_provider_id =
-                    get_string_data_from_json(&cloud_event.data, "public_key")?;
+                    get_string_data_from_json(&cloud_event.data, "provider_id")?;
 
                 if returned_provider_id == provider_id {
-                    let contract_id = get_string_data_from_json(&cloud_event.data, "contract_id")?;
-                    let link_name = get_string_data_from_json(&cloud_event.data, "link_name")?;
-
                     return Ok(EventCheckOutcome::Success(ProviderStoppedInfo {
                         host_id: host_id.as_str().into(),
                         provider_id: returned_provider_id,
-                        contract_id,
-                        link_name,
                     }));
                 }
             }
