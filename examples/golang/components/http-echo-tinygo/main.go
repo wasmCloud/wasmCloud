@@ -20,10 +20,10 @@ type EchoResponse struct {
 // Implmenetation struct for the `echo` world (see `wit/echo.wit`)
 type Echo struct{}
 
-type HttpRequest = echo.ExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandlerIncomingRequest
-type HttpResponseWriter = echo.WasiHttp0_2_0_rc_2023_12_05_TypesResponseOutparam
-type KeyValueTuple = echo.WasiHttp0_2_0_rc_2023_12_05_TypesTuple2FieldKeyFieldValueT
-type Headers = echo.WasiHttp0_2_0_rc_2023_12_05_TypesHeaders
+type HttpRequest = echo.ExportsWasiHttp0_2_0_IncomingHandlerIncomingRequest
+type HttpResponseWriter = echo.WasiHttp0_2_0_TypesResponseOutparam
+type KeyValueTuple = echo.WasiHttp0_2_0_TypesTuple2FieldKeyFieldValueT
+type Headers = echo.WasiHttp0_2_0_TypesHeaders
 
 // Implementation of the `wasi-http:incoming-handler` export in the `echo` world (see `wit/echo.wit)`
 //
@@ -35,17 +35,17 @@ func (g *Echo) Handle(req HttpRequest, resp HttpResponseWriter) {
 	// Detect request method, use to build EchoResponse
 	method := req.Method()
 	switch method {
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodGet():
+	case echo.WasiHttp0_2_0_TypesMethodGet():
 		er.Method = "GET"
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPost():
+	case echo.WasiHttp0_2_0_TypesMethodPost():
 		er.Method = "POST"
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPut():
+	case echo.WasiHttp0_2_0_TypesMethodPut():
 		er.Method = "PUT"
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodDelete():
+	case echo.WasiHttp0_2_0_TypesMethodDelete():
 		er.Method = "DELETE"
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodPatch():
+	case echo.WasiHttp0_2_0_TypesMethodPatch():
 		er.Method = "PATCH"
-	case echo.WasiHttp0_2_0_rc_2023_12_05_TypesMethodConnect():
+	case echo.WasiHttp0_2_0_TypesMethodConnect():
 		er.Method = "CONNECT"
 	default:
 		er.Method = "OTHER"
@@ -91,7 +91,7 @@ func (g *Echo) Handle(req HttpRequest, resp HttpResponseWriter) {
 	if maybeReadStream.IsErr() {
 		// If the body is empty, we'll get a closed error, in which case we *do not* want to throw an error.
 		errKind := maybeReadStream.UnwrapErr().Kind()
-		if errKind == echo.WasiIo0_2_0_rc_2023_11_10_StreamsStreamErrorKindClosed {
+		if errKind == echo.WasiIo0_2_0_StreamsStreamErrorKindClosed {
 			// There was likely *no* data in the body (ex. a GET request)
 			er.Body = ""
 		} else {
@@ -150,12 +150,12 @@ func writeHttpResponse(responseOutparam HttpResponseWriter, statusCode uint16, h
 	}
 
 	// Set the response on the outparam
-	echo.StaticResponseOutparamSet(responseOutparam, echo.Ok[echo.WasiHttp0_2_0_rc_2023_12_05_TypesOutgoingResponse, echo.WasiHttp0_2_0_rc_2023_12_05_TypesErrorCode](outgoingResponse))
+	echo.StaticResponseOutparamSet(responseOutparam, echo.Ok[echo.WasiHttp0_2_0_TypesOutgoingResponse, echo.WasiHttp0_2_0_TypesErrorCode](outgoingResponse))
 }
 
 func init() {
 	mg := new(Echo)
-	echo.SetExportsWasiHttp0_2_0_rc_2023_12_05_IncomingHandler(mg)
+	echo.SetExportsWasiHttp0_2_0_IncomingHandler(mg)
 }
 
 // NOTE: the below go-generate line is not strictly necessary when using `wash build`,
