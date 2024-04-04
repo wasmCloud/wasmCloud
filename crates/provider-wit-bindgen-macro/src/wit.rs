@@ -238,8 +238,8 @@ pub(crate) fn convert_wit_typedef(
 
         // For records that we encounter, they will be translated to Rust Structs by bindgen
         // we can pretend the struct exists because by the time the macro is done, it will.
-        TypeDefKind::Record(_) => {
-            let struct_name = format_ident!(
+        TypeDefKind::Enum(_) | TypeDefKind::Record(_) => {
+            let name = format_ident!(
                 "{}",
                 type_def
                     .name
@@ -247,7 +247,7 @@ pub(crate) fn convert_wit_typedef(
                     .context("unexpectedly missing name for typedef")?
                     .to_upper_camel_case()
             );
-            Ok(struct_name.to_token_stream())
+            Ok(name.to_token_stream())
         }
 
         _ => bail!("unsupported type kind {type_def:#?}"),
