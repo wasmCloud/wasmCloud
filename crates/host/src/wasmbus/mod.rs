@@ -216,6 +216,21 @@ struct Handler {
 }
 
 impl Handler {
+    /// Used for creating a new handler from an existing one. This is different than clone because
+    /// some fields shouldn't be copied between component instances such as link targets.
+    fn copy_for_new(&self) -> Self {
+        Handler {
+            nats: self.nats.clone(),
+            config_data: self.config_data.clone(),
+            lattice: self.lattice.clone(),
+            component_id: self.component_id.clone(),
+            targets: Arc::default(),
+            interface_links: self.interface_links.clone(),
+            polyfilled_imports: self.polyfilled_imports.clone(),
+            invocation_timeout: self.invocation_timeout,
+        }
+    }
+
     fn wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
@@ -2604,7 +2619,8 @@ impl Host {
                     &config != actor.handler.config_data.read().await.config_names();
                 // Modify scale only if the requested max differs from the current max or if the configuration has changed
                 if actor.max_instances != max || config_changed {
-                    let handler = actor.handler.clone();
+                    // We must partially clone the handler as we can't be sharing the targets between actors
+                    let handler = actor.handler.copy_for_new();
                     if config_changed {
                         let mut conf = handler.config_data.write().await;
                         *conf = self.config_generator.generate(config).await?;
@@ -2714,7 +2730,7 @@ impl Host {
             }
 
             let max = actor.max_instances;
-            let mut handler = actor.handler.clone();
+            let mut handler = actor.handler.copy_for_new();
             handler.polyfilled_imports = get_import_results(&new_actor);
             let Ok(new_actor) = self
                 .instantiate_actor(
