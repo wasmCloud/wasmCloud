@@ -5485,7 +5485,7 @@ dependencies = [
  "warp",
  "wascap 0.13.0",
  "wash-lib",
- "wasmcloud-control-interface 1.0.0-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core 0.4.0",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5549,7 +5549,7 @@ dependencies = [
  "wascap 0.13.0",
  "wasm-encoder 0.202.0",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 1.0.0-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-control-interface 1.0.0-alpha.2",
  "wasmcloud-core 0.4.0",
  "wasmparser 0.201.0",
  "wat",
@@ -5731,7 +5731,7 @@ dependencies = [
  "uuid",
  "vaultrs",
  "wascap 0.13.0",
- "wasmcloud-control-interface 1.0.0-alpha.2",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-core 0.4.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-fs",
@@ -5809,27 +5809,6 @@ dependencies = [
 [[package]]
 name = "wasmcloud-control-interface"
 version = "1.0.0-alpha.2"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "bytes",
- "cloudevents-sdk",
- "futures",
- "oci-distribution",
- "opentelemetry 0.21.0",
- "opentelemetry_sdk 0.21.2",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-opentelemetry 0.22.0",
- "wasmcloud-core 0.4.0",
-]
-
-[[package]]
-name = "wasmcloud-control-interface"
-version = "1.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "042a574966c368f0e04b9829dd9d1df1965c7c852a2b4880384fe7a2f7ea0cd9"
 dependencies = [
@@ -5848,6 +5827,27 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry 0.22.0",
  "wasmcloud-core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "wasmcloud-control-interface"
+version = "1.0.0-alpha.3"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "cloudevents-sdk",
+ "futures",
+ "oci-distribution",
+ "opentelemetry 0.21.0",
+ "opentelemetry_sdk 0.21.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry 0.22.0",
+ "wasmcloud-core 0.4.0",
 ]
 
 [[package]]
@@ -5943,7 +5943,7 @@ dependencies = [
  "url",
  "uuid",
  "wascap 0.13.0",
- "wasmcloud-control-interface 1.0.0-alpha.2",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-core 0.4.0",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
@@ -6067,7 +6067,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "wasmcloud-control-interface 1.0.0-alpha.2",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wrpc-interface-keyvalue",
@@ -6105,7 +6105,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wascap 0.13.0",
- "wasmcloud-control-interface 1.0.0-alpha.2",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-provider-wit-bindgen",
 ]
 
@@ -6264,7 +6264,7 @@ dependencies = [
  "tracing",
  "url",
  "wascap 0.13.0",
- "wasmcloud-control-interface 1.0.0-alpha.2",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-host",
 ]
 
