@@ -152,8 +152,6 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         FindEventOutcome::Success(ProviderStoppedInfo {
             host_id,
             provider_id,
-            link_name,
-            contract_id,
         }) => {
             let text = format!("Provider [{}] stopped successfully", &cmd.provider_id);
             Ok(CommandOutput::new(
@@ -162,8 +160,6 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
                     ("result".into(), text.into()),
                     ("provider_id".into(), provider_id.into()),
                     ("host_id".into(), host_id.into()),
-                    ("link_name".into(), link_name.into()),
-                    ("contract_id".into(), contract_id.into()),
                 ]),
             ))
         }

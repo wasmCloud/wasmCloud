@@ -308,8 +308,6 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             provider_id,
             provider_ref,
             host_id,
-            contract_id,
-            link_name,
         }) => {
             let text = format!(
                 "Provider [{}] (ref: [{}]) started on host [{}]",
@@ -321,8 +319,6 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
                     ("result".into(), text.into()),
                     ("provider_ref".into(), provider_ref.into()),
                     ("provider_id".into(), provider_id.into()),
-                    ("link_name".into(), link_name.into()),
-                    ("contract_id".into(), contract_id.into()),
                     ("host_id".into(), host_id.into()),
                 ]),
             ))

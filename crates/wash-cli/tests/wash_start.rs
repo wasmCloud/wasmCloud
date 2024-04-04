@@ -32,8 +32,6 @@ async fn integration_start_stop_provider_serial() -> Result<()> {
         .start_provider(PROVIDER_HTTPSERVER_OCI_REF, "httpserver_start_stop")
         .await?;
 
-    // Test stopping using only aliases, yes I know this mixes stop and start, but saves on copied
-    // code
     wash_instance
         .stop_provider("httpserver_start_stop", None)
         .await?;

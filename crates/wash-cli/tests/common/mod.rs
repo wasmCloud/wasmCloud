@@ -32,7 +32,7 @@ pub const LOCAL_REGISTRY: &str = "localhost:5001";
 pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.1";
 
 #[allow(unused)]
-pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.19.1";
+pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.20.0";
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
 
