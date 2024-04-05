@@ -128,7 +128,11 @@ pub async fn wait_for_component_scaled_event(
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == actor_ref {
-                    let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")?;
+                    // NOTE(brooksmtownsend): Temporary handling of both actor_id and component_id
+                    let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")
+                        .or_else(|_| {
+                            get_string_data_from_json(&cloud_event.data, "component_id")
+                        })?;
                     return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
                         host_id: host_id.as_str().into(),
                         component_ref: actor_ref.as_str().into(),
