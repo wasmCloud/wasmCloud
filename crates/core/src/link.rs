@@ -4,38 +4,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    wit::{deserialize_wit_map, serialize_wit_map, WitMap},
-    ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage,
-};
+use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
 
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
-
-/// Settings associated with an actor-provider link
-pub type LinkSettings = WitMap<String>;
-
-/// Link definition for binding actor to provider
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct LinkDefinition {
-    /// actor public key
-    #[serde(default)]
-    pub actor_id: String,
-    /// provider public key
-    #[serde(default)]
-    pub provider_id: String,
-    /// link name
-    #[serde(default)]
-    pub link_name: String,
-    /// contract id
-    #[serde(default)]
-    pub contract_id: String,
-    #[serde(
-        serialize_with = "serialize_wit_map",
-        deserialize_with = "deserialize_wit_map"
-    )]
-    pub values: LinkSettings,
-}
 
 /// A link definition between a source and target component (actor or provider) on a given
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
