@@ -11,7 +11,7 @@ use futures::{Stream, TryStreamExt};
 use tokio::sync::RwLock;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 pub(crate) mod client;
@@ -355,7 +355,7 @@ impl Atomic for KvVaultProvider {
 /// Handle provider control commands, the minimum required of any provider on
 /// a wasmcloud lattice
 #[async_trait]
-impl ProviderHandler for KvVaultProvider {
+impl Provider for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.

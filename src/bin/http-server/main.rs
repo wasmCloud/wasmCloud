@@ -3,7 +3,7 @@ use wasmcloud_provider_http_server::HttpServerProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let shutdown = wasmcloud_provider_sdk::run_provider_handler(
+    let shutdown = wasmcloud_provider_sdk::run_provider(
         HttpServerProvider::default(),
         "http-server-provider",
     )

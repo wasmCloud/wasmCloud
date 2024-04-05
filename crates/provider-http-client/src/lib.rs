@@ -4,7 +4,7 @@ use tokio::spawn;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::http::OutgoingHandler;
-use wasmcloud_provider_sdk::{Context, ProviderHandler};
+use wasmcloud_provider_sdk::{Context, Provider};
 use wrpc_interface_http::try_http_to_outgoing_response;
 use wrpc_transport::AcceptedInvocation;
 
@@ -83,4 +83,4 @@ impl OutgoingHandler for HttpClientProvider {
 }
 
 /// Handle provider control commands
-impl ProviderHandler for HttpClientProvider {}
+impl Provider for HttpClientProvider {}

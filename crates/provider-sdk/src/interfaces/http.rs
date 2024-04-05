@@ -8,9 +8,7 @@ use tracing::{debug, error, instrument, warn};
 use wrpc_interface_http::{IncomingRequestHttp, RequestOptions};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use crate::{get_connection, run_provider_handler, Context, ProviderHandler};
-
-use super::WrpcContextClient;
+use crate::{get_connection, run_provider, Context, Provider, WrpcClient};
 
 /// `wrpc:http/outgoing-handler` provider
 pub trait OutgoingHandler: Send {
@@ -31,7 +29,7 @@ pub async fn serve_outgoing_handler(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcContextClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         use wrpc_interface_http::OutgoingHandler as _;
@@ -69,10 +67,10 @@ pub async fn serve_outgoing_handler(
 /// Run `wrpc:http/outgoing-handler` provider
 #[instrument(level = "trace", skip_all)]
 pub async fn run_outgoing_handler(
-    provider: impl ProviderHandler + OutgoingHandler + Clone + 'static,
+    provider: impl Provider + OutgoingHandler + Clone + 'static,
     name: &str,
 ) -> anyhow::Result<()> {
-    let shutdown = run_provider_handler(provider.clone(), name)
+    let shutdown = run_provider(provider.clone(), name)
         .await
         .context("failed to run provider")?;
     serve_outgoing_handler(provider, shutdown).await

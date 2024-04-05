@@ -9,9 +9,7 @@ use tracing::{debug, error, instrument, warn};
 use wrpc_interface_blobstore::{BlobstoreInvocations, ObjectId};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use crate::{get_connection, run_provider_handler, Context, ProviderHandler};
-
-use super::WrpcContextClient;
+use crate::{get_connection, run_provider, Context, Provider, WrpcClient};
 
 /// `wrpc:blobstore/blobstore` provider
 pub trait Blobstore: Send {
@@ -98,7 +96,7 @@ pub async fn serve_blobstore(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcContextClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let BlobstoreInvocations {
@@ -341,10 +339,10 @@ pub async fn serve_blobstore(
 /// Run `wrpc:blobstore/blobstore` provider
 #[instrument(level = "trace", skip_all)]
 pub async fn run_blobstore(
-    provider: impl ProviderHandler + Blobstore + Clone + 'static,
+    provider: impl Provider + Blobstore + Clone + 'static,
     name: &str,
 ) -> anyhow::Result<()> {
-    let shutdown = run_provider_handler(provider.clone(), name)
+    let shutdown = run_provider(provider.clone(), name)
         .await
         .context("failed to run provider")?;
     serve_blobstore(provider, shutdown).await
