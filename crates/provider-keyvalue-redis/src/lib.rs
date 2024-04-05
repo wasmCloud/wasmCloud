@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
@@ -28,7 +27,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 /// Default URL to use to connect to Redis
@@ -316,18 +315,18 @@ impl Atomic for KvRedisProvider {
 }
 
 /// Handle provider control commands
-#[async_trait]
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip(self, link_config), fields(source_id = %link_config.get_source_id()))]
+    #[instrument(level = "debug", skip(self, config))]
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
-        let conn = if let Some(url) = link_config.get_config().get(CONFIG_REDIS_URL_KEY) {
+        LinkConfig {
+            source_id, config, ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let conn = if let Some(url) = config.get(CONFIG_REDIS_URL_KEY) {
             match redis::Client::open(url.to_string()) {
                 Ok(client) => match client.get_connection_manager().await {
                     Ok(conn) => {
@@ -340,7 +339,7 @@ impl Provider for KvRedisProvider {
                             ?err,
                         "Could not create Redis connection manager for source [{source_id}], keyvalue operations will fail",
                     );
-                        return Err(anyhow!("failed to create redis connection manager").into());
+                        return Err(anyhow!("failed to create redis connection manager"));
                     }
                 },
                 Err(err) => {
@@ -348,7 +347,7 @@ impl Provider for KvRedisProvider {
                         ?err,
                         "Could not create Redis client for source [{source_id}], keyvalue operations will fail",
                     );
-                    return Err(anyhow!("failed to create redis client").into());
+                    return Err(anyhow!("failed to create redis client"));
                 }
             }
         } else {
@@ -365,7 +364,7 @@ impl Provider for KvRedisProvider {
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.sources.write().await;
         if let Some(conn) = aw.remove(source_id) {
             info!("redis closing connection for actor {}", source_id);
@@ -375,7 +374,7 @@ impl Provider for KvRedisProvider {
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.sources.write().await;
         // empty the actor link data and stop all servers
         for (_, conn) in aw.drain() {

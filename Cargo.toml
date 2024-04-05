@@ -153,7 +153,6 @@ wasmcloud-core = { workspace = true, features = [
 wasmcloud-test-util = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
-wrpc-transport-derive = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
 
@@ -288,8 +287,6 @@ wasmcloud-provider-lattice-controller = { version = "*", path = "./crates/provid
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
 wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
 wasmcloud-provider-sdk = { version = "0.3", path = "./crates/provider-sdk", default-features = false }
-wasmcloud-provider-wit-bindgen = { version = "0.1", path = "./crates/provider-wit-bindgen", default-features = false }
-wasmcloud-provider-wit-bindgen-macro = { version = "0.1", path = "./crates/provider-wit-bindgen-macro", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-test-util = { version = "0.1", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "0.2", path = "./crates/tracing", default-features = false }
@@ -302,17 +299,16 @@ wat = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
 which = { version = "4", default-features = false }
-wit-bindgen = { version = "0.22", default-features = false }
-wit-bindgen-core = { version = "0.22", default-features = false }
-wit-bindgen-go = { version = "0.22", default-features = false }
-wit-component = { version = "0.201", default-features = false }
-wit-parser = { version = "0.201", default-features = false }
-wrpc-interface-blobstore = { version = "0.14", default-features = false }
-wrpc-interface-http = { version = "0.19", default-features = false }
-wrpc-interface-keyvalue = { version = "0.11", default-features = false }
-wrpc-runtime-wasmtime = { version = "0.13", default-features = false }
-wrpc-transport = { version = "0.22", default-features = false }
-wrpc-transport-derive = { version = "0.1", path = "./crates/wrpc-transport-derive", default-features = false }
-wrpc-transport-derive-macro = { version = "0.1", path = "./crates/wrpc-transport-derive-macro", default-features = false }
-wrpc-transport-nats = { version = "0.19", default-features = false }
-wrpc-types = { version = "0.5", default-features = false }
+wit-bindgen = { version = "0.24", default-features = false }
+wit-bindgen-core = { version = "0.24", default-features = false }
+wit-bindgen-go = { version = "0.24", default-features = false }
+wit-bindgen-wrpc = { version = "0.3", default-features = false }
+wit-component = { version = "0.202", default-features = false }
+wit-parser = { version = "0.202", default-features = false }
+wrpc-interface-blobstore = { version = "0.16", default-features = false }
+wrpc-interface-http = { version = "0.21", default-features = false }
+wrpc-interface-keyvalue = { version = "0.13", default-features = false }
+wrpc-runtime-wasmtime = { version = "0.15", default-features = false }
+wrpc-transport = { version = "0.24", default-features = false }
+wrpc-transport-nats = { version = "0.21", default-features = false }
+wrpc-types = { version = "0.6", default-features = false }

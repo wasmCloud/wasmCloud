@@ -3,23 +3,22 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
-use futures::StreamExt;
+use anyhow::{bail, Context as _};
+use futures::TryStreamExt as _;
 use rskafka::client::consumer::{StartOffset, StreamConsumerBuilder};
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use rskafka::record::{Record, RecordAndOffset};
+use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
-
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
+use wasmcloud_provider_sdk::{
+    get_connection, run_provider, Context, LinkConfig, Provider, WrpcClient,
 };
 
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: KafkaMessagingProvider,
-    wit_bindgen_cfg: "provider-messaging-kafka"
-});
+use crate::wasmcloud::messaging::types::BrokerMessage;
+
+wit_bindgen_wrpc::generate!();
 
 /// Linkdef value for hosts, accepted as a comma separated string
 const KAFKA_HOSTS: &str = "HOSTS";
@@ -33,7 +32,7 @@ const DEFAULT_TOPIC: &str = "my-topic";
 /// A struct that contains a consumer task handler and the host connection strings
 struct KafkaConnection {
     connection_hosts: Vec<String>,
-    consumer_handle: Arc<JoinHandle<()>>,
+    consumer_handle: Arc<JoinHandle<Result<(), rskafka::client::error::Error>>>,
 }
 
 #[derive(Clone, Default)]
@@ -43,19 +42,34 @@ pub struct KafkaMessagingProvider {
     connections: Arc<RwLock<HashMap<String, KafkaConnection>>>,
 }
 
-#[async_trait]
-impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
-    #[instrument(level = "info", skip_all, fields(source_id = %link_config.get_source_id()))]
+impl KafkaMessagingProvider {
+    pub async fn run() -> anyhow::Result<()> {
+        let provider = Self::default();
+        let shutdown = run_provider(provider.clone(), "kafka-messaging-provider")
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        serve(
+            &WrpcClient(connection.get_wrpc_client(connection.provider_key())),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+}
+
+impl Provider for KafkaMessagingProvider {
+    #[instrument(level = "info", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
+        LinkConfig {
+            source_id, config, ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
         debug!("putting link for actor [{source_id}]");
-        let config_values = link_config.get_config();
 
         // Collect comma separated hosts into a Vec<String>
-        let hosts = config_values
+        let hosts = config
             .iter()
             .find_map(|(k, v)| {
                 if *k == KAFKA_HOSTS {
@@ -71,18 +85,17 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
             .collect::<Vec<String>>();
 
         // Retrieve or use default topic, trimming off extra whitespace
-        let topic = config_values
+        let topic = config
             .iter()
             .find_map(|(k, v)| {
                 if *k == KAFKA_TOPIC {
-                    Some(v.to_string())
+                    Some(v.as_str())
                 } else {
                     None
                 }
             })
-            .unwrap_or_else(|| DEFAULT_TOPIC.to_string())
-            .trim()
-            .to_string();
+            .unwrap_or(DEFAULT_TOPIC)
+            .trim();
 
         // Do some basic validation before spawning off in a thread
         let Ok(client) = ClientBuilder::new(hosts.clone()).build().await else {
@@ -90,64 +103,66 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
                 source_id,
                 "failed to create Kafka client for actor, messages won't be received",
             );
-            return Ok(());
+            bail!("failed to create Kafka client for actor, messages won't be received")
         };
 
         // Create a partition client
         let Ok(partition_client) = client
-            .partition_client(&topic, 0, UnknownTopicHandling::Error)
+            .partition_client(topic, 0, UnknownTopicHandling::Error)
             .await
         else {
             warn!(
                 source_id,
                 "failed to create partition client for actor, messages won't be received",
             );
-            return Ok(());
+            bail!("failed to create partition client for actor, messages won't be received")
         };
+        let partition_client = Arc::new(partition_client);
 
-        // Clone for moving into thread
-        let component_id = source_id.clone();
-        let join = tokio::task::spawn(async move {
-            let component_id = component_id.clone();
-
-            // construct stream consumer
-            let mut stream =
-            // StartOffset::Latest only processes new messages, but Earliest will send every message.
-            // This could be a linkdef tunable value in the future
-                StreamConsumerBuilder::new(Arc::new(partition_client), StartOffset::Latest)
+        let source_id: Arc<str> = source_id.into();
+        let subject: Arc<str> = topic.into();
+        // StartOffset::Latest only processes new messages, but Earliest will send every message.
+        // This could be a linkdef tunable value in the future
+        let join = spawn(
+            StreamConsumerBuilder::new(partition_client, StartOffset::Latest)
                 .with_max_wait_ms(100)
-                .build();
-
-            // Continue to pull records off the stream until it closes
-            while let Some(Ok((
-                RecordAndOffset {
-                    record:
-                        Record {
-                            value: Some(message),
+                .build()
+                .try_filter_map(
+                    |(
+                        RecordAndOffset {
+                            record: Record { value, .. },
                             ..
                         },
-                    ..
-                },
-                _water_mark,
-            ))) = stream.next().await
-            {
-                let component_id = component_id.clone();
-                if let Err(e) = InvocationHandler::new(component_id)
-                    .handle_message(BrokerMessage {
-                        body: message,
-                        reply_to: None,
-                        subject: topic.to_owned(),
-                    })
-                    .await
-                {
-                    eprintln!("Unable to send subscription: {:?}", e);
-                }
-            }
-        });
+                        _water_mark,
+                    )| async { Ok(value) },
+                )
+                .try_for_each({
+                    let source_id = Arc::clone(&source_id);
+                    move |message| {
+                        let wrpc = get_connection().get_wrpc_client(&source_id);
+                        let subject = Arc::clone(&subject);
+                        async move {
+                            if let Err(e) = wasmcloud::messaging::handler::handle_message(
+                                &wrpc,
+                                &BrokerMessage {
+                                    body: message,
+                                    reply_to: None,
+                                    subject: subject.to_string(),
+                                },
+                            )
+                            .await
+                            {
+                                eprintln!("Unable to send subscription: {:?}", e);
+                            }
+                            Ok(())
+                        }
+                    }
+                }),
+        );
 
         let mut connections = self.connections.write().unwrap();
         connections.insert(
-            source_id.into(),
+            source_id.to_string(),
             KafkaConnection {
                 consumer_handle: Arc::new(join),
                 connection_hosts: hosts,
@@ -159,7 +174,7 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
 
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         debug!("deleting link for actor {}", source_id);
 
         let mut connections = self.connections.write().unwrap();
@@ -176,7 +191,7 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
     }
 
     /// Handle shutdown request with any cleanup necessary
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         self.connections
             .write()
             .expect("failed to write connections")
@@ -189,14 +204,17 @@ impl WasmcloudCapabilityProvider for KafkaMessagingProvider {
 }
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
-#[async_trait]
-impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
+impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for KafkaMessagingProvider {
     #[instrument(
         level = "debug", 
         skip_all,
         fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len())
     )]
-    async fn publish(&self, ctx: Context, msg: BrokerMessage) -> Result<(), String> {
+    async fn publish(
+        &self,
+        ctx: Option<Context>,
+        msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
         debug!("publishing message: {msg:?}");
 
         let hosts = {
@@ -204,15 +222,16 @@ impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
                 Ok(connections) => connections,
                 Err(e) => {
                     error!("failed to read connections: {e}");
-                    return Err(format!("failed to read connections: {e}"));
+                    return Ok(Err(format!("failed to read connections: {e}")));
                 }
             };
 
+            let ctx = ctx.as_ref().context("context missing")?;
             let config = match connections.get(&ctx.actor.clone().unwrap()) {
                 Some(config) => config,
                 None => {
                     error!("no actor config for connection");
-                    return Err("no actor config for connection".to_string());
+                    return Ok(Err("no actor config for connection".to_string()));
                 }
             };
 
@@ -223,7 +242,7 @@ impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
             Ok(client) => client,
             Err(e) => {
                 error!("failed to build client: {e}");
-                return Err(format!("failed to build client: {e}"));
+                return Ok(Err(format!("failed to build client: {e}")));
             }
         };
 
@@ -232,7 +251,7 @@ impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
             Ok(controller_client) => controller_client,
             Err(e) => {
                 error!("failed to build controller client: {e}");
-                return Err(format!("failed to build controller client: {e}"));
+                return Ok(Err(format!("failed to build controller client: {e}")));
             }
         };
 
@@ -261,7 +280,7 @@ impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
             Ok(partition_client) => partition_client,
             Err(e) => {
                 error!("failed to create partition client: {e}");
-                return Err(format!("failed to create partition client: {e}"));
+                return Ok(Err(format!("failed to create partition client: {e}")));
             }
         };
 
@@ -278,26 +297,26 @@ impl WasmcloudMessagingConsumer for KafkaMessagingProvider {
             .await
         {
             error!("failed to produce record: {e}");
-            return Err(format!("failed to produce record: {e}"));
+            return Ok(Err(format!("failed to produce record: {e}")));
         }
-        Ok(())
+        Ok(Ok(()))
     }
 
     #[instrument(level = "debug", skip_all, fields(subject = _subject))]
     async fn request(
         &self,
-        _ctx: Context,
+        _ctx: Option<Context>,
         _subject: String,
         _body: Vec<u8>,
         _timeout_ms: u32,
-    ) -> Result<BrokerMessage, String> {
+    ) -> anyhow::Result<Result<BrokerMessage, String>> {
         // Kafka does not support request-reply in the traditional sense. You can publish to a
         // topic, and get an acknowledgement that it was received, but you can't get a
         // reply from a consumer on the other side.
         error!("not implemented (Kafka does not officially support the request-reply paradigm)");
-        Err(
+        Ok(Err(
             "not implemented (Kafka does not officially support the request-reply paradigm)"
                 .to_string(),
-        )
+        ))
     }
 }
