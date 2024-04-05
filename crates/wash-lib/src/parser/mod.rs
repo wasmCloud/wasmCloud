@@ -116,7 +116,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
     type Error = anyhow::Error;
 
     fn try_from(raw_config: RawActorConfig) -> Result<Self, Self::Error> {
-        let key_directory = if let Some(key_directory) = raw_config.key_directory {
+        let key_dir = if let Some(key_directory) = raw_config.key_directory {
             key_directory
         } else {
             let home_dir = dirs::home_dir()
@@ -126,7 +126,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
             push_insecure: raw_config.push_insecure.unwrap_or(false),
-            key_directory,
+            key_directory: key_dir,
             wasm_target: raw_config
                 .wasm_target
                 .map(WasmTarget::from)
@@ -182,7 +182,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
     type Error = anyhow::Error;
 
     fn try_from(raw_config: RawProviderConfig) -> Result<Self, Self::Error> {
-        let key_directory = if let Some(key_directory) = raw_config.key_directory {
+        let key_dir = if let Some(key_directory) = raw_config.key_directory {
             key_directory
         } else {
             let home_dir = dirs::home_dir()
@@ -200,7 +200,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
             rust_target: raw_config.rust_target,
             bin_name: raw_config.bin_name,
             wit_world: raw_config.wit_world,
-            key_directory,
+            key_directory: key_dir,
         })
     }
 }
