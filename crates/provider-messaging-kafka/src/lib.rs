@@ -12,9 +12,7 @@ use rskafka::record::{Record, RecordAndOffset};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
-use wasmcloud_provider_sdk::{
-    get_connection, run_provider, Context, LinkConfig, Provider, WrpcClient,
-};
+use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
 
 use crate::wasmcloud::messaging::types::BrokerMessage;
 
@@ -50,7 +48,7 @@ impl KafkaMessagingProvider {
             .context("failed to run provider")?;
         let connection = get_connection();
         serve(
-            &WrpcClient(connection.get_wrpc_client(connection.provider_key())),
+            &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
         )

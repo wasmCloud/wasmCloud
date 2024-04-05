@@ -28,7 +28,9 @@ use wasmcloud_core::TraceContext;
 use wasmcloud_tracing::context::attach_span_context;
 
 use crate::error::{ProviderInitError, ProviderInitResult};
-use crate::{with_connection_event_logging, Context, LinkConfig, Provider, DEFAULT_NATS_ADDR};
+use crate::{
+    with_connection_event_logging, Context, LinkConfig, Provider, WrpcClient, DEFAULT_NATS_ADDR,
+};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -722,7 +724,7 @@ impl ProviderConnection {
     /// # Arguments
     ///
     /// * `target` - Target ID to which invocations will be sent
-    pub fn get_wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
+    pub fn get_wrpc_client(&self, target: &str) -> WrpcClient {
         self.get_wrpc_client_custom(target, None, None)
     }
 
@@ -739,7 +741,7 @@ impl ProviderConnection {
         target: &str,
         headers: Option<HashMap<String, String>>,
         timeout: Option<Duration>,
-    ) -> wasmcloud_core::wrpc::Client {
+    ) -> WrpcClient {
         let mut hmap = HeaderMap::new();
         if let Some(values) = headers {
             for (k, v) in values.iter() {
@@ -748,13 +750,13 @@ impl ProviderConnection {
         }
         hmap.insert("source-id", self.provider_key.as_str());
         hmap.insert("target-id", target);
-        wasmcloud_core::wrpc::Client::new(
+        WrpcClient(wasmcloud_core::wrpc::Client::new(
             Arc::clone(&self.nats),
             &self.lattice,
             target,
             hmap,
             timeout.unwrap_or_else(|| Duration::from_secs(10)),
-        )
+        ))
     }
 
     /// Get the provider key that was assigned to this host @ startup
