@@ -6025,7 +6025,6 @@ dependencies = [
  "tracing",
  "wascap",
  "wasmcloud-control-interface 1.0.0-alpha.3",
- "wasmcloud-provider-wit-bindgen",
 ]
 
 [[package]]

@@ -35,7 +35,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 const ALIAS_PREFIX: &str = "alias_";
@@ -991,7 +991,7 @@ impl Blobstore for BlobstoreS3Provider {
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
 #[async_trait]
-impl ProviderHandler for BlobstoreS3Provider {
+impl Provider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.

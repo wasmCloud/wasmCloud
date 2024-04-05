@@ -20,7 +20,7 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 #[derive(Default, Debug, Clone)]
@@ -648,7 +648,7 @@ impl Blobstore for FsProvider {
 }
 
 #[async_trait]
-impl ProviderHandler for FsProvider {
+impl Provider for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
     async fn receive_link_config_as_target(
         &self,

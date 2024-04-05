@@ -1,30 +1,33 @@
+use ::core::future::Future;
+use ::core::time::Duration;
+
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
 use async_trait::async_trait;
-use core::{ComponentId, LatticeTarget, LinkName};
+use provider::invocation_context;
 use provider::ProviderInitState;
+use tower::ServiceExt;
 use tracing::{error, info, warn};
+use wasmcloud_core::{ComponentId, LatticeTarget, LinkName};
+use wrpc_transport::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
 
 pub mod error;
 pub mod interfaces;
 pub mod provider;
 
+pub use provider::{
+    get_connection, load_host_data, run_provider, start_provider, ProviderConnection,
+};
+pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
-pub use core::{
+pub use wasmcloud_core::{
     HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WitFunction, WitInterface,
     WitNamespace, WitPackage,
 };
-pub use provider::{
-    get_connection, load_host_data, run_provider, run_provider_handler, start_provider,
-    ProviderConnection,
-};
-pub use wasmcloud_core as core;
 pub use wasmcloud_tracing;
 
-use crate::error::InvocationResult;
 pub use crate::error::ProviderOperationResult;
 
 /// Parse an sufficiently specified WIT operation/method into constituent parts.
@@ -103,21 +106,18 @@ pub struct Context {
     pub tracing: HashMap<String, String>,
 }
 
-/// The super trait containing all necessary traits for a provider
-pub trait Provider: ProviderHandler + WrpcNats + WrpcDispatch + Send + Sync + 'static {}
-
 /// Configuration of a link that is passed to a provider
 pub trait LinkConfig: Send + Sync {
     /// Given that the link was established with the source as this provider,
     /// get the target ID which should be a component
-    fn get_target_id(&self) -> &LatticeTarget;
+    fn get_target_id(&self) -> &str;
 
     /// Given that the link was established with the target as this provider,
     /// get the source ID which should be a component
-    fn get_source_id(&self) -> &ComponentId;
+    fn get_source_id(&self) -> &str;
 
     /// Get the name of the link that was provided
-    fn get_link_name(&self) -> &LinkName;
+    fn get_link_name(&self) -> &str;
 
     /// Get the configuration provided to the provider (either as the target or the source)
     fn get_config(&self) -> &HashMap<String, String>;
@@ -131,15 +131,15 @@ impl LinkConfig
         HashMap<String, String>,
     )
 {
-    fn get_source_id(&self) -> &ComponentId {
+    fn get_source_id(&self) -> &str {
         &self.0
     }
 
-    fn get_target_id(&self) -> &LatticeTarget {
+    fn get_target_id(&self) -> &str {
         &self.1
     }
 
-    fn get_link_name(&self) -> &LinkName {
+    fn get_link_name(&self) -> &str {
         &self.2
     }
 
@@ -156,15 +156,15 @@ impl LinkConfig
         &HashMap<String, String>,
     )
 {
-    fn get_source_id(&self) -> &ComponentId {
+    fn get_source_id(&self) -> &str {
         self.0
     }
 
-    fn get_target_id(&self) -> &LatticeTarget {
+    fn get_target_id(&self) -> &str {
         self.1
     }
 
-    fn get_link_name(&self) -> &LinkName {
+    fn get_link_name(&self) -> &str {
         self.2
     }
 
@@ -202,7 +202,7 @@ impl ProviderInitConfig for &ProviderInitState {
 
 /// CapabilityProvider handling of messages from host
 #[async_trait]
-pub trait ProviderHandler: Sync {
+pub trait Provider: Sync {
     /// Initialize the provider
     ///
     /// # Arguments
@@ -263,58 +263,64 @@ pub trait ProviderHandler: Sync {
     }
 }
 
-/// Human readable name of a [`wit_parser::WorldKey`] which includes interface ID if necessary
-/// see: https://docs.rs/wit-parser/latest/wit_parser/struct.Resolve.html#method.name_world_key
-pub type WorldKeyName = String;
+pub struct WrpcClient(pub wasmcloud_core::wrpc::Client);
 
-/// A NATS subject which is used for wRPC, normally of the shape `<lattice>.<target id>.wrpc.0.0.1.<interface>.<operation>`
-pub type WrpcNatsSubject = String;
+impl wrpc_transport::Client for WrpcClient {
+    type Context = Option<Context>;
+    type Subject = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subject;
+    type Subscriber = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subscriber;
+    type Transmission = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Transmission;
+    type Acceptor = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Acceptor;
+    type Invocation = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Invocation;
+    type InvocationStream<Ctx, T, Tx: wrpc_transport::Transmitter> =
+        <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::InvocationStream<Ctx, T, Tx>;
 
-pub type WrpcInvocationLookup =
-    HashMap<WrpcNatsSubject, (WorldKeyName, WitFunction, wrpc_types::DynamicFunction)>;
-
-/// A trait for providers that are powered by WIT contracts and communicate with wRPC
-///
-/// Providers are responsible for converting the contents of their WIT files and making
-/// a list of invocations available as a lookup that is:
-///
-/// - Keyed by the wRPC subject to listen on
-/// - Contains tuples with:
-///   - The appropriate world key name (which includes interface ID -- see [`wit_parser::WorldKey`])
-///   - The WIT function name
-///   - A callable [`wrpc_types::DynamicFunction`]
-///
-/// It is up to the host to interpret this information and build necessary lookups/structures to negotiate
-/// lattice operations on behalf of the provider.
-#[async_trait]
-pub trait WrpcNats {
-    /// Given a lattice name, produces a mapping of wRPC-compatible subjects (`wrpc_transport::Subject`) to functions that can be invoked by the provider
-    ///
-    /// # Arguments
-    ///
-    /// * `lattice_name` - The name of the lattice invocations will be addressed to. This can only be known at runtime after provider instantiation
-    /// * `target_id` - The target that represents this provider (ex. a stringified public `nkey`). The target ID may not uniquely identify this provider -- there may be other providers with the same target.
-    /// * `wrpc_version` - The version of wRPC that is intended to be used
-    async fn incoming_wrpc_invocations_by_subject(
+    fn serve<Ctx, T, Tx, S, Fut>(
         &self,
-        _lattice_name: impl AsRef<str> + Send,
-        _target_id: impl AsRef<str> + Send,
-        _wrpc_version: impl AsRef<str> + Send,
-    ) -> crate::error::ProviderInitResult<WrpcInvocationLookup> {
-        Ok(HashMap::new())
+        instance: &str,
+        name: &str,
+        svc: S,
+    ) -> impl Future<Output = anyhow::Result<Self::InvocationStream<Ctx, T, Tx>>>
+    where
+        Tx: wrpc_transport::Transmitter,
+        S: tower::Service<
+                IncomingInvocation<Self::Context, Self::Subscriber, Self::Acceptor>,
+                Future = Fut,
+            > + Send
+            + Clone
+            + 'static,
+        Fut: Future<Output = Result<AcceptedInvocation<Ctx, T, Tx>, anyhow::Error>> + Send,
+    {
+        self.0.serve(
+            instance,
+            name,
+            svc.map_request(
+                |IncomingInvocation {
+                     context,
+                     payload,
+                     param_subject,
+                     error_subject,
+                     handshake_subject,
+                     subscriber,
+                     acceptor,
+                 }: IncomingInvocation<Option<_>, _, _>| {
+                    IncomingInvocation {
+                        context: context.as_ref().map(invocation_context),
+                        payload,
+                        param_subject,
+                        error_subject,
+                        handshake_subject,
+                        subscriber,
+                        acceptor,
+                    }
+                },
+            ),
+        )
     }
-}
 
-/// todo: invert this so that the provider takes the wrpc_transport::Client and then hooks up it's own handlers
-
-/// Handler for dispatching invocations that come via wRPC
-#[async_trait]
-pub trait WrpcDispatch {
-    /// Dispatch a single invocation that came in over wRPC
-    async fn dispatch_wrpc_dynamic<'a>(
-        &'a self,
-        ctx: Context,
-        operation: String,
-        params: Vec<wrpc_transport::Value>,
-    ) -> InvocationResult<Vec<u8>>;
+    fn new_invocation(
+        &self,
+    ) -> OutgoingInvocation<Self::Invocation, Self::Subscriber, Self::Subject> {
+        self.0.new_invocation()
+    }
 }

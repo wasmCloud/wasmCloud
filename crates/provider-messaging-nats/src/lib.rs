@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
+use async_nats::subject::ToSubject;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
@@ -15,7 +16,7 @@ use wascap::prelude::KeyPair;
 
 use wasmcloud_provider_wit_bindgen::deps::{
     async_trait::async_trait,
-    wasmcloud_provider_sdk::core::{ComponentId, HostData},
+    wasmcloud_provider_sdk::core::HostData,
     wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
 };
 
@@ -73,7 +74,7 @@ impl NatsMessagingProvider {
     async fn connect(
         &self,
         cfg: ConnectionConfig,
-        component_id: ComponentId,
+        component_id: &str,
     ) -> anyhow::Result<NatsClientBundle> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
@@ -114,7 +115,7 @@ impl NatsMessagingProvider {
 
             sub_handles.push((
                 sub.to_string(),
-                self.subscribe(&client, component_id.clone(), sub.to_string(), queue)
+                self.subscribe(&client, component_id, sub.to_string(), queue)
                     .await?,
             ));
         }
@@ -129,17 +130,18 @@ impl NatsMessagingProvider {
     async fn subscribe(
         &self,
         client: &async_nats::Client,
-        component_id: ComponentId,
-        sub: String,
+        component_id: &str,
+        sub: impl ToSubject,
         queue: Option<String>,
     ) -> anyhow::Result<JoinHandle<()>> {
         let mut subscriber = match queue {
-            Some(queue) => client.queue_subscribe(sub.clone(), queue).await,
-            None => client.subscribe(sub.clone()).await,
+            Some(queue) => client.queue_subscribe(sub, queue).await,
+            None => client.subscribe(sub).await,
         }?;
 
         debug!(?component_id, "spawning listener for component");
 
+        let component_id = Arc::new(component_id.to_string());
         // Spawn a thread that listens for messages coming from NATS
         // this thread is expected to run the full duration that the provider is available
         let join_handle = tokio::spawn(async move {
@@ -154,10 +156,9 @@ impl NatsMessagingProvider {
 
             // Listen for NATS message(s)
             while let Some(msg) = subscriber.next().await {
-                let component_id = component_id.clone();
                 debug!(?msg, ?component_id, "received messsage");
                 // Set up tracing context for the NATS message
-                let span = tracing::debug_span!("handle_message", component_id);
+                let span = tracing::debug_span!("handle_message", ?component_id);
 
                 span.in_scope(|| {
                     attach_span_context(&msg);
@@ -171,7 +172,12 @@ impl NatsMessagingProvider {
                     }
                 };
 
-                tokio::spawn(dispatch_msg(component_id, msg, permit).instrument(span));
+                let component_id = Arc::clone(&component_id);
+                tokio::spawn(async move {
+                    dispatch_msg(component_id.as_str(), msg, permit)
+                        .instrument(span)
+                        .await
+                });
             }
         });
 
@@ -181,7 +187,7 @@ impl NatsMessagingProvider {
 
 #[instrument(level = "debug", skip_all, fields(component_id = %component_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
 async fn dispatch_msg(
-    component_id: ComponentId,
+    component_id: &str,
     nats_msg: async_nats::Message,
     _permit: OwnedSemaphorePermit,
 ) {
@@ -190,7 +196,7 @@ async fn dispatch_msg(
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
     };
-    let actor = InvocationHandler::new(component_id.clone());
+    let actor = get_wrpc_client(component_id);
     debug!(
         subject = msg.subject,
         reply_to = ?msg.reply_to,
@@ -235,7 +241,7 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
         };
 
         let mut update_map = self.actors.write().await;
-        let bundle = match self.connect(config, source_id.into()).await {
+        let bundle = match self.connect(config, source_id).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
@@ -424,7 +430,7 @@ mod test {
     use std::collections::HashMap;
 
     use wasmcloud_provider_wit_bindgen::deps::serde_json;
-    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::ProviderHandler;
+    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Provider;
 
     use crate::{ConnectionConfig, NatsMessagingProvider};
 

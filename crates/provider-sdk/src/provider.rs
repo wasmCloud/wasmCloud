@@ -11,37 +11,27 @@ use anyhow::{bail, Result};
 use async_nats::subject::ToSubject;
 use async_nats::HeaderMap;
 use base64::Engine;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::spawn_blocking;
 use tokio::{select, spawn, try_join};
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
-use ulid::Ulid;
-use uuid::Uuid;
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::rpc::{health_subject, link_del_subject, link_put_subject, shutdown_subject};
 use wasmcloud_core::{HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition};
-use wrpc_transport::{AcceptedInvocation, Client, Transmitter};
-use wrpc_types::DynamicFunction;
 
 #[cfg(feature = "otel")]
 use wasmcloud_core::TraceContext;
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::attach_span_context;
 
-use crate::error::{InvocationResult, ProviderInitError, ProviderInitResult};
-use crate::{
-    with_connection_event_logging, Context, Provider, ProviderHandler, WrpcDispatch,
-    WrpcInvocationLookup, DEFAULT_NATS_ADDR,
-};
+use crate::error::{ProviderInitError, ProviderInitResult};
+use crate::{with_connection_event_logging, Context, Provider, DEFAULT_NATS_ADDR};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
-
-/// Name of the header that should be passed for invocations that identifies the host from which invocation was run
-const WRPC_HEADER_NAME_HOST_ID: &str = "host-id";
 
 static HOST_DATA: OnceCell<HostData> = OnceCell::new();
 static CONNECTION: OnceCell<ProviderConnection> = OnceCell::new();
@@ -105,9 +95,6 @@ fn _load_host_data() -> ProviderInitResult<HostData> {
     })?;
     Ok(host_data)
 }
-
-/// Current version of wRPC supported by this version of the provider-sdk
-pub(crate) const WRPC_VERSION: &str = "0.0.1";
 
 pub type QuitSignal = broadcast::Receiver<()>;
 
@@ -474,7 +461,7 @@ async fn receive_link_for_provider<P>(
     ld: InterfaceLinkDefinition,
 ) -> Result<()>
 where
-    P: ProviderHandler,
+    P: Provider,
 {
     let do_receive_link = if ld.source_id == connection.provider_key {
         provider.receive_link_config_as_source((
@@ -506,7 +493,7 @@ where
 
 /// Handle provider commands in a loop.
 async fn handle_provider_commands(
-    provider: impl ProviderHandler,
+    provider: impl Provider,
     connection: &ProviderConnection,
     mut quit_rx: broadcast::Receiver<()>,
     quit_tx: broadcast::Sender<()>,
@@ -619,8 +606,8 @@ async fn handle_provider_commands(
 
 /// Runs the provider handler. You can use this method instead of [`start_provider`] if you are already in
 /// an async context and want to manually manage RPC serving functionality.
-pub async fn run_provider_handler(
-    provider: impl ProviderHandler,
+pub async fn run_provider(
+    provider: impl Provider,
     friendly_name: &str,
 ) -> ProviderInitResult<impl Future<Output = ()>> {
     let init_state = init_provider(friendly_name).await?;
@@ -651,7 +638,6 @@ pub async fn run_provider_handler(
         lattice_rpc_prefix.clone(),
         host_id,
         link_name,
-        WrpcInvocationLookup::default(),
         config,
     )?;
     CONNECTION.set(connection).map_err(|_| {
@@ -674,80 +660,6 @@ pub async fn run_provider_handler(
     ))
 }
 
-/// Runs the provider. You can use this method instead of [`start_provider`] if you are already in
-/// an async context
-pub async fn run_provider(
-    provider: impl Provider + Clone,
-    friendly_name: &str,
-) -> ProviderInitResult<()> {
-    let init_state = init_provider(friendly_name).await?;
-
-    // Run user-implemented provider-internal specific initialization
-    if let Err(e) = provider.init(&init_state).await {
-        return Err(ProviderInitError::Initialization(format!(
-            "provider init failed: {e}"
-        )));
-    }
-
-    let ProviderInitState {
-        nats,
-        quit_rx,
-        quit_tx,
-        host_id,
-        lattice_rpc_prefix,
-        link_name,
-        provider_key,
-        link_definitions,
-        commands,
-        config,
-    } = init_state;
-
-    let invocation_map = provider
-        .incoming_wrpc_invocations_by_subject(
-            &lattice_rpc_prefix,
-            &provider_key,
-            crate::provider::WRPC_VERSION,
-        )
-        .await?;
-
-    // Initialize host connection to provider, save it as a global
-    let connection = ProviderConnection::new(
-        nats,
-        provider_key,
-        lattice_rpc_prefix.clone(),
-        host_id,
-        link_name,
-        invocation_map,
-        config,
-    )?;
-    CONNECTION.set(connection).map_err(|_| {
-        ProviderInitError::Initialization("Provider connection was already initialized".to_string())
-    })?;
-    let connection = get_connection();
-
-    // Pre-populate provider and bridge with initial set of link definitions
-    // Initialization of any link is fatal for provider startup
-    for ld in link_definitions {
-        if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
-            error!(
-                error = ?e,
-                "failed to initialize link during provider startup",
-            );
-        }
-    }
-    connection
-        .subscribe_rpc(
-            provider.clone(),
-            quit_tx.subscribe(),
-            lattice_rpc_prefix,
-            &connection.provider_key,
-        )
-        .await?;
-
-    handle_provider_commands(provider, connection, quit_rx, quit_tx, commands).await;
-    Ok(())
-}
-
 /// Source ID for a link
 type SourceId = String;
 
@@ -768,10 +680,6 @@ pub struct ProviderConnection {
     // TODO: Reference this field to get static config
     #[allow(unused)]
     config: HashMap<String, String>,
-
-    /// Mapping of NATS subjects to dynamic function information for incoming invocations
-    #[allow(unused)]
-    incoming_invocation_fn_map: Arc<WrpcInvocationLookup>,
 }
 
 impl fmt::Debug for ProviderConnection {
@@ -812,7 +720,6 @@ impl ProviderConnection {
         lattice: String,
         host_id: String,
         link_name: String,
-        incoming_invocation_fn_map: WrpcInvocationLookup,
         config: HashMap<String, String>,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
@@ -822,7 +729,6 @@ impl ProviderConnection {
             host_id,
             link_name,
             provider_key,
-            incoming_invocation_fn_map: Arc::new(incoming_invocation_fn_map),
             config,
         })
     }
@@ -895,157 +801,5 @@ impl ProviderConnection {
         if let Err(err) = self.nats.flush().await {
             error!(%err, "error flushing NATS client");
         }
-    }
-
-    /// Subscribe to a nats topic for rpc messages.
-    /// This method starts a separate async task and returns immediately.
-    /// It will exit if the nats client disconnects, or if a signal is received on the quit channel.
-    pub async fn subscribe_rpc(
-        &self,
-        provider: impl WrpcDispatch + Clone + Send + 'static,
-        quit: QuitSignal,
-        lattice: String,
-        provider_id: impl AsRef<str>,
-    ) -> ProviderInitResult<Vec<JoinHandle<Result<()>>>> {
-        let mut handles = Vec::new();
-        let provider_id = provider_id.as_ref();
-
-        // Build a wrpc client that we can use to listen for incoming invocations
-        let wrpc_client = self.get_wrpc_client(provider_id);
-        let link_name = self.link_name.clone();
-
-        // For every mapping of world key names to dynamic functions to call, spawn a client that will listen
-        // forever and process incoming invocations
-        for (_nats_subject, (world_key_name, wit_fn, dyn_fn)) in
-            self.incoming_invocation_fn_map.iter()
-        {
-            let wrpc_client = wrpc_client.clone();
-            let world_key_name = world_key_name.clone();
-            let wit_fn = wit_fn.clone();
-            let lattice = lattice.clone();
-            let provider = provider.clone();
-            let fn_params = match dyn_fn {
-                DynamicFunction::Method { params, .. } => params.clone(),
-                DynamicFunction::Static { params, .. } => params.clone(),
-            };
-            let mut quit = quit.resubscribe();
-            let this = self.clone();
-            let provider_id = provider_id.to_string();
-            let link_name = link_name.clone();
-
-            trace!(
-                "spawning invocation serving for [{}.{}]",
-                world_key_name.as_str(),
-                wit_fn.as_str()
-            );
-
-            // Set up stream of incoming invocations
-            let mut invocations = wrpc_client
-                .serve_dynamic(world_key_name.as_str(), wit_fn.as_str(), fn_params)
-                .await
-                .map_err(|e| {
-                    ProviderInitError::Initialization(format!("failed to start wprc serving: {e}"))
-                })?;
-
-            // Spawn off process to handle invocations forever
-            handles.push(spawn(async move {
-                loop {
-                    tokio::select! {
-                        _ = quit.recv() => {
-                            break Ok(());
-                        }
-
-                        invocation = invocations.try_next() => {
-                            // Get the stream of invocations out
-                            let AcceptedInvocation {
-                                context,
-                                params,
-                                result_subject,
-                                error_subject,
-                                transmitter
-                            } = match invocation {
-                                Ok(Some(inv)) => inv,
-                                // If we get an invocation that is empty, skip
-                                Ok(None) => {
-                                    continue;
-                                },
-                                // Process errors if we fail to get the invocation
-                                Err(e) => {
-                                    error!(error = %e, world_key_name, wit_fn, "failed to serve via wrpc");
-                                    continue;
-                                }
-                            };
-
-                            let invocation_id = Uuid::from_u128(Ulid::new().into()).to_string();
-                            let operation = format!("{world_key_name}.{wit_fn}");
-                            let current = tracing::Span::current();
-                            let context = context.unwrap_or_default();
-                            let source_id = context.get(WRPC_SOURCE_ID_HEADER_NAME)
-                                .map(ToString::to_string)
-                                .unwrap_or_else(|| "<unknown>".into());
-                            current.record("operation", &tracing::field::display(&operation));
-                            current.record("lattice_name", &tracing::field::display(&lattice));
-                            current.record("invocation_id", &tracing::field::display(&invocation_id));
-                            current.record("source_id", &tracing::field::display(&source_id));
-                            current.record(
-                                "host_id",
-                                &tracing::field::display(&context.get(WRPC_HEADER_NAME_HOST_ID).map(ToString::to_string).unwrap_or("<unknown>".to_string()))
-                            );
-                            current.record("provider_id", provider_id.clone());
-                            current.record("link_name", &tracing::field::display(&link_name));
-                            let context = invocation_context(&context);
-
-                            // Perform RPC
-                            match this.handle_wrpc(provider.clone(), operation.clone(), source_id, params, context).in_current_span().await {
-                                Ok(bytes) => {
-                                    // Assuming that the provider has processed the request and produced objects
-                                    // that conform to wrpc, transmit the response that were returned by the invocation
-                                    if let Err(err) = transmitter.transmit(result_subject, bytes.into()).await {
-                                        error!(%err, "failed to transmit invocation results");
-                                    }
-                                },
-                                Err(err) => {
-                                    error!(%err, %operation, "wRPC invocation failed");
-
-                                    // Send the error forwards on the error subject
-                                    if let Err(err) = transmitter
-                                        .transmit_static(error_subject, format!("{err:#}"))
-                                        .await
-                                    {
-                                        error!(?err, "failed to transmit error to invoker");
-                                    }
-                                },
-                            };
-                        }
-                    }
-                }
-            }));
-        }
-
-        Ok(handles)
-    }
-
-    /// Handle an invocation coming from wRPC
-    ///
-    /// # Arguments
-    ///
-    /// * `provider` - The Provider
-    /// * `operation` - The operation being performed (of the form `<ns>:<pkg>/<interface>.<function>`)
-    /// * `source_id` - The ID of the origin which might represent one or more components/providers (ex. an actor public key)
-    /// * `wrpc_invocation` - Details of the wRPC invocation
-    async fn handle_wrpc(
-        &self,
-        provider: impl WrpcDispatch + 'static,
-        operation: String,
-        source_id: String,
-        invocation_params: Vec<wrpc_transport::Value>,
-        context: Context,
-    ) -> InvocationResult<Vec<u8>> {
-        // Dispatch the invocation to the provider
-        let span = tracing::debug_span!("dispatch", %source_id, %operation);
-        provider
-            .dispatch_wrpc_dynamic(context, operation, invocation_params)
-            .instrument(span)
-            .await
     }
 }

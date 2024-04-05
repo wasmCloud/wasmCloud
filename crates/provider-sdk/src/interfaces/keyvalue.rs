@@ -9,9 +9,7 @@ use tracing::{debug, error, instrument, warn};
 use wrpc_interface_keyvalue::{AtomicInvocations, EventualInvocations};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use crate::{get_connection, run_provider_handler, Context, ProviderHandler};
-
-use super::WrpcContextClient;
+use crate::{get_connection, run_provider, Context, Provider, WrpcClient};
 
 /// `wrpc:keyvalue/atomic` provider
 pub trait Atomic: Send {
@@ -66,7 +64,7 @@ pub async fn serve_atomic(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcContextClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let AtomicInvocations {
@@ -121,7 +119,7 @@ pub async fn serve_eventual(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcContextClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let EventualInvocations {
@@ -208,7 +206,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcContextClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let (
@@ -330,10 +328,10 @@ pub async fn serve(
 /// Run `wrpc:keyvalue/atomic` provider
 #[instrument(level = "trace", skip_all)]
 pub async fn run_atomic(
-    provider: impl ProviderHandler + Atomic + Clone + 'static,
+    provider: impl Provider + Atomic + Clone + 'static,
     name: &str,
 ) -> anyhow::Result<()> {
-    let shutdown = run_provider_handler(provider.clone(), name)
+    let shutdown = run_provider(provider.clone(), name)
         .await
         .context("failed to run provider")?;
     serve_atomic(provider, shutdown).await
@@ -342,10 +340,10 @@ pub async fn run_atomic(
 /// Run `wrpc:keyvalue/eventual` provider
 #[instrument(level = "trace", skip_all)]
 pub async fn run_eventual(
-    provider: impl ProviderHandler + Eventual + Clone + 'static,
+    provider: impl Provider + Eventual + Clone + 'static,
     name: &str,
 ) -> anyhow::Result<()> {
-    let shutdown = run_provider_handler(provider.clone(), name)
+    let shutdown = run_provider(provider.clone(), name)
         .await
         .context("failed to run provider")?;
     serve_eventual(provider, shutdown).await
@@ -354,10 +352,10 @@ pub async fn run_eventual(
 /// Run all supported `wrpc:keyvalue` interface provider
 #[instrument(level = "trace", skip_all)]
 pub async fn run(
-    provider: impl ProviderHandler + Atomic + Eventual + Clone + 'static,
+    provider: impl Provider + Atomic + Eventual + Clone + 'static,
     name: &str,
 ) -> anyhow::Result<()> {
-    let shutdown = run_provider_handler(provider.clone(), name)
+    let shutdown = run_provider(provider.clone(), name)
         .await
         .context("failed to run provider")?;
     serve(provider, shutdown).await

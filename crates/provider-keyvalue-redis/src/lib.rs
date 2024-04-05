@@ -28,7 +28,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, ProviderHandler, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 /// Default URL to use to connect to Redis
@@ -317,7 +317,7 @@ impl Atomic for KvRedisProvider {
 
 /// Handle provider control commands
 #[async_trait]
-impl ProviderHandler for KvRedisProvider {
+impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.

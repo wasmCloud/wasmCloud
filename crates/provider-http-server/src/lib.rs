@@ -47,9 +47,7 @@ use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::core::LatticeTarget;
-use wasmcloud_provider_sdk::{
-    get_connection, LinkConfig, ProviderHandler, ProviderOperationResult,
-};
+use wasmcloud_provider_sdk::{get_connection, LinkConfig, Provider, ProviderOperationResult};
 use wrpc_interface_http::IncomingHandler as _;
 
 mod hashmap_ci;
@@ -68,7 +66,7 @@ pub struct HttpServerProvider {
 }
 
 #[async_trait]
-impl ProviderHandler for HttpServerProvider {
+impl Provider for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     async fn receive_link_config_as_source(
@@ -243,10 +241,7 @@ async fn handle_request(
 
 impl HttpServerCore {
     #[instrument]
-    pub async fn new(
-        settings: Arc<ServiceSettings>,
-        target: &LatticeTarget,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(settings: Arc<ServiceSettings>, target: &str) -> anyhow::Result<Self> {
         let addr = settings
             .address
             .unwrap_or_else(|| (Ipv4Addr::UNSPECIFIED, 8000).into());
