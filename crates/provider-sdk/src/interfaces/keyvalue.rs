@@ -9,7 +9,7 @@ use tracing::{debug, error, instrument, warn};
 use wrpc_interface_keyvalue::{AtomicInvocations, EventualInvocations};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use crate::{get_connection, run_provider, Context, Provider, WrpcClient};
+use crate::{get_connection, run_provider, Context, Provider};
 
 /// `wrpc:keyvalue/atomic` provider
 pub trait Atomic: Send {
@@ -64,7 +64,7 @@ pub async fn serve_atomic(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = connection.get_wrpc_client(connection.provider_key());
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let AtomicInvocations {
@@ -119,7 +119,7 @@ pub async fn serve_eventual(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = connection.get_wrpc_client(connection.provider_key());
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let EventualInvocations {
@@ -206,7 +206,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = connection.get_wrpc_client(connection.provider_key());
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let (

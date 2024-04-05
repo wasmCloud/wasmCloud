@@ -9,7 +9,7 @@ use tracing::{debug, error, instrument, warn};
 use wrpc_interface_blobstore::{BlobstoreInvocations, ObjectId};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use crate::{get_connection, run_provider, Context, Provider, WrpcClient};
+use crate::{get_connection, run_provider, Context, Provider};
 
 /// `wrpc:blobstore/blobstore` provider
 pub trait Blobstore: Send {
@@ -96,7 +96,7 @@ pub async fn serve_blobstore(
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let connection = get_connection();
-    let wrpc = WrpcClient(connection.get_wrpc_client(connection.provider_key()));
+    let wrpc = connection.get_wrpc_client(connection.provider_key());
     let mut shutdown = pin!(shutdown);
     'outer: loop {
         let BlobstoreInvocations {

@@ -21,4 +21,3 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
-#wasmcloud-provider-wit-bindgen = { workspace = true, features = [ "otel" ] }

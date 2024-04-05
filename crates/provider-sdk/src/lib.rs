@@ -215,6 +215,7 @@ pub trait Provider<E = anyhow::Error>: Sync {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct WrpcClient(pub wasmcloud_core::wrpc::Client);
 
 impl wrpc_transport::Client for WrpcClient {

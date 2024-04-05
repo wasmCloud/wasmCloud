@@ -128,7 +128,7 @@ impl wrpc_transport::Acceptor for AcceptorWithHeaders {
 
 /// Wrapper around [`wrpc_transport_nats::Client`] that includes a [`async_nats::HeaderMap`] for
 /// passing invocation and trace context.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     inner: wrpc_transport_nats::Client,
     headers: HeaderMap,

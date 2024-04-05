@@ -16,7 +16,7 @@ use wascap::prelude::KeyPair;
 use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider, WrpcClient,
+    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
 };
 
 mod connection;
@@ -60,7 +60,7 @@ impl NatsMessagingProvider {
             .context("failed to run provider")?;
         let connection = get_connection();
         serve(
-            &WrpcClient(connection.get_wrpc_client(connection.provider_key())),
+            &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
         )

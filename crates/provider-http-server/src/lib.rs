@@ -146,7 +146,7 @@ pub struct HttpServerCore {
 
 #[derive(Clone, Debug)]
 struct RequestContext {
-    wrpc: Arc<wasmcloud_provider_sdk::core::wrpc::Client>,
+    wrpc: Arc<wasmcloud_provider_sdk::WrpcClient>,
     settings: Arc<ServiceSettings>,
     scheme: http::uri::Scheme,
 }
