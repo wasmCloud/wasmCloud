@@ -52,9 +52,9 @@ use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wrpc_transport::{
-    AcceptedInvocation, Client, DynamicTuple, EncodeSync, IncomingInputStream, Transmitter,
+    AcceptedInvocation, AsyncSubscription, AsyncValue, Client, DynamicTuple, Encode,
+    IncomingInputStream, Receive, Subscribe, Transmitter,
 };
-use wrpc_transport::{AsyncSubscription, AsyncValue, Encode, Receive, Subscribe};
 use wrpc_types::DynamicFunction;
 
 use crate::{
@@ -902,12 +902,16 @@ impl Encode for BrokerMessage {
             reply_to,
         }) = self;
         subject
-            .encode_sync(&mut payload)
+            .encode(&mut payload)
+            .await
             .context("failed to encode `subject`")?;
         body.encode(&mut payload)
             .await
             .context("failed to encode `body`")?;
-        EncodeSync::encode_sync_option(reply_to, payload).context("failed to encode `reply_to`")?;
+        reply_to
+            .encode(payload)
+            .await
+            .context("failed to encode `reply_to`")?;
         Ok(None)
     }
 }

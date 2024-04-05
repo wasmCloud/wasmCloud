@@ -39,15 +39,13 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use async_trait::async_trait;
 use axum::extract;
 use axum::handler::Handler as _;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
-use wasmcloud_provider_sdk::core::LatticeTarget;
-use wasmcloud_provider_sdk::{get_connection, LinkConfig, Provider, ProviderOperationResult};
+use wasmcloud_provider_sdk::{get_connection, LinkConfig, Provider};
 use wrpc_interface_http::IncomingHandler as _;
 
 mod hashmap_ci;
@@ -65,41 +63,40 @@ pub struct HttpServerProvider {
     actors: Arc<dashmap::DashMap<String, HttpServerCore>>,
 }
 
-#[async_trait]
 impl Provider for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     async fn receive_link_config_as_source(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let settings = match load_settings(link_config.get_config())
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let settings = match load_settings(link_config.config)
             .context("httpserver failed to load settings for actor")
         {
             Ok(settings) => settings,
             Err(e) => {
                 error!(
-                    config = ?link_config.get_config(),
+                    config = ?link_config.config,
                     "httpserver failed to load settings for actor: {}", e.to_string()
                 );
-                return Err(e.into());
+                return Err(e);
             }
         };
 
         // Start a server instance that calls the given actor
-        let http_server = HttpServerCore::new(Arc::new(settings), link_config.get_target_id())
+        let http_server = HttpServerCore::new(Arc::new(settings), link_config.target_id)
             .await
             .context("httpserver failed to start listener for actor")?;
 
         // Save the actor and server instance locally
         self.actors
-            .insert(link_config.get_target_id().to_string(), http_server);
+            .insert(link_config.target_id.to_string(), http_server);
 
         Ok(())
     }
 
     /// Handle notification that a link is dropped - stop the http listener
-    async fn delete_link(&self, actor_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, actor_id: &str) -> anyhow::Result<()> {
         if let Some((_, server)) = self.actors.remove(actor_id) {
             info!(%actor_id, "httpserver stopping listener for actor");
             server.handle.shutdown();
@@ -108,7 +105,7 @@ impl Provider for HttpServerProvider {
     }
 
     /// Handle shutdown request by shutting down all the http server threads
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         // empty the actor link data and stop all servers
         self.actors.clear();
         Ok(())

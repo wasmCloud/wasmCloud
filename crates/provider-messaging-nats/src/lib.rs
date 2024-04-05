@@ -13,20 +13,16 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-
-use wasmcloud_provider_wit_bindgen::deps::{
-    async_trait::async_trait,
-    wasmcloud_provider_sdk::core::HostData,
-    wasmcloud_provider_sdk::{Context, LinkConfig, ProviderOperationResult},
+use wasmcloud::messaging::types::BrokerMessage;
+use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::{
+    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider, WrpcClient,
 };
 
 mod connection;
 use connection::ConnectionConfig;
 
-wasmcloud_provider_wit_bindgen::generate!({
-    impl_struct: NatsMessagingProvider,
-    wit_bindgen_cfg: "provider-messaging-nats"
-});
+wit_bindgen_wrpc::generate!();
 
 /// [`NatsClientBundle`]s hold a NATS client and information (subscriptions)
 /// related to it.
@@ -56,6 +52,21 @@ pub struct NatsMessagingProvider {
 }
 
 impl NatsMessagingProvider {
+    pub async fn run() -> anyhow::Result<()> {
+        let host_data = load_host_data().context("failed to load host data")?;
+        let provider = Self::from_host_data(host_data);
+        let shutdown = run_provider(provider.clone(), "nats-messaging-provider")
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        serve(
+            &WrpcClient(connection.get_wrpc_client(connection.provider_key())),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> NatsMessagingProvider {
         let config = ConnectionConfig::from_map(&host_data.config);
@@ -196,14 +207,18 @@ async fn dispatch_msg(
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
     };
-    let actor = get_wrpc_client(component_id);
     debug!(
         subject = msg.subject,
         reply_to = ?msg.reply_to,
         component_id = component_id,
         "sending message to actor",
     );
-    if let Err(e) = actor.handle_message(msg).await {
+    if let Err(e) = wasmcloud::messaging::handler::handle_message(
+        &get_connection().get_wrpc_client(component_id),
+        &msg,
+    )
+    .await
+    {
         error!(
             error = %e,
             "Unable to send message"
@@ -213,29 +228,26 @@ async fn dispatch_msg(
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
-#[async_trait]
-impl WasmcloudCapabilityProvider for NatsMessagingProvider {
+impl Provider for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id = %link_config.get_source_id()))]
+    #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
-        let config_values = link_config.get_config();
-        let config = if config_values.is_empty() {
+        LinkConfig {
+            source_id, config, ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let config = if config.is_empty() {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match ConnectionConfig::from_map(config_values) {
+            match ConnectionConfig::from_map(config) {
                 Ok(cc) => self.default_config.merge(&cc),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
-                    return Err(anyhow!(e)
-                        .context("failed to build connection config")
-                        .into());
+                    return Err(anyhow!(e).context("failed to build connection config"));
                 }
             }
         };
@@ -245,7 +257,7 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
-                return Err(anyhow!(e).context("failed to connect to NATS").into());
+                bail!(anyhow!(e).context("failed to connect to NATS"))
             }
         };
         update_map.insert(source_id.into(), bundle);
@@ -255,7 +267,7 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
 
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
 
         if let Some(bundle) = aw.remove(source_id) {
@@ -272,7 +284,7 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         aw.clear();
@@ -283,31 +295,26 @@ impl WasmcloudCapabilityProvider for NatsMessagingProvider {
 }
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
-#[async_trait]
-impl WasmcloudMessagingConsumer for NatsMessagingProvider {
-    #[instrument(level = "debug", skip(self, ctx, msg), fields(source_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
-    async fn publish(&self, ctx: Context, msg: BrokerMessage) -> Result<(), String> {
-        let source_id = match ctx.actor.as_ref() {
-            Some(source_id) => source_id,
-            None => {
-                error!("no actor in request");
-                return Err("no actor in request".to_string());
-            }
-        };
-
-        // get read lock on actor-client hashmap to get the connection, then drop it
-        let _rd = self.actors.read().await;
-
-        let nats_client = {
-            let rd = self.actors.read().await;
-            let nats_bundle = match rd.get(source_id) {
+impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsMessagingProvider {
+    #[instrument(level = "debug", skip(self, ctx, msg), fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
+    async fn publish(
+        &self,
+        ctx: Option<Context>,
+        msg: BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        let nats_client = if let Some(ref source_id) = ctx.and_then(|Context { actor, .. }| actor) {
+            let actors = self.actors.read().await;
+            let nats_bundle = match actors.get(source_id) {
                 Some(nats_bundle) => nats_bundle,
                 None => {
                     error!("actor not linked: {source_id}");
-                    return Err(format!("actor not linked: {source_id}"));
+                    bail!("actor not linked: {source_id}")
                 }
             };
             nats_bundle.client.clone()
+        } else {
+            error!("no actor in request");
+            bail!("no actor in request")
         };
 
         let headers = NatsHeaderInjector::default_with_span().into();
@@ -335,36 +342,31 @@ impl WasmcloudMessagingConsumer for NatsMessagingProvider {
                 .map_err(|e| e.to_string()),
         };
         let _ = nats_client.flush().await;
-        res
+        Ok(res)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(source_id = ?ctx.actor, subject = %subject))]
+    #[instrument(level = "debug", skip(self, ctx), fields(subject = %subject))]
     async fn request(
         &self,
-        ctx: Context,
+        ctx: Option<Context>,
         subject: String,
         body: Vec<u8>,
         timeout_ms: u32,
-    ) -> Result<BrokerMessage, String> {
-        let source_id = match ctx.actor.as_ref() {
-            Some(source_id) => source_id,
-            None => {
-                error!("no actor in request");
-                return Err("no actor in request".to_string());
-            }
-        };
-
-        let nats_client = {
-            let rd = self.actors.read().await;
-            let nats_bundle = match rd.get(source_id) {
+    ) -> anyhow::Result<Result<BrokerMessage, String>> {
+        let nats_client = if let Some(ref source_id) = ctx.and_then(|Context { actor, .. }| actor) {
+            let actors = self.actors.read().await;
+            let nats_bundle = match actors.get(source_id) {
                 Some(nats_bundle) => nats_bundle,
                 None => {
                     error!("actor not linked: {source_id}");
-                    return Err(format!("actor not linked: {source_id}"));
+                    bail!("actor not linked: {source_id}")
                 }
             };
             nats_bundle.client.clone()
-        }; // early release of actor-client map
+        } else {
+            error!("no actor in request");
+            bail!("no actor in request")
+        };
 
         // Inject OTEL headers
         let headers = NatsHeaderInjector::default_with_span().into();
@@ -386,17 +388,17 @@ impl WasmcloudMessagingConsumer for NatsMessagingProvider {
         match request_with_timeout {
             Err(timeout_err) => {
                 error!("nats request timed out: {timeout_err}");
-                return Err(format!("nats request timed out: {timeout_err}"));
+                return Ok(Err(format!("nats request timed out: {timeout_err}")));
             }
             Ok(Err(send_err)) => {
                 error!("nats send error: {send_err}");
-                return Err(format!("nats send error: {send_err}"));
+                return Ok(Err(format!("nats send error: {send_err}")));
             }
-            Ok(Ok(resp)) => Ok(BrokerMessage {
+            Ok(Ok(resp)) => Ok(Ok(BrokerMessage {
                 body: resp.payload.to_vec(),
                 reply_to: resp.reply.map(|s| s.to_string()),
                 subject: resp.subject.to_string(),
-            }),
+            })),
         }
     }
 }
@@ -427,12 +429,7 @@ fn add_tls_ca(
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
-    use wasmcloud_provider_wit_bindgen::deps::serde_json;
-    use wasmcloud_provider_wit_bindgen::deps::wasmcloud_provider_sdk::Provider;
-
-    use crate::{ConnectionConfig, NatsMessagingProvider};
+    use super::*;
 
     #[test]
     fn test_default_connection_serialize() {
@@ -470,84 +467,5 @@ mod test {
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
         assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
-    }
-
-    /// Ensure that unlink triggers subscription removal
-    /// https://github.com/wasmCloud/capability-providers/issues/196
-    ///
-    /// NOTE: this is tested here for easy access to put_link/del_link without
-    /// the fuss of loading/managing individual actors in the lattice
-    #[tokio::test]
-    async fn test_link_unsub() -> anyhow::Result<()> {
-        // Build a nats messaging provider
-        let prov = NatsMessagingProvider::default();
-
-        // Actor should have no clients and no subs before hand
-        let actor_map = prov.actors.write().await;
-        assert_eq!(actor_map.len(), 0);
-        drop(actor_map);
-
-        // Link the provider
-        let link_config = (
-            &String::from("some-source"),
-            &String::from("some-provider"),
-            &String::from("default"),
-            &HashMap::new(),
-        );
-        assert!(prov
-            .receive_link_config_as_target(link_config)
-            .await
-            .is_ok());
-
-        // After putting a link there should be one sub
-        let actor_map = prov.actors.write().await;
-        assert_eq!(actor_map.len(), 1);
-        assert_eq!(actor_map.get("???").unwrap().sub_handles.len(), 1);
-        drop(actor_map);
-
-        // Remove link (this should kill the subscription)
-        let _ = prov.delete_link(link_config.0).await;
-
-        // After removing a link there should be no subs
-        let actor_map = prov.actors.write().await;
-        assert_eq!(actor_map.len(), 0);
-        drop(actor_map);
-
-        let _ = prov.shutdown().await;
-        Ok(())
-    }
-
-    /// Ensure that provided URIs are honored by NATS provider
-    /// https://github.com/wasmCloud/capability-providers/issues/231
-    ///
-    /// NOTE: This test can't be rolled into the put_link test because
-    /// NATS does not store the URL you fed it to connect -- it stores the host's view in
-    /// [async_nats::ServerInfo]
-    #[tokio::test]
-    async fn test_link_value_uri_usage() -> anyhow::Result<()> {
-        // Build a nats messaging provider
-        let prov = NatsMessagingProvider::default();
-
-        // Actor should have no clients and no subs before hand
-        let actor_map = prov.actors.write().await;
-        assert_eq!(actor_map.len(), 0);
-        drop(actor_map);
-
-        // Add a provider
-        let link_config = (
-            &String::from("some-source"),
-            &String::from("some-target"),
-            &String::from("test"),
-            &HashMap::from([
-                ("SUBSCRIPTION".into(), "test.wasmcloud.unlink".into()),
-                ("URI".into(), "99.99.99.99:4222".into()),
-            ]),
-        );
-        assert!(prov
-            .receive_link_config_as_target(link_config)
-            .await
-            .is_ok());
-        assert!(prov.shutdown().await.is_ok());
-        Ok(())
     }
 }

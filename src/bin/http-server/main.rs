@@ -3,12 +3,10 @@ use wasmcloud_provider_http_server::HttpServerProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let shutdown = wasmcloud_provider_sdk::run_provider(
-        HttpServerProvider::default(),
-        "http-server-provider",
-    )
-    .await
-    .context("failed to run provider")?;
+    let shutdown =
+        wasmcloud_provider_sdk::run_provider(HttpServerProvider::default(), "http-server-provider")
+            .await
+            .context("failed to run provider")?;
     shutdown.await;
     eprintln!("HttpServer provider exiting");
     Ok(())

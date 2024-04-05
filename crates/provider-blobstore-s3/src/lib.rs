@@ -10,7 +10,6 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use async_trait::async_trait;
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::default_provider::region::DefaultRegionChain;
 use aws_config::retry::RetryConfig;
@@ -35,7 +34,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 const ALIAS_PREFIX: &str = "alias_";
@@ -990,44 +989,40 @@ impl Blobstore for BlobstoreS3Provider {
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
-#[async_trait]
 impl Provider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
-        let config_values = link_config.get_config();
-
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
         // Build storage config
-        let config = match StorageConfig::from_values(config_values).await {
+        let config = match StorageConfig::from_values(link_config.config).await {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, %source_id, "failed to build storage config");
-                return Err(anyhow!(e).context("failed to build source config").into());
+                error!(error = %e, %link_config.source_id, "failed to build storage config");
+                return Err(anyhow!(e).context("failed to build source config"));
             }
         };
 
-        let link = StorageClient::new(config, config_values).await;
+        let link = StorageClient::new(config, link_config.config).await;
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(source_id.to_string(), link);
+        update_map.insert(link_config.source_id.to_string(), link);
 
         Ok(())
     }
 
     /// Handle notification that a link is dropped: close the connection
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
         aw.remove(source_id);
         Ok(())
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         aw.drain();

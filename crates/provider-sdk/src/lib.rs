@@ -5,21 +5,17 @@ use std::collections::HashMap;
 
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
-use async_trait::async_trait;
 use provider::invocation_context;
 use provider::ProviderInitState;
 use tower::ServiceExt;
 use tracing::{error, info, warn};
-use wasmcloud_core::{ComponentId, LatticeTarget, LinkName};
 use wrpc_transport::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
 
 pub mod error;
 pub mod interfaces;
 pub mod provider;
 
-pub use provider::{
-    get_connection, load_host_data, run_provider, start_provider, ProviderConnection,
-};
+pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
 pub use wasmcloud_core::{
@@ -27,8 +23,6 @@ pub use wasmcloud_core::{
     WitNamespace, WitPackage,
 };
 pub use wasmcloud_tracing;
-
-pub use crate::error::ProviderOperationResult;
 
 /// Parse an sufficiently specified WIT operation/method into constituent parts.
 ///
@@ -107,70 +101,20 @@ pub struct Context {
 }
 
 /// Configuration of a link that is passed to a provider
-pub trait LinkConfig: Send + Sync {
+pub struct LinkConfig<'a> {
     /// Given that the link was established with the source as this provider,
-    /// get the target ID which should be a component
-    fn get_target_id(&self) -> &str;
+    /// this is the target ID which should be a component
+    pub target_id: &'a str,
 
     /// Given that the link was established with the target as this provider,
-    /// get the source ID which should be a component
-    fn get_source_id(&self) -> &str;
+    /// this is the source ID which should be a component
+    pub source_id: &'a str,
 
-    /// Get the name of the link that was provided
-    fn get_link_name(&self) -> &str;
+    /// Name of the link that was provided
+    pub link_name: &'a str,
 
-    /// Get the configuration provided to the provider (either as the target or the source)
-    fn get_config(&self) -> &HashMap<String, String>;
-}
-
-impl LinkConfig
-    for (
-        ComponentId,
-        LatticeTarget,
-        LinkName,
-        HashMap<String, String>,
-    )
-{
-    fn get_source_id(&self) -> &str {
-        &self.0
-    }
-
-    fn get_target_id(&self) -> &str {
-        &self.1
-    }
-
-    fn get_link_name(&self) -> &str {
-        &self.2
-    }
-
-    fn get_config(&self) -> &HashMap<String, String> {
-        &self.3
-    }
-}
-
-impl LinkConfig
-    for (
-        &ComponentId,
-        &LatticeTarget,
-        &LinkName,
-        &HashMap<String, String>,
-    )
-{
-    fn get_source_id(&self) -> &str {
-        self.0
-    }
-
-    fn get_target_id(&self) -> &str {
-        self.1
-    }
-
-    fn get_link_name(&self) -> &str {
-        self.2
-    }
-
-    fn get_config(&self) -> &HashMap<String, String> {
-        self.3
-    }
+    /// Configuration provided to the provider (either as the target or the source)
+    pub config: &'a HashMap<String, String>,
 }
 
 /// Configuration object is made available when a provider is started, to assist in init
@@ -201,15 +145,18 @@ impl ProviderInitConfig for &ProviderInitState {
 }
 
 /// CapabilityProvider handling of messages from host
-#[async_trait]
-pub trait Provider: Sync {
+pub trait Provider<E = anyhow::Error>: Sync {
     /// Initialize the provider
     ///
     /// # Arguments
     ///
     /// * `static_config` - Merged named configuration attached to the provider *prior* to startup
-    async fn init(&self, _init_config: impl ProviderInitConfig) -> ProviderOperationResult<()> {
-        Ok(())
+    fn init(
+        &self,
+        init_config: impl ProviderInitConfig,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = init_config;
+        async { Ok(()) }
     }
 
     /// Receive and handle a link that has been established on the lattice where this provider is the source.
@@ -219,11 +166,12 @@ pub trait Provider: Sync {
     /// [Links](https://wasmcloud.com/docs/concepts/runtime-linking) are uni-directional -- a "source"
     /// operates as one end of the link, linking to a "target". When a link is created on the lattice, and
     /// this provider is the source, this method is called.
-    async fn receive_link_config_as_source(
+    fn receive_link_config_as_source(
         &self,
-        _config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        Ok(())
+        config: LinkConfig<'_>,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = config;
+        async { Ok(()) }
     }
 
     /// Receive and handle a link that has been established on the lattice where this provider is the target.
@@ -233,33 +181,37 @@ pub trait Provider: Sync {
     /// [Links](https://wasmcloud.com/docs/concepts/runtime-linking) are uni-directional -- a "source"
     /// operates as one end of the link, linking to a "target". When a link is created on the lattice, and
     /// this provider is the target, this method is called.
-    async fn receive_link_config_as_target(
+    fn receive_link_config_as_target(
         &self,
-        _config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        Ok(())
+        config: LinkConfig<'_>,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = config;
+        async { Ok(()) }
     }
 
     /// Notify the provider that the link is dropped
-    async fn delete_link(&self, _actor_id: &str) -> ProviderOperationResult<()> {
-        Ok(())
+    fn delete_link(&self, actor_id: &str) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = actor_id;
+        async { Ok(()) }
     }
 
     /// Perform health check. Called at regular intervals by host
     /// Default implementation always returns healthy
-    async fn health_request(
+    fn health_request(
         &self,
         _arg: &HealthCheckRequest,
-    ) -> ProviderOperationResult<HealthCheckResponse> {
-        Ok(HealthCheckResponse {
-            healthy: true,
-            message: None,
-        })
+    ) -> impl Future<Output = Result<HealthCheckResponse, E>> + Send {
+        async {
+            Ok(HealthCheckResponse {
+                healthy: true,
+                message: None,
+            })
+        }
     }
 
     /// Handle system shutdown message
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
-        Ok(())
+    fn shutdown(&self) -> impl Future<Output = Result<(), E>> + Send {
+        async { Ok(()) }
     }
 }
 

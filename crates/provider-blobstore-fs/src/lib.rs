@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, bail, Context as _};
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
@@ -20,7 +19,7 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 #[derive(Default, Debug, Clone)]
@@ -647,21 +646,20 @@ impl Blobstore for FsProvider {
     }
 }
 
-#[async_trait]
 impl Provider for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
-        let config_values = link_config.get_config();
-        for (k, v) in config_values.iter() {
+        LinkConfig {
+            source_id, config, ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        for (k, v) in config.iter() {
             info!("link definition configuration [{k}] set to [{v}]");
         }
 
         // Determine the root path value
-        let root_val: PathBuf = match config_values.iter().find(|(key, _)| **key == "ROOT") {
+        let root_val: PathBuf = match config.iter().find(|(key, _)| **key == "ROOT") {
             None => "/tmp".into(),
             Some((_, value)) => value.into(),
         };
@@ -688,29 +686,25 @@ impl Provider for FsProvider {
             Ok(path) => path,
             Err(e) => {
                 error!("Failed to resolve subpath to actor directory: {e}");
-                return Err(anyhow!(e)
-                    .context("failed to resolve subpath to actor dir")
-                    .into());
+                return Err(anyhow!(e).context("failed to resolve subpath to actor dir"));
             }
         };
 
         // Create directory for the individual actor
         if let Err(e) = create_dir_all(actor_dir.as_path()).await {
             error!("Could not create actor directory: {:?}", e);
-            return Err(anyhow!(e)
-                .context("failed to create actor directory")
-                .into());
+            return Err(anyhow!(e).context("failed to create actor directory"));
         }
 
         Ok(())
     }
 
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         self.config.write().await.remove(source_id);
         Ok(())
     }
 
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         self.config.write().await.drain();
         Ok(())
     }
@@ -718,9 +712,7 @@ impl Provider for FsProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_subpath;
-
-    use std::path::PathBuf;
+    use super::*;
 
     /// Ensure that only safe subpaths are resolved
     #[tokio::test]

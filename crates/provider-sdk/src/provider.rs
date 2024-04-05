@@ -28,7 +28,7 @@ use wasmcloud_core::TraceContext;
 use wasmcloud_tracing::context::attach_span_context;
 
 use crate::error::{ProviderInitError, ProviderInitResult};
-use crate::{with_connection_event_logging, Context, Provider, DEFAULT_NATS_ADDR};
+use crate::{with_connection_event_logging, Context, LinkConfig, Provider, DEFAULT_NATS_ADDR};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -437,23 +437,6 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
     })
 }
 
-/// Starts a provider, reading all of the host data and starting the process
-pub fn start_provider(
-    provider: impl Provider + Clone,
-    friendly_name: &str,
-) -> ProviderInitResult<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| ProviderInitError::Initialization(e.to_string()))?;
-
-    runtime.block_on(run_provider(provider, friendly_name))?;
-    // in the unlikely case there are any stuck threads,
-    // close them so the process has a clean exit
-    runtime.shutdown_timeout(std::time::Duration::from_secs(10));
-    Ok(())
-}
-
 /// Appropriately receive a link (depending on if it's source/target) for a provider
 async fn receive_link_for_provider<P>(
     provider: &P,
@@ -463,31 +446,32 @@ async fn receive_link_for_provider<P>(
 where
     P: Provider,
 {
-    let do_receive_link = if ld.source_id == connection.provider_key {
-        provider.receive_link_config_as_source((
-            &ld.source_id,
-            &ld.target,
-            &ld.name,
-            &ld.source_config,
-        ))
+    match if ld.source_id == connection.provider_key {
+        provider
+            .receive_link_config_as_source(LinkConfig {
+                source_id: &ld.source_id,
+                target_id: &ld.target,
+                link_name: &ld.name,
+                config: &ld.source_config,
+            })
+            .await
     } else if ld.target == connection.provider_key {
-        provider.receive_link_config_as_target((
-            &ld.source_id,
-            &ld.target,
-            &ld.name,
-            &ld.target_config,
-        ))
+        provider
+            .receive_link_config_as_target(LinkConfig {
+                source_id: &ld.source_id,
+                target_id: &ld.target,
+                link_name: &ld.name,
+                config: &ld.target_config,
+            })
+            .await
     } else {
         bail!("received link put where provider was neither source nor target");
-    };
-
-    match do_receive_link.await {
+    } {
         Ok(()) => connection.put_link(ld).await,
         Err(e) => {
             warn!(error = %e, "receiving link failed");
         }
     };
-
     Ok(())
 }
 

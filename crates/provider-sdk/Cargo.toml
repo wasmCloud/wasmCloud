@@ -16,7 +16,6 @@ otel = ["opentelemetry", "tracing-opentelemetry"]
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }

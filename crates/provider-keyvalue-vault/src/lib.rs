@@ -3,15 +3,14 @@ use core::str;
 use std::collections::{hash_map, HashMap};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _, Result};
-use async_trait::async_trait;
+use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, TryStreamExt};
 use tokio::sync::RwLock;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider, ProviderOperationResult};
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 pub(crate) mod client;
@@ -32,7 +31,7 @@ pub struct KvVaultProvider {
 
 impl KvVaultProvider {
     /// Retrieve a client for a given context (determined by source_id)
-    async fn get_client(&self, ctx: Option<Context>) -> Result<Arc<Client>> {
+    async fn get_client(&self, ctx: Option<Context>) -> anyhow::Result<Arc<Client>> {
         let ctx = ctx.context("invocation context missing")?;
         // get the actor ID
         let source_id = ctx
@@ -354,26 +353,27 @@ impl Atomic for KvVaultProvider {
 
 /// Handle provider control commands, the minimum required of any provider on
 /// a wasmcloud lattice
-#[async_trait]
 impl Provider for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    #[instrument(level = "debug", skip_all, fields(source_id = %link_config.get_source_id()))]
+    #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let source_id = link_config.get_source_id();
-        let link_name = link_config.get_source_id();
+        LinkConfig {
+            source_id,
+            link_name,
+            config,
+            ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
         debug!(
            %source_id,
            %link_name,
             "adding link for actor",
         );
 
-        let config_values = link_config.get_config();
-        let config = match Config::from_values(config_values) {
+        let config = match Config::from_values(config) {
             Ok(config) => config,
             Err(e) => {
                 error!(
@@ -381,7 +381,7 @@ impl Provider for KvVaultProvider {
                     %link_name,
                     "failed to parse config: {e}",
                 );
-                return Err(anyhow!(e).context("failed to parse config").into());
+                bail!(anyhow!(e).context("failed to parse config"))
             }
         };
 
@@ -393,9 +393,7 @@ impl Provider for KvVaultProvider {
                     %link_name,
                     "failed to create new client config: {e}",
                 );
-                return Err(anyhow!(e)
-                    .context("failed to create new client config")
-                    .into());
+                return Err(anyhow!(e).context("failed to create new client config"));
             }
         };
         client.set_renewal().await;
@@ -408,7 +406,7 @@ impl Provider for KvVaultProvider {
 
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(source_id) {
             debug!("deleting link for actor [{source_id}]");
@@ -418,7 +416,7 @@ impl Provider for KvVaultProvider {
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
         // Empty the actor link data and stop all servers
         for (_, client) in aw.drain() {
