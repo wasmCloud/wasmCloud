@@ -41,56 +41,56 @@ Like any good open source project, we use Pull Requests (PRs) to track code chan
 ### PR Lifecycle
 
 1. PR creation
-    - We more than welcome PRs that are currently in progress. They are a great way to keep track of
-      important work that is in-flight, but useful for others to see. If a PR is a work in progress,
-      it **must** be prefaced with "WIP: [title]". Once the PR is ready for review, remove "WIP"
-      from the title.
-    - It is preferred, but not required, to have a PR tied to a specific issue. There can be
-      circumstances where if it is a quick fix then an issue might be overkill. The details provided
-      in the PR description would suffice in this case.
+   - We more than welcome PRs that are currently in progress. They are a great way to keep track of
+     important work that is in-flight, but useful for others to see. If a PR is a work in progress,
+     it **must** be prefaced with "WIP: [title]". Once the PR is ready for review, remove "WIP"
+     from the title.
+   - It is preferred, but not required, to have a PR tied to a specific issue. There can be
+     circumstances where if it is a quick fix then an issue might be overkill. The details provided
+     in the PR description would suffice in this case.
 2. Triage
-    - The maintainer in charge of triaging will apply the proper labels for the issue. This should
-      include at least a `bug` or `feature` label once all labels are applied. See the [Labels
-      section](#labels) for full details on the definitions of labels.
+   - The maintainer in charge of triaging will apply the proper labels for the issue. This should
+     include at least a `bug` or `feature` label once all labels are applied. See the [Labels
+     section](#labels) for full details on the definitions of labels.
 3. Assigning reviews
-    - Reviewers will either be autoassigned using a CODEOWNERS file or by maintainers of the repo
-      when they triage PRs, maintainers will review them as schedule permits. The maintainer who
-      takes the issue should self-request a review.
-    - PRs from a community member with that are any larger than 10-ish lines requires 2 review
-      approvals from maintainers before it can be merged. For contributions from contributors and
-      maintainers, 2 reviews are only required if the PR is large, or if the first maintainer
-      requests a second review. These size and review requirements are implemented per the judgement
-      of the maintainers. In the future, we may adopt a more standardized approach
+   - Reviewers will either be autoassigned using a CODEOWNERS file or by maintainers of the repo
+     when they triage PRs, maintainers will review them as schedule permits. The maintainer who
+     takes the issue should self-request a review.
+   - PRs from a community member with that are any larger than 10-ish lines requires 2 review
+     approvals from maintainers before it can be merged. For contributions from contributors and
+     maintainers, 2 reviews are only required if the PR is large, or if the first maintainer
+     requests a second review. These size and review requirements are implemented per the judgement
+     of the maintainers. In the future, we may adopt a more standardized approach
 4. Reviewing/Discussion
-    - All reviews will be completed using GitHub review tool.
-    - A "Comment" review should be used when there are questions about the code that should be
-      answered, but that don't involve code changes. This type of review does not count as approval.
-    - A "Changes Requested" review indicates that changes to the code need to be made before they
-      will be merged.
-    - Reviewers should update labels as needed (such as `breaking`, if the PR contains a breaking
-      change)
-    - If a comment is a nit, it should be prefaced with the text `Nit:` to indicate to the submitter
-      that addressing this comment is optional
+   - All reviews will be completed using GitHub review tool.
+   - A "Comment" review should be used when there are questions about the code that should be
+     answered, but that don't involve code changes. This type of review does not count as approval.
+   - A "Changes Requested" review indicates that changes to the code need to be made before they
+     will be merged.
+   - Reviewers should update labels as needed (such as `breaking`, if the PR contains a breaking
+     change)
+   - If a comment is a nit, it should be prefaced with the text `Nit:` to indicate to the submitter
+     that addressing this comment is optional
 5. Address comments by answering questions or changing code
 6. LGTM (Looks good to me)
-    - Once a Reviewer has completed a review and the code looks ready to merge, an "Approve" review
-      is used to signal to the contributor and to other maintainers that you have reviewed the code
-      and feel that it is ready to be merged.
+   - Once a Reviewer has completed a review and the code looks ready to merge, an "Approve" review
+     is used to signal to the contributor and to other maintainers that you have reviewed the code
+     and feel that it is ready to be merged.
 7. Merge or close
-    - PRs should stay open until merged or if they have not been active for more than 30 days. This
-      will help keep the PR queue to a manageable size and reduce noise. Should the PR need to stay
-      open (like in the case of a WIP), the `keep open` label can be added.
-    - If the owner of the PR is a maintainer, that user **must** merge their own PRs or explicitly
-      request another maintainer do that for them.
-    - If the owner of a PR is _not_ a maintainer, any maintainer may merge the PR. As a rule of
-      thumb, we usually recommend one of the reviewers be the one to merge the PR, but this is not
-      required
+   - PRs should stay open until merged or if they have not been active for more than 30 days. This
+     will help keep the PR queue to a manageable size and reduce noise. Should the PR need to stay
+     open (like in the case of a WIP), the `keep open` label can be added.
+   - If the owner of the PR is a maintainer, that user **must** merge their own PRs or explicitly
+     request another maintainer do that for them.
+   - If the owner of a PR is _not_ a maintainer, any maintainer may merge the PR. As a rule of
+     thumb, we usually recommend one of the reviewers be the one to merge the PR, but this is not
+     required
 
 #### Documentation PRs
 
 Documentation PRs will follow the same lifecycle as other PRs. They will also be labeled with the
 `documentation` label. For documentation, special attention will be paid to spelling, grammar, and
-clarity (whereas those things don't matter *as* much for comments in code).
+clarity (whereas those things don't matter _as_ much for comments in code).
 
 ## Reporting a Security Issue
 
@@ -148,7 +148,7 @@ If you set your `user.name` and `user.email` git configs, you can sign your comm
 with `git commit -s`.
 
 Note: If your git config information is set properly then viewing the `git log` information for your
- commit will look something like this:
+commit will look something like this:
 
 ```
 Author: Joe Smith <joe.smith@example.com>
@@ -182,14 +182,12 @@ that we're already aware of. It is also worth asking on the Slack channels.
 ## Semantic Versioning
 
 If you are not familiar with SemVer (the standard), [give it a quick read](https://semver.org/). We
-follow SemVer with a high degree of rigor. 
+follow SemVer with a high degree of rigor.
 
-As a pre-1.0 project, we are likely to have breaking changes on each release. However, these changes
-must be _clearly documented_ in the release notes for each release. Once we release a 1.0 version of
-wasmCloud, we will maintain a strong commitment to backward compatibility. All of our changes to
-protocols and formats will be backward compatible from one minor release to the next. No features,
-flags, commands, or APIs will be removed or substantially modified without a major version release
-(unless absolutely needed to fix a security issue). This often means that we have to tell people
+As a post-1.0 project, wasmCloud maintains a strong commitment to backward compatibility. All of our
+changes to protocols and formats will be backward compatible from one minor release to the next. No
+features, flags, commands, or APIs will be removed or substantially modified without a major version
+release(unless absolutely needed to fix a security issue). This often means that we have to tell people
 "no" or "wait" in order to preserve backward compatibility.
 
 ## Issues
@@ -218,23 +216,23 @@ Differences are noted below.
 
 1. Issue creation
 2. Triage
-    - A maintainer or contributor will apply the proper labels for the issue. This includes labels
-      for priority, type, and metadata (such as `good first issue`). The only issue priority we will
-      be tracking is whether or not the issue is "critical." If additional levels are needed in the
-      future, we will add them.
-    - (If needed) Clean up the title to succinctly and clearly state the issue.
+   - A maintainer or contributor will apply the proper labels for the issue. This includes labels
+     for priority, type, and metadata (such as `good first issue`). The only issue priority we will
+     be tracking is whether or not the issue is "critical." If additional levels are needed in the
+     future, we will add them.
+   - (If needed) Clean up the title to succinctly and clearly state the issue.
 3. Discussion
-    - Issues that are labeled `enhancement` must write an Architectural Decision Record (ADR) (see
-      [Proposing an Idea](#proposing-an-idea)). Smaller quality-of-life enhancements are exempt. The
-      decision about which enhancements are exempt are left to the decision of project maintainers
-    - Issues that are labeled as `enhancement` or `bug` should be connected to the PR that resolves
-      it once it is opened (see [How to Contribute Code](#how-to-contribute-code)).
-    - Whoever is working on an `enhancement` or `bug` issue (whether a maintainer or someone from
-      the community), should either assign the issue to themself or make a comment in the issue
-      saying that they are taking it.
-    - `question` issues should stay open until resolved or if they have not been active for more
-      than 30 days. This will help keep the issue queue to a manageable size and reduce noise.
-      Should the issue need to stay open, the `keep open` label can be added.
+   - Issues that are labeled `enhancement` must write an Architectural Decision Record (ADR) (see
+     [Proposing an Idea](#proposing-an-idea)). Smaller quality-of-life enhancements are exempt. The
+     decision about which enhancements are exempt are left to the decision of project maintainers
+   - Issues that are labeled as `enhancement` or `bug` should be connected to the PR that resolves
+     it once it is opened (see [How to Contribute Code](#how-to-contribute-code)).
+   - Whoever is working on an `enhancement` or `bug` issue (whether a maintainer or someone from
+     the community), should either assign the issue to themself or make a comment in the issue
+     saying that they are taking it.
+   - `question` issues should stay open until resolved or if they have not been active for more
+     than 30 days. This will help keep the issue queue to a manageable size and reduce noise.
+     Should the issue need to stay open, the `keep open` label can be added.
 4. Issue closure/resolution
 
 ## Proposing an Idea
@@ -242,7 +240,7 @@ Differences are noted below.
 Before proposing a new idea to a wasmCloud project, please make sure to write up an [Architectural
 Decision Record](https://wasmcloud.github.io/adr/). An Architectural Decision Record is a design
 document that describes a new feature for a wasmCloud project. The proposal should provide a concise
-technical specification and rationale for the feature. 
+technical specification and rationale for the feature.
 
 It is also worth considering vetting your idea with the community via Slack. Vetting an idea
 publicly before going as far as writing a proposal is meant to save the potential author time.
