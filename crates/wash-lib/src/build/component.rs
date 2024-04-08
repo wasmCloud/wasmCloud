@@ -604,7 +604,7 @@ world test-world {
 }
 "#;
     const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 3] =
-        ["test_world.h", "test_world.c", "test-world.go"];
+        ["test_world.h", "test_world.c", "test_world.go"];
 
     const COMPONENT_UPSTREAM_WIT: &str = r#"
 package washlib:multi;
