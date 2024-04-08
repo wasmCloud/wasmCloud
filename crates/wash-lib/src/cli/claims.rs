@@ -1190,6 +1190,10 @@ mod test {
 
         let project_config = assert_ok!(result);
 
+        let mut expected_default_key_dir = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+        expected_default_key_dir.push(".wash/keys");
+
         assert_eq!(
             project_config.language,
             LanguageConfig::Rust(RustConfig {
@@ -1206,7 +1210,7 @@ mod test {
                     "wasmcloud:httpclient".to_string(),
                     "lexcorp:quantum-simulator".to_string()
                 ],
-                key_directory: PathBuf::from("./keys"),
+                key_directory: expected_default_key_dir,
                 destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
                 call_alias: Some("test-actor".to_string()),
                 tags: Some(HashSet::from([
@@ -1325,6 +1329,10 @@ mod test {
 
         let project_config = assert_ok!(result);
 
+        let mut expected_default_key_dir = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+        expected_default_key_dir.push(".wash/keys");
+
         assert_eq!(
             project_config.language,
             LanguageConfig::Rust(RustConfig {
@@ -1339,7 +1347,7 @@ mod test {
                 vendor: "wayne-industries".into(),
                 os: std::env::consts::OS.to_string(),
                 arch: std::env::consts::ARCH.to_string(),
-                key_directory: PathBuf::from("./keys"),
+                key_directory: expected_default_key_dir,
                 wit_world: Some("wasmcloud:httpserver".to_string()),
                 rust_target: None,
                 bin_name: None,
