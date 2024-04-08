@@ -101,6 +101,7 @@ pub struct Context {
 }
 
 /// Configuration of a link that is passed to a provider
+#[non_exhaustive]
 pub struct LinkConfig<'a> {
     /// Given that the link was established with the source as this provider,
     /// this is the target ID which should be a component
