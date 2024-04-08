@@ -87,7 +87,7 @@ jobs:
           chmod +x ./artifacts/wash;
           echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
       # Language specific setup
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           go-version: ${{ matrix.project.lang_version }}
