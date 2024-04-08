@@ -117,13 +117,17 @@ impl TryFrom<RawComponentConfig> for ComponentConfig {
     type Error = anyhow::Error;
 
     fn try_from(raw_config: RawComponentConfig) -> Result<Self> {
+        let key_directory = if let Some(key_directory) = raw_config.key_directory {
+            key_directory
+        } else {
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+            home_dir.join(".wash/keys")
+        };
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
             push_insecure: raw_config.push_insecure.unwrap_or(false),
-            // TODO(#1624): Default to ~/.wash/keys
-            key_directory: raw_config
-                .key_directory
-                .unwrap_or_else(|| PathBuf::from("./keys")),
+            key_directory,
             wasm_target: raw_config
                 .wasm_target
                 .map(WasmTarget::from)
@@ -179,6 +183,13 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
     type Error = anyhow::Error;
 
     fn try_from(raw_config: RawProviderConfig) -> Result<Self> {
+        let key_directory = if let Some(key_directory) = raw_config.key_directory {
+            key_directory
+        } else {
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+            home_dir.join(".wash/keys")
+        };
         Ok(Self {
             vendor: raw_config.vendor.unwrap_or_else(|| "NoVendor".to_string()),
             os: raw_config
@@ -190,10 +201,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
             rust_target: raw_config.rust_target,
             bin_name: raw_config.bin_name,
             wit_world: raw_config.wit_world,
-            // TODO(#1624): Default to ~/.wash/keys
-            key_directory: raw_config
-                .key_directory
-                .unwrap_or_else(|| PathBuf::from("./keys")),
+            key_directory,
         })
     }
 }
