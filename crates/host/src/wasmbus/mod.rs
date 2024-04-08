@@ -2255,24 +2255,10 @@ impl Host {
                 .context("failed to store claims")?;
         }
 
-        let component_spec =
-            if let Ok(Some(mut spec)) = self.get_component_spec(&component_id).await {
-                // If the component didn't start yet, the URL will be empty but the spec may contain links.
-                // Populate the URL and store the updated spec.
-                if spec.url.is_empty() {
-                    spec.url = component_ref.to_string();
-                } else if spec.url != component_ref {
-                    // Ensure another actor isn't already running with the same ID
-                    bail!(
-                        "component spec URL does not match component reference: {} != {}",
-                        spec.url,
-                        component_ref
-                    );
-                }
-                spec
-            } else {
-                ComponentSpecification::new(&component_ref)
-            };
+        let component_spec = self
+            .get_component_spec(&component_id)
+            .await?
+            .unwrap_or_else(|| ComponentSpecification::new(&component_ref));
         self.store_component_spec(&component_id, &component_spec)
             .await?;
 
@@ -2484,6 +2470,21 @@ impl Host {
 
         let host_id = host_id.to_string();
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
+
+        // Basic validation to ensure that the component is running and that the image reference matches
+        // If it doesn't match, we can still successfully scale, but we won't be updating the image reference
+        let message = match self.actors.read().await.get(&component_id) {
+            Some(entry) if entry.image_reference != component_ref => {
+                let msg = format!(
+                    "Requested to scale existing component to a different image reference: {} != {}. The component will be scaled but the image reference will not be updated. If you meant to update this component to a new image ref, use the update command.",
+                    entry.image_reference, component_ref,
+                );
+                warn!(msg);
+                msg
+            }
+            _ => String::with_capacity(0),
+        };
+
         spawn(async move {
             if let Err(e) = self
                 .handle_scale_actor_task(
@@ -2499,7 +2500,11 @@ impl Host {
                 error!(%component_ref, %component_id, err = ?e, "failed to scale component");
             }
         });
-        Ok(CtlResponse::success())
+        Ok(CtlResponse {
+            success: true,
+            message,
+            response: None,
+        })
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2621,6 +2626,7 @@ impl Host {
                 let actor = entry.get_mut();
                 let config_changed =
                     &config != actor.handler.config_data.read().await.config_names();
+
                 // Modify scale only if the requested max differs from the current max or if the configuration has changed
                 if actor.max_instances != max || config_changed {
                     // We must partially clone the handler as we can't be sharing the targets between actors
