@@ -29,8 +29,6 @@ pub struct HostData {
     pub lattice_rpc_url: String,
     #[serde(default)]
     pub provider_key: String,
-    #[serde(default)]
-    pub invocation_seed: String,
     #[serde(
         serialize_with = "serialize_wit_map",
         deserialize_with = "deserialize_wit_map"
@@ -40,7 +38,8 @@ pub struct HostData {
     pub instance_id: String,
     /// initial list of links for provider
     pub link_definitions: Vec<InterfaceLinkDefinition>,
-    /// list of cluster issuers
+    /// list of cluster issuers.
+    #[serde(default)]
     pub cluster_issuers: Vec<String>,
     /// Merged named configuration set for this provider at runtime
     #[serde(default)]

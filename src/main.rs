@@ -48,7 +48,6 @@ struct Args {
     #[clap(
         short = 'x',
         long = "lattice",
-        alias = "lattice-prefix", // TODO(pre-1.0): remove me
         default_value = "default",
         env = "WASMCLOUD_LATTICE"
     )]
@@ -56,16 +55,6 @@ struct Args {
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
-    /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
-    #[clap(long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
-    cluster_seed: Option<String>,
-    /// A comma-delimited list of public keys that can be used as issuers on signed invocations
-    #[clap(
-        long = "cluster-issuers",
-        env = "WASMCLOUD_CLUSTER_ISSUERS",
-        value_delimiter = ','
-    )]
-    cluster_issuers: Option<Vec<String>>,
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
     #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration)]
     provider_shutdown_delay: Duration,
@@ -89,7 +78,7 @@ struct Args {
     /// Denotes if a wasmCloud host should issue requests to a config service on startup
     #[clap(long = "config-service-enabled", env = "WASMCLOUD_CONFIG_SERVICE")]
     config_service_enabled: bool,
-    /// Denotes if a wasmCloud host should allow starting actors from the file system
+    /// Denotes if a wasmCloud host should allow starting components from the file system
     #[clap(
         long = "allow-file-load",
         default_value_t = false,
@@ -105,6 +94,7 @@ struct Args {
     /// Start the host with a set of labels, can be specified multiple times. This can alternatively be specified via environment variables prefixed with `WASMCLOUD_LABEL_`, e.g. `WASMCLOUD_LABEL_foo=bar`
     #[clap(short = 'l', long = "label")]
     label: Option<Vec<String>>,
+
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = "WASMCLOUD_CTL_HOST", hide = true)]
     ctl_host: Option<String>,
@@ -168,7 +158,7 @@ struct Args {
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
     rpc_tls: bool,
 
-    /// If provided, enables policy checks on start actions and actor invocations
+    /// If provided, enables policy checks on start actions and component invocations
     #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC")]
     policy_topic: Option<String>,
     /// If provided, allows the host to subscribe to updates on past policy decisions. Requires `policy_topic` to be set.
@@ -258,14 +248,6 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
-    // TODO(pre-1.0): remove me
-    if let Ok(lattice) = std::env::var("WASMCLOUD_LATTICE_PREFIX") {
-        eprintln!(
-            "The `WASMCLOUD_LATTICE_PREFIX` environment variable is deprecated and will be removed. Please use `WASMCLOUD_LATTICE` instead."
-        );
-        std::env::set_var("WASMCLOUD_LATTICE", lattice);
-    }
-
     let args: Args = Args::parse();
 
     let otel_config = OtelConfig {
@@ -308,13 +290,6 @@ async fn main() -> anyhow::Result<()> {
         .map(KeyPair::from_seed)
         .transpose()
         .context("failed to construct host key pair from seed")?
-        .map(Arc::new);
-    let cluster_key = args
-        .cluster_seed
-        .as_deref()
-        .map(KeyPair::from_seed)
-        .transpose()
-        .context("failed to construct cluster key pair from seed")?
         .map(Arc::new);
     let nats_key = args
         .nats_seed
@@ -376,8 +351,6 @@ async fn main() -> anyhow::Result<()> {
         ctl_nats_url,
         lattice: args.lattice,
         host_key,
-        cluster_key,
-        cluster_issuers: args.cluster_issuers,
         config_service_enabled: args.config_service_enabled,
         js_domain: args.js_domain,
         labels,

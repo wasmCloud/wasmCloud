@@ -133,7 +133,6 @@ pub struct WasmcloudOpts {
     #[clap(
         short = 'x',
         long = "lattice",
-        alias = "lattice-prefix", // TODO(pre-1.0): remove me
         env = WASMCLOUD_LATTICE
     )]
     pub lattice: Option<String>,
