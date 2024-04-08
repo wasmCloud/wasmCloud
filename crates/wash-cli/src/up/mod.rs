@@ -430,7 +430,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
                 }
             }
             Err(e) => {
-                eprintln!("🟨 Couldn't download wadm {WADM_VERSION}: {e}");
+                let wadm_version: String = cmd.wadm_opts.wadm_version.clone();
+                eprintln!("🟨 Couldn't download wadm {wadm_version}: {e}");
                 None
             }
         }
