@@ -6959,9 +6959,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc"
-version = "0.3.0"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b15e81d1352082c02a79e5c4f82bf65ae7b0606df8a39da023cbb9f768959744"
+checksum = "fe314edff6fe0d9ef849d751328a4a104acd3fdbc1f3e8c92976e96d52af01cc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6976,9 +6976,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc-rust"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8001b62382c798b0bfb2a8cb108a02038ed8eade103f899843dfe74594e2e8a6"
+checksum = "598df0a25ce498a5bce9b82fc67601eb072eb9cb2871fa77d16ae67fcf3643f7"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -6987,9 +6987,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc-rust-macro"
-version = "0.3.0"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7a98836bd9040cdbc11e0ec93bf787fe51a736219a0ad9fbf4367af5cd2a12"
+checksum = "24917eb88bfa6eefdf8d53280ef0877bb23bc400713966dcab306a70290159ba"
 dependencies = [
  "anyhow",
  "proc-macro2",
