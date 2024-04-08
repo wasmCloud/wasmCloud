@@ -290,7 +290,7 @@ wasmcloud-provider-sdk = { version = "0.3", path = "./crates/provider-sdk", defa
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-test-util = { version = "0.1", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "0.2", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.201", default-features = false }
+wasmparser = { version = "0.202", default-features = false }
 wasmtime = { version = "19", default-features = false }
 wasmtime-wasi = { version = "19", default-features = false }
 wasmtime-wasi-http = { version = "19", default-features = false }
