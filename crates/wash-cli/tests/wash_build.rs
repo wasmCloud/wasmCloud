@@ -70,6 +70,10 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     env::set_var("RUST_LOG", "debug");
 
     // base case: no keys directory configured
+    let mut expected_default_key_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+    expected_default_key_dir.push(".wash/keys");
+
     let cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build"])
         .stderr(std::process::Stdio::piped())
@@ -85,7 +89,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains("hello/keys/http_hello_world_module.nk"));
+    assert!(output.contains(expected_default_key_dir.to_str().unwrap()));
 
     // case: keys directory configured via cli arg --keys-directory
     let key_directory = project_dir.join("batmankeys").to_string_lossy().to_string();
