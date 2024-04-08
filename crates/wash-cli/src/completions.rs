@@ -12,11 +12,19 @@ use wash_lib::config::cfg_dir;
 const TOKEN_FILE: &str = ".completion_suggested";
 const COMPLETION_DOC_URL: &str =
     "https://github.com/wasmCloud/wasmCloud/blob/main/crates/wash-cli/Completions.md";
+const SLACK_URL: &str = "https://slack.wasmcloud.com";
 
 fn instructions() -> String {
     format!(
-        "For instructions on setting up auto-complete for your shell, please see '{}'",
+        "🐚 Autocomplete available! To configure autocomplete with your shell, follow the instructions at\n   {}",
         COMPLETION_DOC_URL
+    )
+}
+
+fn feedback() -> String {
+    format!(
+        "📝 Feedback wanted! If you want to suggest an improvement or would like assistance, join the community at\n   {}",
+        SLACK_URL
     )
 }
 
@@ -57,8 +65,9 @@ pub fn first_run_suggestion() -> Result<Option<String>> {
         )
     })?;
     Ok(Some(format!(
-        "Congratulations on installing wash!  Shell auto-complete is available. {}",
-        instructions()
+        "Congratulations on installing wash!\n\n{}\n\n{}",
+        instructions(),
+        feedback(),
     )))
 }
 
