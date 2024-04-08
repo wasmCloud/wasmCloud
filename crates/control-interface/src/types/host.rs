@@ -10,10 +10,6 @@ use crate::types::provider::ProviderDescription;
 /// A summary representation of a host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {
-    /// Comma-delimited list of valid cluster issuer public keys as known
-    /// to this host
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cluster_issuers: Option<String>,
     /// NATS server host used for regular RPC
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc_host: Option<String>,
@@ -58,9 +54,6 @@ pub struct HostInventory {
     /// The host's unique ID
     #[serde(default)]
     pub host_id: String,
-    /// The host's cluster issuer public key
-    #[serde(default)]
-    pub issuer: String,
     /// The host's human-readable friendly name
     #[serde(default)]
     pub friendly_name: String,

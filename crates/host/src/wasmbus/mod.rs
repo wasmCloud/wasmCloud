@@ -131,7 +131,6 @@ impl Queue {
         nats: &async_nats::Client,
         topic_prefix: &str,
         lattice: &str,
-        cluster_key: &KeyPair,
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
@@ -1043,10 +1042,6 @@ struct Actor {
     max_instances: NonZeroUsize,
     image_reference: String,
     metrics: Arc<HostMetrics>,
-    // TODO(#1220): implement issuer verification
-    /// Cluster issuers that this component should accept invocations from
-    #[allow(unused)]
-    valid_issuers: Vec<String>,
     #[allow(unused)]
     policy_manager: Arc<PolicyManager>,
 }
@@ -1280,8 +1275,6 @@ struct Provider {
 pub struct Host {
     /// The actor map is a map of actor component ID to actor
     actors: RwLock<HashMap<String, Arc<Actor>>>,
-    cluster_key: Arc<KeyPair>,
-    cluster_issuers: Vec<String>,
     event_builder: EventBuilderV10,
     friendly_name: String,
     heartbeat: AbortHandle,
@@ -1624,18 +1617,6 @@ impl Host {
     pub async fn new(
         config: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let cluster_key = if let Some(cluster_key) = &config.cluster_key {
-            ensure!(cluster_key.key_pair_type() == KeyPairType::Cluster);
-            Arc::clone(cluster_key)
-        } else {
-            Arc::new(KeyPair::new(KeyPairType::Cluster))
-        };
-        let mut cluster_issuers = config.cluster_issuers.clone().unwrap_or_default();
-        let cluster_pub_key = cluster_key.public_key();
-        if !cluster_issuers.contains(&cluster_pub_key) {
-            debug!(cluster_pub_key, "adding cluster key to cluster issuers");
-            cluster_issuers.push(cluster_pub_key);
-        }
         let host_key = if let Some(host_key) = &config.host_key {
             ensure!(host_key.key_pair_type() == KeyPairType::Server);
             Arc::clone(host_key)
@@ -1678,7 +1659,6 @@ impl Host {
                     &ctl_nats,
                     &config.ctl_topic_prefix,
                     &config.lattice,
-                    &cluster_key,
                     &host_key,
                 )
                 .await
@@ -1778,8 +1758,6 @@ impl Host {
 
         let host = Host {
             actors: RwLock::default(),
-            cluster_key,
-            cluster_issuers,
             event_builder,
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
@@ -2042,7 +2020,6 @@ impl Host {
             uptime_seconds: uptime.as_secs(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             host_id: self.host_key.public_key(),
-            issuer: self.cluster_key.public_key(),
         }
     }
 
@@ -2095,7 +2072,6 @@ impl Host {
             handler: handler.clone(),
             annotations: annotations.clone(),
             max_instances,
-            valid_issuers: self.cluster_issuers.clone(),
             policy_manager: Arc::clone(&self.policy_manager),
             image_reference: component_ref,
             metrics: Arc::clone(&self.metrics),
@@ -2920,10 +2896,6 @@ impl Host {
 
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
-            let invocation_seed = self
-                .cluster_key
-                .seed()
-                .context("cluster key seed missing")?;
             let lattice_rpc_user_seed = self
                 .host_config
                 .rpc_key
@@ -2987,9 +2959,8 @@ impl Host {
                 provider_key: provider_id.to_string(),
                 link_definitions,
                 config: config.get_config().await.clone(),
+                cluster_issuers: vec![],
                 default_rpc_timeout_ms,
-                cluster_issuers: self.cluster_issuers.clone(),
-                invocation_seed,
                 log_level: Some(self.host_config.log_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
@@ -3530,7 +3501,6 @@ impl Host {
     ) -> anyhow::Result<CtlResponse<wasmcloud_control_interface::Host>> {
         trace!("replying to ping");
         let uptime = self.start_at.elapsed();
-        let cluster_issuers = self.cluster_issuers.clone().join(",");
 
         Ok(CtlResponse::ok(wasmcloud_control_interface::Host {
             id: self.host_key.public_key(),
@@ -3539,7 +3509,6 @@ impl Host {
             uptime_seconds: uptime.as_secs(),
             uptime_human: Some(human_friendly_uptime(uptime)),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            cluster_issuers: Some(cluster_issuers),
             js_domain: self.host_config.js_domain.clone(),
             ctl_host: Some(self.host_config.ctl_nats_url.to_string()),
             rpc_host: Some(self.host_config.rpc_nats_url.to_string()),

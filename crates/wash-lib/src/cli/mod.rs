@@ -170,12 +170,7 @@ pub struct CliConnectionOpts {
     pub js_domain: Option<String>,
 
     /// Lattice name for wasmcloud control interface, defaults to "default"
-    #[clap(
-        short = 'x',
-        long = "lattice",
-        alias = "lattice-prefix", // TODO(pre-1.0): remove me
-        env = "WASMCLOUD_LATTICE"
-    )]
+    #[clap(short = 'x', long = "lattice", env = "WASMCLOUD_LATTICE")]
     pub lattice: Option<String>,
 
     /// Timeout length to await a control interface response, defaults to 2000 milliseconds

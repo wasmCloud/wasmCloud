@@ -27,7 +27,6 @@ pub struct DownCommand {
     #[clap(
             short = 'x',
             long = "lattice",
-            alias = "lattice-prefix", // TODO(pre-1.0): remove me
             default_value = DEFAULT_LATTICE,
             env = WASMCLOUD_LATTICE,
         )]

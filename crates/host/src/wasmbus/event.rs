@@ -11,18 +11,18 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
-fn format_actor_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
+fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
     let not_before_human = "TODO";
     let expires_human = "TODO";
-    if let Some(actor) = &claims.metadata {
+    if let Some(component) = &claims.metadata {
         json!({
-            "call_alias": actor.call_alias,
+            "call_alias": component.call_alias,
             "issuer": issuer,
-            "tags": actor.tags,
-            "name": actor.name,
-            "version": actor.ver,
-            "revision": actor.rev,
+            "tags": component.tags,
+            "name": component.name,
+            "version": component.ver,
+            "revision": component.rev,
             "not_before_human": not_before_human,
             "expires_human": expires_human,
         })
@@ -41,17 +41,17 @@ pub fn component_scaled(
     host_id: impl AsRef<str>,
     max_instances: impl Into<usize>,
     image_ref: impl AsRef<str>,
-    actor_id: impl AsRef<str>,
+    component_id: impl AsRef<str>,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
         json!({
             "public_key": claims.subject,
-            "claims": format_actor_claims(claims),
+            "claims": format_component_claims(claims),
             "annotations": annotations,
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances.into(),
-            "component_id": actor_id.as_ref(),
+            "component_id": component_id.as_ref(),
         })
     } else {
         json!({
@@ -59,7 +59,7 @@ pub fn component_scaled(
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances.into(),
-            "component_id": actor_id.as_ref(),
+            "component_id": component_id.as_ref(),
         })
     }
 }
@@ -69,14 +69,14 @@ pub fn component_scale_failed(
     annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
-    actor_id: impl AsRef<str>,
+    component_id: impl AsRef<str>,
     max_instances: NonZeroUsize,
     error: &anyhow::Error,
 ) -> serde_json::Value {
     if let Some(claims) = claims {
         json!({
             "public_key": claims.subject,
-            "component_id": actor_id.as_ref(),
+            "component_id": component_id.as_ref(),
             "annotations": annotations,
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
@@ -86,7 +86,7 @@ pub fn component_scale_failed(
     } else {
         json!({
             "annotations": annotations,
-            "component_id": actor_id.as_ref(),
+            "component_id": component_id.as_ref(),
             "host_id": host_id.as_ref(),
             "image_ref": image_ref.as_ref(),
             "max_instances": max_instances,

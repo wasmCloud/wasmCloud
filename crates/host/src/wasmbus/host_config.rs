@@ -40,10 +40,6 @@ pub struct Host {
     pub labels: HashMap<String, String>,
     /// The server key pair used by this host to generate its public key
     pub host_key: Option<Arc<KeyPair>>,
-    /// The cluster key pair used by this host to sign all invocations
-    pub cluster_key: Option<Arc<KeyPair>>,
-    /// The identity keys (a printable 256-bit Ed25519 public key) that this host should allow invocations from
-    pub cluster_issuers: Option<Vec<String>>,
     /// The amount of time to wait for a provider to gracefully shut down before terminating it
     pub provider_shutdown_delay: Option<Duration>,
     /// Configuration for downloading artifacts from OCI registries
@@ -92,8 +88,6 @@ impl Default for Host {
             js_domain: None,
             labels: HashMap::default(),
             host_key: None,
-            cluster_key: None,
-            cluster_issuers: None,
             provider_shutdown_delay: None,
             oci_opts: OciConfig::default(),
             allow_file_load: false,

@@ -77,8 +77,6 @@ impl WasmCloudTestHost {
             ctl_nats_url: nats_url.clone(),
             rpc_nats_url: nats_url.clone(),
             lattice: lattice_name.into(),
-            cluster_key: Some(Arc::clone(&cluster_key)),
-            cluster_issuers: Some(vec![cluster_key.public_key()]),
             host_key: Some(Arc::clone(&host_key)),
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
