@@ -6959,9 +6959,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc"
-version = "0.3.5"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe314edff6fe0d9ef849d751328a4a104acd3fdbc1f3e8c92976e96d52af01cc"
+checksum = "45d489e9fb703a430b07105c193ed78b63aaf868a6c5fea99a311c7e7372dee7"
 dependencies = [
  "anyhow",
  "async-trait",
