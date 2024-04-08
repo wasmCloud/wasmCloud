@@ -5685,7 +5685,7 @@ version = "1.0.0-alpha.5"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "clap",
  "futures",
@@ -5846,7 +5846,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "async-trait",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "cloudevents-sdk",
  "futures",
@@ -5921,7 +5921,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "futures",
  "hyper-rustls 0.25.0",
@@ -5961,7 +5961,7 @@ dependencies = [
  "async-nats",
  "axum 0.7.5",
  "axum-server",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "dashmap",
  "futures",
@@ -6004,7 +6004,7 @@ name = "wasmcloud-provider-keyvalue-vault"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "futures",
  "serde",
@@ -6074,7 +6074,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.21.7",
+ "base64 0.22.0",
  "bytes",
  "futures",
  "nkeys",
