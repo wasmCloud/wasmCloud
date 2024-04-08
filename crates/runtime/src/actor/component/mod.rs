@@ -251,6 +251,7 @@ where
     let mut polyfilled_imports = HashMap::with_capacity(imports.len());
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
+        // Avoid polyfilling instances, for which static bindings are linked
         match instance_name.as_ref() {
             "wasi:blobstore/blobstore@0.2.0-draft"
             | "wasi:blobstore/container@0.2.0-draft"
@@ -444,6 +445,9 @@ fn instantiate(
     let imports = ty.imports(engine);
     let mut custom_result_types = HashMap::with_capacity(imports.len());
     for (instance_name, item) in imports {
+        // Skip static bindings, since the runtime types of their results are not needed by the
+        // runtime - those will not be constructed using reflection, but rather directly returned
+        // by Wasmtime
         match instance_name {
             "wasi:blobstore/blobstore@0.2.0-draft"
             | "wasi:blobstore/container@0.2.0-draft"
