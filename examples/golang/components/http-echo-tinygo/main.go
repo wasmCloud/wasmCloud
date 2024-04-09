@@ -3,9 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	echo "github.com/wasmcloud/wasmcloud/examples/golang/actors/http-echo-tinygo/gen"
 	"net/http"
 	"strings"
+
+	echo "github.com/wasmcloud/wasmcloud/examples/golang/components/http-echo-tinygo/gen"
 )
 
 // A struct containing information about a request,
