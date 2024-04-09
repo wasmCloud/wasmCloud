@@ -34,7 +34,7 @@ pub async fn registry_pull(
     cmd: RegistryPullCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
+    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default(), None)?;
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
@@ -72,7 +72,7 @@ pub async fn registry_pull(
 }
 
 pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
-    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
+    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default(), None)?;
     let mut client = Client::new(ClientConfig {
         protocol: if cmd.opts.insecure {
             ClientProtocol::Http
@@ -127,7 +127,11 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default())?;
+    let image: Reference = resolve_artifact_ref(
+        &cmd.url,
+        &cmd.registry.unwrap_or_default(),
+        cmd.config.clone(),
+    )?;
     let artifact_url = image.whole();
     if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
         warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
@@ -171,7 +175,11 @@ pub async fn registry_push(
     ))
 }
 
-fn resolve_artifact_ref(url: &str, registry: &str) -> Result<Reference> {
+fn resolve_artifact_ref(
+    url: &str,
+    registry: &str,
+    project_config: Option<PathBuf>,
+) -> Result<Reference> {
     let image: Reference = url
         .trim()
         .to_ascii_lowercase()
@@ -192,7 +200,7 @@ fn resolve_artifact_ref(url: &str, registry: &str) -> Result<Reference> {
     }
 
     if !url.trim().is_empty() && registry.trim().is_empty() {
-        let project_config = get_config(None, Some(true))?;
+        let project_config = get_config(project_config, Some(true))?;
         let registry = project_config
             .common
             .registry
@@ -391,7 +399,10 @@ mod tests {
                 assert_eq!(artifact, format!("{TESTDIR}/logging.par.gz"));
                 assert!(opts.insecure);
                 assert!(allow_latest);
-                assert_eq!(config.unwrap(), format!("{TESTDIR}/config.json"));
+                assert_eq!(
+                    format!("{}", config.unwrap().as_path().display()),
+                    format!("{TESTDIR}/config.json")
+                );
                 assert_eq!(opts.user.unwrap(), "localuser");
                 assert_eq!(opts.password.unwrap(), "supers3cr3t");
             }
