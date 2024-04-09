@@ -102,14 +102,11 @@ impl IncomingRequest {
         loop {
             match incoming_req_body_stream.read(MAX_READ_BYTES as u64) {
                 Ok(bytes) => buf.extend(bytes),
-                Err(StreamError::Closed) => {
-                    buf.shrink_to_fit();
-                    break;
-                }
+                Err(StreamError::Closed) => break,
                 Err(e) => bail!("failed to read bytes: {e}"),
             }
         }
-        IncomingBody::finish(incoming_req_body);
+        buf.shrink_to_fit();
         Ok(buf)
     }
 }
