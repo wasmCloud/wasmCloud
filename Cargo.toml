@@ -214,7 +214,6 @@ opentelemetry-otlp = { version = "0.14", default-features = false }
 opentelemetry_sdk = { version = "0.21", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 path-clean = { version = "1", default-features = false }
-proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0.9", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
@@ -240,7 +239,6 @@ serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "0.9", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 simple_env_load = { version = "0.2", default-features = false }
-syn = { version = "2", default-features = false }
 sysinfo = { version = "0.27", default-features = false }
 tempfile = { version = "3", default-features = false }
 term-table = { version = "1", default-features = false }
@@ -302,13 +300,13 @@ which = { version = "4", default-features = false }
 wit-bindgen = { version = "0.24", default-features = false }
 wit-bindgen-core = { version = "0.24", default-features = false }
 wit-bindgen-go = { version = "0.24", default-features = false }
-wit-bindgen-wrpc = { version = "0.3", default-features = false }
+wit-bindgen-wrpc = { version = "0.3.7", default-features = false }
 wit-component = { version = "0.202", default-features = false }
 wit-parser = { version = "0.202", default-features = false }
 wrpc-interface-blobstore = { version = "0.16", default-features = false }
 wrpc-interface-http = { version = "0.21", default-features = false }
 wrpc-interface-keyvalue = { version = "0.13", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.15", default-features = false }
-wrpc-transport = { version = "0.24", default-features = false }
+wrpc-transport = { version = "0.24.2", default-features = false }
 wrpc-transport-nats = { version = "0.21", default-features = false }
 wrpc-types = { version = "0.6", default-features = false }
