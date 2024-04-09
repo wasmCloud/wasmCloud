@@ -155,6 +155,7 @@ jobs:
             name: "http-jsonify"
             wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
     steps:
+      - uses: actions/checkout@v4
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
@@ -167,6 +168,7 @@ jobs:
           echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
           echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
           echo "branch-prefix=$BRANCH_PREFIX" >> $GITHUB_OUTPUT;
+          echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (wash binary and example component binaries) to work dir
       - uses: actions/download-artifact@v4
         with:
@@ -184,6 +186,7 @@ jobs:
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           wash push \
+            --config=${{ steps.meta.outputs.wasmcloud-toml-path }} \
             ghcr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} \
             artifacts/${{ steps.meta.outputs.bin-name }}
       - name: Push version-tagged WebAssembly binary to GHCR
@@ -193,6 +196,7 @@ jobs:
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           wash push \
+            --config=${{ steps.meta.outputs.wasmcloud-toml-path }} \
             ghcr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} \
             artifacts/${{ steps.meta.outputs.bin-name }}
       # (wasmCloud/wasmCloud repository only)
@@ -201,6 +205,7 @@ jobs:
         if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
           wash push \
+            --config=${{ steps.meta.outputs.wasmcloud-toml-path }} \
             wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} \
             artifacts/${{ steps.meta.outputs.bin-name }}
         env:
@@ -210,6 +215,7 @@ jobs:
         if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
           wash push \
+            --config=${{ steps.meta.outputs.wasmcloud-toml-path }} \
             wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} \
             artifacts/${{ steps.meta.outputs.bin-name }}
         env:
