@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug, Clone)]
@@ -80,7 +82,7 @@ pub struct RegistryPushCommand {
 
     /// Path to config file, if omitted will default to a blank configuration
     #[clap(short = 'c', long = "config")]
-    pub config: Option<String>,
+    pub config: Option<PathBuf>,
 
     /// Allow latest artifact tags
     #[clap(long = "allow-latest")]
