@@ -1,7 +1,7 @@
 package main
 
 import (
-	http "github.com/wasmcloud/wasmcloud/examples/golang/actors/http-hello-world/gen"
+	http "github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world/gen"
 )
 
 // Helper type aliases to make code more readable
@@ -23,10 +23,14 @@ func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWrite
 	headers := http.NewFields()
 	httpResponse := http.NewOutgoingResponse(headers)
 	httpResponse.SetStatusCode(200)
-	httpResponse.Body().Unwrap().Write().Unwrap().BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
+	body := httpResponse.Body().Unwrap()
+	bodyWrite := body.Write().Unwrap()
+	bodyWrite.BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
 
 	// Send HTTP response
 	okResponse := http.Ok[HttpOutgoingResponse, HttpError](httpResponse)
+	bodyWrite.Drop()
+	http.StaticOutgoingBodyFinish(body, http.None[http.WasiHttp0_2_0_TypesTrailers]())
 	http.StaticResponseOutparamSet(responseWriter, okResponse)
 }
 

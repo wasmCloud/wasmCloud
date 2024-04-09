@@ -1,4 +1,4 @@
-package wasi:keyvalue@0.1.0;
+package wasi:keyvalue@0.2.0-draft;
 
 /// The `wasi:keyvalue/imports` world provides common APIs for interacting
 /// with key-value stores. Components targeting this world will be able to
