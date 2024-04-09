@@ -9,4 +9,4 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.16", features = ["default"] }
+wit-bindgen = { version = "0.24", features = ["default"] }

@@ -1,8 +1,5 @@
 wit_bindgen::generate!({
     world: "hello",
-    exports: {
-        "wasi:http/incoming-handler": HttpServer,
-    },
 });
 
 use exports::wasi::http::incoming_handler::Guest;
@@ -24,3 +21,5 @@ impl Guest for HttpServer {
         ResponseOutparam::set(response_out, Ok(response));
     }
 }
+
+export!(HttpServer);
