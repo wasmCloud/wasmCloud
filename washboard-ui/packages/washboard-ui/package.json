@@ -1,13 +1,14 @@
 {
   "name": "@wasmcloud/washboard-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint:eslint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:playwright:headless": "playwright test",
     "test:playwright:ui": "playwright test --ui",
     "format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern '**/*'",
