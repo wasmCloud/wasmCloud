@@ -5,8 +5,8 @@ This is a simple Rust Wasm example that responds with a "Hello World" message fo
 ## Prerequisites
 
 - `cargo` 1.75
-- [`wash`](https://wasmcloud.com/docs/installation) 0.26.0
-- `wasmtime` 17.0.0 (if running with wasmtime)
+- [`wash`](https://wasmcloud.com/docs/installation) 0.27.0
+- `wasmtime` 19.0.0 (if running with wasmtime)
 
 ## Building
 
@@ -16,7 +16,7 @@ wash build
 
 ## Running with wasmtime
 
-You must have wasmtime 17.0.0 for this to work. Make sure to follow the build step above first.
+You must have wasmtime 19.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
 wasmtime serve -Scommon ./build/http_hello_world_s.wasm
@@ -28,9 +28,10 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 
 ```shell
 wash up -d
+wash config put default-http address=127.0.0.1:8080
 wash app deploy ./wadm.yaml
 wash app list
-curl http://localhost:8080
+curl http://127.0.0.1:8080
 ```
 
 ## Adding Capabilities

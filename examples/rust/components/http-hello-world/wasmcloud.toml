@@ -1,7 +1,6 @@
 name = "http-hello-world"
 language = "rust"
-type = "actor"
-version = "0.1.0"
+type = "component"
 
 [actor]
 wit_world = "hello"
