@@ -144,17 +144,20 @@ jobs:
 
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
-      - run: move "target/release/blobstore-fs.exe" "artifact/bin/blobstore-fs.exe"
-      - run: move "target/release/blobstore-s3.exe" "artifact/bin/blobstore-s3.exe"
-      - run: move "target/release/http-client.exe" "artifact/bin/http-client.exe"
-      - run: move "target/release/http-server.exe" "artifact/bin/http-server.exe"
-      - run: move "target/release/keyvalue-redis.exe" "artifact/bin/keyvalue-redis.exe"
-      - run: move "target/release/keyvalue-vault.exe" "artifact/bin/keyvalue-vault.exe"
-      - run: move "target/release/lattice-controller.exe" "artifact/bin/lattice-controller.exe"
-      - run: move "target/release/messaging-kafka.exe" "artifact/bin/messaging-kafka.exe"
-      - run: move "target/release/messaging-nats.exe" "artifact/bin/messaging-nats.exe"
+
+      - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
+      - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
+      - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
+      - run: move "target/release/http-server-provider.exe" "artifact/bin/http-server-provider.exe"
+      - run: move "target/release/keyvalue-redis-provider.exe" "artifact/bin/keyvalue-redis-provider.exe"
+      - run: move "target/release/keyvalue-vault-provider.exe" "artifact/bin/keyvalue-vault-provider.exe"
+      - run: move "target/release/lattice-controller-provider.exe" "artifact/bin/lattice-controller-provider.exe"
+      - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
+      - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
+
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
       - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+
       - uses: actions/upload-artifact@v4
         with:
           name: wasmcloud-x86_64-pc-windows-msvc

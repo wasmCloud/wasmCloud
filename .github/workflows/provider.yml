@@ -49,11 +49,11 @@ jobs:
       with:
         path: artifacts
 
-    - run: chmod +x "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}"
-    - run: chmod +x "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}"
-    - run: chmod +x "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}"
-    - run: chmod +x "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}.exe"
-    - run: chmod +x "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}"
+    - run: chmod +x "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}-provider"
+    - run: chmod +x "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}-provider"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe"
+    - run: chmod +x "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider"
 
     - run: mv "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/wash" wash
     - run: chmod +x wash
@@ -66,16 +66,16 @@ jobs:
           export WASH_SUBJECT_KEY="${{ secrets.subject }}"
         fi
         ./wash par create \
-              --binary "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}" \
+              --binary "./artifacts/wasmcloud-x86_64-unknown-linux-musl/bin/${{ inputs.name }}-provider" \
               --compress \
               --destination "${{ inputs.name }}.par.gz" \
-              --name "${{ inputs.name }}" \
+              --name "${{ inputs.name }}-provider" \
               --vendor wasmcloud \
               --version ${{ steps.ctx.outputs.version }}
-        ./wash par insert --arch aarch64-linux  --binary "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
-        ./wash par insert --arch aarch64-macos  --binary "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
-        ./wash par insert --arch x86_64-macos   --binary "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}" "${{ inputs.name }}.par.gz"
-        ./wash par insert --arch x86_64-windows --binary "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}.exe" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch aarch64-linux  --binary "./artifacts/wasmcloud-aarch64-unknown-linux-musl/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch aarch64-macos  --binary "./artifacts/wasmcloud-aarch64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch x86_64-macos   --binary "./artifacts/wasmcloud-x86_64-apple-darwin/bin/${{ inputs.name }}-provider" "${{ inputs.name }}.par.gz"
+        ./wash par insert --arch x86_64-windows --binary "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
         ./wash par inspect "${{ inputs.name }}.par.gz"
 
     - uses: actions/upload-artifact@v4

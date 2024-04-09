@@ -37,39 +37,39 @@ providers = [
 default = ["providers"]
 
 [[bin]]
-name = "blobstore-fs"
+name = "blobstore-fs-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "blobstore-s3"
+name = "blobstore-s3-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "http-server"
+name = "http-server-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "http-client"
+name = "http-client-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "keyvalue-redis"
+name = "keyvalue-redis-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "keyvalue-vault"
+name = "keyvalue-vault-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "lattice-controller"
+name = "lattice-controller-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "messaging-kafka"
+name = "messaging-kafka-provider"
 required-features = ["providers"]
 
 [[bin]]
-name = "messaging-nats"
+name = "messaging-nats-provider"
 required-features = ["providers"]
 
 [profile.release]
