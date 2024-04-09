@@ -2,7 +2,10 @@ name: wasmCloud example components
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    tags:
+      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+
   pull_request:
     branches: [main]
     paths:
@@ -67,13 +70,25 @@ jobs:
           - 0.26.0
           - current
         project:
-          - { lang: "golang", lang_version: "1.20", name: "http-echo-tinygo" }
-          - { lang: "golang", lang_version: "1.20", name: "http-hello-world" }
-          - { lang: "rust", name: "blobby" }
-          - { lang: "rust", name: "http-hello-world" }
-          - { lang: "rust", name: "http-jsonify" }
-          - { lang: "python", lang_version: "3.10", name: "http-hello-world" }
-          - { lang: "typescript", lang_version: "20.x", name: "http-hello-world" }
+          - lang: "golang"
+            lang_version: "1.20"
+            name: "http-echo-tinygo"
+          - lang: "golang"
+            lang_version: "1.20"
+            name: "http-hello-world"
+          - lang: "rust"
+            name: "blobby"
+          - lang: "rust"
+            name: "http-hello-world"
+          - lang: "rust"
+            name: "http-jsonify"
+            wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
+          - lang: "python"
+            lang_version: "3.10"
+            name: "http-hello-world"
+          - lang: "typescript"
+            lang_version: "20.x"
+            name: "http-hello-world"
     steps:
       - uses: actions/checkout@v4
       # Download wash binary & install to path
@@ -117,3 +132,86 @@ jobs:
       - name: build project
         run: wash build
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+      # Save example as an artifact for later step(s)
+      - uses: actions/upload-artifact@v4
+        if: ${{ startswith(github.ref, format('refs/tags/component-{0}-v', matrix.project.name)) }}
+        with:
+          name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}
+          path: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/build/${{ matrix.project.wasm-bin }}
+
+  # Publish components relevant components if they've been tagged
+  publish:
+    name: publish
+    runs-on: ubuntu-22.04
+    needs: [ wash-build ]
+    if: ${{ startswith(github.ref, 'refs/tags/component-') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        wash-version:
+          - current
+        project:
+          - lang: "rust"
+            name: "http-jsonify"
+            wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
+    steps:
+      # Determine tag version (if this is a release tag), without the 'v'
+      - name: Determine version
+        id: meta
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          BRANCH_PREFIX: ${{ format('refs/tags/component-{0}-v', matrix.project.name) }}
+        run: |
+          export VERSION=${TAG#$PREFIX};
+          echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
+          echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
+          echo "branch-prefix=$BRANCH_PREFIX" >> $GITHUB_OUTPUT;
+      # Download all artifacts (wash binary and example component binaries) to work dir
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: install wash binary to PATH # Some build tools expect wash to be on the PATH
+        shell: bash
+        run: |
+          chmod +x ./artifacts/wash-${{ matrix.wash-version }}/wash;
+          echo "$(realpath ./artifacts/wash-${{ matrix.wash-version }})" >> "$GITHUB_PATH";
+      # Push the project to GitHub Container Registry under various tags, if this is a release tag
+      - name: Push SHA-tagged WebAssembly binary to GHCR
+        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) }}
+        env:
+          WASH_REG_USER: ${{ github.repository_owner }}
+          WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          wash push \
+            ghcr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} \
+            artifacts/${{ steps.meta.outputs.bin-name }}
+      - name: Push version-tagged WebAssembly binary to GHCR
+        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) }}
+        env:
+          WASH_REG_USER: ${{ github.repository_owner }}
+          WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          wash push \
+            ghcr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} \
+            artifacts/${{ steps.meta.outputs.bin-name }}
+      # (wasmCloud/wasmCloud repository only)
+      # Push the project to Azure Container Registry under various tags, if this is a release tag
+      - name: Push SHA-tagged WebAssembly binary to AzureCR
+        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
+        run: |
+          wash push \
+            wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} \
+            artifacts/${{ steps.meta.outputs.bin-name }}
+        env:
+          WASH_REG_USER: ${{ secrets.azurecr_username }}
+          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+      - name: Push version-tagged WebAssembly binary to AzureCR
+        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
+        run: |
+          wash push \
+            wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} \
+            artifacts/${{ steps.meta.outputs.bin-name }}
+        env:
+          WASH_REG_USER: ${{ secrets.azurecr_username }}
+          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
