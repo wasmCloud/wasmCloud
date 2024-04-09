@@ -72,7 +72,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                 })
             };
 
-            let actor_path = if command.sign_only {
+            let component_path = if command.sign_only {
                 std::env::set_current_dir(&config.common.path)?;
                 let actor_wasm_path = if let Some(path) = actor_config.build_artifact.clone() {
                     path
@@ -92,17 +92,17 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             };
 
             let json_output = HashMap::from([
-                ("actor_path".to_string(), json!(actor_path)),
+                ("component_path".to_string(), json!(component_path)),
                 ("built".to_string(), json!(!command.sign_only)),
                 ("signed".to_string(), json!(!command.build_only)),
             ]);
             Ok(CommandOutput::new(
                 if command.build_only {
-                    format!("Actor built and can be found at {actor_path:?}")
+                    format!("Component built and can be found at {component_path:?}")
                 } else if command.sign_only {
-                    format!("Actor signed and can be found at {actor_path:?}")
+                    format!("Component signed and can be found at {component_path:?}")
                 } else {
-                    format!("Actor built and signed and can be found at {actor_path:?}")
+                    format!("Component built and signed and can be found at {component_path:?}")
                 },
                 json_output,
             ))
