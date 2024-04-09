@@ -5263,8 +5263,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm"
-version = "0.11.0-alpha.1"
-source = "git+https://github.com/wasmcloud/wadm?branch=chore/v0.11.0-alpha.1#1068dc35ea1918f08ad9e9326ad7e1be0d3549dc"
+version = "0.11.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a2fc81038e2d2a90c30a49237973224ee76ed0b11d0d714d027798ad5eb565"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5290,7 +5291,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "uuid",
- "wasmcloud-control-interface 1.0.0-alpha.3 (git+https://github.com/wasmcloud/wasmcloud?branch=main)",
+ "wasmcloud-control-interface 1.0.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5358,23 +5359,25 @@ dependencies = [
 [[package]]
 name = "wascap"
 version = "0.13.0"
-source = "git+https://github.com/wasmcloud/wasmcloud?branch=main#804d67665fac39c08a536b0902a65a85035e685e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "802ee1beca185fd4d61bcfd937360d1dddacc88fefa39b08209e875d99c95711"
 dependencies = [
  "data-encoding",
  "humantime",
+ "log",
  "nkeys",
  "nuid 0.4.1",
  "ring",
  "serde",
  "serde_json",
- "wasm-encoder 0.202.0",
+ "wasm-encoder 0.41.2",
  "wasm-gen",
- "wasmparser 0.202.0",
+ "wasmparser 0.121.2",
 ]
 
 [[package]]
 name = "wash-cli"
-version = "0.27.0-alpha.1"
+version = "0.27.0-alpha.2"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -5428,13 +5431,13 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "weld-codegen",
  "which",
- "wrpc-transport",
- "wrpc-types",
+ "wrpc-transport 0.24.2",
+ "wrpc-types 0.6.0",
 ]
 
 [[package]]
 name = "wash-lib"
-version = "0.19.0"
+version = "0.20.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5572,6 +5575,15 @@ checksum = "af190c94f2773fdb3729c55b007a722abb5384da03bc0986df4c289bf5567e96"
 
 [[package]]
 name = "wasm-encoder"
+version = "0.41.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "972f97a5d8318f908dded23594188a90bcd09365986b1163e66d70170e5287ae"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.201.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9c7d2731df60006819b013f64ccc2019691deccf6e11a1804bc850cd6748f1a"
@@ -5676,9 +5688,9 @@ dependencies = [
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport",
- "wrpc-transport-nats",
- "wrpc-types",
+ "wrpc-transport 0.24.2",
+ "wrpc-transport-nats 0.21.0",
+ "wrpc-types 0.6.0",
 ]
 
 [[package]]
@@ -5738,7 +5750,8 @@ dependencies = [
 [[package]]
 name = "wasmcloud-control-interface"
 version = "1.0.0-alpha.3"
-source = "git+https://github.com/wasmcloud/wasmcloud?branch=main#804d67665fac39c08a536b0902a65a85035e685e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc87e84c68d31d65d4070cf70548f5d27e2c9c75d2768ea52ce60416c048e9a6"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5754,7 +5767,35 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.5.0 (git+https://github.com/wasmcloud/wasmcloud?branch=main)",
+ "wasmcloud-core 0.4.0",
+]
+
+[[package]]
+name = "wasmcloud-core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9384bec7161ea7763f6665c49b9282323065e3edd0247cca9f679180bd14d86"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "hex",
+ "nkeys",
+ "once_cell",
+ "rustls 0.23.4",
+ "serde",
+ "serde_bytes",
+ "sha2",
+ "tokio",
+ "tower",
+ "tracing",
+ "ulid",
+ "uuid",
+ "wascap 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wrpc-transport 0.22.0",
+ "wrpc-transport-nats 0.19.0",
 ]
 
 [[package]]
@@ -5785,35 +5826,8 @@ dependencies = [
  "uuid",
  "wascap 0.13.0",
  "webpki-roots 0.26.1",
- "wrpc-transport",
- "wrpc-transport-nats",
-]
-
-[[package]]
-name = "wasmcloud-core"
-version = "0.5.0"
-source = "git+https://github.com/wasmcloud/wasmcloud?branch=main#804d67665fac39c08a536b0902a65a85035e685e"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "bytes",
- "futures",
- "hex",
- "nkeys",
- "once_cell",
- "rustls 0.23.4",
- "serde",
- "serde_bytes",
- "sha2",
- "tokio",
- "tower",
- "tracing",
- "ulid",
- "uuid",
- "wascap 0.13.0 (git+https://github.com/wasmcloud/wasmcloud?branch=main)",
- "wrpc-transport",
- "wrpc-transport-nats",
+ "wrpc-transport 0.24.2",
+ "wrpc-transport-nats 0.21.0",
 ]
 
 [[package]]
@@ -5857,9 +5871,9 @@ dependencies = [
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-interface-keyvalue",
- "wrpc-transport",
- "wrpc-transport-nats",
- "wrpc-types",
+ "wrpc-transport 0.24.2",
+ "wrpc-transport-nats 0.21.0",
+ "wrpc-types 0.6.0",
 ]
 
 [[package]]
@@ -5887,7 +5901,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -5912,7 +5926,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -5927,7 +5941,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-http",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -5973,7 +5987,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wrpc-interface-keyvalue",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -5994,7 +6008,7 @@ dependencies = [
  "vaultrs",
  "wasmcloud-provider-sdk",
  "wrpc-interface-keyvalue",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -6074,9 +6088,9 @@ dependencies = [
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-interface-keyvalue",
- "wrpc-transport",
- "wrpc-transport-nats",
- "wrpc-types",
+ "wrpc-transport 0.24.2",
+ "wrpc-transport-nats 0.21.0",
+ "wrpc-types 0.6.0",
 ]
 
 [[package]]
@@ -6111,8 +6125,8 @@ dependencies = [
  "wit-component",
  "wit-parser 0.202.0",
  "wrpc-runtime-wasmtime",
- "wrpc-transport",
- "wrpc-types",
+ "wrpc-transport 0.24.2",
+ "wrpc-types 0.6.0",
 ]
 
 [[package]]
@@ -6152,6 +6166,17 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wasmcloud-core 0.5.0",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.121.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dbe55c8f9d0dbd25d9447a5a889ff90c0cc3feaa7395310d3d826b2c703eaab"
+dependencies = [
+ "bitflags 2.5.0",
+ "indexmap 2.2.6",
+ "semver",
 ]
 
 [[package]]
@@ -6948,7 +6973,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wit-bindgen-wrpc-rust-macro",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -7042,7 +7067,7 @@ dependencies = [
  "bytes",
  "futures",
  "tracing",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -7063,7 +7088,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wasmtime-wasi-http",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -7076,7 +7101,7 @@ dependencies = [
  "bytes",
  "futures",
  "tracing",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
 ]
 
 [[package]]
@@ -7090,7 +7115,26 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
+]
+
+[[package]]
+name = "wrpc-transport"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b551cf90e43a1a331ec13af1ad244c9605956fd2c3d535ff857f5978ae963518"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "futures",
+ "leb128",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "wrpc-types 0.5.0",
 ]
 
 [[package]]
@@ -7109,7 +7153,23 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tracing",
- "wrpc-types",
+ "wrpc-types 0.6.0",
+]
+
+[[package]]
+name = "wrpc-transport-nats"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0d7401a0771e00936b57519e5c1627a174ae05d979a5f8a961e264f0e6f99f1"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures",
+ "tokio",
+ "tower",
+ "tracing",
+ "wrpc-transport 0.22.0",
 ]
 
 [[package]]
@@ -7125,7 +7185,18 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "wrpc-transport",
+ "wrpc-transport 0.24.2",
+]
+
+[[package]]
+name = "wrpc-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "052dd3b6e5a936407695801656660badc5d0ddeaff482ac266669bfd47e6457e"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "wit-parser 0.201.0",
 ]
 
 [[package]]
