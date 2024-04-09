@@ -1,13 +1,14 @@
 import {produce} from 'immer';
 import {NatsConnection, connect} from 'nats.ws';
-import {BehaviorSubject, Observable, Subject, map, merge, tap} from 'rxjs';
-import {CloudEvent, WadmActor, WadmHost, WadmLink, WadmProvider} from './types';
+import {BehaviorSubject, Observable, map, merge, tap} from 'rxjs';
+import {CloudEvent, LinkResponse, WadmComponent, WadmConfig, WadmHost, WadmLink, WadmProvider} from './types';
 
 export type LatticeCache = {
   hosts: Record<string, WadmHost>;
-  actors: Record<string, WadmActor>;
+  components: Record<string, WadmComponent>;
   providers: Record<string, WadmProvider>;
   links: WadmLink[];
+  configs: Record<string, WadmConfig>;
 };
 
 export type LatticeClientConfig = {
@@ -31,12 +32,14 @@ export class LatticeClient {
   config$: BehaviorSubject<LatticeClientConfig>;
 
   #connection?: NatsConnection;
-  #linkState$: Subject<Pick<LatticeCache, 'links'>>;
-  #wadmState$: Subject<Partial<LatticeCache>>;
+  #linkState$: BehaviorSubject<Pick<LatticeCache, 'links'>>;
+  #wadmState$: BehaviorSubject<Partial<Pick<LatticeCache, 'components' | 'providers' | 'hosts'>>>;
+  #configState$: BehaviorSubject<Pick<LatticeCache, 'configs'>>;
 
   constructor({config}: LatticeClientOptions) {
-    this.#linkState$ = new Subject<Pick<LatticeCache, 'links'>>();
-    this.#wadmState$ = new Subject<Partial<LatticeCache>>();
+    this.#linkState$ = new BehaviorSubject<Pick<LatticeCache, 'links'>>({links: []});
+    this.#configState$ = new BehaviorSubject<Pick<LatticeCache, 'configs'>>({configs: {}});
+    this.#wadmState$ = new BehaviorSubject<Partial<Pick<LatticeCache, 'components' | 'providers' | 'hosts'>>>({ components: {}, providers: {}, hosts: {}});
     this.config$ = new BehaviorSubject({
       ...defaultConfig,
       ...config,
@@ -65,7 +68,7 @@ export class LatticeClient {
   }
 
   get #ctlTopic(): string {
-    return `${this.#ctlTopicPrefix}.ctl.${this.#latticeId}`;
+    return `${this.#ctlTopicPrefix}.ctl.v1.${this.#latticeId}`;
   }
 
   connect = async (): Promise<void> => {
@@ -79,6 +82,7 @@ export class LatticeClient {
     });
     this.#subscribeToWadmState();
     this.#subscribeToLinks();
+    this.#subscribeToConfigs();
   };
 
   disconnect = async (): Promise<void> => {
@@ -93,13 +97,14 @@ export class LatticeClient {
   getLatticeCache$ = (): Observable<LatticeCache> => {
     const subject = new BehaviorSubject<LatticeCache>({
       hosts: {},
-      actors: {},
+      components: {},
       providers: {},
       links: [],
+      configs: {},
     });
 
     // join wadmState and #linkState into a single observable
-    merge(this.#wadmState$, this.#linkState$)
+    merge(this.#wadmState$, this.#linkState$, this.#configState$)
       .pipe(
         // merge the new event into the existing state
         map((event) =>
@@ -118,9 +123,14 @@ export class LatticeClient {
 
   #subscribeToLinks = (): void => {
     (async (): Promise<void> => {
+      const LINK_TOPIC = `${this.#ctlTopic}.link.get`;
       const connection = await this.#waitForConnection();
-      const message = await connection.request(`${this.#ctlTopic}.get.links`);
-      this.#linkState$.next(message.json<{links: WadmLink[]}>());
+      const json = await (await connection.request(LINK_TOPIC)).json<LinkResponse>()
+      if (json.success) {
+        this.#linkState$.next({links: json.response});
+      } else {
+        throw new Error(json.message);
+      }
 
       // TODO: ideally we'll want to subscribe to the individual event topics but for now, that'll do 🐷
       const watch = await connection.subscribe(`wasmbus.evt.${this.#latticeId}.*`);
@@ -130,7 +140,7 @@ export class LatticeClient {
           case 'com.wasmcloud.lattice.linkdef_set':
           case 'com.wasmcloud.lattice.linkdef_deleted': {
             // Just refresh the whole list instead of trying to figure out which one changed
-            const message = await connection.request(`${this.#ctlTopic}.get.links`);
+            const message = await connection.request(LINK_TOPIC);
             this.#linkState$.next(message.json<{links: WadmLink[]}>());
           }
         }
@@ -138,6 +148,20 @@ export class LatticeClient {
       this.#linkState$.complete();
     })();
   };
+
+  #subscribeToConfigs = (): void => {
+    (async (): Promise<void> => {
+      const connection = await this.#waitForConnection();
+      const configs = await connection.jetstream().views.kv('CONFIGDATA_default');
+      const watch = await configs.watch();
+      for await (const event of watch) {
+        const existingConfigs = this.#configState$.getValue().configs
+        const newConfigs = { [event.key]: { name: event.key, entries: event.json<{[key: string]: string}>() }};
+        this.#configState$.next({configs: {...existingConfigs, ...newConfigs}});
+      }
+      this.#configState$.complete();
+    })();
+  }
 
   #subscribeToWadmState = (): void => {
     (async (): Promise<void> => {
@@ -150,8 +174,8 @@ export class LatticeClient {
             this.#wadmState$.next({hosts: event.json() as Record<string, WadmHost>});
             break;
           }
-          case 'actor_default': {
-            this.#wadmState$.next({actors: event.json() as Record<string, WadmActor>});
+          case 'component_default': {
+            this.#wadmState$.next({components: event.json() as Record<string, WadmComponent>});
             break;
           }
           case 'provider_default': {
