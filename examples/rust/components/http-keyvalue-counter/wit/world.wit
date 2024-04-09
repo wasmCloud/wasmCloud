@@ -1,0 +1,8 @@
+package wasmcloud:hello;
+
+world hello {
+  import wasi:keyvalue/atomic@0.2.0-draft; 
+  import wasi:keyvalue/eventual@0.2.0-draft; 
+
+  export wasi:http/incoming-handler@0.2.0;
+}

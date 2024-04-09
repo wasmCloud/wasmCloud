@@ -1,0 +1,31 @@
+/// A keyvalue interface that provides atomic operations.
+/// 
+/// Atomic operations are single, indivisible operations. When a fault causes
+/// an atomic operation to fail, it will appear to the invoker of the atomic
+/// operation that the action either completed successfully or did nothing
+/// at all.
+interface atomic {
+	/// A keyvalue interface that provides atomic operations.
+	use types.{bucket, error, key};
+
+	/// Atomically increment the value associated with the key in the bucket by the 
+	/// given delta. It returns the new value.
+	///
+	/// If the key does not exist in the bucket, it creates a new key-value pair
+	/// with the value set to the given delta. 
+	///
+	/// If any other error occurs, it returns an `Err(error)`.
+	increment: func(bucket: borrow<bucket>, key: key, delta: u64) -> result<u64, error>;
+	
+	/// Compare-and-swap (CAS) atomically updates the value associated with the key
+	/// in the bucket if the value matches the old value. This operation returns
+	/// `Ok(true)` if the swap was successful, `Ok(false)` if the value did not match,
+	/// 
+	/// A successful CAS operation means the current value matched the `old` value
+	/// and was replaced with the `new` value.
+	///
+	/// If the key does not exist in the bucket, it returns `Ok(false)`.
+	/// 
+	/// If any other error occurs, it returns an `Err(error)`.
+	compare-and-swap: func(bucket: borrow<bucket>, key: key, old: u64, new: u64) -> result<bool, error>;
+}
