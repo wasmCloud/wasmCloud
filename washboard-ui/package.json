@@ -10,6 +10,7 @@
     "turbo:build": "turbo run build --cache-dir .turbo/cache",
     "turbo:dev": "turbo run dev",
     "turbo:lint:eslint": "turbo run lint:eslint",
+    "turbo:lint:eslint:fix": "turbo run lint:eslint:fix",
     "turbo:format:prettier:fix": "turbo run format:prettier:fix",
     "turbo:format:prettier:check": "turbo run format:prettier:check",
     "turbo:test:playwright:headless": "turbo run test:playwright:headless",

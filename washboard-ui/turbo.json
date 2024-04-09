@@ -5,6 +5,9 @@
     "lint:eslint": {
       "dependsOn": ["^lint:eslint", "^build"]
     },
+    "lint:eslint:fix": {
+      "dependsOn": ["^lint:eslint:fix"]
+    },
     "format:prettier:check": {
       "dependsOn": ["^format:prettier:check"]
     },
