@@ -43,7 +43,7 @@ pub async fn rust_blobstore_fs() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-blobstore-fs",
-                env!("CARGO_BIN_EXE_blobstore-fs"),
+                env!("CARGO_BIN_EXE_blobstore-fs-provider"),
             )
             .await
             .expect("failed to build blobstore-fs PAR")
@@ -57,7 +57,7 @@ pub async fn rust_blobstore_s3() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-blobstore-s3",
-                env!("CARGO_BIN_EXE_blobstore-s3"),
+                env!("CARGO_BIN_EXE_blobstore-s3-provider"),
             )
             .await
             .expect("failed to build blobstore-s3 PAR")
@@ -71,7 +71,7 @@ pub async fn rust_http_client() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-http-client",
-                env!("CARGO_BIN_EXE_http-client"),
+                env!("CARGO_BIN_EXE_http-client-provider"),
             )
             .await
             .expect("failed to build http-client PAR")
@@ -85,7 +85,7 @@ pub async fn rust_http_server() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-http-server",
-                env!("CARGO_BIN_EXE_http-server"),
+                env!("CARGO_BIN_EXE_http-server-provider"),
             )
             .await
             .expect("failed to build http-server PAR")
@@ -99,7 +99,7 @@ pub async fn rust_lattice_controller() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-lattice-controller",
-                env!("CARGO_BIN_EXE_lattice-controller"),
+                env!("CARGO_BIN_EXE_lattice-controller-provider"),
             )
             .await
             .expect("failed to build lattice-controller PAR")
@@ -113,7 +113,7 @@ pub async fn rust_keyvalue_redis() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-keyvalue-redis",
-                env!("CARGO_BIN_EXE_keyvalue-redis"),
+                env!("CARGO_BIN_EXE_keyvalue-redis-provider"),
             )
             .await
             .expect("failed to build keyvalue-redis PAR")
@@ -127,7 +127,7 @@ pub async fn rust_keyvalue_vault() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-keyvalue-vault",
-                env!("CARGO_BIN_EXE_keyvalue-vault"),
+                env!("CARGO_BIN_EXE_keyvalue-vault-provider"),
             )
             .await
             .expect("failed to build keyvalue-vault PAR")
@@ -141,7 +141,7 @@ pub async fn rust_messaging_kafka() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-messaging-kafka",
-                env!("CARGO_BIN_EXE_messaging-kafka"),
+                env!("CARGO_BIN_EXE_messaging-kafka-provider"),
             )
             .await
             .expect("failed to build messaging-kafka PAR")
@@ -155,7 +155,7 @@ pub async fn rust_messaging_nats() -> &'static Provider {
         .get_or_init(|| async {
             Provider::new(
                 "wasmcloud-provider-messaging-nats",
-                env!("CARGO_BIN_EXE_messaging-nats"),
+                env!("CARGO_BIN_EXE_messaging-nats-provider"),
             )
             .await
             .expect("failed to build messaging-nats PAR")
