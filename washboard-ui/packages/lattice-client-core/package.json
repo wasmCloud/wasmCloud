@@ -2,7 +2,7 @@
   "name": "@wasmcloud/lattice-client-core",
   "packageManager": "yarn@4.0.2",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-agnostic core package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
@@ -16,10 +16,12 @@
     ".": {
       "import": {
         "types": "./build/index.d.ts",
+        "development": "./src/index.ts",
         "default": "./build/index.js"
       },
       "require": {
         "types": "./build/index.d.ts",
+        "development": "./src/index.ts",
         "default": "./build/index.cjs"
       }
     },
@@ -31,6 +33,7 @@
   ],
   "scripts": {
     "lint:eslint": "eslint --ext .ts,.tsx ./src",
+    "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
     "dev": "tsup --watch",
     "build": "tsup"
