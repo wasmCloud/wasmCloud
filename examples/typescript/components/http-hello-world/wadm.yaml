@@ -2,35 +2,38 @@
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
-  name: typescript-http-hello-world
+  name: typescript-hello-world
   annotations:
     version: v0.0.1
     description: "Demo of Typescript HTTP hello world server"
-    experimental: true
 spec:
   components:
-    # (Capability Provider) mediates HTTP access
-    - name: httpserver
-      type: capability
-      properties:
-        image: wasmcloud.azurecr.io/httpserver:0.19.1
-        contract: wasmcloud:httpserver
-
-    # (Actor) A test actor that returns a string for any given HTTP request
-    - name: typescript-http-hello-world
-      type: actor
+    # (Component) A test component that returns a string for any given HTTP request
+    - name: http-component
+      type: component
       properties:
         image: file://./build/http_hello_world_s.wasm
       traits:
-        # Govern the spread/scheduling of the actor
+        # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
             replicas: 1
 
-        # Link the HTTP server, and inform it to listen on port 8080
-        # on the local machine
-        - type: linkdef
+    # Add a capability provider that enables HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.20.0
+      traits:
+        # Link the httpserver to the component, and configure the HTTP server
+        # to listen on port 8080 for incoming requests
+        - type: link
           properties:
-            target: httpserver
-            values:
-              ADDRESS: 127.0.0.1:8080
+            target: http-component
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 127.0.0.1:8080
