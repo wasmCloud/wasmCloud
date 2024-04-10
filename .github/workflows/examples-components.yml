@@ -31,7 +31,8 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - 0.26.0
+          # TODO: Use this once 0.27.0 is released
+          # - 0.27.0
           - current
     steps:
       - uses: actions/checkout@v4
@@ -62,12 +63,13 @@ jobs:
   wash-build:
     name: build
     runs-on: ubuntu-22.04
-    needs: [ build-wash-cli ]
+    needs: [build-wash-cli]
     strategy:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.26.0
+          # TODO: Use this once 0.27.0 is released
+          # - 0.27.0
           - current
         project:
           - lang: "golang"
@@ -143,7 +145,7 @@ jobs:
   publish:
     name: publish
     runs-on: ubuntu-22.04
-    needs: [ wash-build ]
+    needs: [wash-build]
     if: ${{ startswith(github.ref, 'refs/tags/component-') }}
     strategy:
       fail-fast: false
