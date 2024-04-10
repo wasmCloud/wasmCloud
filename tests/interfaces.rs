@@ -21,7 +21,8 @@ use wasmcloud_core::tls::NativeRootsExt as _;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
 use wasmcloud_test_util::{
-    actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
+    component::assert_scale_component, host::WasmCloudTestHost,
+    lattice::link::assert_advertise_link,
 };
 
 pub mod common;
@@ -265,7 +266,7 @@ async fn interfaces() -> anyhow::Result<()> {
             try_join!(
                 async {
                     // Scale pinger
-                    assert_scale_actor(
+                    assert_scale_component(
                         &ctl_client,
                         &host.host_key(),
                         format!("file://{RUST_INTERFACES_REACTOR}"),
@@ -279,7 +280,7 @@ async fn interfaces() -> anyhow::Result<()> {
                 },
                 async {
                     // Scale ponger
-                    assert_scale_actor(
+                    assert_scale_component(
                         &ctl_client,
                         &host.host_key(),
                         format!("file://{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2}"),
