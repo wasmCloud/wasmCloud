@@ -4,7 +4,7 @@ use anyhow::Context as _;
 
 use wasmcloud_host::wasmbus::host_config::PolicyService;
 use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
-use wasmcloud_test_util::{actor::assert_scale_actor, host::WasmCloudTestHost};
+use wasmcloud_test_util::{component::assert_scale_component, host::WasmCloudTestHost};
 
 pub mod common;
 use common::nats::start_nats;
@@ -68,7 +68,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     );
 
     assert!(
-        assert_scale_actor(
+        assert_scale_component(
             &ctl_client,
             &host.host_key(),
             format!("file://{RUST_INTERFACES_REACTOR}"),

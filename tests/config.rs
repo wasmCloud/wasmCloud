@@ -17,7 +17,8 @@ use tracing_subscriber::prelude::*;
 use wasmcloud_host::wasmbus::config::BundleGenerator;
 use wasmcloud_test_util::lattice::config::assert_config_put;
 use wasmcloud_test_util::{
-    actor::assert_scale_actor, host::WasmCloudTestHost, lattice::link::assert_advertise_link,
+    component::assert_scale_component, host::WasmCloudTestHost,
+    lattice::link::assert_advertise_link,
 };
 
 pub mod common;
@@ -164,7 +165,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     )
     .await?;
     // Scale pinger
-    assert_scale_actor(
+    assert_scale_component(
         &ctl_client,
         &host.host_key(),
         format!("file://{RUST_PINGER_CONFIG_COMPONENT_PREVIEW2_SIGNED}"),
@@ -184,7 +185,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     )
     .await?;
     // Scale ponger
-    assert_scale_actor(
+    assert_scale_component(
         &ctl_client,
         &host.host_key(),
         format!("file://{RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED}"),
