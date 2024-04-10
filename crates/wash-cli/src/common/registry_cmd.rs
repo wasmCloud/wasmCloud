@@ -180,26 +180,27 @@ fn resolve_artifact_ref(
     registry: &str,
     project_config: Option<PathBuf>,
 ) -> Result<Reference> {
+    // NOTE: Image URLs must be all lower case for `oci_distribution::Reference` to parse them properly
+    let url = url.trim().to_ascii_lowercase();
+    let registry = registry.trim().to_ascii_lowercase();
+
     let image: Reference = url
-        .trim()
-        .to_ascii_lowercase()
         .parse()
         .context("failed to parse artifact url into oci image reference")?;
 
-    if url.trim() == image.whole() {
+    if url == image.whole() {
         return Ok(image);
     }
 
-    if !url.trim().is_empty() && !registry.trim().is_empty() {
-        let image: Reference = format!("{}/{}", registry.trim(), url.trim())
-            .to_ascii_lowercase()
+    if !url.is_empty() && !registry.is_empty() {
+        let image: Reference = format!("{}/{}", registry, url)
             .parse()
             .context("failed to parse artifact url from specified registry and repository")?;
 
         return Ok(image);
     }
 
-    if !url.trim().is_empty() && registry.trim().is_empty() {
+    if !url.is_empty() && registry.is_empty() {
         let project_config = get_config(project_config, Some(true))?;
         let registry = project_config
             .common
@@ -208,14 +209,13 @@ fn resolve_artifact_ref(
             .clone()
             .unwrap_or_default();
 
-        if registry.trim().is_empty() {
+        if registry.is_empty() {
             bail!("Missing or invalid registry url configuration")
         }
 
-        let image: Reference = format!("{}/{}", registry.trim(), url.trim())
-        .to_ascii_lowercase()
-        .parse()
-        .context("failed to parse artifact url from specified repository and registry url configuration")?;
+        let image: Reference = format!("{}/{}", registry, url).parse().context(
+            "failed to parse artifact url from specified repository and registry url configuration",
+        )?;
 
         return Ok(image);
     }
