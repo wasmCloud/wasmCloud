@@ -403,7 +403,10 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
             path,
         )
     } else {
-        bail!("no wasmcloud.toml file found in {}", path.display());
+        bail!(
+            "unrecognized path [{}] (neither directory nor file)",
+            path.display()
+        );
     };
 
     let mut config = Config::builder().add_source(config::File::from(wasmcloud_path.clone()));
