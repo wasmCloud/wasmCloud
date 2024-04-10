@@ -33,9 +33,8 @@ sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee097
 
 [keyvalue]
 url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
-sha256 = "4724712166fe3475591c085ec06f2e27e1dd564b71f0fe181175098621fbfe03"
-sha512 = "88e0c0e48e5e169726419a7467092d555326a483f0cb616bc896d4853d511989074907750aad36c06f258fa050ebf030cc3566ec01b6f05612bba3c6e8f2690d"
-deps = ["io"]
+sha256 = "d2de617fe31ec0abc6072f75f97dd22bf95b3231d5b3111471d73871df9081cd"
+sha512 = "6f0b4e44c684d760c54552e2bde9bc976e0a4f6525fc1d47acb98625e030847276436242f42a41f4da1bb9169fb2968c53d659d61af9b2f709f4eb6f9880e2c7"
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"

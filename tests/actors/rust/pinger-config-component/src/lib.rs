@@ -3,19 +3,18 @@
 wit_bindgen::generate!({
     world: "actor",
     with: {
+        "wasi:http/types@0.2.0": wasmcloud_actor::wasi::http::types,
         "wasi:io/streams@0.2.0": wasmcloud_actor::wasi::io::streams,
     }
 });
 
-use std::{
-    collections::HashMap,
-    io::{Read, Write},
-};
+use std::collections::HashMap;
+use std::io::{Read, Write};
 
 use serde::Deserialize;
 use serde_json::json;
 use test_actors::testing::*;
-use wasi::http;
+use wasmcloud_actor::wasi::{http, config};
 use wasmcloud_actor::{InputStreamReader, OutputStreamWriter};
 
 struct Actor;
@@ -46,8 +45,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let pong = pingpong::ping();
 
         let res = json!({
-            "single_val": wasi::config::runtime::get(&config_key).expect("failed to get config value"),
-            "multi_val": wasi::config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
+            "single_val": config::runtime::get(&config_key).expect("failed to get config value"),
+            "multi_val": config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
             "pong": pong,
         });
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");

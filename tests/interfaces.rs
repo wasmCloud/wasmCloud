@@ -345,7 +345,7 @@ async fn interfaces() -> anyhow::Result<()> {
         "default",
         "wasi",
         "keyvalue",
-        vec!["atomic".to_string(), "eventual".to_string()],
+        vec!["atomics".to_string(), "store".to_string()],
         vec![],
         vec![keyvalue_redis_config_name],
     )
@@ -359,7 +359,7 @@ async fn interfaces() -> anyhow::Result<()> {
         "vault",
         "wasi",
         "keyvalue",
-        vec!["eventual".to_string()],
+        vec!["store".to_string()],
         vec![],
         vec![keyvalue_vault_config_name],
     )

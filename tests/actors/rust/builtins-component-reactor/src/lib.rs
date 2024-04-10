@@ -181,111 +181,62 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         bus::lattice::set_link_name(
             "keyvalue",
             vec![bus::lattice::CallTargetInterface::new(
-                "wasi", "keyvalue", "eventual",
+                "wasi", "keyvalue", "store",
             )],
         );
         let foo_key = String::from("foo");
-        let bucket = keyvalue::types::Bucket::open_bucket("")
-            .map_err(|e| e.trace())
-            .expect("failed to open empty bucket");
-        keyvalue::eventual::exists(&bucket, &foo_key)
-            .map_err(|e| e.trace())
+        let bucket = keyvalue::store::open("").expect("failed to open empty bucket");
+        bucket
+            .exists(&foo_key)
             .expect("failed to check whether `foo` exists")
             .then_some(())
             .expect("`foo` does not exist");
 
-        let foo_value = keyvalue::eventual::get(&bucket, &foo_key)
-            .map_err(|e| e.trace())
+        let foo_value = bucket
+            .get(&foo_key)
             .expect("failed to get `foo`")
             .expect("`foo` does not exist in bucket");
-        assert!(foo_value.incoming_value_size().is_err());
-
-        let foo_value = keyvalue::types::IncomingValue::incoming_value_consume_sync(foo_value)
-            .map_err(|e| e.trace())
-            .expect("failed to get incoming value buffer");
         assert_eq!(foo_value, b"bar");
 
-        let foo_value = keyvalue::eventual::get(&bucket, &foo_key)
-            .map_err(|e| e.trace())
-            .expect("failed to get `foo`")
-            .expect("`foo` does not exist in bucket");
-        let mut foo_stream =
-            keyvalue::types::IncomingValue::incoming_value_consume_async(foo_value)
-                .map_err(|e| e.trace())
-                .expect("failed to get incoming value stream");
-        let mut foo_value = vec![];
-        let n = InputStreamReader::from(&mut foo_stream)
-            .read_to_end(&mut foo_value)
-            .expect("failed to read value from keyvalue input stream");
-        assert_eq!(n, 3);
-        assert_eq!(foo_value, b"bar");
+        bucket.delete(&foo_key).expect("failed to delete `foo`");
 
-        keyvalue::eventual::delete(&bucket, &foo_key)
-            .map_err(|e| e.trace())
-            .expect("failed to delete `foo`");
-
-        let foo_exists = keyvalue::eventual::exists(&bucket, &foo_key)
-            .map_err(|e| e.trace())
-            .expect(
-                "`exists` method should not have returned an error for `foo` key, which was deleted",
-            );
+        let foo_exists = bucket.exists(&foo_key).expect(
+            "`exists` method should not have returned an error for `foo` key, which was deleted",
+        );
         assert!(!foo_exists);
+
+        let foo_value = bucket.get(&foo_key).expect("failed to get `foo`");
+        assert_eq!(foo_value, None);
 
         let result_key = String::from("result");
 
-        let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();
-        result_value
-            .outgoing_value_write_body_sync(&body)
-            .expect("failed to write outgoing value");
-        keyvalue::eventual::set(&bucket, &result_key, &result_value)
-            .map_err(|e| e.trace())
+        bucket
+            .set(&result_key, &body)
             .expect("failed to set `result`");
 
-        let result_value = keyvalue::eventual::get(&bucket, &result_key)
-            .map_err(|e| e.trace())
+        let result_value = bucket
+            .get(&result_key)
             .expect("failed to get `result`")
             .expect("`result` does not exist in bucket");
-        let result_value =
-            keyvalue::types::IncomingValue::incoming_value_consume_sync(result_value)
-                .map_err(|e| e.trace())
-                .expect("failed to get incoming value buffer");
         assert_eq!(result_value, body);
 
-        let result_value = keyvalue::types::OutgoingValue::new_outgoing_value();
-        let mut result_stream = result_value
-            .outgoing_value_write_body_async()
-            .expect("failed to get outgoing value output stream");
-        let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
-        result_stream_writer
-            .write_all(&body)
-            .expect("failed to write result to keyvalue output stream");
-        result_stream_writer
-            .flush()
-            .expect("failed to flush keyvalue output stream");
-
-        keyvalue::eventual::set(&bucket, &result_key, &result_value)
-            .map_err(|e| e.trace())
+        bucket
+            .set(&result_key, &result_value)
             .expect("failed to set `result`");
 
         bus::lattice::set_link_name(
             "keyvalue",
             vec![bus::lattice::CallTargetInterface::new(
-                "wasi", "keyvalue", "atomic",
+                "wasi", "keyvalue", "atomics",
             )],
         );
         let counter_key = String::from("counter");
-        let value = keyvalue::atomic::increment(&bucket, &counter_key, 1)
-            .map_err(|e| e.trace())
+        let value = keyvalue::atomics::increment(&bucket, &counter_key, 1)
             .expect("failed to increment `counter`");
         assert_eq!(value, 1);
-        let value = keyvalue::atomic::increment(&bucket, &counter_key, 41)
-            .map_err(|e| e.trace())
+        let value = keyvalue::atomics::increment(&bucket, &counter_key, 41)
             .expect("failed to increment `counter`");
         assert_eq!(value, 42);
-
-        // TODO: Verify return value when implemented for all hosts
-        let _ = keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 42, 4242);
-        let _ = keyvalue::atomic::compare_and_swap(&bucket, &counter_key, 4242, 42);
 
         bus::lattice::set_link_name(
             "blobstore",

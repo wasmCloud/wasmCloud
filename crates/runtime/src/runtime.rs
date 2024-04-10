@@ -1,5 +1,5 @@
 use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueEventual, Logging, Messaging,
+    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
     OutgoingHttp,
 };
 use crate::ActorConfig;
@@ -95,26 +95,26 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`KeyValueAtomic`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`KeyValueAtomics`] handler to use for all actor instances unless overriden for the instance
     #[must_use]
-    pub fn keyvalue_atomic(
+    pub fn keyvalue_atomics(
         self,
-        keyvalue_atomic: Arc<impl KeyValueAtomic + Sync + Send + 'static>,
+        keyvalue_atomics: Arc<impl KeyValueAtomics + Sync + Send + 'static>,
     ) -> Self {
         Self {
-            handler: self.handler.keyvalue_atomic(keyvalue_atomic),
+            handler: self.handler.keyvalue_atomics(keyvalue_atomics),
             ..self
         }
     }
 
-    /// Set a [`KeyValueEventual`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`KeyValueStore`] handler to use for all actor instances unless overriden for the instance
     #[must_use]
-    pub fn keyvalue_eventual(
+    pub fn keyvalue_store(
         self,
-        keyvalue_eventual: Arc<impl KeyValueEventual + Sync + Send + 'static>,
+        keyvalue_store: Arc<impl KeyValueStore + Sync + Send + 'static>,
     ) -> Self {
         Self {
-            handler: self.handler.keyvalue_eventual(keyvalue_eventual),
+            handler: self.handler.keyvalue_store(keyvalue_store),
             ..self
         }
     }

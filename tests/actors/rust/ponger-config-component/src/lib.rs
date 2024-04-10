@@ -2,6 +2,8 @@
 
 wit_bindgen::generate!("actor");
 
+use wasmcloud_actor::wasi;
+
 use exports::test_actors::testing::*;
 
 struct Actor;
