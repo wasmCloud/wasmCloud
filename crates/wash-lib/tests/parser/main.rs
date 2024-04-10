@@ -266,7 +266,7 @@ fn folder_path_with_no_config() {
     let err = assert_err!(result);
     assert_eq!(
         format!(
-            "no wasmcloud.toml file found in {}",
+            "failed to find wasmcloud.toml in [{}]",
             get_full_path("./tests/parser/files/noconfig")
         ),
         err.to_string().as_str()

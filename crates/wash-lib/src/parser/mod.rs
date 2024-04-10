@@ -392,7 +392,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let (project_path, wasmcloud_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {
-            bail!("no wasmcloud.toml file found in {}", path.display());
+            bail!("failed to find wasmcloud.toml in [{}]", path.display());
         }
         (path, wasmcloud_path)
     } else if path.is_file() {
@@ -404,7 +404,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         )
     } else {
         bail!(
-            "unrecognized path [{}] (neither directory nor file)",
+            "failed to find wasmcloud.toml: path [{}] is not a directory or file",
             path.display()
         );
     };
