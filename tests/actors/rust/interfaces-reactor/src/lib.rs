@@ -142,20 +142,20 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     eprintln!("test default messaging...");
     messaging::run_test();
 
-    eprintln!("test default keyvalue/eventual...");
-    keyvalue::run_eventual_test(&body);
+    eprintln!("test default keyvalue/store...");
+    keyvalue::run_store_test(&body);
 
-    eprintln!("test vault keyvalue/eventual...");
+    eprintln!("test vault keyvalue/store...");
     bus::lattice::set_link_name(
         "vault",
         vec![bus::lattice::CallTargetInterface::new(
-            "wasi", "keyvalue", "eventual",
+            "wasi", "keyvalue", "store",
         )],
     );
-    keyvalue::run_eventual_test(&body);
+    keyvalue::run_store_test(&body);
 
-    eprintln!("test default keyvalue/atomic...");
-    keyvalue::run_atomic_test();
+    eprintln!("test default keyvalue/atomics...");
+    keyvalue::run_atomics_test();
 
     eprintln!("test default blobstore...");
     blobstore::run_test(1, &body, "container");

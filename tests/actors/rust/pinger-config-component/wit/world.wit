@@ -1,10 +1,6 @@
 package test-wrpc:pinger;
 
 world actor {
-  import wasi:http/outgoing-handler@0.2.0;
-  import wasi:io/poll@0.2.0;
-  import wasi:config/runtime@0.2.0-draft;
-
   import test-actors:testing/pingpong;
 
   export wasi:http/incoming-handler@0.2.0;

@@ -1,7 +1,5 @@
 package test-wrpc:ponger;
 
 world actor {
-  import wasi:config/runtime@0.2.0-draft;
-
   export test-actors:testing/pingpong;
 }

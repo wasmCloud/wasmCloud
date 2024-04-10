@@ -114,6 +114,7 @@ dependencies = [
 name = "ponger-config-component"
 version = "0.1.0"
 dependencies = [
+ "wasmcloud-actor",
  "wit-bindgen 0.22.0",
 ]
 

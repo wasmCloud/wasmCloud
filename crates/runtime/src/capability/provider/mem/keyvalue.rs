@@ -1,4 +1,4 @@
-use crate::capability::{KeyValueAtomic, KeyValueEventual};
+use crate::capability::{keyvalue, KeyValueAtomics, KeyValueStore};
 
 use core::sync::atomic::AtomicU64;
 
@@ -7,11 +7,8 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use futures::stream;
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing::instrument;
-use wrpc_transport::IncomingInputStream;
 
 /// Bucket entry
 #[derive(Debug)]
@@ -24,7 +21,7 @@ pub enum Entry {
 
 type Bucket = HashMap<String, Entry>;
 
-/// In-memory [`KeyValueEventual`] and [`KeyValueAtomic`] implementation
+/// In-memory [`KeyValueStore`] and [`KeyValueAtomics`] implementation
 #[derive(Debug)]
 pub struct KeyValue(RwLock<HashMap<String, RwLock<Bucket>>>);
 
@@ -83,16 +80,21 @@ impl IntoIterator for KeyValue {
 }
 
 #[async_trait]
-impl KeyValueAtomic for KeyValue {
-    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
+impl KeyValueAtomics for KeyValue {
+    async fn increment(
+        &self,
+        bucket: &str,
+        key: String,
+        delta: u64,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?;
         if let Some(entry) = bucket.read().await.get(&key) {
             match entry {
                 Entry::Atomic(value) => {
-                    return Ok(value
+                    return Ok(Ok(value
                         .fetch_add(delta, Ordering::Relaxed)
-                        .wrapping_add(delta));
+                        .wrapping_add(delta)));
                 }
                 Entry::Blob(_) => bail!("invalid entry type"),
             }
@@ -101,47 +103,35 @@ impl KeyValueAtomic for KeyValue {
         match bucket.entry(key) {
             hash_map::Entry::Vacant(entry) => {
                 entry.insert(Entry::Atomic(AtomicU64::new(delta)));
-                Ok(delta)
+                Ok(Ok(delta))
             }
             hash_map::Entry::Occupied(entry) => match entry.get() {
-                Entry::Atomic(value) => Ok(value
+                Entry::Atomic(value) => Ok(Ok(value
                     .fetch_add(delta, Ordering::Relaxed)
-                    .wrapping_add(delta)),
+                    .wrapping_add(delta))),
                 Entry::Blob(_) => bail!("invalid entry type"),
             },
-        }
-    }
-
-    async fn compare_and_swap(
-        &self,
-        bucket: &str,
-        key: String,
-        old: u64,
-        new: u64,
-    ) -> anyhow::Result<bool> {
-        let kv = self.0.read().await;
-        let bucket = kv.get(bucket).context("bucket not found")?.read().await;
-        match bucket.get(&key).context("key not found")? {
-            Entry::Atomic(value) => Ok(value
-                .compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok_and(|value| value == old)),
-            Entry::Blob(_) => bail!("invalid entry type"),
         }
     }
 }
 
 #[async_trait]
-impl KeyValueEventual for KeyValue {
+impl KeyValueStore for KeyValue {
     #[instrument]
-    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, keyvalue::store::Error>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?.read().await;
-        let value = match bucket.get(&key) {
-            None => return Ok(None),
-            Some(Entry::Atomic(value)) => value.load(Ordering::Relaxed).to_string().into_bytes(),
-            Some(Entry::Blob(value)) => value.clone(),
-        };
-        Ok(Some(Box::new(stream::iter([Ok(value.into())]))))
+        Ok(Ok(match bucket.get(&key) {
+            None => None,
+            Some(Entry::Atomic(value)) => {
+                Some(value.load(Ordering::Relaxed).to_string().into_bytes())
+            }
+            Some(Entry::Blob(value)) => Some(value.clone()),
+        }))
     }
 
     #[instrument(skip(value))]
@@ -149,31 +139,54 @@ impl KeyValueEventual for KeyValue {
         &self,
         bucket: &str,
         key: String,
-        mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
-    ) -> anyhow::Result<()> {
-        let mut buf = vec![];
-        value
-            .read_to_end(&mut buf)
-            .await
-            .context("failed to read value")?;
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
         let mut kv = self.0.write().await;
         let mut bucket = kv.entry(bucket.into()).or_default().write().await;
-        bucket.insert(key, Entry::Blob(buf));
-        Ok(())
+        bucket.insert(key, Entry::Blob(value));
+        Ok(Ok(()))
     }
 
     #[instrument]
-    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
+    async fn delete(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?;
         bucket.write().await.remove(&key).context("key not found")?;
-        Ok(())
+        Ok(Ok(()))
     }
 
     #[instrument]
-    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
+    async fn exists(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<bool, keyvalue::store::Error>> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?.read().await;
-        Ok(bucket.contains_key(&key))
+        Ok(Ok(bucket.contains_key(&key)))
+    }
+
+    #[instrument]
+    async fn list_keys(
+        &self,
+        bucket: &str,
+        cursor: Option<u64>,
+    ) -> anyhow::Result<Result<keyvalue::store::KeyResponse, keyvalue::store::Error>> {
+        let kv = self.0.read().await;
+        let bucket = kv.get(bucket).context("bucket not found")?.read().await;
+        if cursor.is_some() {
+            Ok(Err(keyvalue::store::Error::Other(
+                "cursors not supported".into(),
+            )))
+        } else {
+            Ok(Ok(keyvalue::store::KeyResponse {
+                cursor: None,
+                keys: bucket.keys().map(ToString::to_string).collect(),
+            }))
+        }
     }
 }

@@ -4,7 +4,7 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, Config, IncomingHttp, KeyValueAtomic, KeyValueEventual,
+    ActorIdentifier, Blobstore, Bus, Config, IncomingHttp, KeyValueAtomics, KeyValueStore,
     LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
     OutgoingHttpRequest, TargetEntity,
 };
@@ -17,9 +17,6 @@ pub use wasmcloud_core::CallTargetInterface;
 mod bindgen {
     mod keyvalue {
         pub type Bucket = std::sync::Arc<String>;
-        pub type IncomingValue = wrpc_transport::IncomingInputStream;
-        pub type OutgoingValue = crate::io::AsyncVec;
-        pub type Error = anyhow::Error;
     }
 
     mod blobstore {
@@ -48,15 +45,12 @@ mod bindgen {
            "wasi:clocks/wall_clock": wasmtime_wasi::bindings::clocks::wall_clock,
            "wasi:filesystem/filesystem": wasmtime_wasi::bindings::filesystem::filesystem,
            "wasi:http/incoming-handler": wasmtime_wasi_http::bindings::http::incoming_handler,
-           "wasi:http/outgoing-handler": wasmtime_wasi_http::bindings::http::incoming_handler,
+           "wasi:http/outgoing-handler": wasmtime_wasi_http::bindings::http::outgoing_handler,
            "wasi:http/types": wasmtime_wasi_http::bindings::http::types,
            "wasi:io/error": wasmtime_wasi::bindings::io::error,
            "wasi:io/poll": wasmtime_wasi::bindings::io::poll,
            "wasi:io/streams": wasmtime_wasi::bindings::io::streams,
-           "wasi:keyvalue/types/bucket": keyvalue::Bucket,
-           "wasi:keyvalue/types/incoming-value": keyvalue::IncomingValue,
-           "wasi:keyvalue/types/outgoing-value": keyvalue::OutgoingValue,
-           "wasi:keyvalue/wasi-keyvalue-error/error": keyvalue::Error,
+           "wasi:keyvalue/store/bucket": keyvalue::Bucket,
            "wasi:random/random": wasmtime_wasi::bindings::random::random,
            "wasmcloud:bus/lattice/call-target-interface": super::CallTargetInterface,
         },

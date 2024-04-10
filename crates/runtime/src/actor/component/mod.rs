@@ -39,6 +39,53 @@ mod keyvalue;
 mod logging;
 mod messaging;
 
+/// skips instance names, for which static (builtin) bindings exist
+macro_rules! skip_static_instances {
+    ($instance:expr) => {
+        match ($instance) {
+            "wasi:blobstore/blobstore@0.2.0-draft"
+            | "wasi:blobstore/container@0.2.0-draft"
+            | "wasi:blobstore/types@0.2.0-draft"
+            | "wasi:cli/environment@0.2.0"
+            | "wasi:cli/exit@0.2.0"
+            | "wasi:cli/stderr@0.2.0"
+            | "wasi:cli/stdin@0.2.0"
+            | "wasi:cli/stdout@0.2.0"
+            | "wasi:cli/terminal-input@0.2.0"
+            | "wasi:cli/terminal-output@0.2.0"
+            | "wasi:cli/terminal-stderr@0.2.0"
+            | "wasi:cli/terminal-stdin@0.2.0"
+            | "wasi:cli/terminal-stdout@0.2.0"
+            | "wasi:clocks/monotonic-clock@0.2.0"
+            | "wasi:clocks/wall-clock@0.2.0"
+            | "wasi:config/runtime@0.2.0-draft"
+            | "wasi:filesystem/preopens@0.2.0"
+            | "wasi:filesystem/types@0.2.0"
+            | "wasi:http/incoming-handler@0.2.0"
+            | "wasi:http/outgoing-handler@0.2.0"
+            | "wasi:http/types@0.2.0"
+            | "wasi:io/error@0.2.0"
+            | "wasi:io/poll@0.2.0"
+            | "wasi:io/streams@0.2.0"
+            | "wasi:keyvalue/atomics@0.2.0-draft"
+            | "wasi:keyvalue/store@0.2.0-draft"
+            | "wasi:logging/logging"
+            | "wasi:random/random@0.2.0"
+            | "wasi:sockets/instance-network@0.2.0"
+            | "wasi:sockets/network@0.2.0"
+            | "wasi:sockets/tcp-create-socket@0.2.0"
+            | "wasi:sockets/tcp@0.2.0"
+            | "wasi:sockets/udp-create-socket@0.2.0"
+            | "wasi:sockets/udp@0.2.0"
+            | "wasmcloud:bus/lattice@1.0.0"
+            | "wasmcloud:messaging/consumer@0.2.0"
+            | "wasmcloud:messaging/handler@0.2.0"
+            | "wasmcloud:messaging/types@0.2.0" => continue,
+            _ => {}
+        }
+    };
+}
+
 type TableResult<T> = Result<T, ResourceTableError>;
 
 /// `StdioStream` delegates all stream I/O to inner stream if such is set and
@@ -252,49 +299,7 @@ where
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
         // Avoid polyfilling instances, for which static bindings are linked
-        match instance_name.as_ref() {
-            "wasi:blobstore/blobstore@0.2.0-draft"
-            | "wasi:blobstore/container@0.2.0-draft"
-            | "wasi:blobstore/types@0.2.0-draft"
-            | "wasi:config/runtime@0.2.0-draft"
-            | "wasi:cli/environment@0.2.0"
-            | "wasi:cli/exit@0.2.0"
-            | "wasi:cli/stderr@0.2.0"
-            | "wasi:cli/stdin@0.2.0"
-            | "wasi:cli/stdout@0.2.0"
-            | "wasi:cli/terminal-input@0.2.0"
-            | "wasi:cli/terminal-output@0.2.0"
-            | "wasi:cli/terminal-stderr@0.2.0"
-            | "wasi:cli/terminal-stdin@0.2.0"
-            | "wasi:cli/terminal-stdout@0.2.0"
-            | "wasi:clocks/monotonic-clock@0.2.0"
-            | "wasi:clocks/wall-clock@0.2.0"
-            | "wasi:filesystem/preopens@0.2.0"
-            | "wasi:filesystem/types@0.2.0"
-            | "wasi:http/incoming-handler@0.2.0"
-            | "wasi:http/outgoing-handler@0.2.0"
-            | "wasi:http/types@0.2.0"
-            | "wasi:io/error@0.2.0"
-            | "wasi:io/poll@0.2.0"
-            | "wasi:io/streams@0.2.0"
-            | "wasi:keyvalue/atomic@0.2.0-draft"
-            | "wasi:keyvalue/eventual@0.2.0-draft"
-            | "wasi:keyvalue/types@0.2.0-draft"
-            | "wasi:keyvalue/wasi-keyvalue-error@0.2.0-draft"
-            | "wasi:logging/logging"
-            | "wasi:random/random@0.2.0"
-            | "wasi:sockets/instance-network@0.2.0"
-            | "wasi:sockets/network@0.2.0"
-            | "wasi:sockets/tcp-create-socket@0.2.0"
-            | "wasi:sockets/tcp@0.2.0"
-            | "wasi:sockets/udp-create-socket@0.2.0"
-            | "wasi:sockets/udp@0.2.0"
-            | "wasmcloud:bus/lattice"
-            | "wasmcloud:messaging/consumer@0.2.0"
-            | "wasmcloud:messaging/handler@0.2.0"
-            | "wasmcloud:messaging/types@0.2.0" => continue,
-            _ => {}
-        }
+        skip_static_instances!(instance_name.as_ref());
         let wit_parser::WorldItem::Interface(interface) = item else {
             continue;
         };
@@ -448,49 +453,7 @@ fn instantiate(
         // Skip static bindings, since the runtime types of their results are not needed by the
         // runtime - those will not be constructed using reflection, but rather directly returned
         // by Wasmtime
-        match instance_name {
-            "wasi:blobstore/blobstore@0.2.0-draft"
-            | "wasi:blobstore/container@0.2.0-draft"
-            | "wasi:blobstore/types@0.2.0-draft"
-            | "wasi:cli/environment@0.2.0"
-            | "wasi:cli/exit@0.2.0"
-            | "wasi:cli/stderr@0.2.0"
-            | "wasi:cli/stdin@0.2.0"
-            | "wasi:cli/stdout@0.2.0"
-            | "wasi:cli/terminal-input@0.2.0"
-            | "wasi:cli/terminal-output@0.2.0"
-            | "wasi:cli/terminal-stderr@0.2.0"
-            | "wasi:cli/terminal-stdin@0.2.0"
-            | "wasi:cli/terminal-stdout@0.2.0"
-            | "wasi:clocks/monotonic-clock@0.2.0"
-            | "wasi:clocks/wall-clock@0.2.0"
-            | "wasi:config/runtime@0.2.0-draft"
-            | "wasi:filesystem/preopens@0.2.0"
-            | "wasi:filesystem/types@0.2.0"
-            | "wasi:http/incoming-handler@0.2.0"
-            | "wasi:http/outgoing-handler@0.2.0"
-            | "wasi:http/types@0.2.0"
-            | "wasi:io/error@0.2.0"
-            | "wasi:io/poll@0.2.0"
-            | "wasi:io/streams@0.2.0"
-            | "wasi:keyvalue/atomic@0.2.0-draft"
-            | "wasi:keyvalue/eventual@0.2.0-draft"
-            | "wasi:keyvalue/types@0.2.0-draft"
-            | "wasi:keyvalue/wasi-keyvalue-error@0.2.0-draft"
-            | "wasi:logging/logging"
-            | "wasi:random/random@0.2.0"
-            | "wasi:sockets/instance-network@0.2.0"
-            | "wasi:sockets/network@0.2.0"
-            | "wasi:sockets/tcp-create-socket@0.2.0"
-            | "wasi:sockets/tcp@0.2.0"
-            | "wasi:sockets/udp-create-socket@0.2.0"
-            | "wasi:sockets/udp@0.2.0"
-            | "wasmcloud:messaging/consumer@0.2.0"
-            | "wasmcloud:messaging/handler@0.2.0"
-            | "wasmcloud:messaging/types@0.2.0" => continue,
-            _ => {}
-        }
-
+        skip_static_instances!(instance_name);
         let component::types::ComponentItem::ComponentInstance(item) = item else {
             continue;
         };

@@ -84,8 +84,8 @@ impl capability::Bus for Handler {
     ) -> anyhow::Result<()> {
         match (link_name.as_ref(), interfaces.as_slice()) {
             ("messaging", [cti]) if cti.namespace == "wasmcloud" && cti.package == "messaging" && cti.interface == "consumer" => {},
-            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "atomic" => {},
-            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "eventual" => {},
+            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "atomics" => {},
+            ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "store" => {},
             ("blobstore", [cti]) if cti.namespace == "wasi" && cti.package == "blobstore" && cti.interface == "blobstore" => {},
             ("httpclient", [cti]) if cti.namespace == "wasi" && cti.package == "http" && cti.interface == "outgoing-handler" => {},
             ("unknown/alias" | "foobar-component-command-preview2", [cti]) if cti.namespace == "test-actors" && cti.package == "foobar" && cti.interface ==
@@ -217,8 +217,8 @@ fn new_runtime(
         .bus(Arc::clone(&handler))
         .blobstore(Arc::clone(&blobstore))
         .config(Arc::new(TestConfig { config }))
-        .keyvalue_atomic(Arc::clone(&keyvalue))
-        .keyvalue_eventual(Arc::clone(&keyvalue))
+        .keyvalue_atomics(Arc::clone(&keyvalue))
+        .keyvalue_store(Arc::clone(&keyvalue))
         .logging(Arc::clone(&handler))
         .messaging(Arc::clone(&handler))
         .outgoing_http(Arc::clone(&handler))

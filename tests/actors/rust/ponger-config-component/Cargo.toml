@@ -10,4 +10,5 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
+wasmcloud-actor = { workspace = true }
 wit-bindgen = { workspace = true, features = ["default"] }

@@ -1,5 +1,5 @@
 use super::logging::logging;
-use super::{blobstore, format_opt, messaging};
+use super::{blobstore, config, format_opt, keyvalue, messaging};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
@@ -10,7 +10,7 @@ use core::time::Duration;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use async_trait::async_trait;
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
@@ -29,8 +29,8 @@ pub struct Handler {
     config: Option<Arc<dyn Config + Send + Sync>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
-    keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
-    keyvalue_eventual: Option<Arc<dyn KeyValueEventual + Sync + Send>>,
+    keyvalue_atomics: Option<Arc<dyn KeyValueAtomics + Sync + Send>>,
+    keyvalue_store: Option<Arc<dyn KeyValueStore + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
@@ -42,8 +42,8 @@ impl Debug for Handler {
             .field("bus", &format_opt(&self.bus))
             .field("config", &format_opt(&self.config))
             .field("incoming_http", &format_opt(&self.incoming_http))
-            .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
-            .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
+            .field("keyvalue_atomics", &format_opt(&self.keyvalue_atomics))
+            .field("keyvalue_store", &format_opt(&self.keyvalue_store))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
@@ -78,15 +78,15 @@ impl Handler {
     fn proxy_keyvalue_atomic(
         &self,
         method: &str,
-    ) -> anyhow::Result<&Arc<dyn KeyValueAtomic + Sync + Send>> {
-        proxy(&self.keyvalue_atomic, "KeyvalueAtomic", method)
+    ) -> anyhow::Result<&Arc<dyn KeyValueAtomics + Sync + Send>> {
+        proxy(&self.keyvalue_atomics, "KeyvalueAtomic", method)
     }
 
-    fn proxy_keyvalue_eventual(
+    fn proxy_keyvalue_store(
         &self,
         method: &str,
-    ) -> anyhow::Result<&Arc<dyn KeyValueEventual + Sync + Send>> {
-        proxy(&self.keyvalue_eventual, "KeyvalueEventual", method)
+    ) -> anyhow::Result<&Arc<dyn KeyValueStore + Sync + Send>> {
+        proxy(&self.keyvalue_store, "KeyvalueEventual", method)
     }
 
     fn proxy_messaging(&self, method: &str) -> anyhow::Result<&Arc<dyn Messaging + Sync + Send>> {
@@ -125,20 +125,20 @@ impl Handler {
         self.incoming_http.replace(incoming_http)
     }
 
-    /// Replace [`KeyValueAtomic`] handler returning the old one, if such was set
-    pub fn replace_keyvalue_atomic(
+    /// Replace [`KeyValueAtomics`] handler returning the old one, if such was set
+    pub fn replace_keyvalue_atomics(
         &mut self,
-        keyvalue_atomic: Arc<dyn KeyValueAtomic + Send + Sync>,
-    ) -> Option<Arc<dyn KeyValueAtomic + Send + Sync>> {
-        self.keyvalue_atomic.replace(keyvalue_atomic)
+        keyvalue_atomics: Arc<dyn KeyValueAtomics + Send + Sync>,
+    ) -> Option<Arc<dyn KeyValueAtomics + Send + Sync>> {
+        self.keyvalue_atomics.replace(keyvalue_atomics)
     }
 
-    /// Replace [`KeyValueEventual`] handler returning the old one, if such was set
-    pub fn replace_keyvalue_eventual(
+    /// Replace [`KeyValueStore`] handler returning the old one, if such was set
+    pub fn replace_keyvalue_store(
         &mut self,
-        keyvalue_eventual: Arc<dyn KeyValueEventual + Send + Sync>,
-    ) -> Option<Arc<dyn KeyValueEventual + Send + Sync>> {
-        self.keyvalue_eventual.replace(keyvalue_eventual)
+        keyvalue_store: Arc<dyn KeyValueStore + Send + Sync>,
+    ) -> Option<Arc<dyn KeyValueStore + Send + Sync>> {
+        self.keyvalue_store.replace(keyvalue_store)
     }
 
     /// Replace [`Logging`] handler returning the old one, if such was set
@@ -337,14 +337,12 @@ pub trait Config {
     async fn get(
         &self,
         key: &str,
-    ) -> anyhow::Result<Result<Option<String>, super::bindgen::wasi::config::runtime::ConfigError>>;
+    ) -> anyhow::Result<Result<Option<String>, config::runtime::ConfigError>>;
 
     /// Handle `wasi:config/runtime.get_all`
     async fn get_all(
         &self,
-    ) -> anyhow::Result<
-        Result<Vec<(String, String)>, super::bindgen::wasi::config::runtime::ConfigError>,
-    >;
+    ) -> anyhow::Result<Result<Vec<(String, String)>, config::runtime::ConfigError>>;
 }
 
 #[async_trait]
@@ -403,40 +401,55 @@ pub trait IncomingHttp {
 }
 
 #[async_trait]
-/// `wasi:keyvalue/atomic` implementation
-pub trait KeyValueAtomic {
-    /// Handle `wasi:keyvalue/atomic.increment`
-    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64>;
-
-    /// Handle `wasi:keyvalue/atomic.compare-and-swap`
-    async fn compare_and_swap(
+/// `wasi:keyvalue/atomics` implementation
+pub trait KeyValueAtomics {
+    /// Handle `wasi:keyvalue/atomics.increment`
+    async fn increment(
         &self,
         bucket: &str,
         key: String,
-        old: u64,
-        new: u64,
-    ) -> anyhow::Result<bool>;
+        delta: u64,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>>;
 }
 
 #[async_trait]
-/// `wasi:keyvalue/eventual` implementation
-pub trait KeyValueEventual {
-    /// Handle `wasi:keyvalue/eventual.get`
-    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>>;
+/// `wasi:keyvalue/store` implementation
+pub trait KeyValueStore {
+    /// Handle `wasi:keyvalue/store.get`
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, keyvalue::store::Error>>;
 
-    /// Handle `wasi:keyvalue/eventual.set`
+    /// Handle `wasi:keyvalue/store.set`
     async fn set(
         &self,
         bucket: &str,
         key: String,
-        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
-    ) -> anyhow::Result<()>;
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>>;
 
-    /// Handle `wasi:keyvalue/eventual.delete`
-    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()>;
+    /// Handle `wasi:keyvalue/store.delete`
+    async fn delete(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>>;
 
-    /// Handle `wasi:keyvalue/eventual.exists`
-    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool>;
+    /// Handle `wasi:keyvalue/store.exists`
+    async fn exists(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<bool, keyvalue::store::Error>>;
+
+    /// Handle `wasi:keyvalue/store.list-keys`
+    async fn list_keys(
+        &self,
+        bucket: &str,
+        cursor: Option<u64>,
+    ) -> anyhow::Result<Result<keyvalue::store::KeyResponse, keyvalue::store::Error>>;
 }
 
 #[async_trait]
@@ -664,17 +677,14 @@ impl Config for Handler {
     async fn get(
         &self,
         key: &str,
-    ) -> anyhow::Result<Result<Option<String>, super::bindgen::wasi::config::runtime::ConfigError>>
-    {
+    ) -> anyhow::Result<Result<Option<String>, config::runtime::ConfigError>> {
         self.proxy_config("wasi:config/runtime.get")?.get(key).await
     }
 
     #[instrument(level = "trace", skip_all)]
     async fn get_all(
         &self,
-    ) -> anyhow::Result<
-        Result<Vec<(String, String)>, super::bindgen::wasi::config::runtime::ConfigError>,
-    > {
+    ) -> anyhow::Result<Result<Vec<(String, String)>, config::runtime::ConfigError>> {
         self.proxy_config("wasi:config/runtime.get-all")?
             .get_all()
             .await
@@ -701,31 +711,28 @@ impl Logging for Handler {
 }
 
 #[async_trait]
-impl KeyValueAtomic for Handler {
-    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
-        self.proxy_keyvalue_atomic("wasi:keyvalue/atomic.increment")?
-            .increment(bucket, key, delta)
-            .await
-    }
-
-    async fn compare_and_swap(
+impl KeyValueAtomics for Handler {
+    async fn increment(
         &self,
         bucket: &str,
         key: String,
-        old: u64,
-        new: u64,
-    ) -> anyhow::Result<bool> {
-        self.proxy_keyvalue_atomic("wasi:keyvalue/atomic.compare-and-swap")?
-            .compare_and_swap(bucket, key, old, new)
+        delta: u64,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
+        self.proxy_keyvalue_atomic("wasi:keyvalue/atomics.increment")?
+            .increment(bucket, key, delta)
             .await
     }
 }
 
 #[async_trait]
-impl KeyValueEventual for Handler {
+impl KeyValueStore for Handler {
     #[instrument(level = "trace", skip(self))]
-    async fn get(&self, bucket: &str, key: String) -> anyhow::Result<Option<IncomingInputStream>> {
-        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.get")?
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, keyvalue::store::Error>> {
+        self.proxy_keyvalue_store("wasi:keyvalue/store.get")?
             .get(bucket, key)
             .await
     }
@@ -735,24 +742,43 @@ impl KeyValueEventual for Handler {
         &self,
         bucket: &str,
         key: String,
-        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
-    ) -> anyhow::Result<()> {
-        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.set")?
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
+        self.proxy_keyvalue_store("wasi:keyvalue/store.set")?
             .set(bucket, key, value)
             .await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
-        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.delete")?
+    async fn delete(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
+        self.proxy_keyvalue_store("wasi:keyvalue/store.delete")?
             .delete(bucket, key)
             .await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
-        self.proxy_keyvalue_eventual("wasi:keyvalue/eventual.exists")?
+    async fn exists(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<Result<bool, keyvalue::store::Error>> {
+        self.proxy_keyvalue_store("wasi:keyvalue/store.exists")?
             .exists(bucket, key)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn list_keys(
+        &self,
+        bucket: &str,
+        cursor: Option<u64>,
+    ) -> anyhow::Result<Result<keyvalue::store::KeyResponse, keyvalue::store::Error>> {
+        self.proxy_keyvalue_store("wasi:keyvalue/store.list-keys")?
+            .list_keys(bucket, cursor)
             .await
     }
 }
@@ -835,10 +861,10 @@ pub(crate) struct HandlerBuilder {
     pub config: Option<Arc<dyn Config + Sync + Send>>,
     /// [`IncomingHttp`] handler
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
-    /// [`KeyValueAtomic`] handler
-    pub keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
-    /// [`KeyValueEventual`] handler
-    pub keyvalue_eventual: Option<Arc<dyn KeyValueEventual + Sync + Send>>,
+    /// [`KeyValueAtomics`] handler
+    pub keyvalue_atomics: Option<Arc<dyn KeyValueAtomics + Sync + Send>>,
+    /// [`KeyValueStore`] handler
+    pub keyvalue_store: Option<Arc<dyn KeyValueStore + Sync + Send>>,
     /// [`Logging`] handler
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
     /// [`Messaging`] handler
@@ -883,24 +909,24 @@ impl HandlerBuilder {
         }
     }
 
-    /// Set [`KeyValueAtomic`] handler
-    pub fn keyvalue_atomic(
+    /// Set [`KeyValueAtomics`] handler
+    pub fn keyvalue_atomics(
         self,
-        keyvalue_atomic: Arc<impl KeyValueAtomic + Sync + Send + 'static>,
+        keyvalue_atomics: Arc<impl KeyValueAtomics + Sync + Send + 'static>,
     ) -> Self {
         Self {
-            keyvalue_atomic: Some(keyvalue_atomic),
+            keyvalue_atomics: Some(keyvalue_atomics),
             ..self
         }
     }
 
-    /// Set [`KeyValueEventual`] handler
-    pub fn keyvalue_eventual(
+    /// Set [`KeyValueStore`] handler
+    pub fn keyvalue_store(
         self,
-        keyvalue_eventual: Arc<impl KeyValueEventual + Sync + Send + 'static>,
+        keyvalue_store: Arc<impl KeyValueStore + Sync + Send + 'static>,
     ) -> Self {
         Self {
-            keyvalue_eventual: Some(keyvalue_eventual),
+            keyvalue_store: Some(keyvalue_store),
             ..self
         }
     }
@@ -940,8 +966,8 @@ impl Debug for HandlerBuilder {
             .field("bus", &format_opt(&self.bus))
             .field("config", &format_opt(&self.config))
             .field("incoming_http", &format_opt(&self.incoming_http))
-            .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
-            .field("keyvalue_eventual", &format_opt(&self.keyvalue_eventual))
+            .field("keyvalue_atomics", &format_opt(&self.keyvalue_atomics))
+            .field("keyvalue_store", &format_opt(&self.keyvalue_store))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
@@ -956,8 +982,8 @@ impl From<Handler> for HandlerBuilder {
             bus,
             config,
             incoming_http,
-            keyvalue_atomic,
-            keyvalue_eventual,
+            keyvalue_atomics,
+            keyvalue_store,
             logging,
             messaging,
             outgoing_http,
@@ -968,8 +994,8 @@ impl From<Handler> for HandlerBuilder {
             bus,
             config,
             incoming_http,
-            keyvalue_atomic,
-            keyvalue_eventual,
+            keyvalue_atomics,
+            keyvalue_store,
             logging,
             messaging,
             outgoing_http,
@@ -984,8 +1010,8 @@ impl From<HandlerBuilder> for Handler {
             bus,
             config,
             incoming_http,
-            keyvalue_atomic,
-            keyvalue_eventual,
+            keyvalue_atomics,
+            keyvalue_store,
             logging,
             messaging,
             outgoing_http,
@@ -997,8 +1023,8 @@ impl From<HandlerBuilder> for Handler {
             config,
             incoming_http,
             outgoing_http,
-            keyvalue_atomic,
-            keyvalue_eventual,
+            keyvalue_atomics,
+            keyvalue_store,
             logging,
             messaging,
         }
