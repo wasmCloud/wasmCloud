@@ -262,10 +262,10 @@ jobs:
       matrix:
         include:
           - name: blobstore-fs
-            subject: BLOBSTORE_S3_SUBJECT
+            subject: BLOBSTORE_FS_SUBJECT
 
           - name: blobstore-s3
-            subject: BLOBSTORE_FS_SUBJECT
+            subject: BLOBSTORE_S3_SUBJECT
 
           - name: keyvalue-redis
             subject: KEYVALUE_REDIS_SUBJECT
