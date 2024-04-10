@@ -202,12 +202,12 @@ jobs:
         run: |
           wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+          WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
+          WASH_REG_PASSWORD: ${{ secrets.AZURE_CR_PUSH_PASSWORD }}
       - name: Push version-tagged WebAssembly binary to AzureCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
           wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
-          WASH_REG_USER: ${{ secrets.azurecr_username }}
-          WASH_REG_PASSWORD: ${{ secrets.azurecr_password }}
+          WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
+          WASH_REG_PASSWORD: ${{ secrets.AZURE_CR_PUSH_PASSWORD }}
