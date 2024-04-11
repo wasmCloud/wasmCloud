@@ -164,7 +164,7 @@ jobs:
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-          BRANCH_PREFIX: ${{ format('refs/tags/component-{0}-v', matrix.project.name) }}
+          BRANCH_PREFIX: ${{ format('component-{0}-v', matrix.project.name) }}
         run: |
           export VERSION=${TAG#$BRANCH_PREFIX};
           echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
