@@ -1,0 +1,6 @@
+package wasmcloud:provider-messaging-nats;
+
+world provider-messaging-nats {
+    import wasmcloud:messaging/handler@0.2.0;
+    export wasmcloud:messaging/consumer@0.2.0;
+}
