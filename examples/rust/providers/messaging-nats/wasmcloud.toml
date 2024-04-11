@@ -1,0 +1,6 @@
+name = "Messaging NATS"
+language = "rust"
+type = "provider"
+
+[provider]
+vendor = "Example Vendor"

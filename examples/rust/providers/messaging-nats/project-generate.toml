@@ -1,0 +1,12 @@
+[template]
+
+raw = [
+  "*.par.gz",
+  "*.par",
+]
+exclude = [
+  "target/",
+  "keys/",
+  "build/",
+  "*.lock",
+]
