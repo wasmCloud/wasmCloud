@@ -35,8 +35,8 @@
 use core::str::FromStr as _;
 use core::time::Duration;
 
-use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::{collections::HashMap, net::Ipv4Addr};
 
 use anyhow::Context as _;
 use axum::extract;
@@ -146,7 +146,7 @@ pub struct HttpServerCore {
 
 #[derive(Clone, Debug)]
 struct RequestContext {
-    wrpc: Arc<wasmcloud_provider_sdk::WrpcClient>,
+    target: String,
     settings: Arc<ServiceSettings>,
     scheme: http::uri::Scheme,
 }
@@ -154,7 +154,7 @@ struct RequestContext {
 #[instrument]
 async fn handle_request(
     extract::State(RequestContext {
-        wrpc,
+        target,
         settings,
         scheme,
     }): extract::State<RequestContext>,
@@ -206,6 +206,16 @@ async fn handle_request(
         .body(body)
         .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     trace!(?req, "httpserver calling component");
+
+    // Create a new wRPC client with all headers from the current span injected
+    let invocation_headers: HashMap<String, String> = wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+        )
+        .iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+
+    let wrpc =
+        get_connection().get_wrpc_client_custom(target.as_str(), Some(invocation_headers), None);
 
     let fut = wrpc.invoke_handle_http(req);
     let res = if let Some(timeout) = timeout {
@@ -326,7 +336,6 @@ impl HttpServerCore {
         }
         let service = handle_request.layer(cors);
 
-        let wrpc = Arc::new(get_connection().get_wrpc_client(target));
         let settings = Arc::clone(&settings);
         let handle = axum_server::Handle::new();
         if let Tls {
@@ -343,7 +352,7 @@ impl HttpServerCore {
                 .serve(
                     service
                         .with_state(RequestContext {
-                            wrpc,
+                            target: target.into(),
                             settings,
                             scheme: http::uri::Scheme::HTTPS,
                         })
@@ -357,7 +366,7 @@ impl HttpServerCore {
                 .serve(
                     service
                         .with_state(RequestContext {
-                            wrpc,
+                            target: target.into(),
                             settings,
                             scheme: http::uri::Scheme::HTTP,
                         })
