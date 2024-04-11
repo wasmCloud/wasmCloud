@@ -165,8 +165,8 @@ async fn renew_self(
 /// Redis KV provider implementation which utilizes [Hashicorp Vault](https://developer.hashicorp.com/vault/docs)
 #[derive(Default, Clone)]
 pub struct KvVaultProvider {
-    // store vault connection per actor
-    actors: Arc<RwLock<HashMap<String, Arc<Client>>>>,
+    // store vault connection per component
+    components: Arc<RwLock<HashMap<String, Arc<Client>>>>,
 }
 
 impl KvVaultProvider {
@@ -190,11 +190,11 @@ impl KvVaultProvider {
             warn!("invocation context missing");
             keyvalue::store::Error::Other("invocation context missing".into())
         })?;
-        let source_id = ctx.actor.as_ref().ok_or_else(|| {
+        let source_id = ctx.component.as_ref().ok_or_else(|| {
             warn!("source ID missing");
             keyvalue::store::Error::Other("source ID missing".into())
         })?;
-        let links = self.actors.read().await;
+        let links = self.components.read().await;
         links.get(source_id).cloned().ok_or_else(|| {
             warn!(source_id, "source ID not linked");
             keyvalue::store::Error::Other("source ID not linked".into())
@@ -373,7 +373,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
 /// a wasmcloud lattice
 impl Provider for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
+    /// including setting up per-component resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
@@ -388,7 +388,7 @@ impl Provider for KvVaultProvider {
         debug!(
            %source_id,
            %link_name,
-            "adding link for actor",
+            "adding link for component",
         );
 
         let config = match Config::from_values(config) {
@@ -416,7 +416,7 @@ impl Provider for KvVaultProvider {
         };
         client.set_renewal().await;
 
-        let mut update_map = self.actors.write().await;
+        let mut update_map = self.components.write().await;
         update_map.insert(source_id.to_string(), Arc::new(client));
 
         Ok(())
@@ -425,18 +425,18 @@ impl Provider for KvVaultProvider {
     /// Handle notification that a link is dropped - close the connection
     #[instrument(level = "debug", skip(self))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        let mut aw = self.actors.write().await;
+        let mut aw = self.components.write().await;
         if let Some(client) = aw.remove(source_id) {
-            debug!("deleting link for actor [{source_id}]");
-            drop(client);
+            debug!("deleting link for component [{source_id}]");
+            drop(client)
         }
         Ok(())
     }
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
-        let mut aw = self.actors.write().await;
-        // Empty the actor link data and stop all servers
+        let mut aw = self.components.write().await;
+        // Empty the component link data and stop all servers
         for (_, client) in aw.drain() {
             drop(client);
         }

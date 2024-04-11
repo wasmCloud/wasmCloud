@@ -112,7 +112,7 @@ impl KvRedisProvider {
 
     #[instrument(level = "debug", skip(self))]
     async fn invocation_conn(&self, context: Option<Context>) -> anyhow::Result<ConnectionManager> {
-        if let Some(ref source_id) = context.and_then(|Context { actor, .. }| actor) {
+        if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
             let sources = self.sources.read().await;
             let Some(conn) = sources.get(source_id) else {
                 error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");

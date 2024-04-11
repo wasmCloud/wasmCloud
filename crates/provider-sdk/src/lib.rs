@@ -90,11 +90,11 @@ pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {
     })
 }
 
-/// Context - message passing metadata used by wasmhost Actors and Capability Providers
+/// Context - message passing metadata used by wasmCloud Capability Providers
 #[derive(Default, Debug, Clone)]
 pub struct Context {
-    /// Messages received by a Provider will have actor set to the actor's public key
-    pub actor: Option<String>,
+    /// Messages received by a Provider will have component set to the component's ID
+    pub component: Option<String>,
 
     /// A map of tracing context information
     pub tracing: HashMap<String, String>,
@@ -191,8 +191,8 @@ pub trait Provider<E = anyhow::Error>: Sync {
     }
 
     /// Notify the provider that the link is dropped
-    fn delete_link(&self, actor_id: &str) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = actor_id;
+    fn delete_link(&self, component_id: &str) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = component_id;
         async { Ok(()) }
     }
 

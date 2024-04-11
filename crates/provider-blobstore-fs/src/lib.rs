@@ -65,7 +65,7 @@ fn resolve_subpath(root: &Path, path: impl AsRef<Path>) -> Result<PathBuf, std::
 
 impl FsProvider {
     async fn get_root(&self, context: Option<Context>) -> anyhow::Result<Arc<PathBuf>> {
-        if let Some(ref source_id) = context.and_then(|Context { actor, .. }| actor) {
+        if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
             self.config
                 .read()
                 .await

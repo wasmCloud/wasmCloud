@@ -306,20 +306,21 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
         ctx: Option<Context>,
         msg: BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        let nats_client = if let Some(ref source_id) = ctx.and_then(|Context { actor, .. }| actor) {
-            let actors = self.actors.read().await;
-            let nats_bundle = match actors.get(source_id) {
-                Some(nats_bundle) => nats_bundle,
-                None => {
-                    error!("actor not linked: {source_id}");
-                    bail!("actor not linked: {source_id}")
-                }
+        let nats_client =
+            if let Some(ref source_id) = ctx.and_then(|Context { component, .. }| component) {
+                let actors = self.actors.read().await;
+                let nats_bundle = match actors.get(source_id) {
+                    Some(nats_bundle) => nats_bundle,
+                    None => {
+                        error!("actor not linked: {source_id}");
+                        bail!("actor not linked: {source_id}")
+                    }
+                };
+                nats_bundle.client.clone()
+            } else {
+                error!("no actor in request");
+                bail!("no actor in request")
             };
-            nats_bundle.client.clone()
-        } else {
-            error!("no actor in request");
-            bail!("no actor in request")
-        };
 
         let headers = NatsHeaderInjector::default_with_span().into();
 
@@ -357,20 +358,21 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
         body: Vec<u8>,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
-        let nats_client = if let Some(ref source_id) = ctx.and_then(|Context { actor, .. }| actor) {
-            let actors = self.actors.read().await;
-            let nats_bundle = match actors.get(source_id) {
-                Some(nats_bundle) => nats_bundle,
-                None => {
-                    error!("actor not linked: {source_id}");
-                    bail!("actor not linked: {source_id}")
-                }
+        let nats_client =
+            if let Some(ref source_id) = ctx.and_then(|Context { component, .. }| component) {
+                let actors = self.actors.read().await;
+                let nats_bundle = match actors.get(source_id) {
+                    Some(nats_bundle) => nats_bundle,
+                    None => {
+                        error!("actor not linked: {source_id}");
+                        bail!("actor not linked: {source_id}")
+                    }
+                };
+                nats_bundle.client.clone()
+            } else {
+                error!("no actor in request");
+                bail!("no actor in request")
             };
-            nats_bundle.client.clone()
-        } else {
-            error!("no actor in request");
-            bail!("no actor in request")
-        };
 
         // Inject OTEL headers
         let headers = NatsHeaderInjector::default_with_span().into();
