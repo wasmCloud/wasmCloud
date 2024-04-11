@@ -56,10 +56,10 @@ jobs:
           shared-key: "ubuntu-22.04-shared-cache"
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.20'
+          go-version: '1.22'
       - uses: acifani/setup-tinygo@v2
         with:
-          tinygo-version: "0.27.0"
+          tinygo-version: "0.31.0"
           install-binaryen: "false"
       - name: Add wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
