@@ -50,7 +50,7 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::{IncomingHttp as _, MessagingHandler as _};
+use wasmcloud_runtime::capability::{messaging, IncomingHttp as _, MessagingHandler as _};
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
@@ -58,13 +58,13 @@ use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
 use wrpc_types::DynamicFunction;
 
+use crate::bindings::wasmcloud;
 use crate::{
     fetch_actor, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType,
 };
 
 use self::config::{BundleGenerator, ConfigBundle};
-use self::handler::BrokerMessage;
 use self::handler::Handler;
 
 #[derive(Debug)]
@@ -209,7 +209,7 @@ enum InvocationParams {
         params: Vec<wrpc_transport::Value>,
     },
     IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
-    MessagingHandleMessage(BrokerMessage),
+    MessagingHandleMessage(wasmcloud::messaging::types::BrokerMessage),
 }
 
 impl std::fmt::Debug for InvocationParams {
@@ -387,13 +387,23 @@ impl Actor {
                 res?;
                 Ok(())
             }
-            InvocationParams::MessagingHandleMessage(BrokerMessage(msg)) => {
+            InvocationParams::MessagingHandleMessage(
+                wasmcloud::messaging::types::BrokerMessage {
+                    subject,
+                    body,
+                    reply_to,
+                },
+            ) => {
                 let actor = actor
                     .into_messaging_handler()
                     .await
                     .context("failed to instantiate `wasmcloud:messaging/handler`")?;
                 let res = actor
-                    .handle_message(&msg)
+                    .handle_message(&messaging::types::BrokerMessage {
+                        subject,
+                        body,
+                        reply_to,
+                    })
                     .await
                     .context("failed to call `wasmcloud:messaging/handler.handle-message`");
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();

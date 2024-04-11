@@ -138,20 +138,23 @@ impl capability::Messaging for Handler {
         subject: String,
         body: Vec<u8>,
         timeout: Duration,
-    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
         assert_eq!(subject, "test-messaging-request");
         assert_eq!(body, b"foo".as_slice());
         assert_eq!(timeout, Duration::from_millis(1000));
-        Ok(messaging::types::BrokerMessage {
+        Ok(Ok(messaging::types::BrokerMessage {
             subject,
             body: "bar".into(),
             reply_to: None,
-        })
+        }))
     }
 
-    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+    async fn publish(
+        &self,
+        msg: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
         self.messaging.lock().await.push(msg);
-        Ok(())
+        Ok(Ok(()))
     }
 }
 

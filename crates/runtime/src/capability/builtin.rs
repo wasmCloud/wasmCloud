@@ -79,14 +79,14 @@ impl Handler {
         &self,
         method: &str,
     ) -> anyhow::Result<&Arc<dyn KeyValueAtomics + Sync + Send>> {
-        proxy(&self.keyvalue_atomics, "KeyvalueAtomic", method)
+        proxy(&self.keyvalue_atomics, "KeyvalueAtomics", method)
     }
 
     fn proxy_keyvalue_store(
         &self,
         method: &str,
     ) -> anyhow::Result<&Arc<dyn KeyValueStore + Sync + Send>> {
-        proxy(&self.keyvalue_store, "KeyvalueEventual", method)
+        proxy(&self.keyvalue_store, "KeyvalueStore", method)
     }
 
     fn proxy_messaging(&self, method: &str) -> anyhow::Result<&Arc<dyn Messaging + Sync + Send>> {
@@ -473,10 +473,13 @@ pub trait Messaging {
         subject: String,
         body: Vec<u8>,
         timeout: Duration,
-    ) -> anyhow::Result<messaging::types::BrokerMessage>;
+    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>>;
 
     /// Handle `wasmcloud:messaging/consumer.publish`
-    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()>;
+    async fn publish(
+        &self,
+        msg: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>>;
 }
 
 /// `wasmcloud:messaging/handler` implementation
@@ -814,14 +817,17 @@ impl Messaging for Handler {
         subject: String,
         body: Vec<u8>,
         timeout: Duration,
-    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
         self.proxy_messaging("wasmcloud:messaging/consumer.request")?
             .request(subject, body, timeout)
             .await
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+    async fn publish(
+        &self,
+        msg: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
         self.proxy_messaging("wasmcloud:messaging/consumer.publish")?
             .publish(msg)
             .await

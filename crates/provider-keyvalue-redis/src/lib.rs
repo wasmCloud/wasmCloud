@@ -12,23 +12,25 @@
 //! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
 //!
 //!
-use core::ops::{Deref as _, DerefMut as _};
+use core::num::NonZeroU64;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
-use bytes::{Bytes, BytesMut};
-use futures::{Stream, TryStreamExt};
-use once_cell::sync::Lazy;
 use redis::aio::ConnectionManager;
-use redis::{Cmd, FromRedisValue, Script, ScriptInvocation};
+use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
 use tracing::{error, info, instrument, warn};
 
-use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::{
+    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+};
+
+use exports::wrpc::keyvalue;
+
+wit_bindgen_wrpc::generate!();
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -36,15 +38,7 @@ const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
 /// Configuration key that will be used to search for Redis config
 const CONFIG_REDIS_URL_KEY: &str = "URL";
 
-static CAS: Lazy<Script> = Lazy::new(|| {
-    Script::new(
-        r#"if redis.call("GET", KEYS[1]) == ARGV[1] then
-            return redis.call("SET", KEYS[1], ARGV[2])
-        else
-            return 0
-        end"#,
-    )
-});
+type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
 #[derive(Clone)]
 pub enum DefaultConnection {
@@ -52,7 +46,7 @@ pub enum DefaultConnection {
     Conn(ConnectionManager),
 }
 
-/// Redis keyValue provider implementation.
+/// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
     // store redis connections per source ID
@@ -61,7 +55,34 @@ pub struct KvRedisProvider {
     default_connection: Arc<RwLock<DefaultConnection>>,
 }
 
+pub async fn run() -> anyhow::Result<()> {
+    KvRedisProvider::run().await
+}
+
 impl KvRedisProvider {
+    pub async fn run() -> anyhow::Result<()> {
+        let HostData { config, .. } = load_host_data().context("failed to load host data")?;
+        let client = redis::Client::open(retrieve_default_url(config))
+            .context("failed to construct default Redis client")?;
+        let default_connection = if let Ok(conn) = client.get_connection_manager().await {
+            DefaultConnection::Conn(conn)
+        } else {
+            DefaultConnection::Client(client)
+        };
+        let provider = KvRedisProvider::new(default_connection);
+        let shutdown = run_provider(provider.clone(), "keyvalue-redis-provider")
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        serve(
+            &connection.get_wrpc_client(connection.provider_key()),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+
+    #[must_use]
     pub fn new(default_connection: DefaultConnection) -> Self {
         KvRedisProvider {
             sources: Arc::default(),
@@ -71,11 +92,11 @@ impl KvRedisProvider {
 
     #[instrument(level = "trace", skip_all)]
     async fn get_default_connection(&self) -> anyhow::Result<ConnectionManager> {
-        if let DefaultConnection::Conn(conn) = self.default_connection.read().await.deref() {
+        if let DefaultConnection::Conn(conn) = &*self.default_connection.read().await {
             Ok(conn.clone())
         } else {
             let mut default_conn = self.default_connection.write().await;
-            match default_conn.deref_mut() {
+            match &mut *default_conn {
                 DefaultConnection::Conn(conn) => Ok(conn.clone()),
                 DefaultConnection::Client(client) => {
                     let conn = client
@@ -111,206 +132,123 @@ impl KvRedisProvider {
         &self,
         context: Option<Context>,
         cmd: &mut Cmd,
-    ) -> anyhow::Result<T> {
-        let mut conn = self.invocation_conn(context).await?;
+    ) -> Result<T, keyvalue::store::Error> {
+        let mut conn = self
+            .invocation_conn(context)
+            .await
+            .map_err(|err| keyvalue::store::Error::Other(format!("{err:#}")))?;
         match cmd.query_async(&mut conn).await {
             Ok(v) => Ok(v),
             Err(e) => {
-                error!("failed to perform redis command: {e}");
-                bail!("failed to perform redis command: {e}")
-            }
-        }
-    }
-
-    /// Execute Redis async script
-    async fn exec_script<T: FromRedisValue>(
-        &self,
-        context: Option<Context>,
-        cmd: &mut ScriptInvocation<'_>,
-    ) -> anyhow::Result<T> {
-        let mut conn = self.invocation_conn(context).await?;
-        match cmd.invoke_async(&mut conn).await {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                error!("failed to perform redis command: {e}");
-                bail!("failed to perform redis command: {e}")
+                error!("failed to execute Redis command: {e}");
+                Err(keyvalue::store::Error::Other(format!(
+                    "failed to execute Redis command: {e}"
+                )))
             }
         }
     }
 }
 
-impl Eventual for KvRedisProvider {
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete<Tx: Transmitter>(
+impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
+    #[instrument(level = "debug", skip(self))]
+    async fn delete(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<()>> {
         // TODO: Use bucket
         _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<()>(context, &mut Cmd::del(key)).await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        Ok(self.exec_cmd(context, &mut Cmd::del(key)).await)
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_exists<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn exists(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<bool>> {
         // TODO: Use bucket
         _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<bool>(context, &mut Cmd::exists(key)).await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        Ok(self.exec_cmd(context, &mut Cmd::exists(key)).await)
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn get(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
         // TODO: Use bucket
         _ = bucket;
-        let value = match self
+        match self
             .exec_cmd::<redis::Value>(context, &mut Cmd::get(key))
             .await
         {
-            Ok(redis::Value::Nil) => Ok(None),
-            Ok(redis::Value::Data(buf)) => Ok(Some(Some(buf))),
-            _ => Err("failed to get data from Redis"),
-        };
-        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
-            error!(?err, "failed to transmit result")
+            Ok(redis::Value::Nil) => Ok(Ok(None)),
+            Ok(redis::Value::Data(buf)) => Ok(Ok(Some(buf))),
+            Ok(_) => Ok(Err(keyvalue::store::Error::Other(
+                "invalid data type returned by Redis".into(),
+            ))),
+            Err(err) => Ok(Err(err)),
         }
     }
 
-    #[instrument(
-        level = "debug",
-        skip(self, result_subject, error_subject, value, transmitter)
-    )]
-    async fn serve_set<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn set(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            error_subject,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
-            Tx,
-        >,
-    ) {
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<()>> {
         // TODO: Use bucket
         _ = bucket;
-        let value: BytesMut = match value.try_collect().await {
-            Ok(value) => value,
-            Err(err) => {
-                error!(?err, "failed to receive value");
-                if let Err(err) = transmitter
-                    .transmit_static(error_subject, err.to_string())
-                    .await
-                {
-                    error!(?err, "failed to transmit error")
-                }
-                return;
-            }
-        };
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<()>(context, &mut Cmd::set(key, value.deref()))
-                    .await,
+        Ok(self.exec_cmd(context, &mut Cmd::set(key, value)).await)
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn list_keys(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        cursor: Option<u64>,
+    ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
+        // TODO: Use bucket
+        _ = bucket;
+        match self
+            .exec_cmd(
+                context,
+                redis::cmd("SCAN").cursor_arg(cursor.unwrap_or_default()),
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            Ok((cursor, keys)) => Ok(Ok(keyvalue::store::KeyResponse {
+                keys,
+                cursor: NonZeroU64::new(cursor).map(Into::into),
+            })),
+            Err(err) => Ok(Err(err)),
         }
     }
 }
 
-impl Atomic for KvRedisProvider {
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_compare_and_swap<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, old, new),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String, u64, u64), Tx>,
-    ) {
-        // TODO: Use bucket
-        _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_script::<bool>(context, CAS.key(key).arg(old).arg(new))
-                    .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-
+impl keyvalue::atomics::Handler<Option<Context>> for KvRedisProvider {
     /// Increments a numeric value, returning the new value
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_increment<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn increment(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String, u64), Tx>,
-    ) {
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+        delta: u64,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
         // TODO: Use bucket
         _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.exec_cmd::<u64>(context, &mut Cmd::incr(key, value))
-                    .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        Ok(self
+            .exec_cmd::<u64>(context, &mut Cmd::incr(key, delta))
+            .await)
     }
 }
 
@@ -368,7 +306,7 @@ impl Provider for KvRedisProvider {
         let mut aw = self.sources.write().await;
         if let Some(conn) = aw.remove(source_id) {
             info!("redis closing connection for actor {}", source_id);
-            drop(conn)
+            drop(conn);
         }
         Ok(())
     }
@@ -378,7 +316,7 @@ impl Provider for KvRedisProvider {
         let mut aw = self.sources.write().await;
         // empty the actor link data and stop all servers
         for (_, conn) in aw.drain() {
-            drop(conn)
+            drop(conn);
         }
         Ok(())
     }

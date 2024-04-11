@@ -1,26 +1,166 @@
+pub(crate) mod config;
+
 use core::str;
+use core::time::Duration;
 
 use std::collections::{hash_map, HashMap};
+use std::string::ToString;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
-use bytes::{Bytes, BytesMut};
-use futures::{Stream, TryStreamExt};
-use tokio::sync::RwLock;
-use tracing::{debug, error, instrument};
-use wasmcloud_provider_sdk::interfaces::keyvalue::{Atomic, Eventual};
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tracing::{debug, error, info, instrument, warn};
+use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
+use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
 
-pub(crate) mod client;
-pub(crate) mod config;
-
-use crate::client::Client;
 use crate::config::Config;
 
-/// Token to indicate string data was passed during set
-pub const STRING_VALUE_MARKER: &str = "string_data___";
+use exports::wrpc::keyvalue;
+
+wit_bindgen_wrpc::generate!();
+
+type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
+
+/// Vault HTTP api version. As of Vault 1.9.x (Feb 2022), all http api calls use version 1
+const API_VERSION: u8 = 1;
+
+/// Default TTL for tokens used by this provider. Defaults to 72 hours.
+pub const TOKEN_INCREMENT_TTL: &str = "72h";
+pub const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60 * 12); // 12 hours
+
+pub async fn run() -> anyhow::Result<()> {
+    KvVaultProvider::run().await
+}
+
+/// Vault client connection information.
+#[derive(Clone)]
+pub struct Client {
+    inner: Arc<vaultrs::client::VaultClient>,
+    namespace: String,
+    token_increment_ttl: String,
+    token_refresh_interval: Duration,
+    renew_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+}
+
+impl Client {
+    /// Creates a new Vault client. See [config](./config.rs) for explanation of parameters.
+    ///
+    /// Note that this constructor does not attempt to connect to the vault server,
+    /// so the vault server does not need to be running at the time a `LinkDefinition` to this provider is created.
+    pub fn new(config: Config) -> Result<Self, vaultrs::error::ClientError> {
+        let client = VaultClient::new(VaultClientSettings {
+            token: config.token,
+            address: config.addr,
+            ca_certs: config.certs,
+            verify: false,
+            version: API_VERSION,
+            wrapping: false,
+            timeout: None,
+            namespace: None,
+            identity: None,
+        })?;
+        Ok(Self {
+            inner: Arc::new(client),
+            namespace: config.mount,
+            token_increment_ttl: config
+                .token_increment_ttl
+                .unwrap_or(TOKEN_INCREMENT_TTL.into()),
+            token_refresh_interval: config
+                .token_refresh_interval
+                .unwrap_or(TOKEN_REFRESH_INTERVAL),
+            renew_task: Arc::default(),
+        })
+    }
+
+    /// Reads value of secret using namespace and key path
+    pub async fn read_secret(&self, path: &str) -> Result<Option<HashMap<String, String>>> {
+        match vaultrs::kv2::read(self.inner.as_ref(), &self.namespace, path).await {
+            Err(vaultrs::error::ClientError::APIError {
+                code: 404,
+                errors: _,
+            }) => Ok(None),
+            Err(err) => {
+                error!(error = %err, "failed to read secret");
+                Err(keyvalue::store::Error::Other(format!(
+                    "{:#}",
+                    anyhow!(err).context("failed to read secret")
+                )))
+            }
+            Ok(val) => Ok(val),
+        }
+    }
+
+    /// Writes value of secret using namespace and key path
+    pub async fn write_secret(&self, path: &str, data: &HashMap<String, String>) -> Result<()> {
+        let md = vaultrs::kv2::set(self.inner.as_ref(), &self.namespace, path, data)
+            .await
+            .map_err(|err| {
+                error!(error = %err, "failed to write secret");
+                keyvalue::store::Error::Other(format!(
+                    "{:#}",
+                    anyhow!(err).context("failed to write secret")
+                ))
+            })?;
+        debug!(?md, "set returned metadata");
+        Ok(())
+    }
+
+    /// Sets up a background task to renew the token at the configured interval. This function
+    /// attempts to lock the `renew_task` mutex and will deadlock if called without first ensuring
+    /// the lock is available.
+    pub async fn set_renewal(&self) {
+        let mut renew_task = self.renew_task.lock().await;
+        if let Some(handle) = renew_task.take() {
+            handle.abort();
+        }
+        let client = self.inner.clone();
+        let interval = self.token_refresh_interval;
+        let ttl = self.token_increment_ttl.clone();
+
+        *renew_task = Some(tokio::spawn(async move {
+            let mut next_interval = tokio::time::interval(interval);
+            loop {
+                next_interval.tick().await;
+                // NOTE(brooksmtownsend): Errors are appropriately logged in the function
+                let _ = renew_self(&client, ttl.as_str()).await;
+            }
+        }));
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        // NOTE(brooksmtownsend): We're trying to lock here so we don't deadlock on dropping.
+        if let Ok(mut renew_task) = self.renew_task.try_lock() {
+            if let Some(handle) = renew_task.take() {
+                handle.abort();
+            }
+        }
+    }
+}
+
+/// Helper function to renew a client's token, incrementing the validity by `increment`
+async fn renew_self(
+    client: &VaultClient,
+    increment: &str,
+) -> Result<(), vaultrs::error::ClientError> {
+    debug!("renewing token");
+    client.renew(Some(increment)).await.map_err(|e| {
+        error!("error renewing self token: {}", e);
+        e
+    })?;
+
+    let info = client.lookup().await.map_err(|e| {
+        error!("error looking up self token: {}", e);
+        e
+    })?;
+
+    let expire_time = info.expire_time.unwrap_or_else(|| "None".to_string());
+    info!(%expire_time, accessor = %info.accessor, "renewed token");
+    Ok(())
+}
 
 /// Redis KV provider implementation which utilizes [Hashicorp Vault](https://developer.hashicorp.com/vault/docs)
 #[derive(Default, Clone)]
@@ -30,24 +170,35 @@ pub struct KvVaultProvider {
 }
 
 impl KvVaultProvider {
-    /// Retrieve a client for a given context (determined by source_id)
-    async fn get_client(&self, ctx: Option<Context>) -> anyhow::Result<Arc<Client>> {
-        let ctx = ctx.context("invocation context missing")?;
-        // get the actor ID
-        let source_id = ctx
-            .actor
-            .as_ref()
-            .context("invalid parameter: no actor in request")?;
-
-        // Clone the existing client for the given actor from the internal hash map
-        let client = self
-            .actors
-            .read()
+    pub async fn run() -> anyhow::Result<()> {
+        let provider = Self::default();
+        let shutdown = run_provider(provider.clone(), "keyvalue-vault-provider")
             .await
-            .get(source_id)
-            .with_context(|| format!("invalid parameter: actor [{source_id}] not linked"))?
-            .clone();
-        Ok(client)
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        serve(
+            &connection.get_wrpc_client(connection.provider_key()),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+
+    /// Retrieve a client for a given context (determined by `source_id`)
+    async fn get_client(&self, ctx: Option<Context>) -> Result<Arc<Client>> {
+        let ctx = ctx.ok_or_else(|| {
+            warn!("invocation context missing");
+            keyvalue::store::Error::Other("invocation context missing".into())
+        })?;
+        let source_id = ctx.actor.as_ref().ok_or_else(|| {
+            warn!("source ID missing");
+            keyvalue::store::Error::Other("source ID missing".into())
+        })?;
+        let links = self.actors.read().await;
+        links.get(source_id).cloned().ok_or_else(|| {
+            warn!(source_id, "source ID not linked");
+            keyvalue::store::Error::Other("source ID not linked".into())
+        })
     }
 
     /// Gets a value for a specified key. Deserialize the value as json
@@ -60,94 +211,53 @@ impl KvVaultProvider {
         ctx: Option<Context>,
         path: String,
         key: String,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        let client = match self.get_client(ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                bail!("failed to retrieve client: {e}");
-            }
-        };
-        match client.read_secret(&path).await {
-            Ok(Some(mut secret)) => match secret.remove(&key) {
+    ) -> Result<Option<Vec<u8>>> {
+        let client = self.get_client(ctx).await?;
+        if let Some(mut secret) = client.read_secret(&path).await? {
+            match secret.remove(&key) {
                 Some(value) => {
                     let value = base64::engine::general_purpose::STANDARD_NO_PAD
                         .decode(value)
-                        .context("failed to decode secret")?;
+                        .map_err(|err| {
+                            error!(?err, "failed to decode secret value");
+                            keyvalue::store::Error::Other(format!(
+                                "{:#}",
+                                anyhow!(err).context("failed to decode secret value")
+                            ))
+                        })?;
                     Ok(Some(value))
                 }
                 None => Ok(None),
-            },
-            Ok(None) => Ok(None),
-            Err(e) => {
-                error!(error = %e, "failed to read secret");
-                bail!(anyhow!(e).context("failed to read secret"))
             }
+        } else {
+            Ok(None)
         }
     }
 
     /// Returns true if the store contains the key
     #[instrument(level = "debug", skip(ctx, self))]
-    async fn contains(
-        &self,
-        ctx: Option<Context>,
-        path: String,
-        key: String,
-    ) -> anyhow::Result<bool> {
-        let client = match self.get_client(ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                bail!("failed to retrieve client: {e}");
-            }
-        };
-        match client.read_secret(&path).await {
-            Ok(Some(secret)) => Ok(secret.contains_key(&key)),
-            Ok(None) => Ok(false),
-            Err(e) => {
-                error!(error = %e, "failed to read secret");
-                bail!(anyhow!(e).context("failed to read secret"))
-            }
-        }
+    async fn contains(&self, ctx: Option<Context>, path: String, key: String) -> Result<bool> {
+        let client = self.get_client(ctx).await?;
+        let secret = client.read_secret(&path).await?;
+        Ok(secret.is_some_and(|secret| secret.contains_key(&key)))
     }
 
     /// Deletes a key from a secret
     #[instrument(level = "debug", skip(ctx, self))]
-    async fn del(&self, ctx: Option<Context>, path: String, key: String) -> anyhow::Result<()> {
-        let client = match self.get_client(ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                bail!("failed to retrieve client: {e}");
-            }
-        };
-        let value = match client.read_secret(&path).await {
-            Ok(Some(mut secret)) => {
-                if secret.remove(&key).is_none() {
-                    debug!("key does not exist in the secret");
-                    return Ok(());
-                }
-                secret
-            }
-            Ok(None) => {
-                debug!("secret not found");
+    async fn del(&self, ctx: Option<Context>, path: String, key: String) -> Result<()> {
+        let client = self.get_client(ctx).await?;
+        let secret = client.read_secret(&path).await?;
+        let secret = if let Some(mut secret) = secret {
+            if secret.remove(&key).is_none() {
+                debug!("key does not exist in the secret");
                 return Ok(());
             }
-            Err(e) => {
-                error!(error = %e, "failed to read secret");
-                bail!(anyhow!(e).context("failed to read secret"))
-            }
+            secret
+        } else {
+            debug!("secret not found");
+            return Ok(());
         };
-        match client.write_secret(&path, &value).await {
-            Ok(metadata) => {
-                debug!(?metadata, "set returned metadata");
-                Ok(())
-            }
-            Err(e) => {
-                error!(error = %e, "failed to set secret");
-                bail!(anyhow!(e).context("failed to set secret"))
-            }
-        }
+        client.write_secret(&path, &secret).await
     }
 
     /// Sets the value of a key.
@@ -157,197 +267,105 @@ impl KvVaultProvider {
         ctx: Option<Context>,
         path: String,
         key: String,
-        value: Bytes,
-    ) -> anyhow::Result<()> {
-        let client = match self.get_client(ctx).await {
-            Ok(client) => client,
-            Err(e) => {
-                error!("failed to retrieve client: {e}");
-                bail!("failed to retrieve client: {e}");
-            }
-        };
+        value: Vec<u8>,
+    ) -> Result<()> {
+        let client = self.get_client(ctx).await?;
         let value = base64::engine::general_purpose::STANDARD_NO_PAD.encode(value);
-        let value = match client.read_secret(&path).await {
-            Ok(Some(mut secret)) => {
-                match secret.entry(key) {
-                    hash_map::Entry::Vacant(e) => {
-                        e.insert(value);
-                    }
-                    hash_map::Entry::Occupied(mut e) => {
-                        if *e.get() == value {
-                            return Ok(());
-                        } else {
-                            e.insert(value);
-                        }
-                    }
+        let secret = client.read_secret(&path).await?;
+        let secret = if let Some(mut secret) = secret {
+            match secret.entry(key) {
+                hash_map::Entry::Vacant(e) => {
+                    e.insert(value);
                 }
-                secret
+                hash_map::Entry::Occupied(mut e) => {
+                    if *e.get() == value {
+                        return Ok(());
+                    }
+                    e.insert(value);
+                }
             }
-            Ok(None) => HashMap::from([(key, value)]),
-            Err(e) => {
-                error!(error = %e, "vault read: other error");
-                bail!(anyhow!(e).context("vault read: other error"))
-            }
+            secret
+        } else {
+            HashMap::from([(key, value)])
         };
-        match client.write_secret(&path, &value).await {
-            Ok(metadata) => {
-                debug!(?metadata, "set returned metadata");
-                Ok(())
-            }
-            Err(e) => {
-                error!(error = %e, "failed to set secret");
-                bail!(anyhow!(e).context("failed to set secret"))
-            }
-        }
+        client.write_secret(&path, &secret).await
+    }
+
+    #[instrument(level = "debug", skip(ctx, self))]
+    async fn list_keys(
+        &self,
+        ctx: Option<Context>,
+        path: String,
+        skip: u64,
+    ) -> Result<keyvalue::store::KeyResponse> {
+        let client = self.get_client(ctx).await?;
+        let secret = client.read_secret(&path).await?;
+        Ok(keyvalue::store::KeyResponse {
+            cursor: None,
+            keys: secret
+                .map(|secret| {
+                    secret
+                        .into_keys()
+                        .skip(skip.try_into().unwrap_or(usize::MAX))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
     }
 }
 
-impl Eventual for KvVaultProvider {
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete<Tx: Transmitter>(
+impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
+    #[instrument(level = "debug", skip(self))]
+    async fn delete(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, self.del(context, bucket, key).await)
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<()>> {
+        Ok(self.del(context, bucket, key).await)
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_exists<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn exists(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, self.contains(context, bucket, key).await)
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<bool>> {
+        Ok(self.contains(context, bucket, key).await)
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn get(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String), Tx>,
-    ) {
-        let value = match self.get(context, bucket, key).await {
-            Ok(Some(value)) => Ok(Some(Some(value))),
-            Ok(None) => Ok(None),
-            Err(err) => Err(err),
-        };
-        if let Err(err) = transmitter.transmit_static(result_subject, value).await {
-            error!(?err, "failed to transmit result")
-        }
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+        Ok(self.get(context, bucket, key).await)
     }
 
-    #[instrument(
-        level = "debug",
-        skip(self, result_subject, error_subject, value, transmitter)
-    )]
-    async fn serve_set<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn set(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            error_subject,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (String, String, impl Stream<Item = anyhow::Result<Bytes>>),
-            Tx,
-        >,
-    ) {
-        let value: BytesMut = match value.try_collect().await {
-            Ok(value) => value,
-            Err(err) => {
-                error!(?err, "failed to receive value");
-                if let Err(err) = transmitter
-                    .transmit_static(error_subject, err.to_string())
-                    .await
-                {
-                    error!(?err, "failed to transmit error")
-                }
-                return;
-            }
-        };
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                self.set(context, bucket, key, value.freeze()).await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
-    }
-}
-
-impl Atomic for KvVaultProvider {
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_compare_and_swap<Tx: Transmitter>(
-        &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, old, new),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String, u64, u64), Tx>,
-    ) {
-        // TODO: Use bucket
-        _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, Err::<(), _>("not supported"))
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<()>> {
+        Ok(self.set(context, bucket, key, value).await)
     }
 
-    /// Increments a numeric value, returning the new value
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_increment<Tx: Transmitter>(
+    #[instrument(level = "debug", skip(self))]
+    async fn list_keys(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (bucket, key, value),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, String, u64), Tx>,
-    ) {
-        // TODO: Use bucket
-        _ = bucket;
-        if let Err(err) = transmitter
-            .transmit_static(result_subject, Err::<(), _>("not supported"))
-            .await
-        {
-            error!(?err, "failed to transmit result")
-        }
+        context: Option<Context>,
+        bucket: String,
+        cursor: Option<u64>,
+    ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
+        Ok(self
+            .list_keys(context, bucket, cursor.unwrap_or_default())
+            .await)
     }
 }
 
@@ -410,7 +428,7 @@ impl Provider for KvVaultProvider {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(source_id) {
             debug!("deleting link for actor [{source_id}]");
-            drop(client)
+            drop(client);
         }
         Ok(())
     }
@@ -420,7 +438,7 @@ impl Provider for KvVaultProvider {
         let mut aw = self.actors.write().await;
         // Empty the actor link data and stop all servers
         for (_, client) in aw.drain() {
-            drop(client)
+            drop(client);
         }
         Ok(())
     }

@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
-use bytes::{Buf, BufMut, Bytes};
-use futures::{stream, try_join, Stream, TryStreamExt};
+use futures::{stream, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::spawn;
 use tokio::sync::RwLock;
@@ -20,10 +19,9 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmtime_wasi_http::body::HyperIncomingBody;
-use wrpc_transport::{
-    AsyncSubscription, AsyncValue, Client, DynamicTuple, Encode, IncomingInputStream, Receive,
-    Subscribe,
-};
+use wrpc_transport::{Client, DynamicTuple, IncomingInputStream};
+
+use crate::bindings::{wasmcloud, wrpc};
 
 use super::config::ConfigBundle;
 use super::injector_to_headers;
@@ -477,7 +475,7 @@ impl Bus for Handler {
 
     /// Set the current link name in use by the handler, which is otherwise "default".
     ///
-    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/readwrite.get`)
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/store.get`)
     /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
     #[instrument(level = "debug", skip(self))]
     async fn set_link_name(
@@ -551,6 +549,14 @@ impl Config for Handler {
     }
 }
 
+fn keyvalue_error_from_wrpc(err: wrpc::keyvalue::store::Error) -> keyvalue::store::Error {
+    match err {
+        wrpc::keyvalue::store::Error::NoSuchStore => keyvalue::store::Error::NoSuchStore,
+        wrpc::keyvalue::store::Error::AccessDenied => keyvalue::store::Error::AccessDenied,
+        wrpc::keyvalue::store::Error::Other(other) => keyvalue::store::Error::Other(other),
+    }
+}
+
 #[async_trait]
 impl KeyValueAtomics for Handler {
     #[instrument(level = "trace", skip(self))]
@@ -560,17 +566,11 @@ impl KeyValueAtomics for Handler {
         key: String,
         delta: u64,
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
-        use wrpc_interface_keyvalue::Atomic;
-
         let wrpc = self.wrpc_keyvalue_atomics().await?;
-        let (res, tx) = wrpc
-            .invoke_increment(bucket, &key, delta)
+        let res = wrpc::keyvalue::atomics::increment(&wrpc, bucket, &key, delta)
             .await
             .context("failed to invoke `wrpc:keyvalue/atomics.increment`")?;
-        // TODO: return a result directly
-        let value = res.map_err(|err| anyhow!(err).context("function failed"))?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(Ok(value))
+        Ok(res.map_err(keyvalue_error_from_wrpc))
     }
 }
 
@@ -582,40 +582,11 @@ impl KeyValueStore for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, keyvalue::store::Error>> {
-        use wrpc_interface_keyvalue::Eventual;
-
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let (res, tx) = wrpc
-            .invoke_get(bucket, &key)
+        let res = wrpc::keyvalue::store::get(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.get`")?;
-        let (res, _) = try_join!(
-            async {
-                match res {
-                    Ok(Some(mut stream)) => {
-                        if let Some(buf) = stream
-                            .try_next()
-                            .await
-                            .context("failed to receive first chunk")?
-                        {
-                            let buf = stream
-                                .try_fold(buf.to_vec(), |mut buf, chunk| async move {
-                                    buf.extend_from_slice(&chunk);
-                                    Ok(buf)
-                                })
-                                .await?;
-                            Ok(Ok(Some(buf)))
-                        } else {
-                            Ok(Ok(None))
-                        }
-                    }
-                    Ok(None) => Ok(Ok(None)),
-                    Err(err) => Ok(Err(keyvalue::store::Error::Other(err))),
-                }
-            },
-            async { tx.await.context("failed to transmit parameters") },
-        )?;
-        Ok(res)
+        Ok(res.map_err(keyvalue_error_from_wrpc))
     }
 
     #[instrument(level = "trace", skip(self, value))]
@@ -625,15 +596,11 @@ impl KeyValueStore for Handler {
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
-        use wrpc_interface_keyvalue::Eventual;
-
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let (res, tx) = wrpc
-            .invoke_set(bucket, &key, stream::iter([value.into()]))
+        let res = wrpc::keyvalue::store::set(&wrpc, bucket, &key, &value)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.set`")?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(res.map_err(keyvalue::store::Error::Other))
+        Ok(res.map_err(keyvalue_error_from_wrpc))
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -642,16 +609,11 @@ impl KeyValueStore for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
-        use wrpc_interface_keyvalue::Eventual;
-
         let wrpc = self.wrpc_keyvalue_store().await?;
-        // TODO: Stream value (or not, depending on how `wasi:keyvalue` develops)
-        let (res, tx) = wrpc
-            .invoke_delete(bucket, &key)
+        let res = wrpc::keyvalue::store::delete(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.delete`")?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(res.map_err(keyvalue::store::Error::Other))
+        Ok(res.map_err(keyvalue_error_from_wrpc))
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -660,24 +622,29 @@ impl KeyValueStore for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<Result<bool, keyvalue::store::Error>> {
-        use wrpc_interface_keyvalue::Eventual;
-
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let (res, tx) = wrpc
-            .invoke_exists(bucket, &key)
+        let res = wrpc::keyvalue::store::exists(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.exists`")?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(res.map_err(keyvalue::store::Error::Other))
+        Ok(res.map_err(keyvalue_error_from_wrpc))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn list_keys(
         &self,
         bucket: &str,
-        _cursor: Option<u64>,
+        cursor: Option<u64>,
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse, keyvalue::store::Error>> {
-        bail!("not supported yet")
+        let wrpc = self.wrpc_keyvalue_store().await?;
+        match wrpc::keyvalue::store::list_keys(&wrpc, bucket, cursor)
+            .await
+            .context("failed to invoke `wrpc:keyvalue/store.list_keys`")?
+        {
+            Ok(wrpc::keyvalue::store::KeyResponse { keys, cursor }) => {
+                Ok(Ok(keyvalue::store::KeyResponse { keys, cursor }))
+            }
+            Err(err) => Ok(Err(keyvalue_error_from_wrpc(err))),
+        }
     }
 }
 
@@ -750,77 +717,6 @@ impl Logging for Handler {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct BrokerMessage(pub messaging::types::BrokerMessage);
-
-#[async_trait]
-impl Encode for BrokerMessage {
-    #[instrument(level = "trace", skip_all)]
-    async fn encode(
-        self,
-        mut payload: &mut (impl BufMut + Send),
-    ) -> anyhow::Result<Option<AsyncValue>> {
-        let Self(messaging::types::BrokerMessage {
-            subject,
-            body,
-            reply_to,
-        }) = self;
-        subject
-            .encode(&mut payload)
-            .await
-            .context("failed to encode `subject`")?;
-        body.encode(&mut payload)
-            .await
-            .context("failed to encode `body`")?;
-        reply_to
-            .encode(payload)
-            .await
-            .context("failed to encode `reply_to`")?;
-        Ok(None)
-    }
-}
-
-impl Subscribe for BrokerMessage {
-    #[instrument(level = "trace", skip_all)]
-    async fn subscribe<T: wrpc_transport::Subscriber + Send + Sync>(
-        _subscriber: &T,
-        _subject: T::Subject,
-    ) -> Result<Option<AsyncSubscription<T::Stream>>, T::SubscribeError> {
-        Ok(None)
-    }
-}
-
-#[async_trait]
-impl<'a> Receive<'a> for BrokerMessage {
-    #[instrument(level = "trace", skip_all)]
-    async fn receive<T>(
-        payload: impl Buf + Send + 'a,
-        rx: &mut (impl Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin),
-        _sub: Option<AsyncSubscription<T>>,
-    ) -> anyhow::Result<(Self, Box<dyn Buf + Send + 'a>)>
-    where
-        T: Stream<Item = anyhow::Result<Bytes>> + Send + Sync + 'static,
-    {
-        let (subject, payload) = Receive::receive_sync(payload, rx)
-            .await
-            .context("failed to receive `subject`")?;
-        let (body, payload) = Receive::receive_sync(payload, rx)
-            .await
-            .context("failed to receive `body`")?;
-        let (reply_to, payload) = Receive::receive_sync(payload, rx)
-            .await
-            .context("failed to receive `reply_to`")?;
-        Ok((
-            Self(messaging::types::BrokerMessage {
-                subject,
-                body,
-                reply_to,
-            }),
-            payload,
-        ))
-    }
-}
-
 #[async_trait]
 impl Messaging for Handler {
     #[instrument(level = "trace", skip(self, body))]
@@ -829,37 +725,51 @@ impl Messaging for Handler {
         subject: String,
         body: Vec<u8>,
         timeout: Duration,
-    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
         let wrpc = self.wrpc_messaging_consumer().await?;
-        let (res, tx) = wrpc
-            .invoke_static::<Result<_, String>>(
-                "wasmcloud:messaging/consumer@0.2.0",
-                "request",
-                (subject, body, timeout),
-            )
-            .await
-            .context("failed to invoke `wasmcloud:messaging/consumer.request`")?;
-        // TODO: return a result directly
-        let BrokerMessage(msg) = res.map_err(|err| anyhow!(err).context("function failed"))?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(msg)
+        let res = wasmcloud::messaging::consumer::request(
+            &wrpc,
+            &subject,
+            &body,
+            timeout.as_millis().try_into().unwrap_or(u32::MAX),
+        )
+        .await
+        .context("failed to invoke `wasmcloud:messaging/consumer.request`")?;
+        Ok(res.map(
+            |wasmcloud::messaging::types::BrokerMessage {
+                 subject,
+                 body,
+                 reply_to,
+             }| {
+                messaging::types::BrokerMessage {
+                    subject,
+                    body,
+                    reply_to,
+                }
+            },
+        ))
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+    async fn publish(
+        &self,
+        messaging::types::BrokerMessage {
+            subject,
+            body,
+            reply_to,
+        }: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
         let wrpc = self.wrpc_messaging_consumer().await?;
-        let (res, tx) = wrpc
-            .invoke_static::<Result<(), String>>(
-                "wasmcloud:messaging/consumer@0.2.0",
-                "publish",
-                BrokerMessage(msg),
-            )
-            .await
-            .context("failed to invoke `wasmcloud:messaging/consumer.publish`")?;
-        // TODO: return a result directly
-        res.map_err(|err| anyhow!(err).context("function failed"))?;
-        tx.await.context("failed to transmit parameters")?;
-        Ok(())
+        wasmcloud::messaging::consumer::publish(
+            &wrpc,
+            &wasmcloud::messaging::types::BrokerMessage {
+                subject,
+                body,
+                reply_to,
+            },
+        )
+        .await
+        .context("failed to invoke `wasmcloud:messaging/consumer.publish`")
     }
 }
 

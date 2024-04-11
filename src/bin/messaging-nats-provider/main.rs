@@ -1,10 +1,12 @@
 //! NATS implementation for wasmcloud:messaging.
 
-use wasmcloud_provider_messaging_nats::NatsMessagingProvider;
+use anyhow::Context as _;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    NatsMessagingProvider::run().await?;
+    wasmcloud_provider_messaging_nats::run()
+        .await
+        .context("failed to run provider")?;
     eprintln!("NATS messaging provider exiting");
     Ok(())
 }

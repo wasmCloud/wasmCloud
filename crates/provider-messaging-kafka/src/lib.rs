@@ -26,6 +26,10 @@ const DEFAULT_HOST: &str = "127.0.0.1:9092";
 const KAFKA_TOPIC: &str = "TOPIC";
 const DEFAULT_TOPIC: &str = "my-topic";
 
+pub async fn run() -> anyhow::Result<()> {
+    KafkaMessagingProvider::run().await
+}
+
 #[derive(Clone)]
 /// A struct that contains a consumer task handler and the host connection strings
 struct KafkaConnection {
@@ -43,7 +47,7 @@ pub struct KafkaMessagingProvider {
 impl KafkaMessagingProvider {
     pub async fn run() -> anyhow::Result<()> {
         let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "kafka-messaging-provider")
+        let shutdown = run_provider(provider.clone(), "messaging-kafka-provider")
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
