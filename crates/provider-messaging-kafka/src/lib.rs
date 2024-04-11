@@ -39,7 +39,7 @@ struct KafkaConnection {
 
 #[derive(Clone, Default)]
 pub struct KafkaMessagingProvider {
-    // Map of actor ID to the JoinHandle where messages are consumed. When a link is put
+    // Map of component ID to the JoinHandle where messages are consumed. When a link is put
     // we spawn a tokio::task to handle messages, and on delete the task is closed
     connections: Arc<RwLock<HashMap<String, KafkaConnection>>>,
 }
@@ -68,7 +68,7 @@ impl Provider for KafkaMessagingProvider {
             source_id, config, ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        debug!("putting link for actor [{source_id}]");
+        debug!("putting link for component [{source_id}]");
 
         // Collect comma separated hosts into a Vec<String>
         let hosts = config
@@ -103,9 +103,9 @@ impl Provider for KafkaMessagingProvider {
         let Ok(client) = ClientBuilder::new(hosts.clone()).build().await else {
             warn!(
                 source_id,
-                "failed to create Kafka client for actor, messages won't be received",
+                "failed to create Kafka client for component, messages won't be received",
             );
-            bail!("failed to create Kafka client for actor, messages won't be received")
+            bail!("failed to create Kafka client for component, messages won't be received")
         };
 
         // Create a partition client
@@ -115,9 +115,9 @@ impl Provider for KafkaMessagingProvider {
         else {
             warn!(
                 source_id,
-                "failed to create partition client for actor, messages won't be received",
+                "failed to create partition client for component, messages won't be received",
             );
-            bail!("failed to create partition client for actor, messages won't be received")
+            bail!("failed to create partition client for component, messages won't be received")
         };
         let partition_client = Arc::new(partition_client);
 
@@ -177,7 +177,7 @@ impl Provider for KafkaMessagingProvider {
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        debug!("deleting link for actor {}", source_id);
+        debug!("deleting link for component {}", source_id);
 
         let mut connections = self.connections.write().unwrap();
         if let Some(KafkaConnection {
@@ -229,11 +229,11 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
             };
 
             let ctx = ctx.as_ref().context("context missing")?;
-            let config = match connections.get(&ctx.actor.clone().unwrap()) {
+            let config = match connections.get(&ctx.component.clone().unwrap()) {
                 Some(config) => config,
                 None => {
-                    error!("no actor config for connection");
-                    return Ok(Err("no actor config for connection".to_string()));
+                    error!("no component config for connection");
+                    return Ok(Err("no component config for connection".to_string()));
                 }
             };
 

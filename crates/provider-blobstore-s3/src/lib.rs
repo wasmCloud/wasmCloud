@@ -501,7 +501,7 @@ pub struct BlobstoreS3Provider {
 impl BlobstoreS3Provider {
     /// Retrieve the per-actor [`StorageClient`] for a given link context
     async fn client(&self, context: Option<Context>) -> Result<StorageClient> {
-        if let Some(ref source_id) = context.and_then(|Context { actor, .. }| actor) {
+        if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
             self.actors
                 .read()
                 .await

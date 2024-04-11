@@ -545,7 +545,7 @@ async fn handle_provider_commands(
                     if connection.is_linked(&ld.source_id).await {
                         warn!("Ignoring duplicate link put");
                     } else {
-                        info!("Linking actor with provider");
+                        info!("Linking component with provider");
                         if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
                             error!(error = %e, "failed to receive link for provider");
                         }
@@ -693,7 +693,7 @@ pub fn invocation_context(headers: &HeaderMap) -> Context {
         .map(ToString::to_string)
         .unwrap_or_else(|| "<unknown>".into());
     Context {
-        actor: Some(source_id),
+        component: Some(source_id),
         tracing: convert_header_map_to_hashmap(headers),
     }
 }
@@ -763,22 +763,22 @@ impl ProviderConnection {
         &self.provider_key
     }
 
-    /// Stores actor with link definition
+    /// Stores component with link definition
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
         let mut update = self.links.write().await;
         update.insert(ld.source_id.to_string(), ld);
     }
 
     /// Deletes link
-    pub async fn delete_link(&self, actor_id: &str) {
+    pub async fn delete_link(&self, component_id: &str) {
         let mut update = self.links.write().await;
-        update.remove(actor_id);
+        update.remove(component_id);
     }
 
-    /// Returns true if the actor is linked
-    pub async fn is_linked(&self, actor_id: &str) -> bool {
+    /// Returns true if the component is linked
+    pub async fn is_linked(&self, component_id: &str) -> bool {
         let read = self.links.read().await;
-        read.contains_key(actor_id)
+        read.contains_key(component_id)
     }
 
     /// flush nats - called before main process exits

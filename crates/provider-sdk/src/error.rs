@@ -64,9 +64,9 @@ pub enum ValidationError {
     /// The target of the invocation is not the same as the provider
     #[error("Target of the invocation was {0}, which does not match the provider {1}")]
     InvalidTarget(String, String),
-    /// The actor that sent the request is not linked to the provider
-    #[error("Actor {0} is not linked to this provider")]
-    InvalidActor(String),
+    /// The component that sent the request is not linked to the provider
+    #[error("Component {0} is not linked to this provider")]
+    InvalidComponent(String),
     // Claims have expired
     #[error("Invocation claims token expired")]
     Expired,
