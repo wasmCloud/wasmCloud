@@ -9,7 +9,7 @@ use std::env;
 use anyhow::{Context, Result};
 use url::Url;
 
-use crate::client::TOKEN_REFRESH_INTERVAL;
+use crate::TOKEN_REFRESH_INTERVAL;
 
 /// Default address at which Vault is expected to be running,
 /// used if unspecified by configuration
@@ -51,7 +51,7 @@ impl Config {
     pub fn from_values(values: &HashMap<String, String>) -> Result<Config> {
         // load environment variables from file
         if let Some(env_file) = values.get("env").or_else(|| values.get("ENV")) {
-            eprintln!("file try read env from file: {}", env_file);
+            eprintln!("file try read env from file: {env_file}");
             let data = std::fs::read_to_string(env_file)
                 .with_context(|| format!("reading env file '{env_file}'"))?;
             simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
@@ -63,8 +63,7 @@ impl Config {
             .unwrap_or_else(|| DEFAULT_VAULT_ADDR.to_string());
         let addr = addr.parse().unwrap_or_else(|_| {
             eprintln!(
-                "Could not parse VAULT_ADDR [{addr}] as Url, using default of {}",
-                DEFAULT_VAULT_ADDR
+                "Could not parse VAULT_ADDR [{addr}] as Url, using default of {DEFAULT_VAULT_ADDR}"
             );
             DEFAULT_VAULT_ADDR.parse().unwrap()
         });

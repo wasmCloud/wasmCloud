@@ -24,6 +24,10 @@ use connection::ConnectionConfig;
 
 wit_bindgen_wrpc::generate!();
 
+pub async fn run() -> anyhow::Result<()> {
+    NatsMessagingProvider::run().await
+}
+
 /// [`NatsClientBundle`]s hold a NATS client and information (subscriptions)
 /// related to it.
 ///
@@ -55,7 +59,7 @@ impl NatsMessagingProvider {
     pub async fn run() -> anyhow::Result<()> {
         let host_data = load_host_data().context("failed to load host data")?;
         let provider = Self::from_host_data(host_data);
-        let shutdown = run_provider(provider.clone(), "nats-messaging-provider")
+        let shutdown = run_provider(provider.clone(), "messaging-nats-provider")
             .await
             .context("failed to run provider")?;
         let connection = get_connection();

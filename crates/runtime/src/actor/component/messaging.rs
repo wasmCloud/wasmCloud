@@ -61,20 +61,12 @@ impl consumer::Host for Ctx {
         timeout_ms: u32,
     ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
         let timeout = Duration::from_millis(timeout_ms.into());
-        Ok(self
-            .handler
-            .request(subject, body, timeout)
-            .await
-            .map_err(|err| format!("{err:#}")))
+        self.handler.request(subject, body, timeout).await
     }
 
     #[instrument(skip(self, msg))]
     async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
-        Ok(self
-            .handler
-            .publish(msg)
-            .await
-            .map_err(|err| format!("{err:#}")))
+        self.handler.publish(msg).await
     }
 }
 

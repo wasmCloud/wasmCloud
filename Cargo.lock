@@ -3653,7 +3653,6 @@ dependencies = [
  "rustls-pemfile 2.1.2",
  "rustls-pki-types",
  "ryu",
- "sha1_smol",
  "tokio",
  "tokio-retry",
  "tokio-rustls 0.25.0",
@@ -4308,12 +4307,6 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
-
-[[package]]
-name = "sha1_smol"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
 
 [[package]]
 name = "sha2"
@@ -5868,9 +5861,9 @@ dependencies = [
  "wasmcloud-runtime",
  "wasmcloud-tracing",
  "wasmtime-wasi-http",
+ "wit-bindgen-wrpc",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
- "wrpc-interface-keyvalue",
  "wrpc-transport 0.24.2",
  "wrpc-transport-nats 0.21.0",
  "wrpc-types 0.6.0",
@@ -5970,13 +5963,11 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "bytes",
  "futures",
- "once_cell",
  "redis",
  "tempfile",
  "tokio",
@@ -5986,29 +5977,22 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0-alpha.3",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
- "wrpc-interface-keyvalue",
- "wrpc-transport 0.24.2",
+ "wit-bindgen-wrpc",
 ]
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "base64 0.22.0",
- "bytes",
- "futures",
- "serde",
- "serde_json",
  "simple_env_load",
- "thiserror",
  "tokio",
  "tracing",
  "url",
  "vaultrs",
  "wasmcloud-provider-sdk",
- "wrpc-interface-keyvalue",
- "wrpc-transport 0.24.2",
+ "wit-bindgen-wrpc",
 ]
 
 [[package]]
@@ -6087,7 +6071,6 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
- "wrpc-interface-keyvalue",
  "wrpc-transport 0.24.2",
  "wrpc-transport-nats 0.21.0",
  "wrpc-types 0.6.0",
@@ -7088,19 +7071,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "wasmtime-wasi-http",
- "wrpc-transport 0.24.2",
-]
-
-[[package]]
-name = "wrpc-interface-keyvalue"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26bcb687f8d1c5f8682bc46ed48da676b75e7478c946d60a20cdb89774cfa44e"
-dependencies = [
- "anyhow",
- "bytes",
- "futures",
- "tracing",
  "wrpc-transport 0.24.2",
 ]
 

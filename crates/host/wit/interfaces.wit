@@ -1,0 +1,9 @@
+package wasmcloud:host;
+
+world interfaces {
+    import wasmcloud:messaging/consumer@0.2.0;
+    import wrpc:keyvalue/atomics@0.2.0-draft;
+    import wrpc:keyvalue/store@0.2.0-draft;
+
+    export wasmcloud:messaging/handler@0.2.0;
+}

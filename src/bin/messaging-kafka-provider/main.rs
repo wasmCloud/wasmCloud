@@ -1,10 +1,12 @@
 //! Kafka implementation for wasmcloud:messaging.
 
-use wasmcloud_provider_messaging_kafka::KafkaMessagingProvider;
+use anyhow::Context as _;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    KafkaMessagingProvider::run().await?;
+    wasmcloud_provider_messaging_kafka::run()
+        .await
+        .context("failed to run provider")?;
     eprintln!("Kafka messaging provider exiting");
     Ok(())
 }

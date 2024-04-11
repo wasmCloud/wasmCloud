@@ -16,6 +16,14 @@ pub fn run_atomics_test() {
 pub fn run_store_test(body: &Vec<u8>) {
     let bucket = keyvalue::store::open("test").expect("failed to open empty bucket");
     let foo_key = String::from("foo");
+
+    eprintln!("call `wasi:keyvalue/store.list-keys`...");
+    let keyvalue::store::KeyResponse { keys, cursor } = bucket
+        .list_keys(None)
+        .expect("failed to list keys");
+    assert_eq!(keys, ["foo"]);
+    assert_eq!(cursor, None);
+
     eprintln!("call `wasi:keyvalue/store.exists`...");
     bucket
         .exists(&foo_key)
@@ -43,8 +51,16 @@ pub fn run_store_test(body: &Vec<u8>) {
     let foo_value = bucket.get(&foo_key).expect("failed to get `foo`");
     assert_eq!(foo_value, None);
 
+    eprintln!("call `wasi:keyvalue/store.list-keys`...");
+    let keyvalue::store::KeyResponse { keys, cursor } = bucket
+        .list_keys(None)
+        .expect("failed to list keys");
+    assert_eq!(keys, [""; 0]);
+    assert_eq!(cursor, None);
+
     let result_key = String::from("result");
 
+    eprintln!("call `wasi:keyvalue/store.set`...");
     bucket
         .set(&result_key, body)
         .expect("failed to set `result`");
