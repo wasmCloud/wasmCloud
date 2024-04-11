@@ -163,13 +163,13 @@ jobs:
         id: meta
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
-          BRANCH_PREFIX: ${{ format('component-{0}-v', matrix.project.name) }}
+          REF: ${{ github.ref }}
+          REF_PREFIX: ${{ format('refs/tags/component-{0}-v', matrix.project.name) }}
         run: |
-          export VERSION=${TAG#$BRANCH_PREFIX};
+          export VERSION=${REF#$REF_PREFIX};
           echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
           echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
-          echo "branch-prefix=$BRANCH_PREFIX" >> $GITHUB_OUTPUT;
+          echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
           echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (wash binary and example component binaries) to work dir
       - uses: actions/download-artifact@v4
@@ -182,14 +182,14 @@ jobs:
           echo "$(realpath ./artifacts/wash-${{ matrix.wash-version }})" >> "$GITHUB_PATH";
       # Push the project to GitHub Container Registry under various tags, if this is a release tag
       - name: Push SHA-tagged WebAssembly binary to GHCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) }}
+        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) }}
         env:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           wash push ghcr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
       - name: Push version-tagged WebAssembly binary to GHCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) }}
+        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) }}
         env:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
@@ -198,14 +198,14 @@ jobs:
       # (wasmCloud/wasmCloud repository only)
       # Push the project to Azure Container Registry under various tags, if this is a release tag
       - name: Push SHA-tagged WebAssembly binary to AzureCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
+        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
           wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
           WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
           WASH_REG_PASSWORD: ${{ secrets.AZURE_CR_PUSH_PASSWORD }}
       - name: Push version-tagged WebAssembly binary to AzureCR
-        if: ${{ startsWith(github.ref, steps.meta.outputs.branch-prefix) && github.repository_owner == 'wasmCloud' }}
+        if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
           wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/component-${{ matrix.project.name }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
