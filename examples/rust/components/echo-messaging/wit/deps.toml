@@ -1,0 +1,2 @@
+logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
