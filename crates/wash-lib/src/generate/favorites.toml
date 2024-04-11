@@ -49,13 +49,8 @@ git = "wasmCloud/project-templates"
 subfolder = "interface/factorial"
 
 [[provider]]
-name = "factorial-provider"
-description = "a capability provider that computes factorials"
-git = "wasmCloud/project-templates"
-subfolder = "provider/factorial"
-
-[[provider]]
-name = "messaging-provider"
-description = "a capability provider that implements pubsub messaging"
-git = "wasmCloud/project-templates"
-subfolder = "provider/messaging"
+name = "messaging-nats"
+description = "a capability provider with scaffolding to implement the `wasmcloud:messaging` interface for pubsub"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/rust/providers/messaging-nats"
+branch = "example/nats-messaging-provider"
