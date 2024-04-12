@@ -72,6 +72,10 @@ pub struct StartComponentCommand {
     /// If this flag is omitted, the timeout will be adjusted to 5 seconds to account for component download times
     #[clap(long = "skip-wait")]
     pub skip_wait: bool,
+
+    /// List of named configuration to apply to the component, may be empty
+    #[clap(long = "config")]
+    pub config: Vec<String>,
 }
 
 pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
@@ -138,8 +142,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
         annotations: None,
-        // TODO: implement config
-        config: vec![],
+        config: cmd.config,
     })
     .await?;
 

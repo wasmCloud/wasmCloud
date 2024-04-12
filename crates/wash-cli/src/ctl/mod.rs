@@ -357,6 +357,10 @@ mod test {
             "1",
             "--annotations",
             "foo=bar",
+            "--config",
+            "default-port",
+            "--config",
+            "lang",
         ])?;
 
         match scale_actor_all.command {
@@ -367,6 +371,7 @@ mod test {
                 component_id: actor_id,
                 max_instances,
                 annotations,
+                config,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
@@ -377,6 +382,7 @@ mod test {
                 assert_eq!(actor_id, "myactorv2".to_string());
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
+                assert_eq!(config, vec!["default-port", "lang"]);
             }
             cmd => panic!("ctl scale actor constructed incorrect command {cmd:?}"),
         }
