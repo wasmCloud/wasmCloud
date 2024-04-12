@@ -8,6 +8,7 @@ use crate::up::{credsfile::parse_credsfile, WasmcloudOpts};
 pub const NATS_SERVER_VERSION: &str = "v2.10.7";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
+pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 // wadm configuration values
 pub const WADM_VERSION: &str = "v0.11.0-alpha.2";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
