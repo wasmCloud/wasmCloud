@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs, path::PathBuf};
 use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
-    get_config, ActorConfig, CommonConfig, LanguageConfig, RegistryConfig, RustConfig,
+    get_config, CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig,
     TinyGoConfig, TypeConfig, WasmTarget,
 };
 
@@ -26,7 +26,7 @@ fn rust_actor() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -35,7 +35,7 @@ fn rust_actor() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 
@@ -76,7 +76,7 @@ fn rust_actor_with_revision() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -86,7 +86,7 @@ fn rust_actor_with_revision() {
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 
@@ -125,7 +125,7 @@ fn tinygo_actor_module() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -134,7 +134,7 @@ fn tinygo_actor_module() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 
@@ -166,7 +166,7 @@ fn tinygo_actor_component() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -175,7 +175,7 @@ fn tinygo_actor_component() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::WasiPreview2,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 }
@@ -338,7 +338,7 @@ fn minimal_rust_actor() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -347,7 +347,7 @@ fn minimal_rust_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 
@@ -387,7 +387,7 @@ fn cargo_toml_actor() {
 
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
 
             push_insecure: false,
@@ -396,7 +396,7 @@ fn cargo_toml_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            ..ActorConfig::default()
+            ..ComponentConfig::default()
         })
     );
 
@@ -429,7 +429,7 @@ fn minimal_rust_actor_preview2() {
     let config = assert_ok!(result);
     assert_eq!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
             key_directory: PathBuf::from("./keys"),
             wasm_target: WasmTarget::WasiPreview2,
@@ -453,7 +453,7 @@ fn minimal_rust_actor_preview1() {
     let config = assert_ok!(result);
     assert!(matches!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             wasm_target: WasmTarget::WasiPreview1,
             ..
         })
@@ -474,7 +474,7 @@ fn minimal_rust_actor_core_module() {
     let config = assert_ok!(result);
     assert!(matches!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             wasm_target: WasmTarget::CoreModule,
             ..
         })
@@ -490,7 +490,7 @@ fn tags() {
     let config = assert_ok!(result);
     assert!(matches!(
         config.project_type,
-        TypeConfig::Actor(ActorConfig {
+        TypeConfig::Component(ComponentConfig {
             tags,
             ..
         }) if tags == Some(HashSet::from(["test".into(), "wasmcloud.com/experimental".into()])),

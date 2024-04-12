@@ -32,7 +32,7 @@ pub async fn run_dev_loop(
                 style("`wash build` providers are not yet supported for dev, skipping...").bold(),
             );
         }
-        TypeConfig::Actor(_) => {
+        TypeConfig::Component(_) => {
             eprintln!(
                 "{} {}",
                 emoji::RECYCLE,

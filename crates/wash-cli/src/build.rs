@@ -57,7 +57,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
     let config = get_config(command.config_path, Some(true))?;
 
     match config.project_type {
-        TypeConfig::Actor(ref actor_config) => {
+        TypeConfig::Component(ref actor_config) => {
             let sign_config = if command.build_only {
                 None
             } else {
