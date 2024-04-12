@@ -20,7 +20,7 @@ use crate::{
         claims::{sign_file, ActorMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
-    parser::{ActorConfig, CommonConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
+    parser::{CommonConfig, ComponentConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
 };
 
 /// Builds a wasmCloud actor using the installed language toolchain, then signs the actor with
@@ -32,7 +32,7 @@ use crate::{
 /// * `common_config`: [CommonConfig] specifying common parameters like [CommonConfig::name] and [CommonConfig::version]
 /// * `signing`: Optional [SignConfig] with information for signing the actor. If omitted, the actor will only be built
 pub fn build_actor(
-    actor_config: &ActorConfig,
+    actor_config: &ComponentConfig,
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
@@ -112,7 +112,7 @@ pub fn build_actor(
 /// Sign the component at `actor_wasm_path` using the provided configuration
 pub fn sign_actor_wasm(
     common_config: &CommonConfig,
-    actor_config: &ActorConfig,
+    actor_config: &ComponentConfig,
     signing_config: &SignConfig,
     actor_wasm_path: impl AsRef<Path>,
 ) -> Result<PathBuf> {
@@ -167,7 +167,7 @@ pub fn sign_actor_wasm(
 fn build_rust_actor(
     common_config: &CommonConfig,
     rust_config: &RustConfig,
-    actor_config: &ActorConfig,
+    actor_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let mut command = match rust_config.cargo_path.as_ref() {
         Some(path) => process::Command::new(path),
@@ -238,7 +238,7 @@ fn build_rust_actor(
 fn build_tinygo_actor(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
-    actor_config: &ActorConfig,
+    actor_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
     let file_path = PathBuf::from(&filename);
@@ -323,7 +323,7 @@ fn build_tinygo_actor(
 /// Builds a wasmCloud actor using a custom override command, then returns the path to the file.
 fn build_custom_actor(
     common_config: &CommonConfig,
-    actor_config: &ActorConfig,
+    actor_config: &ComponentConfig,
     raw_command: &str,
 ) -> Result<PathBuf> {
     // Change directory into the project directory
@@ -478,8 +478,8 @@ fn adapt_wasi_preview1_component(
 
 /// Retrieve bytes for WASI preview2 adapter given a project configuration,
 /// if required by project configuration
-pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Vec<u8>> {
-    if let ActorConfig {
+pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ComponentConfig) -> Result<Vec<u8>> {
+    if let ComponentConfig {
         wasm_target: WasmTarget::WasiPreview2,
         wasi_preview2_adapter_path: Some(path),
         ..
@@ -584,7 +584,7 @@ mod tests {
     use crate::parser::RegistryConfig;
     use crate::{
         build::WASMCLOUD_WASM_TAG_EXPERIMENTAL,
-        parser::{ActorConfig, CommonConfig, WasmTarget},
+        parser::{CommonConfig, ComponentConfig, WasmTarget},
     };
 
     use super::{
@@ -700,11 +700,11 @@ world downstream {
                     wasm_bin_name: Some("test.wasm".into()),
                     registry: RegistryConfig::default(),
                 },
-                &ActorConfig {
+                &ComponentConfig {
                     wasm_target: wasm_target.clone(),
                     wit_world: Some("test".into()),
                     tags: Some(HashSet::from(["test-tag".into()])),
-                    ..ActorConfig::default()
+                    ..ComponentConfig::default()
                 },
                 &SignConfig::default(),
                 &wasm_path,

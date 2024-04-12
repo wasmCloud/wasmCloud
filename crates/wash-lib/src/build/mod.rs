@@ -57,7 +57,7 @@ pub async fn build_project(
     signing: Option<&SignConfig>,
 ) -> Result<PathBuf> {
     match &config.project_type {
-        TypeConfig::Actor(actor_config) => {
+        TypeConfig::Component(actor_config) => {
             build_actor(actor_config, &config.language, &config.common, signing)
         }
         TypeConfig::Provider(provider_config) => {

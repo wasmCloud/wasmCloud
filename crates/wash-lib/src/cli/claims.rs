@@ -20,7 +20,7 @@ use crate::{
     cli::inspect,
     common::boxed_err_to_anyhow,
     config::WashConnectionOptions,
-    parser::{get_config, ActorConfig, ProjectConfig, ProviderConfig, TypeConfig},
+    parser::{get_config, ComponentConfig, ProjectConfig, ProviderConfig, TypeConfig},
 };
 
 #[derive(Debug, Clone, Subcommand)]
@@ -292,8 +292,8 @@ pub struct ActorMetadata {
 impl ActorMetadata {
     pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
         let actor_config = match project_config.project_type {
-            TypeConfig::Actor(ref actor_config) => actor_config.clone(),
-            _ => ActorConfig::default(),
+            TypeConfig::Component(ref actor_config) => actor_config.clone(),
+            _ => ComponentConfig::default(),
         };
 
         ActorMetadata {
@@ -354,14 +354,15 @@ pub async fn handle_command(
                 },
                 destination: match project_config {
                     Some(ref config) => match config.project_type {
-                        TypeConfig::Actor(ref actor_config) => signcmd.destination.or(actor_config
-                            .destination
-                            .clone()
-                            .map(|d| {
-                                d.to_str()
-                                    .expect("unable to convert destination pathbuf to str")
-                                    .to_string()
-                            })),
+                        TypeConfig::Component(ref actor_config) => {
+                            signcmd
+                                .destination
+                                .or(actor_config.destination.clone().map(|d| {
+                                    d.to_str()
+                                        .expect("unable to convert destination pathbuf to str")
+                                        .to_string()
+                                }))
+                        }
                         _ => signcmd.destination,
                     },
                     None => signcmd.destination,
@@ -688,7 +689,7 @@ mod test {
 
     use super::*;
     use crate::parser::{
-        ActorConfig, CommonConfig, LanguageConfig, RegistryConfig, RustConfig, TypeConfig,
+        CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig, TypeConfig,
     };
     use claims::assert_ok;
     use clap::Parser;
@@ -1194,7 +1195,7 @@ mod test {
 
         assert_eq!(
             project_config.project_type,
-            TypeConfig::Actor(ActorConfig {
+            TypeConfig::Component(ComponentConfig {
                 claims: vec![
                     "wasmcloud:httpserver".to_string(),
                     "wasmcloud:httpclient".to_string(),
@@ -1207,7 +1208,7 @@ mod test {
                     "wasmcloud.com/experimental".into(),
                     "test".into(),
                 ])),
-                ..ActorConfig::default()
+                ..ComponentConfig::default()
             })
         );
 
@@ -1269,14 +1270,15 @@ mod test {
                 let cmd = SignCommand {
                     metadata: signcmd.metadata.update_with_project_config(&project_config),
                     destination: match &project_config.project_type {
-                        TypeConfig::Actor(ref actor_config) => signcmd.destination.or(actor_config
-                            .destination
-                            .clone()
-                            .map(|d| {
-                                d.to_str()
-                                    .expect("unable to convert destination pathbuf to str")
-                                    .to_string()
-                            })),
+                        TypeConfig::Component(ref actor_config) => {
+                            signcmd
+                                .destination
+                                .or(actor_config.destination.clone().map(|d| {
+                                    d.to_str()
+                                        .expect("unable to convert destination pathbuf to str")
+                                        .to_string()
+                                }))
+                        }
                         _ => signcmd.destination,
                     },
                     ..signcmd

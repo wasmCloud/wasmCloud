@@ -27,7 +27,8 @@ pub enum LanguageConfig {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeConfig {
-    Actor(ActorConfig),
+    #[serde(alias = "actor")]
+    Component(ComponentConfig),
     Provider(ProviderConfig),
 }
 
@@ -45,7 +46,7 @@ pub struct ProjectConfig {
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
-pub struct ActorConfig {
+pub struct ComponentConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Vec<String>,
     /// Whether to push to the registry insecurely. Defaults to false.
@@ -85,7 +86,7 @@ impl RustConfig {
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-struct RawActorConfig {
+struct RawComponentConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Option<Vec<String>>,
     /// Whether to push to the registry insecurely. Defaults to false.
@@ -112,10 +113,10 @@ struct RawActorConfig {
     pub destination: Option<PathBuf>,
 }
 
-impl TryFrom<RawActorConfig> for ActorConfig {
+impl TryFrom<RawComponentConfig> for ComponentConfig {
     type Error = anyhow::Error;
 
-    fn try_from(raw_config: RawActorConfig) -> Result<Self> {
+    fn try_from(raw_config: RawComponentConfig) -> Result<Self> {
         Ok(Self {
             claims: raw_config.claims.unwrap_or_default(),
             push_insecure: raw_config.push_insecure.unwrap_or(false),
@@ -331,7 +332,8 @@ struct RawProjectConfig {
     #[serde(default)]
     pub revision: i32,
 
-    pub actor: Option<RawActorConfig>,
+    #[serde(alias = "actor")]
+    pub component: Option<RawComponentConfig>,
     pub provider: Option<RawProviderConfig>,
 
     pub rust: Option<RawRustConfig>,
@@ -489,8 +491,8 @@ impl RawProjectConfig {
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "actor" | "component" => {
-                let actor_config = self.actor.context("missing actor config")?;
-                TypeConfig::Actor(actor_config.try_into()?)
+                let actor_config = self.component.context("missing actor config")?;
+                TypeConfig::Component(actor_config.try_into()?)
             }
 
             "provider" => TypeConfig::Provider(

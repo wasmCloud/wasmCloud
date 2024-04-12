@@ -3,7 +3,7 @@ type = "actor"
 name = "testactor"
 version = "0.1.0"
 
-[actor]
+[component]
 claims = ["wasmcloud:httpserver"]
 wasm_target = "wasm32-wasi-preview2"
 wit_world = "test-world"
