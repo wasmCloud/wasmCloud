@@ -1,3 +1,4 @@
+#![allow(clippy::missing_safety_doc)]
 wit_bindgen::generate!({
     world: "hello",
 });
@@ -17,9 +18,8 @@ impl Guest for HttpServer {
             .path_with_query()
             .expect("failed to get path with query");
 
-        let bucket =
-            wasi::keyvalue::types::Bucket::open_bucket("foo").expect("failed to open empty bucket");
-        let count = wasi::keyvalue::atomic::increment(&bucket, &name, 1)
+        let bucket = wasi::keyvalue::store::open("foo").expect("failed to open empty bucket");
+        let count = wasi::keyvalue::atomics::increment(&bucket, &name, 1)
             .expect("failed to increment count");
 
         response_body
