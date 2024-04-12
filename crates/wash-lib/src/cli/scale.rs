@@ -43,6 +43,10 @@ pub struct ScaleComponentCommand {
     /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
     #[clap(short = 'a', long = "annotations")]
     pub annotations: Vec<String>,
+
+    /// List of named configuration to apply to the component, may be empty
+    #[clap(long = "config")]
+    pub config: Vec<String>,
 }
 
 pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<CommandOutput> {
@@ -60,7 +64,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         component_ref: &cmd.component_ref,
         max_instances: cmd.max_instances,
         annotations: Some(annotations),
-        config: vec![],
+        config: cmd.config,
         skip_wait: false,
         timeout_ms: None,
     })
