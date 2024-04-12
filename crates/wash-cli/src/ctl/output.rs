@@ -113,19 +113,19 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
             format!("Host Inventory ({})", inv.host_id),
             4,
-            Alignment::Center,
+            Alignment::Left,
         )]));
 
         if !inv.labels.is_empty() {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "",
-                4,
-                Alignment::Center,
+                2,
+                Alignment::Left,
             )]));
             inv.labels.iter().for_each(|(k, v)| {
                 table.add_row(Row::new(vec![
-                    TableCell::new_with_alignment(k, 2, Alignment::Left),
-                    TableCell::new_with_alignment(v, 2, Alignment::Left),
+                    TableCell::new_with_alignment(k, 1, Alignment::Left),
+                    TableCell::new_with_alignment(v, 1, Alignment::Left),
                 ]))
             });
         } else {
