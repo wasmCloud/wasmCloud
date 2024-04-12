@@ -92,7 +92,7 @@ pub struct NatsOpts {
     #[clap(
         long = "nats-websocket-port",
         env = "NATS_WEBSOCKET_PORT",
-        default_value_t = 4001
+        default_value = DEFAULT_NATS_WEBSOCKET_PORT
     )]
     pub nats_websocket_port: u16,
 
@@ -118,7 +118,7 @@ impl From<NatsOpts> for NatsConfig {
             js_domain: other.nats_js_domain,
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
-            websocket_port: Some(other.nats_websocket_port),
+            websocket_port: other.nats_websocket_port,
         }
     }
 }
@@ -370,7 +370,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             js_domain: cmd.nats_opts.nats_js_domain,
             remote_url: cmd.nats_opts.nats_remote_url,
             credentials: cmd.nats_opts.nats_credsfile.clone(),
-            websocket_port: Some(cmd.nats_opts.nats_websocket_port),
+            websocket_port: cmd.nats_opts.nats_websocket_port,
         };
         start_nats(&install_dir, &nats_binary, nats_config).await?;
         Some(nats_binary)
@@ -609,9 +609,7 @@ async fn run_wasmcloud_interactive(
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode.",);
-        println!(
-            "🎛️  If you enabled --nats-websocket-port, start the dashboard by executing `wash ui`"
-        );
+        println!("🎛️ To start the dashboard, run `wash ui`");
         println!("🚪 Press `CTRL+c` at any time to exit");
     }
 

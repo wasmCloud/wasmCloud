@@ -1,5 +1,5 @@
 # This docker-compose file starts an entire wasmCloud ecosystem, including:
-#   a NATS server (with websocket open on port 4001)
+#   a NATS server (with websocket open on port 4223)
 #   a local OCI registry
 #   grafana + tempo for tracing
 #   a wasmCloud host
@@ -13,7 +13,7 @@ services:
       - "4222:4222"
       - "6222:6222"
       - "8222:8222"
-      - "4001:4001"
+      - "4223:4223"
     command:
       - "-c=/etc/nats/nats-server.conf"
     volumes:

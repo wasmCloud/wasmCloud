@@ -124,7 +124,7 @@ pub struct NatsConfig {
     pub js_domain: Option<String>,
     pub remote_url: Option<String>,
     pub credentials: Option<PathBuf>,
-    pub websocket_port: Option<u16>,
+    pub websocket_port: u16,
 }
 
 /// Returns a standalone NATS config with the following values:
@@ -133,6 +133,7 @@ pub struct NatsConfig {
 /// * `js_domain`: `Some("core")`
 /// * `remote_url`: `None`
 /// * `credentials`: `None`
+/// * `websocket_port`: `4223`
 impl Default for NatsConfig {
     fn default() -> Self {
         NatsConfig {
@@ -142,7 +143,7 @@ impl Default for NatsConfig {
             js_domain: Some("core".to_string()),
             remote_url: None,
             credentials: None,
-            websocket_port: None,
+            websocket_port: 4223,
         }
     }
 }
@@ -166,7 +167,7 @@ impl NatsConfig {
         js_domain: Option<String>,
         remote_url: String,
         credentials: PathBuf,
-        websocket_port: Option<u16>,
+        websocket_port: u16,
     ) -> Self {
         NatsConfig {
             host: host.to_owned(),
@@ -225,17 +226,15 @@ leafnodes {{
         } else {
             String::new()
         };
-        let websocket_section = match self.websocket_port {
-            Some(port) => format!(
-                r#"
+        let websocket_port = self.websocket_port;
+        let websocket_section = format!(
+            r#"
 websocket {{
-    port: {port}
+    port: {websocket_port}
     no_tls: true
 }}
                 "#
-            ),
-            _ => String::new(),
-        };
+        );
         let config = format!(
             r#"
 jetstream {{
@@ -444,7 +443,7 @@ mod test {
             None,
             "connect.ngs.global".to_string(),
             creds.clone(),
-            Some(4204),
+            4204,
         );
 
         config.write_to_path(creds.clone()).await?;

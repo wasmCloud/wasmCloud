@@ -34,7 +34,8 @@ pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Resu
 }
 
 pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
-    let washboard_assets = ensure_washboard(&cmd.version, downloads_dir()?).await?;
+    let washboard_path = downloads_dir()?.join("washboard");
+    let washboard_assets = ensure_washboard(&cmd.version, washboard_path).await?;
     let static_files = warp::fs::dir(washboard_assets);
 
     let cors = warp::cors()
