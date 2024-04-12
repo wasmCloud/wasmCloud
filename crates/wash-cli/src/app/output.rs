@@ -13,7 +13,7 @@ pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Version", 1, Alignment::Left),
-        TableCell::new_with_alignment("Deployed?", 1, Alignment::Left),
+        TableCell::new_with_alignment("Deployed", 1, Alignment::Left),
     ]));
 
     revisions.iter().for_each(|r| {
