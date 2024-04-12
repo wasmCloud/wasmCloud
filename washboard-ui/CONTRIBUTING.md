@@ -25,7 +25,7 @@ Enable `corepack` and install `yarn` using the following commands:
 corepack enable
 yarn install
 ```
- 
+
 ### Start a local UI development server
 
 Run the following command to start a local frontend development server:
@@ -39,7 +39,7 @@ yarn run dev
 Run the following command to start the wasmCloud host using the wash CLI:
 
 ```bash
-wash up --nats-websocket-port 4001
+wash up
 ```
 
 ### Explanations
@@ -49,18 +49,31 @@ wash up --nats-websocket-port 4001
 `wasmcloud` uses [NATS](https://nats.io/) as its message broker. The `wash` CLI can be used to start a local NATS
 or connect to an existing NATS server.
 
-The Washboard UI connects to a NATS server at [ws://localhost:4001 by default][0], although this can be overridden via
+The Washboard UI connects to a NATS server at [ws://localhost:4223 by default][0], although this can be overridden via
 the UI.
 
-In case you use `wash up` to spawn up the Nats server, you can control the websocket port using the
-`--nats-websocket-port` flag or `NATS_WEBSOCKET_PORT` environment variable. For example:
+You can spawn the NATS server with a wasmCloud Host and wadm with the `wash` cli tool. See the documentation for [installation instructions][1].
 
 ```bash
-wash up --nats-websocket-port 4001
+wash up
 ```
 
-Otherwise, verify the port you are using to connect to the NATS server. Visit [NATS Websocket Configuration][1] for more
+You can change the NATS websocket port using the
+`--nats-websocket-port` flag or `NATS_WEBSOCKET_PORT` environment variable. Note that you must stop the NATS Server to make this change. For example:
+
+```bash
+# 1. Make sure NATS is stopped
+wash down
+
+# 2. Start NATS with the new port
+wash up --nats-websocket-port 4001
+# or
+NATS_WEBSOCKET_PORT=4001 wash up
+```
+
+Otherwise, verify the port you are using to connect to the NATS server. Visit [NATS Websocket Configuration][2] for more
 information.
 
-[0]: https://github.com/wasmCloud/wasmCloud/blob/5fbc982aea164a738b9254952ca91b0a5fd3bb82/washboard-ui/src/lattice/lattice-service.ts#L70
-[1]: https://docs.nats.io/running-a-nats-service/configuration/websocket/websocket_conf
+[0]: https://github.com/wasmCloud/wasmCloud/blob/28699dc8e891df34888935e8ace31c718da9f590/washboard-ui/src/lattice/lattice-service.ts#L70
+[1]: https://wasmcloud.com/docs/installation
+[2]: https://docs.nats.io/running-a-nats-service/configuration/websocket/websocket_conf
