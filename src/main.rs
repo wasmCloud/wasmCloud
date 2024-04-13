@@ -370,6 +370,7 @@ async fn main() -> anyhow::Result<()> {
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
         policy_service_config,
+        version: env!("CARGO_PKG_VERSION").to_string(),
     }))
     .await
     .context("failed to initialize host")?;
