@@ -794,7 +794,7 @@ impl Host {
             "friendly_name": friendly_name,
             "labels": labels,
             "uptime_seconds": 0,
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": config.version,
         });
 
         let ((ctl_nats, queue), rpc_nats) = try_join!(
@@ -898,11 +898,11 @@ impl Host {
 
         let meter = global::meter_with_version(
             "wasmcloud-host",
-            Some(env!("CARGO_PKG_VERSION")),
+            Some(config.version.clone()),
             None::<&str>,
             Some(vec![
                 KeyValue::new("host.id", host_key.public_key()),
-                KeyValue::new("host.version", env!("CARGO_PKG_VERSION")),
+                KeyValue::new("host.version", config.version.clone()),
             ]),
         );
         let metrics = HostMetrics::new(
@@ -1175,7 +1175,7 @@ impl Host {
             labels: self.labels.read().await.clone(),
             uptime_human: human_friendly_uptime(uptime),
             uptime_seconds: uptime.as_secs(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: self.host_config.version.clone(),
             host_id: self.host_key.public_key(),
         }
     }
@@ -2665,7 +2665,7 @@ impl Host {
             friendly_name: self.friendly_name.clone(),
             uptime_seconds: uptime.as_secs(),
             uptime_human: Some(human_friendly_uptime(uptime)),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            version: Some(self.host_config.version.clone()),
             js_domain: self.host_config.js_domain.clone(),
             ctl_host: Some(self.host_config.ctl_nats_url.to_string()),
             rpc_host: Some(self.host_config.rpc_nats_url.to_string()),
