@@ -609,7 +609,7 @@ async fn run_wasmcloud_interactive(
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode.",);
-        println!("🎛️ To start the dashboard, run `wash ui`");
+        println!("🎛️  To start the dashboard, run `wash ui`");
         println!("🚪 Press `CTRL+c` at any time to exit");
     }
 
