@@ -5256,9 +5256,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm"
-version = "0.11.0-alpha.2"
+version = "0.11.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a2fc81038e2d2a90c30a49237973224ee76ed0b11d0d714d027798ad5eb565"
+checksum = "8a31e7c622ddb533044d444bed6ac34a87d885e14a9f847563218cb2111c0512"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5370,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.27.0-alpha.2"
+version = "0.27.0-alpha.3"
 dependencies = [
  "anyhow",
  "assert-json-diff",
