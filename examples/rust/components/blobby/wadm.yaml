@@ -16,30 +16,41 @@ spec:
     - name: blobby
       type: actor
       properties:
-        image: wasmcloud.azurecr.io/blobby:0.2.0
+        image: wasmcloud.azurecr.io/blobby:0.1.0
       traits:
         - type: spreadscaler
           properties:
             replicas: 1
         - type: linkdef
           properties:
-            target: httpserver
-            values:
-              ADDRESS: 0.0.0.0:8080
-        - type: linkdef
-          properties:
             target: blobstore
-            values:
-              ROOT: "/tmp"
+            namespace: wasi
+            package: blobstore
+            interfaces: [blobstore]
+            target_config:
+              - name: root-directory
+                properties:
+                  root: "/tmp"
 
     # Capability Providers
     - name: httpserver
       type: capability
       properties:
-        image: file://../../../../crates/providers/providers/http-server/build/httpserver.par.gz
-        contract: wasmcloud:httpserver
+        image: ghcr.io/wasmcloud/http-server:0.20.0
+      traits:
+        # Link the httpserver to the component, and configure the HTTP server
+        # to listen on port 8080 for incoming requests
+        - type: link
+          properties:
+            target: blobby
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 0.0.0.0:8080
     - name: blobstore
       type: capability
       properties:
-        image: file://../../../../crates/providers/blobstore-fs/blobstore_fs.par.gz
-        contract: wasmcloud:blobstore
+        image: ghcr.io/wasmcloud/blobstore-fs:0.6.0
