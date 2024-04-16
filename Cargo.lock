@@ -3813,9 +3813,9 @@ dependencies = [
 
 [[package]]
 name = "rmp"
-version = "0.8.12"
+version = "0.8.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9860a6cc38ed1da53456442089b4dfa35e7cedaa326df63017af88385e6b20"
+checksum = "bddb316f4b9cae1a3e89c02f1926d557d1142d0d2e684b038c11c1b77705229a"
 dependencies = [
  "byteorder 1.5.0",
  "num-traits",
@@ -3835,9 +3835,9 @@ dependencies = [
 
 [[package]]
 name = "rmpv"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e0e0214a4a2b444ecce41a4025792fc31f77c7bb89c46d253953ea8c65701ec"
+checksum = "e540282f11751956c82bc5529a7fb71b871b998fbf9cf06c2419b22e1b4350df"
 dependencies = [
  "num-traits",
  "rmp",
