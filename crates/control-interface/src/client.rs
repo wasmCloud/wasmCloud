@@ -408,7 +408,30 @@ impl Client {
 
     /// Get the named config item.
     ///
-    /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    /// # Arguments
+    /// - `config_name`: The name of the config to fetch. Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// # Returns
+    /// A map of key-value pairs representing the contents of the config item. This response is wrapped in the [CtlResponse] type. If
+    /// the config item does not exist, the host will return a [CtlResponse] with a `success` field set to `true` and a `response` field
+    /// set to [Option::None]. If the config item exists, the host will return a [CtlResponse] with a `success` field set to `true` and a
+    /// `response` field set to [Option::Some] containing the key-value pairs of the config item.
+    ///
+    /// # Example Usage
+    /// ```no_run
+    /// let client = wasmcloud_control_interface::Client::new(async_nats::connect("127.0.0.1:4222")).await.unwrap("should connect to NATS");
+    /// client.put_config("foo", HashMap::from_iter(vec![("key".to_string(), "value".to_string())])).await.expect("should be able to put config");
+    ///
+    /// let config = client.get_config("foo").await.expect("should be able to get config");
+    /// assert!(config.success);
+    /// assert_eq!(config.response, Some(HashMap::from_iter(vec![("key".to_string(), "value".to_string())]))
+    ///
+    /// // Note that the host will return a success response even if the config item does not exist.
+    /// // Errors are reserved for communication problems with the host or with the config store.
+    /// let absent_config = client.get_config("bar").await.expect("should be able to get config");
+    /// assert!(absent_config.success);
+    /// assert_eq!(absent_config.response, None);
+    /// ```
     #[instrument(level = "debug", skip_all)]
     pub async fn get_config(
         &self,

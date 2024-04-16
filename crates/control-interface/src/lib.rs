@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //! All of the [Client] functions are handled by a wasmCloud host running in the specified lattice.
-//! Each function returns a Result<CtlResponse<T>> wrapper around the actual response type. The outer
+//! Each function returns a `Result<CtlResponse<T>>` wrapper around the actual response type. The outer
 //! result should be handled for protocol (timeouts, no hosts available) and deserialization errors (invalid response payload).
 //! The inner result is the actual response from the host(s) and should be handled for application-level errors.
 
