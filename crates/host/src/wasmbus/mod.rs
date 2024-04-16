@@ -2028,26 +2028,11 @@ impl Host {
             "policy denied request to start provider `{request_id}`: `{message:?}`",
         );
 
-        let component_specification = if let Ok(Some(mut spec)) =
-            self.get_component_spec(provider_id).await
-        {
-            // If the component didn't start yet, the URL will be empty but the spec may contain links.
-            // Populate the URL and store the updated spec.
-            if spec.url.is_empty() {
-                spec.url = provider_ref.to_string();
-            } else if spec.url != provider_ref {
-                // Ensure there isn't another component already claiming this ID
-                bail!(
-                        "existing component specification URL [{}] for provider ID [{}] does not match provider reference [{}] (you may need to pick a new ID)",
-                        spec.url,
-                        provider_id,
-                        provider_ref
-                    );
-            }
-            spec
-        } else {
-            ComponentSpecification::new(provider_ref)
-        };
+        let component_specification = self
+            .get_component_spec(provider_id)
+            .await?
+            .unwrap_or_else(|| ComponentSpecification::new(provider_ref));
+
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
 
