@@ -2364,15 +2364,18 @@ impl Host {
     #[instrument(level = "trace", skip(self))]
     async fn handle_config_get(&self, config_name: &str) -> anyhow::Result<Vec<u8>> {
         trace!(%config_name, "handling get config");
-        let config_bytes = self
-            .config_data
-            .get(config_name)
-            .await?
-            .context("config not found")?;
-        let config_map: HashMap<String, String> = serde_json::from_slice(&config_bytes)
-            .context("config data should be a map of string -> string")?;
-
-        serde_json::to_vec(&CtlResponse::ok(config_map)).map_err(anyhow::Error::from)
+        if let Some(config_bytes) = self.config_data.get(config_name).await? {
+            let config_map: HashMap<String, String> = serde_json::from_slice(&config_bytes)
+                .context("config data should be a map of string -> string")?;
+            serde_json::to_vec(&CtlResponse::ok(config_map)).map_err(anyhow::Error::from)
+        } else {
+            serde_json::to_vec(&CtlResponse::<()> {
+                success: true,
+                response: None,
+                message: "Configuration not found".to_string(),
+            })
+            .map_err(anyhow::Error::from)
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
