@@ -1,6 +1,4 @@
-wit_bindgen::generate!({
-    world: "hello",
-});
+wit_bindgen::generate!();
 
 use exports::wasmcloud::messaging::handler::Guest;
 use wasi::logging::logging::*;

@@ -1,9 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 // ^^^ This is for clippy complaining about something that wit bindgen is generating
 
-wit_bindgen::generate!({
-    world: "blobby",
-});
+wit_bindgen::generate!();
 
 use std::io::{Read, Write};
 
