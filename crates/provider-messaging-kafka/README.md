@@ -10,12 +10,12 @@ It exposes publish and subscribe functionality to components to operate on Kafka
 [kafka]: https://kafka.apache.org/
 [redpanda]: https://redpanda.com/
 
-## Link Definition Configuration Settings
+## Named Config Settings
 
 | Property | Description                                                                                                                                                                                                                                                                |
-|:---------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `HOSTS`  | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
-| `TOPIC`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing                                                                                                                                                             |
+|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hosts`  | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
+| `topic`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing
 
 ## Limitations
 
@@ -24,6 +24,8 @@ This capability provider only implements the very basic Kafka functionality of p
 Because of this, advanced Kafka users may find that this is implemented without specific optimizations or options and we welcome any additions to this client.
 
 Additionally, running multiple copies of this provider across different hosts was not tested during development, and it's possible that multiple instances of this provider will cause unexpected behavior like duplicate message delivery.
+
+This provider also hard-codes a return topic (`<topic>.reply`) which is passed along to all actors it invokes.
 
 ## Testing
 
@@ -55,7 +57,7 @@ docker exec -it \
     kafka-console-consumer.sh \
     --consumer.config /opt/bitnami/kafka/config/consumer.properties \
     --bootstrap-server 127.0.0.1:9092 \
-    --topic messaging-kafka.test \
+    --topic wasmcloud.echo \
     --from-beginning
 ```
 
@@ -94,70 +96,59 @@ wash up
 
 ### 4. Deploy an architecture declaratively with `wadm`
 
-Using [`wadm`][wadm] we can easily create a declarative deployment (see [`messaging-kafka-test.wadm.yaml`](./messaging-kafka-test.wadm.yaml)):
+Using [`wadm`][wadm] we can easily create a declarative deployment, using configuration similar to the [`messaging-kafka-demo.wadm.yaml` WADM manifest](./messaging-kafka-demo.wadm.yaml).
 
 ```yaml
 ---
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
-  name: messaging-kafka-test
+  name: messaging-kafka-demo
   annotations:
     version: v0.0.1
-    description: "Test messaging-kafka provider with test actor messaging-sender-http-smithy"
-    experimental: true
+    description: |
+      Echo demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT), along with
+      the Kafka messaging provider.
 spec:
   components:
-    # (Capability Provider) mediates HTTP access
-    - name: httpserver
-      type: capability
+    - name: echo
+      type: component
       properties:
-        image: wasmcloud.azurecr.io/httpserver:0.19.1
-        contract: wasmcloud:httpserver
-
-    # (Capability Provider) provides messaging with Kafka
-    - name: messaging-kafka
-      type: capability
-      properties:
-        # TODO: you must replace the path below with the provider par.gz generated earlier
-        image: file:///the/absolute/path/to/provider.par.gz
-        contract: wasmcloud:messaging
-
-    # (Actor) A test actor that turns HTTP requests into Kafka messages
-    # in particular, sending a HTTP POST request to `/publish` will trigger a publish
-    - name: messaging-receiver-http-smithy
-      type: actor
-      properties:
-        # TODO: you must replace the path below to match your genreated code in build
-       image: file:///the/absolute/path/to/build/messaging-sender-http-smithy_s.wasm
+        # NOTE: make sure to `wash build` the echo messaging example!
+        image: file://../../examples/rust/components/echo-messaging/build/echo_messaging_s.wasm
       traits:
-        # Govern the spread/scheduling of the actor
+        # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
             replicas: 1
-
-        # Link the HTTP server, and inform it to listen on port 8081
-        # on the local machine
-        - type: linkdef
+        - type: link
           properties:
-            target: httpserver
-            values:
-              ADDRESS: 127.0.0.1:8081
+            target: nats
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [consumer]
+            target_config:
+              - name: simple-subscription
+                properties:
+                  topic: wasmcloud.echo
 
-        # Link to the messaging provider, directing it to the Kafka host
-        # and topics to listen on/interact with for this actor
-        - type: linkdef
-          properties:
-            target: messaging
-            values:
-              HOSTS: 127.0.0.1:9092
-              TOPIC: messaging-kafka.test
+    # Add a capability provider that implements `wasmcloud:messaging` using NATS
+    - name: nats
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:canary
+```
+
+Then, we must set up the named config that we're expecting to see (`simple-subscription`):
+
+```console
+wash config put simple-subscription topic=wasmcloud.echo
 ```
 
 To deploy the architecture above to your wasmcloud lattice:
 
 ```console
-wash app deploy messaging-kafka-test.wadm.yaml
+wash app deploy wadm.yaml
 ```
 
 > [!NOTE]
@@ -165,36 +156,37 @@ wash app deploy messaging-kafka-test.wadm.yaml
 > If you ever need to to remove (and possibly redeploy) your application:
 >
 > ```console
-> wash app delete messaging-kafka-test v0.0.1
+> wash app delete messaging-kafka-demo v0.0.1
 > ```
 
-### 5. Send a HTTP request to trigger a publish
+### 5. Send a message on `<topic>`, see it echoed on `<topic>.reply`
 
-Since we're using the [`messaging-sender-http-smithy`][project-messaging-sender-http-smithy] actor, we can use a HTTP request to trigger a mesasge publish on our `messaging-kafka.test` topic.
+Since the `echo-messaging` component returns any message it receives, and this provider adds a `reply_to` of `<topic>.reply`, we can test that our component is working by sending a message over the kafka topic we created earlier `wasmcloud.echo`, and seeing the messaged surfaced on `wasmcloud.echo.reply`.
+
+
+To do this, make sure you have a consumer open for the `wasmcloud.echo.reply` topic:
 
 ```console
-curl localhost:8081/publish \
---data-binary @- << EOF
-{
-  "msg": {
-    "subject": "messaging-kafka.test",
-    "body": "hello world"
-  }
-}
-EOF
+docker exec -it \
+    messaging-test-kafka \
+    kafka-console-consumer.sh \
+    --consumer.config /opt/bitnami/kafka/config/consumer.properties \
+    --bootstrap-server 127.0.0.1:9092 \
+    --topic wasmcloud.echo.reply \
+    --from-beginning
 ```
 
-> [!WARNING]
-> The first few calls may fail with a 500 until the Kafka connection is established on the provider side!
+Then, you should be able to send a message using the kafka container (note that this comamnd will not return, but will instead produce a prompt):
 
-Once your `curl` call is successful, you should see output:
-
+```console
+docker exec -it \
+    messaging-test-kafka \
+    kafka-console-producer.sh \
+    --bootstrap-server 127.0.0.1:9092 \
+    --topic wasmcloud.echo
 ```
-$ curl localhost:8081/publish --data @publish.json
-{"data":null,"status":"success"}
-```
 
-In the shell where you started the consumer, you should also see "hello world" printed to the screen.
+Messages you send via the producer will be echoed first in the original consumer (`wasmcloud.echo`) and *also* echoed in `wasmcloud.echo.reply`, which is the work of the `echo-messaging` component and the default functionality of this provider (supplying a generated `reply_to` topic).
 
 [docker]: https://docs.docker.com
 [wash]: https://github.com/wasmCloud/wasmCloud/tree/main/crates/wash-cli

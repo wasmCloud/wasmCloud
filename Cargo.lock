@@ -6018,7 +6018,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6027,6 +6027,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wasmcloud-provider-sdk",
+ "wasmcloud-tracing",
  "wit-bindgen-wrpc",
 ]
 
