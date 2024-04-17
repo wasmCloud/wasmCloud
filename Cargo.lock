@@ -5284,7 +5284,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "uuid",
- "wasmcloud-control-interface 1.0.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-control-interface 1.0.0-alpha.3",
 ]
 
 [[package]]
@@ -5420,7 +5420,7 @@ dependencies = [
  "warp",
  "wascap 0.14.0",
  "wash-lib",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.5.0",
  "wasmcloud-provider-sdk",
  "weld-codegen",
@@ -5485,7 +5485,7 @@ dependencies = [
  "wascap 0.14.0",
  "wasm-encoder 0.203.0",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.5.0",
  "wasmparser 0.202.0",
  "wat",
@@ -5685,7 +5685,7 @@ dependencies = [
  "uuid",
  "vaultrs",
  "wascap 0.14.0",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.5.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-fs",
@@ -5742,6 +5742,8 @@ dependencies = [
 [[package]]
 name = "wasmcloud-control-interface"
 version = "1.0.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc87e84c68d31d65d4070cf70548f5d27e2c9c75d2768ea52ce60416c048e9a6"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5762,9 +5764,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "1.0.0-alpha.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc87e84c68d31d65d4070cf70548f5d27e2c9c75d2768ea52ce60416c048e9a6"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5876,7 +5876,7 @@ dependencies = [
  "url",
  "uuid",
  "wascap 0.14.0",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.5.0",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
@@ -5994,7 +5994,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wit-bindgen-wrpc",
@@ -6024,7 +6024,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wascap 0.14.0",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
 ]
 
 [[package]]
@@ -6148,7 +6148,7 @@ dependencies = [
  "tracing",
  "url",
  "wascap 0.14.0",
- "wasmcloud-control-interface 1.0.0-alpha.3",
+ "wasmcloud-control-interface 1.0.0",
  "wasmcloud-host",
 ]
 
