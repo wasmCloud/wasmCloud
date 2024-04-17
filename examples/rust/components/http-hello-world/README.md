@@ -28,7 +28,6 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 
 ```shell
 wash up -d
-wash config put default-http address=127.0.0.1:8080
 wash app deploy ./wadm.yaml
 wash app list
 curl http://127.0.0.1:8080

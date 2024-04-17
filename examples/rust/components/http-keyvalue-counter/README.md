@@ -22,8 +22,6 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 redis-server &
 # Start wasmCloud
 wash up -d
-wash config put default-http address=127.0.0.1:8080
-wash config put redis-url url=redis://127.0.0.1:6379
 wash app deploy ./wadm.yaml
 wash app list
 curl http://127.0.0.1:8080/counter
