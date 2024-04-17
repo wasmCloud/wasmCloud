@@ -5432,7 +5432,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.20.0-alpha.2"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5759,7 +5759,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.5.0",
+ "wasmcloud-core 0.4.0",
 ]
 
 [[package]]
@@ -5780,7 +5780,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry",
- "wasmcloud-core 0.4.0",
+ "wasmcloud-core 0.5.0",
 ]
 
 [[package]]
