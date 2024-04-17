@@ -150,6 +150,9 @@ func writeHttpResponse(responseOutparam HttpResponseWriter, statusCode uint16, h
 		return
 	}
 
+	outgoingStream.Drop()
+	echo.StaticOutgoingBodyFinish(outgoingBody, echo.None[echo.WasiHttp0_2_0_TypesTrailers]())
+
 	// Set the response on the outparam
 	echo.StaticResponseOutparamSet(responseOutparam, echo.Ok[echo.WasiHttp0_2_0_TypesOutgoingResponse, echo.WasiHttp0_2_0_TypesErrorCode](outgoingResponse))
 }
