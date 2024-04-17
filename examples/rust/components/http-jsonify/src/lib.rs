@@ -22,9 +22,7 @@
 
 use anyhow::{anyhow, bail, Result};
 
-wit_bindgen::generate!({
-    world: "component"
-});
+wit_bindgen::generate!();
 
 /// Implementation of the 'component' world in wit/world.wit will hang off of this struct
 struct Component;

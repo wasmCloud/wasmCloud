@@ -1,6 +1,4 @@
-wit_bindgen::generate!({
-    world: "hello",
-});
+wit_bindgen::generate!();
 
 use exports::wasi::http::incoming_handler::Guest;
 use wasi::http::types::*;
