@@ -32,9 +32,6 @@ pub const LOCAL_REGISTRY: &str = "localhost:5001";
 pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.1";
 
 #[allow(unused)]
-pub const HTTP_JSONIFY_OCI_REF: &str = "ghcr.io/wasmcloud/component-http-jsonify:0.1.0";
-
-#[allow(unused)]
 pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.20.0";
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
@@ -291,8 +288,8 @@ impl TestWashInstance {
         })
     }
 
-    /// Trigger the equivalent of `wash start component` on a [`TestWashInstance`]
-    pub(crate) async fn start_component(
+    /// Trigger the equivalent of `wash start actor` on a [`TestWashInstance`]
+    pub(crate) async fn start_actor(
         &self,
         oci_ref: impl AsRef<str>,
         component_id: impl AsRef<str>,
@@ -300,7 +297,7 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "component",
+                "actor",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
@@ -313,9 +310,9 @@ impl TestWashInstance {
             .kill_on_drop(true)
             .output()
             .await
-            .context("failed to start component")?;
+            .context("failed to start actor")?;
         serde_json::from_slice(&output.stdout)
-            .context("failed to parse output of `wash start component`")
+            .context("failed to parse output of `wash start actor`")
     }
 
     /// Trigger the equivalent of `wash start provider` on a [`TestWashInstance`]
@@ -365,32 +362,33 @@ impl TestWashInstance {
     }
 
     /// Trigger the equivalent of `wash call` on a [`TestWashInstance`]
-    pub(crate) async fn call_component(
+    pub(crate) async fn call_actor(
         &self,
-        component_id: impl AsRef<str>,
+        actor_id: impl AsRef<str>,
         operation: impl AsRef<str>,
         data: impl AsRef<str>,
     ) -> Result<CallCommandOutput> {
-        let component_id = component_id.as_ref();
+        let actor_id = actor_id.as_ref();
         let operation = operation.as_ref();
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "call",
-                component_id,
+                actor_id,
                 operation,
+                data.as_ref(),
+                "--output",
+                "json",
                 "--rpc-timeout-ms",
                 DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
                 "--rpc-port",
                 &self.nats_port.to_string(),
-                "--output",
-                "json",
-                "--http-body",
-                data.as_ref(),
+                "--cluster-seed",
+                &self.cluster_seed,
             ])
             .output()
             .await
             .with_context(|| {
-                format!("failed to call operation [{operation}] on component [{component_id}]")
+                format!("failed to call operation [{operation}] on actor [{actor_id}]")
             })?;
         ensure!(output.status.success(), "wash call invocation failed");
         serde_json::from_slice(&output.stdout)
