@@ -1,4 +1,4 @@
-[![Homepage and Documentation](https://img.shields.io/website?label=Homepage&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
+[![Documentation](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
 [![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud)](https://landscape.cncf.io/?selected=wasm-cloud)
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)<br />
@@ -13,26 +13,24 @@
 
 ![wasmCloud logo](https://raw.githubusercontent.com/wasmCloud/branding/main/02.Horizontal%20Version/Pixel/PNG/Wasmcloud.Logo-Hrztl_Color.png)
 
-# 💻 Distributed computing, _simplified_
+wasmCloud is a **universal application platform** that helps you build and run globally distributed WebAssembly applications on any cloud or edge. Our goal is to make development more joyful and efficient by giving developers the tools to write only the code that matters—and making it easy to run that code anywhere.
 
-The wasmCloud runtime is a vessel for running applications in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
+wasmCloud leverages WebAssembly's security, portability, and performance to compose applications from tiny, independent building blocks.These building blocks are managed declaratively and reconfigurable at runtime. You shouldn't need to recompile your whole app to upgrade a database client or patch a vulnerability and you shouldn't need to recompile anything to move your app from development to production.
+
+wasmCloud is designed around the following core tenets:
+
+- Distributed from day one
+- Run anywhere and everywhere
+- Secure by default
+- Faster iteration and lower maintenance
 
 **Move from concept to production without changing your design, architecture, or your programming environment.**
-
-wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components. Get rid of the headaches from being smothered by boilerplate, dependency hell, tight coupling, and designs mandated by your infrastructure.
-
-## Core Tenets
-
-- Dead simple distributed applications
-- Run anywhere
-- Secure by default
-- Productivity for both developers and operations
 
 # Getting Started
 
 ## Installation
 
-Install the wasmCloud Shell (`wash`) with [one command](https://wasmcloud.com/docs/installation).
+Install the wasmCloud Shell (`wash`) using the [installation guide](https://wasmcloud.com/docs/installation).
 
 ## Walkthrough
 
@@ -40,24 +38,28 @@ If you're new to the wasmCloud ecosystem, a great place to start is the [getting
 
 ## Quickstart
 
-The following commands launch wasmCloud in a local development environment and deploy a simple "hello world" WebAssembly module.
+The following commands launch wasmCloud in a local development environment and deploy a simple "hello world" WebAssembly component, written in Rust, Go, TypeScript, or Python.
 
 ```console
 wash up -d
-wash new actor -t hello hello
-wash app deploy ./hello/wadm.yaml
+wash new component helloworld
+wash app deploy ./helloworld/wadm.yaml
 curl localhost:8080
 ```
 
+## Features
+
+1. [Declarative WebAssembly Orchestration](https://wasmcloud.com/docs/concepts/applications)
+2. [Seamless Distributed Networking](https://wasmcloud.com/docs/concepts/lattice)
+3. [Vendorless Application Components](https://wasmcloud.com/docs/concepts/components#application-components)
+4. [Completely OTEL Observable](https://wasmcloud.com/docs/category/observability)
+5. [Defense-In-Depth Security By Default](https://wasmcloud.com/docs/category/security)
+
 ## Examples
 
-### WebAssembly Modules (Stable ABI)
+### WASI 0.2 WebAssembly Components
 
-wasmCloud has a wide range of [examples](https://github.com/wasmCloud/examples/) built on the [stable ABI](https://wasmcloud.com/docs/hosts/abis/wasmbus/). This includes components, providers, interfaces, and full applications we've created to demonstrate how to design, compose, and build applications in wasmCloud.
-
-### **Experimental** WASI Preview 2 WebAssembly Components
-
-wasmCloud is actively staying up-to-date with WASI Preview 2 and the Component Model. For components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
+wasmCloud is based on and implements WASI 0.2 (aka the Component Model). For components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples). Examples are organized by language so you can easily find samples in your language of choice.
 
 ### 💥 Awesome wasmCloud
 
@@ -117,12 +119,6 @@ wasmCloud's [standard runtime](./crates/runtime) is built in Rust for its zero-c
 
 For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js)
 
-### ☁️ Elixir/OTP Runtime (`Deprecated`)
-
-**Note**: The OTP Runtime is now **deprecated**.
-
-~~The [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime leverages Elixir/OTP for its battle-tested, massively-scalable foundation. It also leverages a Rust library.~~
-
 ---
 
 ## SDKs and libraries
@@ -130,14 +126,6 @@ For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, 
 ### Rust Provider SDK
 
 wasmCloud provides an [SDK](./crates/provider-sdk) for building capability providers in Rust.
-
-### Go Provider SDK (`Experimental`)
-
-wasmCloud also has an [**experimental** SDK](https://github.com/wasmCloud/provider-sdk-go) for building capability providers in Go.
-
-### Provider Bindgen from WIT Interfaces (`Experimental`)
-
-[`wasmcloud-provider-wit-bindgen`](./crates/provider-wit-bindgen) is a Rust macro used to generate code for [capability providers](./crates/providers).
 
 ### Provider Archive
 
