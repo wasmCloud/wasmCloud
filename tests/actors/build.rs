@@ -119,36 +119,36 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
-    // NOTE: this list should be kept sorted
-    let project_names = [
-        "builtins-component-reactor",
-        "interfaces-handler-reactor",
-        "interfaces-reactor",
-        "pinger-config-component",
-        "ponger-config-component",
-    ];
-
-    let cargo_build_args = [
-        vec![
-            "--manifest-path=./rust/Cargo.toml".to_string(),
-            "--target=wasm32-wasi".to_string(),
-        ],
-        project_names
-            .iter()
-            .map(|n| format!("-p={n}"))
-            .collect::<Vec<String>>(),
-    ]
-    .concat();
-
     try_join!(
-        // Build component actors
         async {
-            let mut artifacts = build_artifacts(cargo_build_args, |name, kind| {
-                project_names.contains(&name)
-                    && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
-            })
+            // NOTE: this list should be kept sorted
+            let packages = [
+                "builtins-component-reactor",
+                "interfaces-handler-reactor",
+                "interfaces-reactor",
+                "pinger-config-component",
+                "ponger-config-component",
+            ];
+
+            let mut artifacts = build_artifacts(
+                [
+                    vec![
+                        "--manifest-path=./rust/Cargo.toml".to_string(),
+                        "--target=wasm32-wasi".to_string(),
+                    ],
+                    packages
+                        .iter()
+                        .map(|n| format!("-p={n}"))
+                        .collect::<Vec<String>>(),
+                ]
+                .concat(),
+                |name, kind| {
+                    packages.contains(&name)
+                        && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
+                },
+            )
             .await
-            .with_context(|| format!("failed to build {project_names:?} crates"))?;
+            .with_context(|| format!("failed to build {packages:?}"))?;
             match (
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),
@@ -188,11 +188,32 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                         ),
                     )
                 }
-                v => bail!("invalid {:?} build artifacts: {v:#?}", project_names),
+                v => bail!("invalid {packages:?} build artifacts: {v:#?}"),
+            }
+        },
+        async {
+            let mut artifacts = build_artifacts(
+                [
+                    "--manifest-path=../../examples/rust/components/http-keyvalue-counter/Cargo.toml",
+                    "--target=wasm32-wasi",
+                ],
+                |name, kind| name == "http-keyvalue-counter" && kind.contains(&CrateType::Cdylib),
+            )
+            .await
+            .context("failed to build `http-keyvalue-counter`")?;
+            match (artifacts.next().deref_artifact(), artifacts.next()) {
+                (Some(("http-keyvalue-counter", [wasm])), None) => {
+                    copy(
+                        wasm,
+                        out_dir.join("rust-example-http-keyvalue-counter.wasm"),
+                    )
+                    .await
+                }
+                v => bail!("invalid `http-keyvalue-counter` build artifacts: {v:#?}"),
             }
         },
     )
-    .context("failed to build `wasm32-wasi` actors")?;
+    .context("failed to build `wasm32-wasi` components")?;
 
     Ok(())
 }
@@ -228,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
     // Build WASI reactor components
     for name in [
         "builtins-component-reactor",
+        "example-http-keyvalue-counter",
         "interfaces-handler-reactor",
         "interfaces-reactor",
         "pinger-config-component",
@@ -257,9 +279,15 @@ async fn main() -> anyhow::Result<()> {
     for name in [
         "builtins-component-reactor",
         "builtins-component-reactor-preview2",
+        "example-http-keyvalue-counter",
+        "example-http-keyvalue-counter-preview2",
+        "interfaces-handler-reactor",
         "interfaces-handler-reactor-preview2",
+        "interfaces-reactor",
         "interfaces-reactor-preview2",
+        "pinger-config-component",
         "pinger-config-component-preview2",
+        "ponger-config-component",
         "ponger-config-component-preview2",
     ] {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
