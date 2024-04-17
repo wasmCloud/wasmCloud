@@ -22,7 +22,7 @@ spec:
             target: kvredis
             namespace: wasi
             package: keyvalue
-            interfaces: [atomic, eventual]
+            interfaces: [atomics, eventual]
             target_config:
               - name: redis-url
                 properties:
