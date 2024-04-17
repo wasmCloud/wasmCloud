@@ -25,6 +25,7 @@ cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 nkeys = { workspace = true }
@@ -68,6 +69,7 @@ wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
+wrpc-interface-http = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-types = { workspace = true }
 

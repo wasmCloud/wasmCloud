@@ -1,19 +1,30 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
+use bytes::{Bytes, BytesMut};
 use clap::Args;
-use serde::Deserialize;
+use futures::StreamExt as _;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::debug;
+
 use wash_lib::cli::{validate_component_id, CommandOutput};
 use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE};
 use wasmcloud_core::parse_wit_meta_from_operation;
+use wrpc_interface_http::IncomingHandler;
 use wrpc_transport::Client;
 
 use crate::util::{default_timeout_ms, msgpack_to_json_val};
+
+const DEFAULT_HTTP_SCHEME: &str = "http";
+const DEFAULT_HTTP_HOST: &str = "localhost";
+/// Default port used by wasmCloud HTTP server provider
+const DEFAULT_HTTP_PORT: u16 = 8080;
 
 #[derive(Deserialize)]
 struct TestResult {
@@ -98,15 +109,95 @@ impl CallCli {
     }
 }
 
-pub async fn handle_command(cmd: CallCommand) -> Result<CommandOutput> {
-    let res = handle_call(cmd).await?;
-    Ok(CommandOutput::new(
-        res.clone(),
-        HashMap::from_iter(vec![(
-            "response".to_string(),
-            serde_json::Value::String(res),
-        )]),
-    ))
+pub async fn handle_command(
+    CallCommand {
+        opts,
+        component_id,
+        function,
+        http_handler_invocation_opts,
+        http_response_extract_json,
+        ..
+    }: CallCommand,
+) -> Result<CommandOutput> {
+    ensure!(!component_id.is_empty(), "component ID may not be empty");
+    debug!(
+        ?component_id,
+        ?function,
+        "calling component function over wRPC"
+    );
+
+    let nc = create_nats_client_from_opts(
+        &opts.rpc_host,
+        &opts.rpc_port,
+        opts.rpc_jwt.clone(),
+        opts.rpc_seed.clone(),
+        opts.rpc_credsfile.clone(),
+    )
+    .await?;
+
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("source-id", "wash");
+
+    let lattice = opts
+        .lattice
+        .clone()
+        .unwrap_or_else(|| DEFAULT_LATTICE.to_string());
+
+    // TODO: Configure invocation timeouts
+    let wrpc_client = wasmcloud_core::wrpc::Client::new(
+        nc,
+        &lattice,
+        &component_id,
+        headers,
+        Duration::from_secs(10),
+    );
+
+    let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
+        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
+    )?;
+    let instance = format!("{namespace}:{package}/{interface}");
+    let name = name.context(
+        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
+    )?;
+    debug!(
+        ?component_id,
+        ?instance,
+        ?name,
+        ?lattice,
+        "invoking component"
+    );
+
+    match function.as_str() {
+        // If we receive a HTTP call we must translate the provided data into a HTTP request that
+        // can be used with wRPC and send that over the wire
+        "wrpc:http/incoming-handler.handle" | "wasi:http/incoming-handler.handle" => {
+            let request = http_handler_invocation_opts
+                .to_request()
+                .await
+                .context("failed to invoke handler with HTTP request options")?;
+            wrpc_invoke_http_handler(
+                &wrpc_client,
+                &lattice,
+                &component_id,
+                opts.timeout_ms,
+                request,
+                http_response_extract_json,
+            )
+            .await
+        }
+        // Assume the call is a function that takes no input and produces a string
+        _ => {
+            wrpc_invoke_simple(
+                &wrpc_client,
+                &component_id,
+                &lattice,
+                &instance,
+                &name,
+                opts.timeout_ms,
+            )
+            .await
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -182,67 +273,208 @@ pub struct CallCommand {
     /// Fully qualified WIT export to invoke on the component, e.g. `wasi:cli/run.run`
     #[clap(name = "function")]
     pub function: String,
+
+    /// Whether the content of the HTTP response body should be parsed as JSON and returned directly
+    #[clap(
+        long = "http-response-extract-json",
+        default_value_t = false,
+        env = "WASH_CALL_HTTP_RESPONSE_EXTRACT_JSON"
+    )]
+    pub http_response_extract_json: bool,
+
+    /// Customizable options related to the HTTP handler invocation (HTTP path, method, etc)
+    #[clap(flatten)]
+    pub http_handler_invocation_opts: HttpHandlerInvocationOpts,
 }
 
-pub async fn handle_call(
-    CallCommand {
-        opts,
-        component_id,
-        function,
-        ..
-    }: CallCommand,
-) -> Result<String> {
-    ensure!(!component_id.is_empty(), "component ID may not be empty");
-    debug!("calling component over wRPC with function: {function}, expecting String response");
+/// Options that customize the HTTP request that is fed to a HTTP handler when using `wash call`
+#[derive(Debug, Clone, Deserialize, Args)]
+pub struct HttpHandlerInvocationOpts {
+    /// Scheme to use when making the HTTP request
+    #[clap(long = "http-scheme", env = "WASH_CALL_INVOKE_HTTP_SCHEME")]
+    http_scheme: Option<String>,
 
-    let nc = create_nats_client_from_opts(
-        &opts.rpc_host,
-        &opts.rpc_port,
-        opts.rpc_jwt,
-        opts.rpc_seed,
-        opts.rpc_credsfile,
-    )
-    .await?;
-    let mut headers = async_nats::HeaderMap::new();
-    headers.insert("source-id", "wash");
-    let lattice = opts.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
-    // TODO: Configure invocation timeouts
-    let wrpc_client = wasmcloud_core::wrpc::Client::new(
-        nc,
-        &lattice,
-        &component_id,
-        headers,
-        Duration::from_secs(10),
-    );
+    /// Host to use when making the HTTP request
+    #[clap(long = "http-host", env = "WASH_CALL_INVOKE_HTTP_HOST")]
+    http_host: Option<String>,
 
-    let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
-        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
-    )?;
-    let instance = format!("{namespace}:{package}/{interface}");
-    let name = name.context(
-        "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
-    )?;
-    debug!("Invoking component {component_id} with {instance}.{name} on lattice {lattice}");
+    /// Port on which to make the HTTP request
+    #[clap(long = "http-port", env = "WASH_CALL_INVOKE_HTTP_PORT")]
+    http_port: Option<u16>,
 
+    /// Method to use when making the HTTP request
+    #[clap(long = "http-method", env = "WASH_CALL_INVOKE_HTTP_METHOD")]
+    http_method: Option<String>,
+
+    /// Stringified body contents to use when making the HTTP request
+    #[clap(
+        long = "http-body",
+        env = "WASH_CALL_INVOKE_HTTP_BODY",
+        conflicts_with = "http_body_path"
+    )]
+    http_body: Option<String>,
+
+    /// Path to a file to use as the body when making a HTTP request
+    #[clap(
+        long = "http-body-path",
+        env = "WASH_CALL_INVOKE_HTTP_BODY_PATH",
+        conflicts_with = "http_body"
+    )]
+    http_body_path: Option<PathBuf>,
+
+    /// Content type header to pass with the request
+    #[clap(long = "http-content-type", env = "WASH_CALL_INVOKE_HTTP_CONTENT_TYPE")]
+    http_content_type: Option<String>,
+}
+
+impl HttpHandlerInvocationOpts {
+    pub async fn to_request(self) -> Result<http::Request<String>> {
+        let HttpHandlerInvocationOpts {
+            http_scheme,
+            http_host,
+            http_port,
+            http_method,
+            http_body,
+            http_body_path,
+            http_content_type,
+            ..
+        } = self;
+
+        let host = http_host.unwrap_or_else(|| DEFAULT_HTTP_HOST.into());
+        let port = http_port.unwrap_or(DEFAULT_HTTP_PORT);
+        let scheme = http_scheme.unwrap_or_else(|| DEFAULT_HTTP_SCHEME.into());
+        let method =
+            http::method::Method::from_str(http_method.unwrap_or_else(|| "GET".into()).as_str())
+                .context("failed to read method from input")?;
+        debug!(?host, ?port, ?scheme, ?method, content_type = ?http_content_type, "building request from options");
+
+        let http_body = match (http_body, http_body_path) {
+            (Some(s), _) => s,
+            (_, Some(p)) => tokio::fs::read_to_string(p)
+                .await
+                .context("failed to read http body file")?,
+            (None, None) => String::new(),
+        };
+
+        // Build the HTTP request
+        let mut req = http::Request::builder()
+            .uri(format!("{scheme}://{host}:{port}"))
+            .method(method);
+        if let Some(content_type) = http_content_type {
+            req = req.header("Content-Type", content_type);
+        }
+        req.body(http_body)
+            .context("failed to build HTTP request from handler invocation options")
+    }
+}
+
+/// Utility type used mostly for printing HTTP responses to the console as JSON
+#[derive(Debug, Clone, Serialize)]
+struct HttpResponse {
+    status: u16,
+    headers: HashMap<String, String>,
+    body: Bytes,
+}
+
+/// Invoke a wRPC endpoint that takes a HTTP request (usually `wasi:http/incoming-handler.handle`);
+async fn wrpc_invoke_http_handler(
+    wrpc_client: &wasmcloud_core::wrpc::Client,
+    lattice: &str,
+    component_id: &str,
+    timeout_ms: u64,
+    request: http::request::Request<String>,
+    extract_json: bool,
+) -> Result<CommandOutput> {
     let result = tokio::time::timeout(
-        std::time::Duration::from_millis(opts.timeout_ms),
-        wrpc_client.invoke_dynamic(&instance, &name, (), &[wrpc_types::Type::String]),
+        std::time::Duration::from_millis(timeout_ms),
+        wrpc_client.invoke_handle_http(request),
+    )
+    .await
+    .with_context(|| format!("component invocation timeout, is component [{component_id}] running in lattice [{lattice}]?"))?
+    .context("failed to perform HTTP request")?;
+
+    match result {
+        (Ok(mut resp), tx, _body_err) => {
+            tx.await
+                .context("failed to wait for transmission to close")?;
+
+            let status = resp.status().as_u16();
+            let headers =
+                HashMap::<String, String>::from_iter(resp.headers().into_iter().map(|(k, v)| {
+                    (
+                        k.as_str().into(),
+                        v.to_str().map(|v| v.to_string()).unwrap_or_default(),
+                    )
+                }));
+
+            // Read the incoming body into a string
+            let mut body = BytesMut::new();
+            while let Some(Ok(bytes)) = resp.body_mut().body.next().await {
+                body.extend(bytes);
+            }
+            let body = body.freeze();
+
+            // If the option for parsing the response as JSON was provided, parse it directly,
+            // and return that as JSON
+            let output = if extract_json {
+                let body_json = serde_json::from_slice(&body)
+                    .context("failed to parse response body bytes into a valid JSON object")?;
+                CommandOutput::new(
+                    serde_json::to_string_pretty(&body_json)
+                        .context("failed to print http response JSON")?,
+                    HashMap::from([("response".into(), body_json)]),
+                )
+            } else {
+                let http_resp = HttpResponse {
+                    status,
+                    headers,
+                    body,
+                };
+                CommandOutput::new(
+                    serde_json::to_string(&http_resp)
+                        .context("failed to print http response JSON")?,
+                    HashMap::from([(
+                        "response".into(),
+                        serde_json::to_value(&http_resp)
+                            .context("failed to convert http response to value")?,
+                    )]),
+                )
+            };
+
+            Ok(output)
+        }
+        // For all other responses, something has gone wrong
+        _ => bail!("unexpected response after HTTP wRPC invocation"),
+    }
+}
+
+/// Invoke a wRPC endpoint that takes nothing and returns a string
+async fn wrpc_invoke_simple(
+    wrpc_client: &wasmcloud_core::wrpc::Client,
+    lattice: &str,
+    component_id: &str,
+    instance: &str,
+    function_name: &str,
+    timeout_ms: u64,
+) -> Result<CommandOutput> {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        wrpc_client.invoke_dynamic(instance, function_name, (), &[wrpc_types::Type::String]),
     )
     .await
     .context("Timeout while invoking component, ensure component {component_id} is running in lattice {lattice}")?;
 
-    let out_str = match result {
+    match result {
         Ok((values, _tx)) => {
             if let Some(wrpc_transport::Value::String(result)) = values.first() {
-                result.to_string()
+                Ok(CommandOutput::new(result.to_string(), HashMap::from([("result".to_string(), json!(result))])))
             } else {
-                bail!("Response from a component was not a String, ensure the function {function} returns a String.")
+                bail!("Response from a component was not a String, ensure the function {instance}.{function_name} returns a String.")
             }
         }
         Err(e) if e.to_string().contains("transmission failed") => bail!("No component responsed to your request, ensure component {component_id} is running in lattice {lattice}"),
         Err(e) => bail!("Error invoking component: {e}"),
-    };
-    Ok(out_str)
+    }
 }
 
 // Helper output functions, used to ensure consistent output between call & standalone commands
@@ -336,6 +568,7 @@ mod test {
                 opts,
                 component_id,
                 function,
+                ..
             } => {
                 assert_eq!(&opts.rpc_host, RPC_HOST);
                 assert_eq!(&opts.rpc_port, RPC_PORT);

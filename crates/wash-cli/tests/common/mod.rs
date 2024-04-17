@@ -19,7 +19,8 @@ use tokio::{
 };
 
 use wash_lib::cli::output::{
-    CallCommandOutput, GetHostsCommandOutput, StartCommandOutput, StopCommandOutput,
+    CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
+    StopCommandOutput,
 };
 use wash_lib::config::{downloads_dir, WASMCLOUD_PID_FILE};
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
@@ -30,6 +31,9 @@ pub const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[allow(unused)]
 pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.1";
+
+#[allow(unused)]
+pub const HTTP_JSONIFY_OCI_REF: &str = "ghcr.io/wasmcloud/component-http-jsonify:0.1.1";
 
 #[allow(unused)]
 pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.20.0";
@@ -288,8 +292,19 @@ impl TestWashInstance {
         })
     }
 
-    /// Trigger the equivalent of `wash start actor` on a [`TestWashInstance`]
-    pub(crate) async fn start_actor(
+    /// Trigger the equivalent of `wash pull` on a [`TestWashInstance`]
+    pub(crate) async fn pull(&self, oci_ref: &str) -> Result<PullCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args(["pull", oci_ref, "--output", "json"])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .with_context(|| format!("failed to pull OCI artifact [{oci_ref}]"))?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash pull`")
+    }
+
+    /// Trigger the equivalent of `wash start component` on a [`TestWashInstance`]
+    pub(crate) async fn start_component(
         &self,
         oci_ref: impl AsRef<str>,
         component_id: impl AsRef<str>,
@@ -297,7 +312,7 @@ impl TestWashInstance {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "start",
-                "actor",
+                "component",
                 oci_ref.as_ref(),
                 component_id.as_ref(),
                 "--output",
@@ -310,9 +325,9 @@ impl TestWashInstance {
             .kill_on_drop(true)
             .output()
             .await
-            .context("failed to start actor")?;
+            .context("failed to start component")?;
         serde_json::from_slice(&output.stdout)
-            .context("failed to parse output of `wash start actor`")
+            .context("failed to parse output of `wash start component`")
     }
 
     /// Trigger the equivalent of `wash start provider` on a [`TestWashInstance`]
@@ -362,33 +377,32 @@ impl TestWashInstance {
     }
 
     /// Trigger the equivalent of `wash call` on a [`TestWashInstance`]
-    pub(crate) async fn call_actor(
+    pub(crate) async fn call_component(
         &self,
-        actor_id: impl AsRef<str>,
+        component_id: impl AsRef<str>,
         operation: impl AsRef<str>,
         data: impl AsRef<str>,
     ) -> Result<CallCommandOutput> {
-        let actor_id = actor_id.as_ref();
+        let component_id = component_id.as_ref();
         let operation = operation.as_ref();
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "call",
-                actor_id,
+                component_id,
                 operation,
-                data.as_ref(),
-                "--output",
-                "json",
                 "--rpc-timeout-ms",
                 DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
                 "--rpc-port",
                 &self.nats_port.to_string(),
-                "--cluster-seed",
-                &self.cluster_seed,
+                "--output",
+                "json",
+                "--http-body",
+                data.as_ref(),
             ])
             .output()
             .await
             .with_context(|| {
-                format!("failed to call operation [{operation}] on actor [{actor_id}]")
+                format!("failed to call operation [{operation}] on component [{component_id}]")
             })?;
         ensure!(output.status.success(), "wash call invocation failed");
         serde_json::from_slice(&output.stdout)
