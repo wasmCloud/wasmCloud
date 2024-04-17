@@ -1,6 +1,6 @@
 # HTTP KeyValue Counter
 
-This is a simple Rust Wasm example that increments a key in a keyvalue store in response to an HTTP request based on the path. This component uses the [wasi-http](https://github.com/WebAssembly/wasi-http) API to receive HTTP requests and the [wasi-keyvalue](https://github.com/WebAssembly/wasi-keyvalue) API to interact with a keyvalue store. At runtime we [link](https://wasmcloud.com/docs/1.0/concepts/linking-components) this component to an implementation of wasi-keyvalue that interacts with [Redis](https://redis.io/).
+This is a simple Rust Wasm example that increments a key in a keyvalue store in response to an HTTP request based on the path. This component uses the [wasi-http](https://github.com/WebAssembly/wasi-http) API to receive HTTP requests and the [wasi-keyvalue](https://github.com/WebAssembly/wasi-keyvalue) API to interact with a keyvalue store. At runtime we [link](https://wasmcloud.com/docs/concepts/linking-components) this component to an implementation of wasi-keyvalue that interacts with [Redis](https://redis.io/).
 
 ## Prerequisites
 
