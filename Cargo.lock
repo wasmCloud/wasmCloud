@@ -5383,7 +5383,6 @@ dependencies = [
  "console",
  "dirs",
  "futures",
- "http 1.1.0",
  "indicatif",
  "nix",
  "nkeys",
@@ -5425,7 +5424,6 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "weld-codegen",
  "which",
- "wrpc-interface-http",
  "wrpc-transport 0.24.2",
  "wrpc-types 0.6.0",
 ]

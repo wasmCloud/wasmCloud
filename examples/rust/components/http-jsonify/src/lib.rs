@@ -29,7 +29,7 @@ struct Component;
 
 use crate::exports::wasi::http::incoming_handler::Guest;
 use crate::wasi::http::types::{
-    Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
+    Fields, IncomingBody, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
 use crate::wasi::io::streams::StreamError;
 

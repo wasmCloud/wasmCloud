@@ -15,7 +15,7 @@ async fn integration_start_stop_actor_serial() -> Result<()> {
 
     // Start the actor via OCI ref
     wash_instance
-        .start_component(HELLO_OCI_REF, "hello_actor_id")
+        .start_actor(HELLO_OCI_REF, "hello_actor_id")
         .await?;
 
     wash_instance.stop_actor("hello_actor_id", None).await?;
