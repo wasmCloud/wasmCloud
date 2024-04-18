@@ -43,6 +43,7 @@ The following commands launch wasmCloud in a local development environment and d
 ```console
 wash up -d
 wash new component helloworld
+wash build -p ./helloworld
 wash app deploy ./helloworld/wadm.yaml
 curl localhost:8080
 ```
