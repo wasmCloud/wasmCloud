@@ -83,7 +83,7 @@ impl Provider for KafkaMessagingProvider {
             .unwrap_or_else(|| DEFAULT_HOST.to_string())
             .trim()
             .split(',')
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<String>>();
 
         // Retrieve or use default topic, trimming off extra whitespace
@@ -154,7 +154,7 @@ impl Provider for KafkaMessagingProvider {
                             )
                             .await
                             {
-                                eprintln!("Unable to send subscription: {:?}", e);
+                                eprintln!("Unable to send subscription: {e:?}");
                             }
                             Ok(())
                         }
@@ -185,9 +185,9 @@ impl Provider for KafkaMessagingProvider {
             ..
         }) = connections.remove(source_id)
         {
-            handle.abort()
+            handle.abort();
         } else {
-            debug!("Linkdef deleted for non-existent consumer, ignoring")
+            debug!("Linkdef deleted for non-existent consumer, ignoring");
         }
         Ok(())
     }
@@ -260,20 +260,20 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
         // TODO: accept linkdef tunable values for these
         if let Err(e) = controller_client
             .create_topic(
-                msg.subject.to_owned(),
+                msg.subject.clone(),
                 1,     // partition
                 1,     // replication factor
                 1_000, // timeout (ms)
             )
             .await
         {
-            warn!("could not create topic: {e:?}")
+            warn!("could not create topic: {e:?}");
         }
 
         // Get a partition-bound client
         let partition_client = match client
             .partition_client(
-                msg.subject.to_owned(),
+                msg.subject.clone(),
                 0, // partition
                 UnknownTopicHandling::Error,
             )

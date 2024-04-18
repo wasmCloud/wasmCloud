@@ -20,6 +20,7 @@ pub struct NatsHeaderExtractor<'a> {
 
 impl<'a> NatsHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
+    #[must_use]
     pub fn new(headers: &'a HeaderMap) -> Self {
         NatsHeaderExtractor { inner: headers }
     }
@@ -59,12 +60,14 @@ pub struct NatsHeaderInjector {
 
 impl NatsHeaderInjector {
     /// Creates a new injector using the given [`HeaderMap`]
+    #[must_use]
     pub fn new(headers: HeaderMap) -> Self {
         NatsHeaderInjector { inner: headers }
     }
 
     /// Convenience constructor that returns a new injector with the current span context already
     /// injected into the given header map
+    #[must_use]
     pub fn new_with_span(headers: HeaderMap) -> Self {
         let mut header_map = Self::new(headers);
         header_map.inject_context();
@@ -73,6 +76,7 @@ impl NatsHeaderInjector {
 
     /// Convenience constructor that returns a new injector with the current span context already
     /// injected into a default [`HeaderMap`]
+    #[must_use]
     pub fn default_with_span() -> Self {
         let mut header_map = Self::default();
         header_map.inject_context();

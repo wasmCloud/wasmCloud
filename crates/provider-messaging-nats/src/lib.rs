@@ -44,7 +44,7 @@ struct NatsClientBundle {
 impl Drop for NatsClientBundle {
     fn drop(&mut self) {
         for handle in &self.sub_handles {
-            handle.1.abort()
+            handle.1.abort();
         }
     }
 }
@@ -207,7 +207,7 @@ impl NatsMessagingProvider {
                 tokio::spawn(async move {
                     dispatch_msg(component_id.as_str(), msg, permit)
                         .instrument(span)
-                        .await
+                        .await;
                 });
             }
         });
@@ -247,7 +247,7 @@ async fn dispatch_msg(
 }
 
 /// Handle provider control commands
-/// put_link (new actor link command), del_link (remove link command), and shutdown
+/// `put_link` (new actor link command), `del_link` (remove link command), and shutdown
 impl Provider for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -488,6 +488,6 @@ mod test {
         let cc3 = cc1.merge(&cc2);
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
-        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
+        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()));
     }
 }

@@ -156,7 +156,7 @@ pub async fn delete_link(
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `link` - The [wasmcloud_control_interface::InterfaceLinkDefinition] to create
+/// * `link` - The [`wasmcloud_control_interface::InterfaceLinkDefinition`] to create
 ///
 /// # Examples
 ///

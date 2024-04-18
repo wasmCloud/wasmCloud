@@ -1,4 +1,4 @@
-//! Redis implementation for wasmcloud:keyvalue.
+//! Redis implementation for wrpc:keyvalue.
 //!
 //! This implementation is multi-threaded and operations between different actors
 //! use different connections and can run in parallel.
@@ -6,12 +6,7 @@
 //! so there may be some brief lock contention if several instances of the same actor
 //! are simultaneously attempting to communicate with redis. See documentation
 //! on the [exec](#exec) function for more information.
-//!
-//! Note that this provider uses many *re-exported* dependencies of `wasmcloud_provider_wit_bindgen`
-//! in order to reduce required dependencies on this binary itself. Using `serde` as a re-exported dependency
-//! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
-//!
-//!
+
 use core::num::NonZeroU64;
 
 use std::collections::HashMap;

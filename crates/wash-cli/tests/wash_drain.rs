@@ -17,7 +17,7 @@ const OCI: &str = "wasmcloud_ocicache";
 /// Runs all `drain` integration tests
 /// Due to the interaction with the TMPDIR / TMP environment variables,
 /// these tests cannot be run concurrently as the interactions with
-/// std::env can affect other tests
+/// `std::env` can affect other tests
 fn integration_drain_comprehensive() {
     integration_drain_lib();
     integration_drain_oci();

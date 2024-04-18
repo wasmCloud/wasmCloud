@@ -22,7 +22,7 @@ mod genconfig;
 mod git;
 pub mod interactive;
 pub mod project_variables;
-use project_variables::*;
+use project_variables::fill_project_variables;
 mod template;
 
 type TomlMap = std::collections::BTreeMap<String, toml::Value>;
@@ -93,13 +93,13 @@ pub struct Project {
     pub branch: Option<String>,
 }
 
-/// From a [Project] specification, generate a project of kind [ProjectKind]
+/// From a [Project] specification, generate a project of kind [`ProjectKind`]
 ///
 /// # Arguments
 /// - project: a [Project] struct containing required information to generate a wasmCloud project
 ///
 /// # Returns
-/// A Result containing a [PathBuf] with the location of the generated project
+/// A Result containing a [`PathBuf`] with the location of the generated project
 pub async fn generate_project(project: Project) -> Result<PathBuf> {
     validate(&project)?;
 
@@ -238,8 +238,7 @@ async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::
         locate_project_config_file(CONFIG_FILE_NAME, &template_base_dir, &project.subfolder)
             .with_context(|| {
                 format!(
-                    "Invalid template folder: Required configuration file `{}` is missing.",
-                    CONFIG_FILE_NAME
+                    "Invalid template folder: Required configuration file `{CONFIG_FILE_NAME}` is missing."
                 )
             })?,
     )?;
@@ -338,7 +337,7 @@ where
     let template_folder = template_folder.as_ref().to_path_buf();
     let mut search_folder = subfolder
         .as_ref()
-        .map_or_else(|| template_folder.to_owned(), |s| template_folder.join(s));
+        .map_or_else(|| template_folder.clone(), |s| template_folder.join(s));
     loop {
         let file_path = search_folder.join(name);
         if file_path.exists() {
@@ -375,7 +374,7 @@ async fn prepare_local_template(project: &Project) -> Result<(TempDir, PathBuf)>
                 style("Cloning template from repo").bold(),
                 style(url).bold().yellow(),
                 project.subfolder.clone().map_or_else(
-                    || style("".to_string()),
+                    || style(String::new()),
                     |s| style(format!(
                         " {} {}",
                         style("subfolder").bold(),

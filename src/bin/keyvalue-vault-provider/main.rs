@@ -1,4 +1,4 @@
-//! Hashicorp Vault implementation of the wasmcloud KeyValue capability contract "wrpc:keyvalue"
+//! Hashicorp Vault implementation of the wasmcloud `KeyValue` capability contract "wrpc:keyvalue"
 
 use anyhow::Context as _;
 

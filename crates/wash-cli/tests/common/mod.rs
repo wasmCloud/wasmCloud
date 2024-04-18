@@ -60,7 +60,7 @@ pub fn get_json_output(output: std::process::Output) -> Result<serde_json::Value
 #[allow(unused)]
 /// Creates a subfolder in the test directory for use with a specific test
 /// It's preferred that the same test that calls this function also
-/// uses std::fs::remove_dir_all to remove the subdirectory
+/// uses `std::fs::remove_dir_all` to remove the subdirectory
 pub fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
     let root_dir = &env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
     let with_subfolder = PathBuf::from(format!("{root_dir}/tests/output/{subfolder}"));
@@ -70,7 +70,7 @@ pub fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
 }
 
 #[allow(unused)]
-/// Returns a PathBuf by appending the subfolder and file arguments
+/// Returns a `PathBuf` by appending the subfolder and file arguments
 /// to the test fixtures directory. This does _not_ create the file,
 /// so the test is responsible for initialization and modification of this file
 pub fn test_dir_file(subfolder: &str, file: &str) -> PathBuf {
@@ -134,7 +134,7 @@ impl Drop for TestWashInstance {
         } = self;
 
         // Attempt to stop the host (this may fail)
-        let kill_cmd = kill_cmd.to_string();
+        let kill_cmd = (*kill_cmd).to_string();
         let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
         wash()
             .args(vec![
@@ -156,7 +156,7 @@ impl Drop for TestWashInstance {
     }
 }
 
-/// Arguments for creating a new TestWashInstance
+/// Arguments for creating a new `TestWashInstance`
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TestWashInstanceNewArgs {
     /// Extra arguments to feed to `wash up`
@@ -253,7 +253,7 @@ impl TestWashInstance {
         let out = read_to_string(&log_path).context("could not read output of wash up")?;
 
         let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
-            Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
+            Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
             Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
         };
 
@@ -675,7 +675,7 @@ pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup
 }
 
 /// Wait for no hosts to be running by checking for process names,
-/// expecting that the wasmcloud process invocation contains 'wasmcloud_host'
+/// expecting that the wasmcloud process invocation contains `wasmcloud_host`
 #[allow(dead_code)]
 pub async fn wait_for_no_hosts() -> Result<()> {
     wait_until_process_has_count(

@@ -52,6 +52,7 @@ impl Debug for Client {
 impl Client {
     /// Get a copy of the NATS client in use by this control client
     #[allow(unused)]
+    #[must_use]
     pub fn nats_client(&self) -> async_nats::Client {
         self.nc.clone()
     }

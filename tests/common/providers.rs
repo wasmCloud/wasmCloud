@@ -32,6 +32,7 @@ impl Provider {
         Ok(Self { par: tmp, subject })
     }
 
+    #[must_use]
     pub fn url(&self) -> Url {
         Url::from_file_path(self.par.path()).expect("failed to construct URL to PAR")
     }

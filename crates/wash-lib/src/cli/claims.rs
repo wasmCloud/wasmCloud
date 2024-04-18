@@ -231,6 +231,7 @@ pub struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
+    #[must_use]
     pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
         let provider_config = match project_config.project_type {
             TypeConfig::Provider(ref provider_config) => provider_config.clone(),
@@ -290,6 +291,7 @@ pub struct ActorMetadata {
 }
 
 impl ActorMetadata {
+    #[must_use]
     pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
         let actor_config = match project_config.project_type {
             TypeConfig::Component(ref actor_config) => actor_config.clone(),
@@ -482,7 +484,10 @@ fn generate_operator(operator: OperatorMetadata, output_kind: OutputKind) -> Res
         days_from_now_to_jwt_time(operator.common.not_before_days),
         days_from_now_to_jwt_time(operator.common.expires_in_days),
         if !additional_keys.is_empty() {
-            additional_keys.iter().map(|k| k.public_key()).collect()
+            additional_keys
+                .iter()
+                .map(nkeys::KeyPair::public_key)
+                .collect()
         } else {
             vec![]
         },
@@ -530,7 +535,10 @@ fn generate_account(account: AccountMetadata, output_kind: OutputKind) -> Result
         days_from_now_to_jwt_time(account.common.not_before_days),
         days_from_now_to_jwt_time(account.common.expires_in_days),
         if !additional_keys.is_empty() {
-            additional_keys.iter().map(|k| k.public_key()).collect()
+            additional_keys
+                .iter()
+                .map(nkeys::KeyPair::public_key)
+                .collect()
         } else {
             vec![]
         },
@@ -676,10 +684,7 @@ pub async fn get_claims(
         .map_err(boxed_err_to_anyhow)
         .map(|c| c.response.unwrap_or_default())
         .with_context(|| {
-            format!(
-                "Was able to connect to NATS, but failed to get claims: {:?}",
-                client
-            )
+            format!("Was able to connect to NATS, but failed to get claims: {client:?}")
         })
 }
 
@@ -727,27 +732,27 @@ mod test {
         let invalid_message = "Call alias contained invalid characters.\nValid aliases are lowercase alphanumeric and can contain underscores and slashes";
         let invalid_symbols = sanitize_alias(Some(INVALID_SYMBOLS.to_string()));
         match invalid_symbols {
-            Err(e) => assert_eq!(format!("{}", e), invalid_message),
+            Err(e) => assert_eq!(format!("{e}"), invalid_message),
             _ => panic!("invalid symbols in call alias should not be accepted"),
         };
 
         let invalid_uppercase = sanitize_alias(Some(INVALID_CAPITAL.to_string()));
         match invalid_uppercase {
-            Err(e) => assert_eq!(format!("{}", e), invalid_message),
+            Err(e) => assert_eq!(format!("{e}"), invalid_message),
             _ => panic!("uppercase symbols in call alias should not be accepted"),
         };
 
         let pkey_message = "Public key cannot be used as a call alias";
         let invalid_pkey = sanitize_alias(Some(INVALID_PKEY.to_string()));
         match invalid_pkey {
-            Err(e) => assert_eq!(format!("{}", e), pkey_message),
+            Err(e) => assert_eq!(format!("{e}"), pkey_message),
             _ => panic!("public keys cannot be a call alias"),
         };
 
         let empty_message = "Call alias cannot be empty";
-        let invalid_empty = sanitize_alias(Some("".to_string()));
+        let invalid_empty = sanitize_alias(Some(String::new()));
         match invalid_empty {
-            Err(e) => assert_eq!(format!("{}", e), empty_message),
+            Err(e) => assert_eq!(format!("{e}"), empty_message),
             _ => panic!("call alias cannot be left empty"),
         }
 
@@ -800,7 +805,7 @@ mod test {
                 assert!(no_cache);
                 assert!(!wit);
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
 
         let short_cmd: Cmd = Parser::try_parse_from([
@@ -845,7 +850,7 @@ mod test {
                 assert!(no_cache);
                 assert!(!wit);
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
     }
 
@@ -902,7 +907,7 @@ mod test {
                 assert_eq!(metadata.rev.unwrap(), 2);
                 assert_eq!(metadata.ver.unwrap(), "0.0.1");
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
         let short_cmd: Cmd = Parser::try_parse_from([
             "claims",
@@ -950,7 +955,7 @@ mod test {
                 assert_eq!(metadata.rev.unwrap(), 2);
                 assert_eq!(metadata.ver.unwrap(), "0.0.1");
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
     }
 
@@ -1014,7 +1019,7 @@ mod test {
                 assert_eq!(adds.len(), 1);
                 assert_eq!(adds[0], OPERATOR_TWO_KEY);
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
         let actor_cmd: Cmd = Parser::try_parse_from([
             "claims",
@@ -1070,7 +1075,7 @@ mod test {
                 assert_eq!(rev.unwrap(), 2);
                 assert_eq!(ver.unwrap(), "0.0.1");
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
         let operator_cmd: Cmd = Parser::try_parse_from([
             "claims",
@@ -1115,7 +1120,7 @@ mod test {
                 assert_eq!(adds.len(), 1);
                 assert_eq!(adds[0], OPERATOR_TWO_KEY);
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
         let provider_cmd: Cmd = Parser::try_parse_from([
             "claims",
@@ -1170,7 +1175,7 @@ mod test {
                 assert_eq!(revision.unwrap(), 0);
                 assert_eq!(version.unwrap(), "1.2.3");
             }
-            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+            cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
     }
 

@@ -56,7 +56,7 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
 
         Ok(CommandOutput::from_key_and_text(
             "result",
-            format!("Host `{}` unlabeled with `{}`", friendly_name, key),
+            format!("Host `{friendly_name}` unlabeled with `{key}`"),
         ))
     } else {
         if value.is_empty() {
@@ -73,7 +73,7 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
 
         Ok(CommandOutput::from_key_and_text(
             "result",
-            format!("Host `{}` labeled with `{}={}`", friendly_name, key, value),
+            format!("Host `{friendly_name}` labeled with `{key}={value}`"),
         ))
     }
 }

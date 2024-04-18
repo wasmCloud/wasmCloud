@@ -365,7 +365,7 @@ impl Actor {
                                         .context("failed to convert response")?;
                                 // TODO: Handle body errors better
                                 spawn(errors.for_each(|err| async move {
-                                    error!(?err, "body error encountered")
+                                    error!(?err, "body error encountered");
                                 }));
                                 Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
                             }
@@ -1260,7 +1260,7 @@ impl Host {
                                 transmitter,
                             },
                         )
-                    })))
+                    })));
                 }
                 "wasmcloud:messaging/handler@0.2.0" => {
                     let invocations = wrpc
@@ -1283,7 +1283,7 @@ impl Host {
                                 transmitter,
                             },
                         )
-                    })))
+                    })));
                 }
                 _ => {
                     let instance = Arc::new(instance.to_string());
@@ -1481,7 +1481,7 @@ impl Host {
         let host_labels = self.labels.read().await;
         let constraints_satisfied = constraints
             .iter()
-            .all(|(k, v)| host_labels.get(k).map(|hv| hv == v).unwrap_or(false));
+            .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
         let component_id_running = self.actors.read().await.contains_key(&component_id);
 
         // This host can run the actor if all constraints are satisfied and the actor is not already running
@@ -1519,7 +1519,7 @@ impl Host {
         let host_labels = self.labels.read().await;
         let constraints_satisfied = constraints
             .iter()
-            .all(|(k, v)| host_labels.get(k).map(|hv| hv == v).unwrap_or(false));
+            .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
         let providers = self.providers.read().await;
         let provider_running = providers.contains_key(&provider_id);
         if constraints_satisfied && !provider_running {
@@ -2457,7 +2457,7 @@ impl Host {
             target_config: _,
         } = interface_link_definition.clone();
 
-        let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
+        let ns_and_package = format!("{wit_namespace}:{wit_package}");
         debug!(
             source_id,
             target,
@@ -2524,7 +2524,7 @@ impl Host {
         } = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
 
-        let ns_and_package = format!("{}:{}", wit_namespace, wit_package);
+        let ns_and_package = format!("{wit_namespace}:{wit_package}");
 
         debug!(
             source_id,
@@ -3126,7 +3126,7 @@ impl Host {
     }
 }
 
-/// Transform a [wasmcloud_control_interface::InterfaceLinkDefinition] into a [wasmcloud_core::InterfaceLinkDefinition]
+/// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
 /// by generating the source and target config for the link
 async fn resolve_link_config(
     config_generator: &BundleGenerator,
@@ -3149,14 +3149,14 @@ async fn resolve_link_config(
     })
 }
 
-/// Helper function to transform a Vec of [InterfaceLinkDefinition]s into the structure components expect to be able
+/// Helper function to transform a Vec of [`InterfaceLinkDefinition`]s into the structure components expect to be able
 /// to quickly look up the desired target for a given interface
 ///
 /// # Arguments
-/// - links: A Vec of [InterfaceLinkDefinition]s
+/// - links: A Vec of [`InterfaceLinkDefinition`]s
 ///
 /// # Returns
-/// - A HashMap in the form of link_name -> namespace:package -> interface -> target
+/// - A `HashMap` in the form of `link_name` -> namespace:package -> interface -> target
 fn component_import_links(
     links: &[InterfaceLinkDefinition],
 ) -> HashMap<String, HashMap<String, HashMap<String, String>>> {
@@ -3191,7 +3191,7 @@ fn component_import_links(
     })
 }
 
-/// Helper function to serialize CtlResponse<T> into a Vec<u8> if the response is Some
+/// Helper function to serialize `CtlResponse`<T> into a Vec<u8> if the response is Some
 fn serialize_ctl_response<T: Serialize>(
     ctl_response: Option<CtlResponse<T>>,
 ) -> Option<anyhow::Result<Vec<u8>>> {

@@ -33,7 +33,7 @@ use std::env;
 
 use wasmcloud_provider_blobstore_s3::{StorageClient, StorageConfig};
 
-/// Helper function to create a StorageClient with local testing overrides
+/// Helper function to create a `StorageClient` with local testing overrides
 async fn test_client() -> StorageClient {
     let conf = StorageConfig {
         endpoint: env::var("AWS_ENDPOINT").ok(),
@@ -58,7 +58,7 @@ async fn test_create_container() {
     let s3 = test_client().await;
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.bucket.{}", num);
+    let bucket = format!("test.bucket.{num}");
 
     assert!(
         !s3.container_exists(&bucket).await.unwrap(),

@@ -11,7 +11,7 @@ use crate::parser::{ProjectConfig, TypeConfig};
 mod component;
 pub use component::*;
 mod provider;
-use provider::*;
+use provider::build_provider;
 
 /// This tag indicates that a Wasm module uses experimental features of wasmCloud
 /// and/or the surrounding ecosystem.
@@ -36,9 +36,9 @@ pub struct SignConfig {
     pub disable_keygen: bool,
 }
 
-/// Using a [ProjectConfig], usually parsed from a `wasmcloud.toml` file, build the project
-/// with the installed language toolchain. This will delegate to [build_actor] when the project is an actor,
-/// or [build_provider] when the project is a provider.
+/// Using a [`ProjectConfig`], usually parsed from a `wasmcloud.toml` file, build the project
+/// with the installed language toolchain. This will delegate to [`build_actor`] when the project is an actor,
+/// or [`build_provider`] when the project is a provider.
 ///
 /// This function returns the path to the compiled artifact, a signed Wasm component or signed provider archive.
 ///
@@ -50,8 +50,8 @@ pub struct SignConfig {
 /// println!("Here is the signed artifact: {}", artifact_path.to_string_lossy());
 /// ```
 /// # Arguments
-/// * `config`: [ProjectConfig] for required information to find, build, and sign an actor
-/// * `signing`: Optional [SignConfig] with information for signing the project artifact. If omitted, the artifact will only be built
+/// * `config`: [`ProjectConfig`] for required information to find, build, and sign an actor
+/// * `signing`: Optional [`SignConfig`] with information for signing the project artifact. If omitted, the artifact will only be built
 pub async fn build_project(
     config: &ProjectConfig,
     signing: Option<&SignConfig>,

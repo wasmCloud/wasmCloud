@@ -40,6 +40,7 @@ pub struct ProviderArchive {
 
 impl ProviderArchive {
     /// Creates a new provider archive in memory, to which native library files can be added.
+    #[must_use]
     pub fn new(name: &str, vendor: &str, rev: Option<i32>, ver: Option<String>) -> ProviderArchive {
         ProviderArchive {
             libraries: HashMap::new(),
@@ -69,11 +70,13 @@ impl ProviderArchive {
     }
 
     /// Gets the list of architecture/OS targets within the archive
+    #[must_use]
     pub fn targets(&self) -> Vec<String> {
         self.libraries.keys().cloned().collect()
     }
 
     /// Retrieves the raw bytes for a given target
+    #[must_use]
     pub fn target_bytes(&self, target: &str) -> Option<Vec<u8>> {
         self.libraries.get(target).cloned()
     }
@@ -81,12 +84,14 @@ impl ProviderArchive {
     /// Returns the embedded claims associated with this archive. Note that claims are not available
     /// while building a new archive. They are only available after the archive has been written
     /// or if the archive was loaded from an existing file
+    #[must_use]
     pub fn claims(&self) -> Option<Claims<CapabilityProvider>> {
         self.claims.clone()
     }
 
     /// Obtains the JSON schema if one was either set explicitly on the structure or loaded from
     /// claims in the PAR
+    #[must_use]
     pub fn schema(&self) -> Option<serde_json::Value> {
         self.json_schema.clone()
     }
@@ -305,9 +310,9 @@ impl ProviderArchive {
         par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_file))
             .await?;
 
-        for (tgt, lib) in self.libraries.iter() {
+        for (tgt, lib) in &self.libraries {
             let mut header = tokio_tar::Header::new_gnu();
-            let path = format!("{}.bin", tgt);
+            let path = format!("{tgt}.bin");
             header.set_path(&path)?;
             header.set_size(lib.len() as u64);
             header.set_cksum();
@@ -331,11 +336,11 @@ fn validate_hashes(
 ) -> Result<()> {
     let file_hashes = claims.metadata.as_ref().unwrap().target_hashes.clone();
 
-    for (tgt, library) in libraries.iter() {
+    for (tgt, library) in libraries {
         let file_hash = file_hashes.get(tgt).cloned().unwrap();
         let check_hash = hash_bytes(library);
         if file_hash != check_hash {
-            return Err(format!("File hash and verify hash do not match for '{}'", tgt).into());
+            return Err(format!("File hash and verify hash do not match for '{tgt}'").into());
         }
     }
     Ok(())
@@ -343,7 +348,7 @@ fn validate_hashes(
 
 fn generate_hashes(libraries: &HashMap<String, Vec<u8>>) -> HashMap<String, String> {
     let mut hm = HashMap::new();
-    for (target, lib) in libraries.iter() {
+    for (target, lib) in libraries {
         let hash = hash_bytes(lib);
         hm.insert(target.to_string(), hash);
     }
@@ -528,8 +533,8 @@ mod test {
 
         let tempdir = tempfile::tempdir()?;
 
-        let parpath = tempdir.path().join(format!("{}.par", filename));
-        let cheezypath = tempdir.path().join(format!("{}.par.gz", filename));
+        let parpath = tempdir.path().join(format!("{filename}.par"));
+        let cheezypath = tempdir.path().join(format!("{filename}.par.gz"));
 
         arch.write(&parpath, &issuer, &subject, false).await?;
         arch.write(&cheezypath, &issuer, &subject, true).await?;
@@ -577,7 +582,7 @@ mod test {
         let tempdir = tempfile::tempdir()?;
 
         arch.write(
-            tempdir.path().join(format!("{}.par", filename)),
+            tempdir.path().join(format!("{filename}.par")),
             &issuer,
             &subject,
             true,
@@ -585,7 +590,7 @@ mod test {
         .await?;
 
         let arch2 =
-            ProviderArchive::try_load_file(tempdir.path().join(format!("{}.par.gz", filename)))
+            ProviderArchive::try_load_file(tempdir.path().join(format!("{filename}.par.gz")))
                 .await?;
 
         assert_eq!(
@@ -619,7 +624,7 @@ mod test {
         let subject = KeyPair::new_service();
 
         let tempdir = tempfile::tempdir()?;
-        let cheezypath = tempdir.path().join(format!("{}.par.gz", filename));
+        let cheezypath = tempdir.path().join(format!("{filename}.par.gz"));
 
         // the gz suffix is explicitly provided to write
         arch.write(&cheezypath, &issuer, &subject, true)

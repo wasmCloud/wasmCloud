@@ -27,7 +27,7 @@ fn integration_keys_gen_comprehensive() {
         "cluster",
     ];
 
-    key_gen_types.iter().for_each(|cmd| {
+    for cmd in &key_gen_types {
         let key_gen_command = wash()
             .args(["keys", "gen", cmd])
             .output()
@@ -37,9 +37,9 @@ fn integration_keys_gen_comprehensive() {
         assert!(output.contains("Public Key:"));
         assert!(output.contains("Seed:"));
         assert!(output.contains("Remember that the seed is private, treat it as a secret."));
-    });
+    }
 
-    key_gen_types.iter().for_each(|cmd| {
+    for cmd in &key_gen_types {
         let key_gen_command = wash()
             .args(["keys", "gen", cmd, "-o", "json"])
             .output()
@@ -48,7 +48,7 @@ fn integration_keys_gen_comprehensive() {
         let output = output_to_string(key_gen_command).unwrap();
         assert!(output.contains("\"public_key\":"));
         assert!(output.contains("\"seed\":"));
-    });
+    }
 }
 
 #[test]

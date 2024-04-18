@@ -57,19 +57,19 @@ impl ConnectionConfig {
             out.cluster_uris = extra.cluster_uris.clone();
         }
         if extra.auth_jwt.is_some() {
-            out.auth_jwt = extra.auth_jwt.clone()
+            out.auth_jwt = extra.auth_jwt.clone();
         }
         if extra.auth_seed.is_some() {
-            out.auth_seed = extra.auth_seed.clone()
+            out.auth_seed = extra.auth_seed.clone();
         }
         if extra.tls_ca.is_some() {
-            out.tls_ca = extra.tls_ca.clone()
+            out.tls_ca = extra.tls_ca.clone();
         }
         if extra.tls_ca_file.is_some() {
-            out.tls_ca_file = extra.tls_ca_file.clone()
+            out.tls_ca_file = extra.tls_ca_file.clone();
         }
         if extra.ping_interval_sec.is_some() {
-            out.ping_interval_sec = extra.ping_interval_sec
+            out.ping_interval_sec = extra.ping_interval_sec;
         }
         out
     }
@@ -97,7 +97,7 @@ impl ConnectionConfig {
         if let Some(sub) = values.get(CONFIG_NATS_SUBSCRIPTION) {
             config
                 .subscriptions
-                .extend(sub.split(',').map(|s| s.to_string()));
+                .extend(sub.split(',').map(std::string::ToString::to_string));
         }
         if let Some(url) = values.get(CONFIG_NATS_URI) {
             config.cluster_uris = url.split(',').map(String::from).collect();
