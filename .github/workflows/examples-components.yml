@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+
+      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
   pull_request:
     branches: [main]
     paths:
