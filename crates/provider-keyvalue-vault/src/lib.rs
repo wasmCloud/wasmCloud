@@ -428,7 +428,7 @@ impl Provider for KvVaultProvider {
         let mut aw = self.components.write().await;
         if let Some(client) = aw.remove(source_id) {
             debug!("deleting link for component [{source_id}]");
-            drop(client)
+            drop(client);
         }
         Ok(())
     }

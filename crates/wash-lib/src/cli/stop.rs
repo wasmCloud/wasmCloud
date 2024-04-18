@@ -352,7 +352,7 @@ pub async fn stop_hosts(
         let host_ids = all_stops
             .iter()
             // Remove any host IDs that ran into errors
-            .filter_map(|host_id| host_id.to_owned())
+            .filter_map(std::borrow::ToOwned::to_owned)
             .collect::<Vec<_>>();
         let hosts_remaining = all_stops.len() > host_ids.len();
 

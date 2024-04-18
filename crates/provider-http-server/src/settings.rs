@@ -1,13 +1,13 @@
-//! Configuration settings for HttpServer.
+//! Configuration settings for [`HttpServerProvider`](crate::HttpServerProvider).
 //! The "values" map in the actor link definition may contain
 //! one or more of the following keys,
 //! which determine how the configuration is parsed.
 //!
 //! For the key...
-///   config_file:       load configuration from file name.
+///   `config_file`:       load configuration from file name.
 ///                      Interprets file as json or toml, based on file extension.
-///   config_b64:        Configuration is a base64-encoded json string
-///   config_json:       Configuration is a raw json string
+///   `config_b64`:        Configuration is a base64-encoded json string
+///   `config_json`:       Configuration is a raw json string
 ///
 /// If no configuration is provided, the default settings below will be used:
 /// - TLS is disabled
@@ -137,8 +137,7 @@ impl ServiceSettings {
                 "json" => ServiceSettings::from_json(&data),
                 "toml" => ServiceSettings::from_toml(&data),
                 _ => Err(HttpServerError::Settings(format!(
-                    "unrecognized extension {}",
-                    ext
+                    "unrecognized extension {ext}"
                 ))),
             }
         } else {
@@ -152,7 +151,7 @@ impl ServiceSettings {
     /// load settings from json
     fn from_json(data: &str) -> Result<Self, HttpServerError> {
         serde_json::from_str(data)
-            .map_err(|e| HttpServerError::Settings(format!("invalid json: {}", e)))
+            .map_err(|e| HttpServerError::Settings(format!("invalid json: {e}")))
     }
 
     /// load settings from toml file
@@ -180,10 +179,11 @@ impl ServiceSettings {
         match (&self.tls.cert_file, &self.tls.priv_key_file) {
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                errors.push("for tls, both 'cert_file' and 'priv_key_file' must be set".to_string())
+                errors
+                    .push("for tls, both 'cert_file' and 'priv_key_file' must be set".to_string());
             }
             (Some(cert_file), Some(key_file)) => {
-                for f in [("cert_file", &cert_file), ("priv_key_file", &key_file)].iter() {
+                for f in &[("cert_file", &cert_file), ("priv_key_file", &key_file)] {
                     let path: &Path = f.1.as_ref();
                     if !path.is_file() {
                         errors.push(format!(
@@ -201,18 +201,15 @@ impl ServiceSettings {
             }
         }
         if let Some(ref methods) = self.cors.allowed_methods {
-            for m in methods.0.iter() {
+            for m in &methods.0 {
                 if http::Method::try_from(m.as_str()).is_err() {
-                    errors.push(format!("invalid CORS method: '{}'", m));
+                    errors.push(format!("invalid CORS method: '{m}'"));
                 }
             }
         }
         if let Some(cache_control) = self.cache_control.as_ref() {
             if http::HeaderValue::from_str(cache_control).is_err() {
-                errors.push(format!(
-                    "Invalid Cache Control header : '{}'",
-                    cache_control
-                ));
+                errors.push(format!("Invalid Cache Control header : '{cache_control}'"));
             }
         }
         if !errors.is_empty() {
@@ -254,7 +251,7 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
     if let Some(str) = values.get("config_b64") {
         let bytes = BASE64_STANDARD_NO_PAD
             .decode(str)
-            .map_err(|e| HttpServerError::Settings(format!("invalid base64 encoding: {}", e)))?;
+            .map_err(|e| HttpServerError::Settings(format!("invalid base64 encoding: {e}")))?;
         settings.merge(ServiceSettings::from_json(&String::from_utf8_lossy(
             &bytes,
         ))?);
@@ -266,16 +263,17 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     // accept address as value parameter
     if let Some(addr) = values.get("address") {
-        settings.address = Some(SocketAddr::from_str(addr).map_err(|_| {
-            HttpServerError::InvalidParameter(format!("invalid address: {}", addr))
-        })?);
+        settings.address =
+            Some(SocketAddr::from_str(addr).map_err(|_| {
+                HttpServerError::InvalidParameter(format!("invalid address: {addr}"))
+            })?);
     }
 
     // accept port, for compatibility with previous implementations
     if let Some(addr) = values.get("port") {
         let port = addr
             .parse::<u16>()
-            .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {}", addr)))?;
+            .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {addr}")))?;
         settings.address = Some(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             port,
@@ -413,7 +411,7 @@ impl FromStr for CorsOrigin {
         let uri = Uri::from_str(origin).map_err(|invalid_uri| {
             std::io::Error::new(
                 ErrorKind::InvalidInput,
-                format!("Invalid uri: {}.\n{}", origin, invalid_uri),
+                format!("Invalid uri: {origin}.\n{invalid_uri}"),
             )
         })?;
         if let Some(s) = uri.scheme_str() {
@@ -464,7 +462,7 @@ impl Default for AllowedOrigins {
         AllowedOrigins(
             CORS_ALLOWED_ORIGINS
                 .iter()
-                .map(|s| CorsOrigin(s.to_string()))
+                .map(|s| CorsOrigin((*s).to_string()))
                 .collect::<Vec<_>>(),
         )
     }
@@ -511,7 +509,7 @@ impl Default for ExposedHeaders {
         ExposedHeaders(
             CORS_EXPOSED_HEADERS
                 .iter()
-                .map(|s| s.to_string())
+                .map(|s| (*s).to_string())
                 .collect::<Vec<_>>(),
         )
     }
@@ -546,7 +544,7 @@ impl FromStr for LogLevel {
             "trace" => Ok(Self::Trace),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("{} is not a valid log level", s),
+                format!("{s} is not a valid log level"),
             )),
         }
     }
@@ -609,7 +607,7 @@ impl FromStr for HttpMethod {
             "TRACE" => Ok(Self::Trace),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("{} is not a valid http method", s),
+                format!("{s} is not a valid http method"),
             )),
         }
     }
@@ -661,7 +659,7 @@ mod test {
         assert!(s.cors.allowed_methods.is_some());
         assert!(s.cors.allowed_origins.is_some());
 
-        assert!(s.cors.allowed_origins.unwrap().0.is_empty())
+        assert!(s.cors.allowed_origins.unwrap().0.is_empty());
     }
 
     #[test]
@@ -698,10 +696,11 @@ mod test {
     #[test]
     fn origins_deserialize() {
         // test CorsOrigin
-        for valid in GOOD_ORIGINS.iter() {
-            let o =
-                serde_json::from_value::<CorsOrigin>(serde_json::Value::String(valid.to_string()));
-            assert!(o.is_ok(), "from_value '{}'", valid);
+        for valid in GOOD_ORIGINS {
+            let o = serde_json::from_value::<CorsOrigin>(serde_json::Value::String(
+                (*valid).to_string(),
+            ));
+            assert!(o.is_ok(), "from_value '{valid}'");
 
             // test as_ref()
             assert_eq!(&o.unwrap().0, valid);
@@ -711,10 +710,10 @@ mod test {
     #[test]
     fn origins_from_str() {
         // test CorsOrigin
-        for &valid in GOOD_ORIGINS.iter() {
+        for &valid in GOOD_ORIGINS {
             let o = CorsOrigin::from_str(valid);
-            println!("{}: {:?}", valid, o);
-            assert!(o.is_ok(), "from_str '{}'", valid);
+            println!("{valid}: {o:?}");
+            assert!(o.is_ok(), "from_str '{valid}'");
 
             // test as_ref()
             assert_eq!(&o.unwrap().0, valid);
@@ -723,15 +722,15 @@ mod test {
 
     #[test]
     fn origins_negative() {
-        for bad in BAD_ORIGINS.iter() {
+        for bad in BAD_ORIGINS {
             let o =
-                serde_json::from_value::<CorsOrigin>(serde_json::Value::String(bad.to_string()));
-            println!("{}: {:?}", bad, o);
-            assert!(o.is_err(), "from_value '{}' (expect err)", bad);
+                serde_json::from_value::<CorsOrigin>(serde_json::Value::String((*bad).to_string()));
+            println!("{bad}: {o:?}");
+            assert!(o.is_err(), "from_value '{bad}' (expect err)");
 
             let o = serde_json::from_str::<CorsOrigin>(bad);
-            println!("{}: {:?}", bad, o);
-            assert!(o.is_err(), "from_str '{}' (expect err)", bad);
+            println!("{bad}: {o:?}");
+            assert!(o.is_err(), "from_str '{bad}' (expect err)");
         }
     }
 }

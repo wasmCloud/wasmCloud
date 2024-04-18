@@ -178,7 +178,7 @@ fn choice_options(var_info: &VarInfo) -> String {
             } => {
                 format!("[default: {}]", style(d).bold())
             }
-            _ => "".to_string(),
+            _ => String::new(),
         },
     }
 }

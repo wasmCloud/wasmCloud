@@ -9,6 +9,7 @@ pub struct HostRng;
 impl HostRng {
     /// Generate a 32-bit random number
     #[inline]
+    #[must_use]
     pub fn random32() -> u32 {
         crate::wasi::random::random::get_random_u64() as _
     }
@@ -16,6 +17,7 @@ impl HostRng {
     /// Generate a v4-format guid in the form "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
     /// where n is a lowercase hex digit and all bits are random.
     #[cfg(feature = "uuid")]
+    #[must_use]
     pub fn generate_guid() -> Uuid {
         let buf = uuid::Bytes::try_from(crate::wasi::random::random::get_random_bytes(16))
             .expect("invalid amount of bytes generated");
@@ -24,6 +26,7 @@ impl HostRng {
 
     /// Generate a random integer within an inclusive range. ( min <= n <= max )
     #[cfg(feature = "rand")]
+    #[must_use]
     pub fn random_in_range(min: u32, max: u32) -> u32 {
         HostRng.gen_range(min..=max)
     }

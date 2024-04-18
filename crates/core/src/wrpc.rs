@@ -22,7 +22,7 @@ use tracing::instrument;
 use wrpc_transport::{AcceptedInvocation, Encode, IncomingInvocation, OutgoingInvocation};
 use wrpc_transport_nats::{Subject, Subscriber, Transmission};
 
-/// Wrapper around [wrpc_transport_nats::Transmitter] that includes a [async_nats::HeaderMap] for
+/// Wrapper around [`wrpc_transport_nats::Transmitter`] that includes a [`async_nats::HeaderMap`] for
 /// passing invocation and trace context.
 #[derive(Clone, Debug)]
 pub struct TransmitterWithHeaders {
@@ -55,7 +55,7 @@ impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     }
 }
 
-/// Wrapper around [wrpc_transport_nats::Invocation] that includes a [async_nats::HeaderMap] for
+/// Wrapper around [`wrpc_transport_nats::Invocation`] that includes a [`async_nats::HeaderMap`] for
 /// passing invocation and trace context.
 pub struct InvocationWithHeaders {
     inner: wrpc_transport_nats::Invocation,
@@ -64,8 +64,8 @@ pub struct InvocationWithHeaders {
 }
 
 impl InvocationWithHeaders {
-    /// This function just delegates to the underlying [wrpc_transport_nats::Invocation::begin] function,
-    /// but since we're consuming `self` it also returns the headers to avoid a clone in [InvocationWithHeaders::invoke].
+    /// This function just delegates to the underlying [`wrpc_transport_nats::Invocation::begin`] function,
+    /// but since we're consuming `self` it also returns the headers to avoid a clone in [`InvocationWithHeaders::invoke`].
     pub(crate) async fn begin(
         self,
         params: impl wrpc_transport::Encode,
@@ -98,7 +98,7 @@ impl wrpc_transport::Invocation for InvocationWithHeaders {
     }
 }
 
-/// Wrapper around [wrpc_transport_nats::Acceptor] that includes a [async_nats::HeaderMap] for
+/// Wrapper around [`wrpc_transport_nats::Acceptor`] that includes a [`async_nats::HeaderMap`] for
 /// passing invocation and trace context.
 pub struct AcceptorWithHeaders {
     inner: wrpc_transport_nats::Acceptor,

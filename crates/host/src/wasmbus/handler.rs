@@ -441,8 +441,7 @@ impl Bus for Handler {
         let targets = self.targets.read().await;
         let link_name = targets
             .get(target_interface)
-            .map(String::as_str)
-            .unwrap_or("default");
+            .map_or("default", String::as_str);
         let (namespace, package, interface) = target_interface.as_parts();
 
         // Determine the lattice target ID we should be sending to
@@ -794,7 +793,7 @@ impl OutgoingHttp for Handler {
             .context("failed to invoke `wrpc:http/outgoing-handler.handle`")?;
         spawn(async move {
             if let Err(err) = tx.await {
-                error!(?err, "failed to transmit parameter values")
+                error!(?err, "failed to transmit parameter values");
             }
         });
         // TODO: Do not ignore outgoing body errors

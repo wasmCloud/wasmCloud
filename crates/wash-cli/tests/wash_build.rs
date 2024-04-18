@@ -104,7 +104,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{key_directory}/http_hello_world_module.nk").as_str()));
 
     // case: keys directory configured via cli arg --keys-directory and --disable-keygen=true
     let key_directory = project_dir
@@ -152,7 +152,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{key_directory}/http_hello_world_module.nk").as_str()));
 
     // case: keys directory configured via wasmcloud.toml. The config that is written to file does affect all the remaining test cases.
     let key_directory = project_dir
@@ -190,7 +190,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{key_directory}/http_hello_world_module.nk").as_str()));
 
     // case when keys directory is configured via cli arg --keys-directory and wasmcloud.toml. cli arg should take precedence
     let key_directory = project_dir
@@ -213,7 +213,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{key_directory}/http_hello_world_module.nk").as_str()));
 
     // case when keys directory is configured via env var $WASH_KEYS, cli arg --keys-directory and wasmcloud.toml. cli arg should take precedence
     let env_key_directory = project_dir.join("flashkeys").to_string_lossy().to_string();
@@ -239,7 +239,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", key_directory).as_str()));
+    assert!(output.contains(format!("{key_directory}/http_hello_world_module.nk").as_str()));
 
     // case when keys directory is configured via env var $WASH_KEYS and wasmcloud.toml. env var should take precedence
     let env_key_directory = project_dir.join("orionkeys").to_string_lossy().to_string();
@@ -259,7 +259,7 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
     assert!(output.status.success());
     let output =
         String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(format!("{}/http_hello_world_module.nk", env_key_directory).as_str()));
+    assert!(output.contains(format!("{env_key_directory}/http_hello_world_module.nk").as_str()));
 
     Ok(())
 }

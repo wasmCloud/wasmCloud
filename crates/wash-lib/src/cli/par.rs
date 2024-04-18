@@ -3,6 +3,7 @@ use provider_archive::ProviderArchive;
 use std::path::PathBuf;
 
 /// Helper function for detecting the arch used by the current machine
+#[must_use]
 pub fn detect_arch() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
@@ -39,7 +40,7 @@ pub fn create_provider_archive(
                 .with_context(|| "Unable to parse JSON from file contents".to_string())?,
         )
         .map_err(convert_error)
-        .with_context(|| format!("Error parsing JSON schema from file '{:?}'", schema))?;
+        .with_context(|| format!("Error parsing JSON schema from file '{schema:?}'"))?;
     }
 
     Ok(par)
@@ -57,6 +58,7 @@ pub async fn insert_provider_binary(
 }
 
 /// Converts error from Send + Sync error to standard anyhow error
+#[must_use]
 pub fn convert_error(e: Box<dyn ::std::error::Error + Send + Sync>) -> anyhow::Error {
     anyhow!(e.to_string())
 }

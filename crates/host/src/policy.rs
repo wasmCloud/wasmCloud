@@ -148,7 +148,7 @@ impl From<&RequestBody> for RequestKey {
             },
             RequestBody::Unknown => RequestKey {
                 kind: RequestKind::Unknown,
-                cache_key: "".to_string(),
+                cache_key: String::new(),
             },
         }
     }
@@ -210,7 +210,7 @@ impl From<&jwt::Claims<jwt::Component>> for PolicyClaims {
             issuer: claims.issuer.to_string(),
             issued_at: claims.issued_at.to_string(),
             expires_at: claims.expires,
-            expired: claims.expires.map(is_expired).unwrap_or_default(),
+            expired: claims.expires.is_some_and(is_expired),
         }
     }
 }
@@ -222,7 +222,7 @@ impl From<&jwt::Claims<jwt::CapabilityProvider>> for PolicyClaims {
             issuer: claims.issuer.to_string(),
             issued_at: claims.issued_at.to_string(),
             expires_at: claims.expires,
-            expired: claims.expires.map(is_expired).unwrap_or_default(),
+            expired: claims.expires.is_some_and(is_expired),
         }
     }
 }
@@ -359,7 +359,7 @@ impl Manager {
         let Some(policy_topic) = self.policy_topic.clone() else {
             // Ensure we short-circuit and allow the request if no policy topic is configured
             return Ok(Response {
-                request_id: "".to_string(),
+                request_id: String::new(),
                 permitted: true,
                 message: None,
             });

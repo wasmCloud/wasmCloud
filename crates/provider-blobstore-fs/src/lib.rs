@@ -133,11 +133,11 @@ impl Blobstore for FsProvider {
                             if ty.is_dir() {
                                 fs::remove_dir_all(&path).await.with_context(|| {
                                     format!("failed to remove directory at `{}`", path.display())
-                                })?
+                                })?;
                             } else {
                                 fs::remove_file(&path).await.with_context(|| {
                                     format!("failed to remove file at `{}`", path.display())
-                                })?
+                                })?;
                             }
                             Ok(())
                         })
@@ -148,7 +148,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -176,7 +176,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -204,7 +204,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -232,7 +232,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -269,7 +269,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -310,7 +310,7 @@ impl Blobstore for FsProvider {
                 )
                 .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -353,7 +353,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -385,7 +385,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -422,7 +422,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -473,7 +473,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -515,7 +515,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -543,7 +543,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -590,7 +590,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -625,7 +625,7 @@ impl Blobstore for FsProvider {
                     .transmit_static(error_subject, err.to_string())
                     .await
                 {
-                    error!(?err, "failed to transmit error")
+                    error!(?err, "failed to transmit error");
                 }
                 return;
             }
@@ -641,7 +641,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 }
@@ -654,7 +654,7 @@ impl Provider for FsProvider {
             source_id, config, ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        for (k, v) in config.iter() {
+        for (k, v) in config {
             info!("link definition configuration [{k}] set to [{v}]");
         }
 

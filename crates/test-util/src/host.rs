@@ -125,6 +125,7 @@ impl WasmCloudTestHost {
     }
 
     /// Get the host key
+    #[must_use]
     pub fn host_key(&self) -> Arc<KeyPair> {
         self.host_key.clone()
     }

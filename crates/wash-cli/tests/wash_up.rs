@@ -57,7 +57,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
 
     // Extract kill comamnd for later
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
-        Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
+        Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
@@ -155,7 +155,7 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let out = read_to_string(&path).expect("could not read output of wash up");
 
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
-        Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
+        Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
@@ -225,7 +225,7 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let out = read_to_string(&path).expect("could not read output of wash up");
 
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
-        Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
+        Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 

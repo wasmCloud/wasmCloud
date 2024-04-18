@@ -55,7 +55,7 @@ fn rust_actor() {
 }
 
 #[test]
-/// When given a specific toml file's path, it should parse the file and return a ProjectConfig.
+/// When given a specific toml file's path, it should parse the file and return a `ProjectConfig`.
 fn rust_actor_with_revision() {
     let result = get_config(
         Some(PathBuf::from(
@@ -363,7 +363,7 @@ fn minimal_rust_actor() {
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
-    )
+    );
 }
 
 #[test]
@@ -412,7 +412,7 @@ fn cargo_toml_actor() {
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
-    )
+    );
 }
 
 /// wasm_target=wasm32-wasi-preview2 is properly parsed

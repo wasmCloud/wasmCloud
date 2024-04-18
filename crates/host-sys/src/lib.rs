@@ -12,5 +12,5 @@ pub extern "C" fn run_host() {
                 .expect("failed to initialize host");
             host.stopped().await.expect("failed to await host stop");
             shutdown.await.expect("failed to shutdown host");
-        })
+        });
 }

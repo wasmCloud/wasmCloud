@@ -53,7 +53,7 @@ pub type WitInterface = String;
 pub type KnownConfigName = String;
 
 /// Generic result
-type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Helper function that serializes the data and maps the error
 pub(crate) fn json_serialize<T>(item: T) -> Result<Vec<u8>>

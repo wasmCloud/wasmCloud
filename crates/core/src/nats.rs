@@ -2,6 +2,7 @@ use async_nats::HeaderMap;
 use std::collections::HashMap;
 
 /// Convert a [`async_nats::HeaderMap`] to a [`HashMap`] used in trace contexts
+#[must_use]
 pub fn convert_header_map_to_hashmap(map: &HeaderMap) -> HashMap<String, String> {
     map.iter()
         .flat_map(|(key, value)| {

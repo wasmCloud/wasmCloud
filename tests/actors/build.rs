@@ -148,7 +148,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                     && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
             })
             .await
-            .with_context(|| format!("failed to build {:?} crates", project_names))?;
+            .with_context(|| format!("failed to build {project_names:?} crates"))?;
             match (
                 artifacts.next().deref_artifact(),
                 artifacts.next().deref_artifact(),

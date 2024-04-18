@@ -47,7 +47,7 @@ pub async fn serve_outgoing_handler(
                             spawn(async move { provider.serve_handle(invocation).await });
                         },
                         Some(Err(err)) => {
-                            error!(?err, "failed to accept `wrpc:http/outgoing-handler.handle` invocation")
+                            error!(?err, "failed to accept `wrpc:http/outgoing-handler.handle` invocation");
                         },
                         None => {
                             warn!("`wrpc:http/outgoing-handler.handle` stream unexpectedly finished, resubscribe");
@@ -55,7 +55,7 @@ pub async fn serve_outgoing_handler(
                         }
                     }
                 }
-                _ = &mut shutdown => {
+                () = &mut shutdown => {
                     debug!("shutdown command received");
                     return Ok(())
                 }

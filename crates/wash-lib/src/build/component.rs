@@ -15,7 +15,7 @@ use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
-    build::*,
+    build::{convert_wit_dir_to_world, SignConfig, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
     cli::{
         claims::{sign_file, ActorMetadata, GenerateCommon, SignCommand},
         OutputKind,
@@ -27,10 +27,10 @@ use crate::{
 /// keys, capability claims, and additional friendly information like name, version, revision, etc.
 ///
 /// # Arguments
-/// * `actor_config`: [ActorConfig] for required information to find, build, and sign an actor
-/// * `language_config`: [LanguageConfig] specifying which language the actor is written in
-/// * `common_config`: [CommonConfig] specifying common parameters like [CommonConfig::name] and [CommonConfig::version]
-/// * `signing`: Optional [SignConfig] with information for signing the actor. If omitted, the actor will only be built
+/// * `actor_config`: [`ActorConfig`] for required information to find, build, and sign an actor
+/// * `language_config`: [`LanguageConfig`] specifying which language the actor is written in
+/// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and [`CommonConfig::version`]
+/// * `signing`: Optional [`SignConfig`] with information for signing the actor. If omitted, the actor will only be built
 pub fn build_actor(
     actor_config: &ComponentConfig,
     language_config: &LanguageConfig,
@@ -210,7 +210,7 @@ fn build_rust_actor(
         .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
     wasm_path_buf.push(build_target);
     wasm_path_buf.push("release");
-    wasm_path_buf.push(format!("{}.wasm", wasm_bin_name));
+    wasm_path_buf.push(format!("{wasm_bin_name}.wasm"));
 
     // Ensure the file exists, normalize uses the fs and file must exist
     let wasm_file = match wasm_path_buf.normalize() {
@@ -223,7 +223,7 @@ fn build_rust_actor(
     };
 
     // move the file out into the build/ folder for parity with tinygo and convienience for users.
-    let copied_wasm_file = PathBuf::from(format!("build/{}.wasm", wasm_bin_name));
+    let copied_wasm_file = PathBuf::from(format!("build/{wasm_bin_name}.wasm"));
     if let Some(p) = copied_wasm_file.parent() {
         fs::create_dir_all(p)?;
     }
@@ -379,7 +379,7 @@ fn build_custom_actor(
 /// from the top level golang project directory
 const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
 
-/// Generate the bindgen code that TinyGo actors need
+/// Generate the bindgen code that `TinyGo` actors need
 fn generate_tinygo_bindgen(
     bindgen_dir: impl AsRef<Path>,
     wit_dir: impl AsRef<Path>,
@@ -592,7 +592,7 @@ mod tests {
     };
 
     const MODULE_WAT: &str = "(module)";
-    const COMPONENT_BASIC_WIT: &str = r#"
+    const COMPONENT_BASIC_WIT: &str = r"
 package washlib:test;
 
 interface foo {
@@ -602,11 +602,11 @@ interface foo {
 world test-world {
    import foo;
 }
-"#;
+";
     const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 3] =
         ["test_world.h", "test_world.c", "test_world.go"];
 
-    const COMPONENT_UPSTREAM_WIT: &str = r#"
+    const COMPONENT_UPSTREAM_WIT: &str = r"
 package washlib:multi;
 
 interface foo {
@@ -616,9 +616,9 @@ interface foo {
 world upstream {
    import foo;
 }
-"#;
+";
 
-    const COMPONENT_DOWNSTREAM_WIT: &str = r#"
+    const COMPONENT_DOWNSTREAM_WIT: &str = r"
 package washlib:multi;
 
 interface bar {
@@ -629,7 +629,7 @@ world downstream {
    include upstream;
    import bar;
 }
-"#;
+";
     const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 3] =
         ["downstream.h", "downstream.c", "downstream.go"];
 
@@ -771,7 +771,6 @@ world downstream {
                 dir_contents.iter().any(|de| {
                     de.path()
                         .file_name()
-                        .to_owned()
                         .is_some_and(|v| v.to_string_lossy() == **f)
                 })
             }),
@@ -813,7 +812,6 @@ world downstream {
                 dir_contents.iter().any(|de| {
                     de.path()
                         .file_name()
-                        .to_owned()
                         .is_some_and(|v| v.to_string_lossy() == **f)
                 })
             }),

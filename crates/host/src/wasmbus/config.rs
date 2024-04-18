@@ -29,7 +29,7 @@ struct AbortHandles {
 
 impl Drop for AbortHandles {
     fn drop(&mut self) {
-        for handle in self.handles.iter() {
+        for handle in &self.handles {
             handle.abort();
         }
     }
@@ -103,39 +103,37 @@ impl ConfigBundle {
         let changed_notifier = Arc::new(changed_notifier);
         update_merge(&bundle.merged_config, &changed_notifier, &ordered_configs).await;
         // Move all the receivers into spawned tasks to update the config
-        receivers
-            .into_iter()
-            .for_each(|ConfigReceiver { name, mut receiver }| {
-                // SAFETY: We know we have the right amount of registrations because we just created
-                // them using the len above
-                let reg = registrations
-                    .pop()
-                    .expect("missing registration, this is developer error");
-                let cloned_name = name.clone();
-                let ordered_receivers = ordered_configs.clone();
-                let merged_config = bundle.merged_config.clone();
-                let notifier = changed_notifier.clone();
-                tokio::spawn(
-                    Abortable::new(
-                        async move {
-                            loop {
-                                match receiver.changed().await {
-                                    Ok(_) => {
-                                        update_merge(&merged_config, &notifier, &ordered_receivers)
-                                            .await;
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, %name, "Config updater has failed!");
-                                        return;
-                                    }
+        for ConfigReceiver { name, mut receiver } in receivers {
+            // SAFETY: We know we have the right amount of registrations because we just created
+            // them using the len above
+            let reg = registrations
+                .pop()
+                .expect("missing registration, this is developer error");
+            let cloned_name = name.clone();
+            let ordered_receivers = ordered_configs.clone();
+            let merged_config = bundle.merged_config.clone();
+            let notifier = changed_notifier.clone();
+            tokio::spawn(
+                Abortable::new(
+                    async move {
+                        loop {
+                            match receiver.changed().await {
+                                Ok(()) => {
+                                    update_merge(&merged_config, &notifier, &ordered_receivers)
+                                        .await;
+                                }
+                                Err(e) => {
+                                    error!(error = %e, %name, "Config updater has failed!");
+                                    return;
                                 }
                             }
-                        },
-                        reg,
-                    )
-                    .instrument(tracing::trace_span!("config_update", name = %cloned_name)),
-                );
-            });
+                        }
+                    },
+                    reg,
+                )
+                .instrument(tracing::trace_span!("config_update", name = %cloned_name)),
+            );
+        }
         // More likely than not, there will be a new value in the watch channel because we always
         // read the latest value from the store before putting it here. But just in case, this
         // ensures that the newly create bundle will return the current config rather than needing
@@ -169,6 +167,7 @@ impl ConfigBundle {
     }
 
     /// Returns a reference to the ordered list of config names handled by this bundle
+    #[must_use]
     pub fn config_names(&self) -> &Vec<String> {
         &self.config_names
     }
@@ -184,6 +183,7 @@ pub struct BundleGenerator {
 
 impl BundleGenerator {
     /// Create a new bundle generator
+    #[must_use]
     pub fn new(store: Store) -> Self {
         Self {
             store,
@@ -328,7 +328,7 @@ async fn update_merge(
     // temporary hashmap of borrowed strings and then after extending everything we could
     // into_iter it and clone it into the final hashmap. This would avoid extra allocations at
     // the cost of a few more iterations
-    for recv in ordered_receivers.iter() {
+    for recv in ordered_receivers {
         lock.extend(recv.borrow().clone());
     }
     // Send a notification that the config has changed

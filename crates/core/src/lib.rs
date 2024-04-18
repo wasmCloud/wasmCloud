@@ -21,7 +21,7 @@ pub mod wrpc;
 pub mod wit;
 pub use wit::*;
 
-/// The 1.0 version of the WasmCloud control API, used in topic strings for the control API
+/// The 1.0 version of the wasmCloud control API, used in topic strings for the control API
 pub const CTL_API_VERSION_1: &str = "v1";
 
 /// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:

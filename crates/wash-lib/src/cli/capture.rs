@@ -88,7 +88,11 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
 
         let source = msg
             .headers
-            .and_then(|headers| headers.get("source-id").map(|s| s.to_string()))
+            .and_then(|headers| {
+                headers
+                    .get("source-id")
+                    .map(std::string::ToString::to_string)
+            })
             .unwrap_or_default();
 
         let from = match cmd.source_id {
@@ -104,7 +108,7 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
             Some(_) => {
                 return None;
             }
-            None => target.to_string(),
+            None => (*target).to_string(),
         };
 
         Some((
@@ -330,5 +334,5 @@ async fn get_all_inventory(
 }
 
 fn stream_name(lattice_id: &str) -> String {
-    format!("{}-{lattice_id}", CAPTURE_STREAM_NAME)
+    format!("{CAPTURE_STREAM_NAME}-{lattice_id}")
 }
