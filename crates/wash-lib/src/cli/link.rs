@@ -77,7 +77,7 @@ pub struct LinkQueryCommand {
 #[derive(Debug, Clone, Parser)]
 pub enum LinkCommand {
     /// Query all links, same as `wash get links`
-    #[clap(name = "query")]
+    #[clap(name = "query", alias = "get")]
     Query(LinkQueryCommand),
 
     /// Put a link from a source to a target on a given WIT interface
