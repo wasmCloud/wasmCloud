@@ -19,7 +19,7 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 #[derive(Default, Debug, Clone)]
@@ -115,6 +115,8 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
+
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -163,6 +165,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -191,6 +194,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -219,6 +223,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -247,6 +252,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -285,6 +291,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) =
             transmitter
                 .transmit_static(
@@ -332,6 +339,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -368,6 +376,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -400,6 +409,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Vec<String>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -441,6 +451,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -488,6 +499,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -530,6 +542,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -565,6 +578,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -616,6 +630,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         // TODO: Consider streaming to FS
         let data: BytesMut = match data.try_collect().await {
             Ok(data) => data,
