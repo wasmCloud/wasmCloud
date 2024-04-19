@@ -20,11 +20,11 @@ pub struct LinkDelCommand {
     pub link_name: Option<String>,
 
     /// WIT namespace of the link
-    #[clap(short = 'n', long = "namespace")]
+    #[clap(name = "wit-namespace")]
     pub wit_namespace: String,
 
     /// WIT package of the link
-    #[clap(short = 'w', long = "package")]
+    #[clap(name = "wit-package")]
     pub wit_package: String,
 }
 
