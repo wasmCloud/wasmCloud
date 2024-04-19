@@ -10,6 +10,7 @@ spec:
     - name: counter
       type: component
       properties:
+        # NOTE: If the file at the relative path below is missing, run `wash build`
         image: file://./build/http_keyvalue_counter_s.wasm
       traits:
         # Govern the spread/scheduling of the component

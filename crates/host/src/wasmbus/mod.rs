@@ -2312,6 +2312,7 @@ impl Host {
         {
             warn!(
                 ?e,
+                provider_id,
                 "provider did not gracefully shut down in time, shutting down forcefully"
             );
         }
