@@ -13,7 +13,9 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
-use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{
+    get_connection, propagate_trace_for_ctx, run_provider, Context, LinkConfig, Provider,
+};
 
 use crate::config::Config;
 
@@ -212,6 +214,7 @@ impl KvVaultProvider {
         path: String,
         key: String,
     ) -> Result<Option<Vec<u8>>> {
+        propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         if let Some(mut secret) = client.read_secret(&path).await? {
             match secret.remove(&key) {
@@ -237,6 +240,7 @@ impl KvVaultProvider {
     /// Returns true if the store contains the key
     #[instrument(level = "debug", skip(ctx, self))]
     async fn contains(&self, ctx: Option<Context>, path: String, key: String) -> Result<bool> {
+        propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         let secret = client.read_secret(&path).await?;
         Ok(secret.is_some_and(|secret| secret.contains_key(&key)))
@@ -245,6 +249,7 @@ impl KvVaultProvider {
     /// Deletes a key from a secret
     #[instrument(level = "debug", skip(ctx, self))]
     async fn del(&self, ctx: Option<Context>, path: String, key: String) -> Result<()> {
+        propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         let secret = client.read_secret(&path).await?;
         let secret = if let Some(mut secret) = secret {
@@ -269,6 +274,7 @@ impl KvVaultProvider {
         key: String,
         value: Vec<u8>,
     ) -> Result<()> {
+        propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         let value = base64::engine::general_purpose::STANDARD_NO_PAD.encode(value);
         let secret = client.read_secret(&path).await?;
@@ -298,6 +304,7 @@ impl KvVaultProvider {
         path: String,
         skip: u64,
     ) -> Result<keyvalue::store::KeyResponse> {
+        propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         let secret = client.read_secret(&path).await?;
         Ok(keyvalue::store::KeyResponse {
@@ -322,6 +329,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
         Ok(self.del(context, bucket, key).await)
     }
 
@@ -332,6 +340,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<bool>> {
+        propagate_trace_for_ctx!(context);
         Ok(self.contains(context, bucket, key).await)
     }
 
@@ -342,6 +351,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+        propagate_trace_for_ctx!(context);
         Ok(self.get(context, bucket, key).await)
     }
 
@@ -353,6 +363,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
         Ok(self.set(context, bucket, key, value).await)
     }
 
@@ -363,6 +374,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         bucket: String,
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
+        propagate_trace_for_ctx!(context);
         Ok(self
             .list_keys(context, bucket, cursor.unwrap_or_default())
             .await)
@@ -428,7 +440,7 @@ impl Provider for KvVaultProvider {
         let mut aw = self.components.write().await;
         if let Some(client) = aw.remove(source_id) {
             debug!("deleting link for component [{source_id}]");
-            drop(client)
+            drop(client);
         }
         Ok(())
     }

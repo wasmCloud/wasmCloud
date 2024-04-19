@@ -8,8 +8,8 @@
 //!
 //! - HTTP/1 and HTTP/2
 //! - TLS
-//! - CORS support (select allowed_origins, allowed_methods,
-//!   allowed_headers.) Cors has sensible defaults so it should
+//! - CORS support (select `allowed_origins`, `allowed_methods`,
+//!   `allowed_headers`.) Cors has sensible defaults so it should
 //!   work as-is for development purposes, and may need refinement
 //!   for production if a more secure configuration is required.
 //! - All settings can be specified at runtime, using per-actor link settings:
@@ -56,7 +56,7 @@ pub use settings::{load_settings, ServiceSettings, CONTENT_LEN_LIMIT, DEFAULT_MA
 
 use crate::settings::Tls;
 
-/// HttpServer provider implementation.
+/// `wrpc:http/incoming-handler` provider implementation.
 #[derive(Clone, Default)]
 pub struct HttpServerProvider {
     // map to store http server (and its link parameters) for each linked actor
@@ -131,7 +131,7 @@ pub enum HttpServerError {
     SettingsToml(toml::de::Error),
 }
 
-/// An asynchronous HttpServer with support for CORS and TLS
+/// An asynchronous `wrpc:http/incoming-handler` with support for CORS and TLS
 ///
 /// ```no_test
 ///   use wasmcloud_provider_httpserver::{HttpServer, load_settings};
@@ -172,7 +172,7 @@ async fn handle_request(
             Err((
                 http::StatusCode::METHOD_NOT_ALLOWED,
                 "only GET and HEAD allowed in read-only mode",
-            ))?
+            ))?;
         }
     }
     let (
@@ -187,10 +187,10 @@ async fn handle_request(
     let http::uri::Parts { path_and_query, .. } = uri.into_parts();
     let mut uri = http::Uri::builder().scheme(scheme);
     if !authority.is_empty() {
-        uri = uri.authority(authority)
+        uri = uri.authority(authority);
     }
     if let Some(path_and_query) = path_and_query {
-        uri = uri.path_and_query(path_and_query)
+        uri = uri.path_and_query(path_and_query);
     }
     let uri = uri
         .build()
@@ -230,7 +230,7 @@ async fn handle_request(
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")))?;
     spawn(async move {
         if let Err(err) = tx.await {
-            error!(?err, "failed to transmit parameter values")
+            error!(?err, "failed to transmit parameter values");
         }
     });
     // TODO: Do not ignore body errors
@@ -382,6 +382,6 @@ impl HttpServerCore {
 impl Drop for HttpServerCore {
     /// Drop the client connection. Does not block or fail if the client has already been closed.
     fn drop(&mut self) {
-        self.handle.shutdown()
+        self.handle.shutdown();
     }
 }

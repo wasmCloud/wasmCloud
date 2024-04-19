@@ -88,6 +88,7 @@ pub struct StdioStream<'a> {
 }
 
 impl StdioStream<'_> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

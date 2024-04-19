@@ -15,6 +15,9 @@ pub mod error;
 pub mod interfaces;
 pub mod provider;
 
+#[cfg(feature = "otel")]
+pub mod otel;
+
 pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
@@ -71,12 +74,13 @@ pub fn parse_wit_meta_from_operation(
 }
 
 pub const URL_SCHEME: &str = "wasmbus";
-/// nats address to use if not included in initial HostData
+/// nats address to use if not included in initial `HostData`
 pub(crate) const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 /// The default timeout for a request to the lattice, in milliseconds
 pub const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
+#[must_use]
 pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {
     opts.event_callback(|event| async move {
         match event {
@@ -145,7 +149,7 @@ impl ProviderInitConfig for &ProviderInitState {
     }
 }
 
-/// CapabilityProvider handling of messages from host
+/// Capability Provider handling of messages from host
 pub trait Provider<E = anyhow::Error>: Sync {
     /// Initialize the provider
     ///

@@ -156,7 +156,7 @@ async fn subscribe_health(
                 }
                 match rx.await.as_ref().map(serde_json::to_vec) {
                     Err(err) => {
-                        error!(%err, "failed to receive health check response")
+                        error!(%err, "failed to receive health check response");
                     }
                     Ok(Ok(t)) => {
                         if let Some(reply_to) = msg.reply {
@@ -211,7 +211,7 @@ async fn subscribe_shutdown(
                         match shutdown_tx.send(tx).await {
                             Ok(()) => {
                                 if let Err(err) = rx.await {
-                                    error!(%err, "failed to await shutdown")
+                                    error!(%err, "failed to await shutdown");
                                 }
                             }
                             Err(err) => error!(%err, "failed to send shutdown"),
@@ -221,7 +221,7 @@ async fn subscribe_shutdown(
                         }
                         // unsubscribe from shutdown topic
                         if let Err(err) = sub.unsubscribe().await {
-                            warn!(%err, "failed to unsubscribe from shutdown topic")
+                            warn!(%err, "failed to unsubscribe from shutdown topic");
                         }
                         // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
                         if let Err(err) = quit.send(()) {
@@ -268,7 +268,7 @@ async fn subscribe_link_put(
                         continue;
                     }
                     if let Err(err) = rx.await {
-                        error!(%err, "failed to await link_put")
+                        error!(%err, "failed to await link_put");
                     }
                 }
                 Err(err) => {
@@ -301,7 +301,7 @@ async fn subscribe_link_del(
                         continue;
                     }
                     if let Err(err) = rx.await {
-                        error!(%err, "failed to await link_del")
+                        error!(%err, "failed to await link_del");
                     }
                 }
             });
@@ -528,7 +528,7 @@ async fn handle_provider_commands(
                         }
                     };
                     if tx.send(res).is_err() {
-                        error!("failed to send health check response")
+                        error!("failed to send health check response");
                     }
                 } else {
                     error!("failed to handle health check, shutdown");
@@ -536,7 +536,7 @@ async fn handle_provider_commands(
                         error!(error = %e, "failed to shutdown provider");
                     }
                     if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
+                        error!("failed to send quit");
                     };
                     return
                 };
@@ -547,7 +547,7 @@ async fn handle_provider_commands(
                         error!(error = %e, "failed to shutdown provider");
                     }
                     if tx.send(()).is_err() {
-                        error!("failed to send shutdown response")
+                        error!("failed to send shutdown response");
                     }
                 } else {
                     error!("failed to handle shutdown, shutdown");
@@ -555,7 +555,7 @@ async fn handle_provider_commands(
                         error!(error = %e, "failed to shutdown provider");
                     }
                     if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
+                        error!("failed to send quit");
                     };
                     return
                 };
@@ -572,7 +572,7 @@ async fn handle_provider_commands(
                         }
                     }
                     if tx.send(()).is_err() {
-                        error!("failed to send link put response")
+                        error!("failed to send link put response");
                     }
                 } else {
                     error!("failed to handle link put, shutdown");
@@ -580,7 +580,7 @@ async fn handle_provider_commands(
                         error!(error = %e, "failed to shutdown provider");
                     }
                     if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
+                        error!("failed to send quit");
                     };
                     return
                 };
@@ -593,7 +593,7 @@ async fn handle_provider_commands(
                     }
 
                     if tx.send(()).is_err() {
-                        error!("failed to send link del response")
+                        error!("failed to send link del response");
                     }
                 } else {
                     error!("failed to handle link del, shutdown");
@@ -601,7 +601,7 @@ async fn handle_provider_commands(
                         error!(error = %e, "failed to shutdown provider");
                     }
                     if quit_tx.send(()).is_err() {
-                        error!("failed to send quit")
+                        error!("failed to send quit");
                     };
                     return
                 };
@@ -711,8 +711,7 @@ pub fn invocation_context(headers: &HeaderMap) -> Context {
     // Determine source ID for the invocation
     let source_id = headers
         .get(WRPC_SOURCE_ID_HEADER_NAME)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "<unknown>".into());
+        .map_or_else(|| "<unknown>".into(), ToString::to_string);
     Context {
         component: Some(source_id),
         tracing: convert_header_map_to_hashmap(headers),
@@ -744,6 +743,7 @@ impl ProviderConnection {
     /// # Arguments
     ///
     /// * `target` - Target ID to which invocations will be sent
+    #[must_use]
     pub fn get_wrpc_client(&self, target: &str) -> WrpcClient {
         self.get_wrpc_client_custom(target, None, None)
     }
@@ -756,6 +756,7 @@ impl ProviderConnection {
     /// * `target` - Target ID to which invocations will be sent
     /// * `headers` - Additional headers (other than `source-id`, `target-id`) to be placed on the client
     /// * `timeout` - Timeout to be set on the client (by default if this is unset it will be 10 seconds)
+    #[must_use]
     pub fn get_wrpc_client_custom(
         &self,
         target: &str,
@@ -764,7 +765,7 @@ impl ProviderConnection {
     ) -> WrpcClient {
         let mut hmap = HeaderMap::new();
         if let Some(values) = headers {
-            for (k, v) in values.iter() {
+            for (k, v) in &values {
                 hmap.insert(k.as_str(), v.as_str());
             }
         }
@@ -780,6 +781,7 @@ impl ProviderConnection {
     }
 
     /// Get the provider key that was assigned to this host @ startup
+    #[must_use]
     pub fn provider_key(&self) -> &str {
         &self.provider_key
     }

@@ -1,7 +1,7 @@
 name = "http-jsonify"
+version = "0.1.1"
 language = "rust"
-type = "actor"
-version = "0.1.0"
+type = "component"
 
 [actor]
 wit_world = "component"

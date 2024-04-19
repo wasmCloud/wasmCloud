@@ -1,4 +1,4 @@
-//! Redis implementation for wasmcloud:keyvalue.
+//! Redis implementation for wrpc:keyvalue.
 //!
 //! This implementation is multi-threaded and operations between different actors
 //! use different connections and can run in parallel.
@@ -6,12 +6,7 @@
 //! so there may be some brief lock contention if several instances of the same actor
 //! are simultaneously attempting to communicate with redis. See documentation
 //! on the [exec](#exec) function for more information.
-//!
-//! Note that this provider uses many *re-exported* dependencies of `wasmcloud_provider_wit_bindgen`
-//! in order to reduce required dependencies on this binary itself. Using `serde` as a re-exported dependency
-//! requires changing the crate location of `serde` with the `#[serde(crate = "...")]` annotation.
-//!
-//!
+
 use core::num::NonZeroU64;
 
 use std::collections::HashMap;
@@ -25,7 +20,8 @@ use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
+    Provider,
 };
 
 use exports::wrpc::keyvalue;
@@ -157,6 +153,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::del(key)).await)
@@ -169,6 +167,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<bool>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::exists(key)).await)
@@ -181,6 +181,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         match self
@@ -204,6 +206,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::set(key, value)).await)
@@ -216,6 +220,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
+        propagate_trace_for_ctx!(context);
         // TODO: Use bucket
         _ = bucket;
         match self
@@ -244,6 +249,7 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvRedisProvider {
         key: String,
         delta: u64,
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
+        propagate_trace_for_ctx!(context);
         // TODO: Use bucket
         _ = bucket;
         Ok(self

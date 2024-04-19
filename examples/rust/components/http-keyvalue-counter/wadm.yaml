@@ -10,6 +10,7 @@ spec:
     - name: counter
       type: component
       properties:
+        # NOTE: If the file at the relative path below is missing, run `wash build`
         image: file://./build/http_keyvalue_counter_s.wasm
       traits:
         # Govern the spread/scheduling of the component
@@ -22,7 +23,7 @@ spec:
             target: kvredis
             namespace: wasi
             package: keyvalue
-            interfaces: [atomic, eventual]
+            interfaces: [atomics, eventual]
             target_config:
               - name: redis-url
                 properties:
@@ -32,7 +33,7 @@ spec:
     - name: kvredis
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.23.0
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.24.0
     # Add a capability provider that enables HTTP access
     - name: httpserver
       type: capability

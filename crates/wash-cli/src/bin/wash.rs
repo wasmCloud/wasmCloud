@@ -302,7 +302,7 @@ async fn main() {
                     // on the first non-error, non-json use of wash, print info about shell completions
                     match completions::first_run_suggestion() {
                         Ok(Some(suggestion)) => {
-                            println!("\n{}", suggestion);
+                            println!("\n{suggestion}");
                             0
                         }
                         Ok(None) => {
@@ -311,7 +311,7 @@ async fn main() {
                         }
                         Err(e) => {
                             // error creating first-run token file
-                            eprintln!("\nError: {}", e);
+                            eprintln!("\nError: {e}");
                             1
                         }
                     }

@@ -81,6 +81,7 @@ impl std::fmt::Display for OutputParseErr {
     }
 }
 
+#[derive(Default)]
 pub struct CommandOutput {
     pub map: std::collections::HashMap<String, serde_json::Value>,
     pub text: String,
@@ -97,7 +98,7 @@ impl CommandOutput {
         }
     }
 
-    /// shorthand to create a new CommandOutput with a single key-value pair for JSON, and simply the text for text output.
+    /// shorthand to create a new `CommandOutput` with a single key-value pair for JSON, and simply the text for text output.
     pub fn from_key_and_text<K: Into<String>, S: Into<String>>(key: K, text: S) -> Self {
         let text_string: String = text.into();
         let mut map = std::collections::HashMap::new();
@@ -110,7 +111,7 @@ impl CommandOutput {
 }
 
 impl From<String> for CommandOutput {
-    /// Create a basic CommandOutput from a String. Puts the string a a "result" key in the JSON output.
+    /// Create a basic `CommandOutput` from a String. Puts the string a a "result" key in the JSON output.
     fn from(text: String) -> Self {
         let mut map = std::collections::HashMap::new();
         map.insert(
@@ -122,18 +123,9 @@ impl From<String> for CommandOutput {
 }
 
 impl From<&str> for CommandOutput {
-    /// Create a basic CommandOutput from a &str. Puts the string a a "result" key in the JSON output.
+    /// Create a basic `CommandOutput` from a &str. Puts the string a a "result" key in the JSON output.
     fn from(text: &str) -> Self {
         CommandOutput::from(text.to_string())
-    }
-}
-
-impl Default for CommandOutput {
-    fn default() -> Self {
-        CommandOutput {
-            map: std::collections::HashMap::new(),
-            text: "".to_string(),
-        }
     }
 }
 
@@ -300,7 +292,7 @@ pub fn extract_keypair(
                         info!(
                             "{}",
                             json!({"status": "No existing keypair found, automatically generated and stored a new one", "path": path, "keygen": "true"})
-                        )
+                        );
                     }
                 }
 
@@ -348,6 +340,7 @@ pub fn validate_component_id(id: &str) -> anyhow::Result<String> {
 
 /// This function is a simple helper to ensure that a component ID is a valid
 /// by transforming any non-alphanumeric characters to underscores
+#[must_use]
 pub fn sanitize_component_id(id: &str) -> String {
     id.chars()
         .map(|c| if valid_component_char(c) { c } else { '_' })
@@ -368,7 +361,7 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
-    use KeyPairType::*;
+    use KeyPairType::{Account, Cluster, Module, Operator, Server, Service, User};
     match keypair_type {
         Account => "account",
         Cluster => "cluster",
@@ -404,6 +397,7 @@ fn empty_table_style() -> term_table::TableStyle {
 pub const OCI_CACHE_DIR: &str = "wasmcloud_ocicache";
 
 /// Given an oci reference, returns a path to a cache file for an artifact
+#[must_use]
 pub fn cached_oci_file(img: &str) -> PathBuf {
     let path = std::env::temp_dir();
     let path = path.join(OCI_CACHE_DIR);

@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 use weld_codegen::render::Renderer;
 
 /// Matcher determines disposition of file: whether it should be copied, whether translated with template engine, and whether it is renamed
-/// The exclude and raw lists use GitIgnore pattern matching
+/// The exclude and raw lists use `GitIgnore` pattern matching
 struct Matcher {
     exclude: Option<Gitignore>,
     raw: Option<Gitignore>,
@@ -121,7 +121,7 @@ pub(crate) fn process_template_dir(
         .filter_map(Result::ok)
         .filter(|e| !is_git_metadata(e.path()))
         .filter(|e| e.path() != source_dir)
-        .map(|e| e.into_path())
+        .map(walkdir::DirEntry::into_path)
         .collect::<Vec<PathBuf>>();
 
     let total = files.len().to_string();
@@ -142,7 +142,7 @@ pub(crate) fn process_template_dir(
             filename
         };
         let f = src_relative.display();
-        pb.set_message(format!("Processing: {}", f));
+        pb.set_message(format!("Processing: {f}"));
 
         if matcher.should_include(src_relative) {
             if entry.is_file() {
@@ -209,11 +209,11 @@ pub(crate) fn process_template_dir(
                     })?;
                     let f = &dest_rel_path.display();
                     pb.inc(50);
-                    pb.finish_with_message(format!("Done: {}", f));
+                    pb.finish_with_message(format!("Done: {f}"));
                 }
             } // not file
         } else {
-            pb.finish_with_message(format!("Skipped: {}", f));
+            pb.finish_with_message(format!("Skipped: {f}"));
         }
     }
     Ok(())

@@ -23,7 +23,7 @@ impl<T> CtlResponse<T> {
     pub fn ok(response: T) -> Self {
         CtlResponse {
             success: true,
-            message: "".to_string(),
+            message: String::new(),
             response: Some(response),
         }
     }
@@ -32,10 +32,11 @@ impl<T> CtlResponse<T> {
 impl CtlResponse<()> {
     /// Helper function to return a successful response without
     /// a message or a payload.
+    #[must_use]
     pub fn success() -> Self {
         CtlResponse {
             success: true,
-            message: "".to_string(),
+            message: String::new(),
             response: None,
         }
     }
@@ -43,6 +44,7 @@ impl CtlResponse<()> {
     /// Helper function to return an unsuccessful response with
     /// a message but no payload. Note that this implicitly is
     /// typing the inner payload as `()` for efficiency.
+    #[must_use]
     pub fn error(message: &str) -> Self {
         CtlResponse {
             success: false,

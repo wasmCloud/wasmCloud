@@ -20,11 +20,11 @@ pub struct LinkDelCommand {
     pub link_name: Option<String>,
 
     /// WIT namespace of the link
-    #[clap(short = 'n', long = "namespace")]
+    #[clap(name = "wit-namespace")]
     pub wit_namespace: String,
 
     /// WIT package of the link
-    #[clap(short = 'w', long = "package")]
+    #[clap(name = "wit-package")]
     pub wit_package: String,
 }
 
@@ -77,7 +77,7 @@ pub struct LinkQueryCommand {
 #[derive(Debug, Clone, Parser)]
 pub enum LinkCommand {
     /// Query all links, same as `wash get links`
-    #[clap(name = "query")]
+    #[clap(name = "query", alias = "get")]
     Query(LinkQueryCommand),
 
     /// Put a link from a source to a target on a given WIT interface
@@ -156,7 +156,7 @@ pub async fn delete_link(
 /// # Arguments
 ///
 /// * `wco` - Options for connecting to wash
-/// * `link` - The [wasmcloud_control_interface::InterfaceLinkDefinition] to create
+/// * `link` - The [`wasmcloud_control_interface::InterfaceLinkDefinition`] to create
 ///
 /// # Examples
 ///

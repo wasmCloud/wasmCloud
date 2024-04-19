@@ -49,33 +49,27 @@ pub async fn handle_command(
         LinkCommand::Del(LinkDelCommand {
             source_id,
             link_name,
-            wit_namespace,
-            wit_package,
+            wit_namespace: namespace,
+            wit_package: package,
             opts,
         }) => {
             let link_name = link_name.clone().unwrap_or_else(|| "default".to_string());
 
             sp.update_spinner_message(format!(
-                "Deleting link for {source_id} on {wit_namespace}:{wit_package} ({link_name}) ... ",
+                "Deleting link for {source_id} on {namespace}:{package} ({link_name}) ... ",
             ));
 
             let failure = delete_link(
                 opts.try_into()?,
                 &source_id,
                 &link_name,
-                &wit_namespace,
-                &wit_package,
+                &namespace,
+                &package,
             )
             .await
             .map_or_else(|e| Some(format!("{e}")), |_| None);
 
-            link_del_output(
-                &source_id,
-                &link_name,
-                &wit_namespace,
-                &wit_package,
-                failure,
-            )?
+            link_del_output(&source_id, &link_name, &namespace, &package, failure)?
         }
         LinkCommand::Put(LinkPutCommand {
             opts,

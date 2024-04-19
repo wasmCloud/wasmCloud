@@ -13,17 +13,18 @@ use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
+use wasmcloud_tracing::context::TraceContextInjector;
 
 use crate::wasmcloud::messaging::types::BrokerMessage;
 
 wit_bindgen_wrpc::generate!();
 
-/// Linkdef value for hosts, accepted as a comma separated string
-const KAFKA_HOSTS: &str = "HOSTS";
+/// Config value for hosts, accepted as a comma separated string
+const KAFKA_HOSTS_CONFIG_KEY: &str = "hosts";
 const DEFAULT_HOST: &str = "127.0.0.1:9092";
 
-/// Linkdef value for topic, accepted as a single string
-const KAFKA_TOPIC: &str = "TOPIC";
+/// Config value for topic, accepted as a single string
+const KAFKA_TOPIC_CONFIG_KEY: &str = "topic";
 const DEFAULT_TOPIC: &str = "my-topic";
 
 pub async fn run() -> anyhow::Result<()> {
@@ -61,7 +62,7 @@ impl KafkaMessagingProvider {
 }
 
 impl Provider for KafkaMessagingProvider {
-    #[instrument(level = "info", skip_all, fields(source_id))]
+    #[instrument(skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
         LinkConfig {
@@ -74,7 +75,7 @@ impl Provider for KafkaMessagingProvider {
         let hosts = config
             .iter()
             .find_map(|(k, v)| {
-                if *k == KAFKA_HOSTS {
+                if *k == KAFKA_HOSTS_CONFIG_KEY {
                     Some(v.to_string())
                 } else {
                     None
@@ -83,14 +84,14 @@ impl Provider for KafkaMessagingProvider {
             .unwrap_or_else(|| DEFAULT_HOST.to_string())
             .trim()
             .split(',')
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<String>>();
 
         // Retrieve or use default topic, trimming off extra whitespace
         let topic = config
             .iter()
             .find_map(|(k, v)| {
-                if *k == KAFKA_TOPIC {
+                if *k == KAFKA_TOPIC_CONFIG_KEY {
                     Some(v.as_str())
                 } else {
                     None
@@ -148,13 +149,14 @@ impl Provider for KafkaMessagingProvider {
                                 &wrpc,
                                 &BrokerMessage {
                                     body: message,
-                                    reply_to: None,
+                                    // By default, we always append '.reply' for reply topics
+                                    reply_to: Some(format!("{subject}.reply")),
                                     subject: subject.to_string(),
                                 },
                             )
                             .await
                             {
-                                eprintln!("Unable to send subscription: {:?}", e);
+                                eprintln!("Unable to send subscription: {e:?}");
                             }
                             Ok(())
                         }
@@ -175,7 +177,7 @@ impl Provider for KafkaMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip(self))]
+    #[instrument(skip(self))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         debug!("deleting link for component {}", source_id);
 
@@ -185,9 +187,9 @@ impl Provider for KafkaMessagingProvider {
             ..
         }) = connections.remove(source_id)
         {
-            handle.abort()
+            handle.abort();
         } else {
-            debug!("Linkdef deleted for non-existent consumer, ignoring")
+            debug!("Linkdef deleted for non-existent consumer, ignoring");
         }
         Ok(())
     }
@@ -208,7 +210,6 @@ impl Provider for KafkaMessagingProvider {
 /// Implement the 'wasmcloud:messaging' capability provider interface
 impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for KafkaMessagingProvider {
     #[instrument(
-        level = "debug", 
         skip_all,
         fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len())
     )]
@@ -217,13 +218,26 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
         ctx: Option<Context>,
         msg: BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        debug!("publishing message: {msg:?}");
+        // Extract tracing information from invocation context, if present
+        let trace_ctx = match ctx {
+            Some(Context { ref tracing, .. }) if !tracing.is_empty() => tracing
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<(String, String)>>(),
+
+            _ => TraceContextInjector::default_with_span()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        wasmcloud_tracing::context::attach_span_context(&trace_ctx);
+        debug!(?msg, "publishing message");
 
         let hosts = {
             let connections = match self.connections.read() {
                 Ok(connections) => connections,
                 Err(e) => {
-                    error!("failed to read connections: {e}");
+                    error!(error = %e, "failed to read connections");
                     return Ok(Err(format!("failed to read connections: {e}")));
                 }
             };
@@ -240,40 +254,52 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
             config.connection_hosts.clone()
         };
 
+        // TODO: pool & reuse client(s)
+        // Retrieve Kafka client
         let client = match ClientBuilder::new(hosts).build().await {
             Ok(client) => client,
             Err(e) => {
-                error!("failed to build client: {e}");
+                error!(error = %e, "failed to build client");
                 return Ok(Err(format!("failed to build client: {e}")));
             }
         };
-
-        // Ensure topic exists
         let controller_client = match client.controller_client() {
             Ok(controller_client) => controller_client,
             Err(e) => {
-                error!("failed to build controller client: {e}");
+                error!(error = %e, "failed to build controller client");
                 return Ok(Err(format!("failed to build controller client: {e}")));
             }
         };
 
+        // Get the list of known topics
+        let topics = match client.list_topics().await {
+            Ok(topics) => topics,
+            Err(e) => {
+                error!(error = %e, "failed to list topics");
+                return Ok(Err(format!("failed to list topics: {e}")));
+            }
+        };
+
+        // Attempt to create the subject in question if not already present as a topic
         // TODO: accept linkdef tunable values for these
-        if let Err(e) = controller_client
-            .create_topic(
-                msg.subject.to_owned(),
-                1,     // partition
-                1,     // replication factor
-                1_000, // timeout (ms)
-            )
-            .await
-        {
-            warn!("could not create topic: {e:?}")
+        if !topics.iter().any(|t| t.name == msg.subject) {
+            if let Err(e) = controller_client
+                .create_topic(
+                    msg.subject.to_owned(),
+                    1,     // partition
+                    1,     // replication factor
+                    1_000, // timeout (ms)
+                )
+                .await
+            {
+                warn!("could not create topic: {e:?}")
+            }
         }
 
         // Get a partition-bound client
         let partition_client = match client
             .partition_client(
-                msg.subject.to_owned(),
+                msg.subject.clone(),
                 0, // partition
                 UnknownTopicHandling::Error,
             )
@@ -281,12 +307,12 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
         {
             Ok(partition_client) => partition_client,
             Err(e) => {
-                error!("failed to create partition client: {e}");
+                error!(error = %e, "failed to create partition client");
                 return Ok(Err(format!("failed to create partition client: {e}")));
             }
         };
 
-        // produce some data
+        // Produce some data
         let records = vec![Record {
             key: None,
             value: Some(msg.body),
@@ -298,20 +324,34 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
             .produce(records, Compression::default())
             .await
         {
-            error!("failed to produce record: {e}");
+            error!(error = %e, "failed to produce record");
             return Ok(Err(format!("failed to produce record: {e}")));
         }
         Ok(Ok(()))
     }
 
-    #[instrument(level = "debug", skip_all, fields(subject = _subject))]
+    #[instrument(skip_all)]
     async fn request(
         &self,
-        _ctx: Option<Context>,
+        ctx: Option<Context>,
         _subject: String,
         _body: Vec<u8>,
         _timeout_ms: u32,
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
+        // Extract tracing information from invocation context, if present
+        let trace_ctx = match ctx {
+            Some(Context { ref tracing, .. }) if !tracing.is_empty() => tracing
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<(String, String)>>(),
+
+            _ => TraceContextInjector::default_with_span()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        wasmcloud_tracing::context::attach_span_context(&trace_ctx);
+
         // Kafka does not support request-reply in the traditional sense. You can publish to a
         // topic, and get an acknowledgement that it was received, but you can't get a
         // reply from a consumer on the other side.

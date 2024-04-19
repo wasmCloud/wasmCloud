@@ -1,4 +1,4 @@
-//! Variables that assist the [crate::generate::interactive] module
+//! Variables that assist the [`crate::generate::interactive`] module
 // This file is lightly modified from project_variables.rs from cargo-generate
 //   source: https://github.com/cargo-generate/cargo-generate
 //   version: 0.9.0
@@ -118,7 +118,7 @@ where
 {
     let mut undefined = Vec::new();
 
-    for placeholder in config.placeholders.iter() {
+    for placeholder in &config.placeholders {
         let mut slot = try_placeholder_into_slot(placeholder, values, renderer)?;
         let key = slot.var_name.clone();
         match values.get(&key) {
@@ -187,7 +187,7 @@ fn try_placeholder_into_slot(
         Some(toml::Value::String(key)) => key,
         _ => {
             return Err(ConversionError::MissingPlaceholderName {
-                map_dump: format!("{:?}", table),
+                map_dump: format!("{table:?}"),
             });
         }
     };
@@ -401,7 +401,7 @@ fn extract_choices(
                     _ => Err(()),
                 })
                 .collect::<Vec<_>>();
-            if converted.iter().any(|v| v.is_err()) {
+            if converted.iter().any(std::result::Result::is_err) {
                 return Err(ConversionError::WrongTypeParameter {
                     var_name: var_name.into(),
                     parameter: "choices".to_string(),
@@ -412,7 +412,7 @@ fn extract_choices(
             let strings = converted
                 .iter()
                 .cloned()
-                .map(|v| v.unwrap())
+                .map(std::result::Result::unwrap)
                 .collect::<Vec<_>>();
             // check if regex matches every choice
             if let Some(reg) = regex {
@@ -617,7 +617,7 @@ mod tests {
             &Renderer::default(),
         );
 
-        assert_eq!(result, Ok(Some(SupportedVarValue::Bool(true))))
+        assert_eq!(result, Ok(Some(SupportedVarValue::Bool(true))));
     }
 
     #[test]
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Some(SupportedVarValue::String("bar".to_string())))
-        )
+        );
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(
             result,
             Ok(Some(SupportedVarValue::String("bar".to_string())))
-        )
+        );
     }
 
     #[test]
@@ -678,7 +678,7 @@ mod tests {
                 var_name: "foo".into(),
                 field: "default".into()
             })
-        )
+        );
     }
 
     #[test]
@@ -700,7 +700,7 @@ mod tests {
                 default: "bar".into(),
                 choices: vec!["zoo".to_string(), "far".to_string()]
             })
-        )
+        );
     }
 
     #[test]
@@ -715,7 +715,7 @@ mod tests {
             &Renderer::default(),
         );
 
-        assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))))
+        assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))));
     }
 
     #[test]
@@ -732,7 +732,7 @@ mod tests {
             &Renderer::default(),
         );
 
-        assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))))
+        assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))));
     }
 
     #[test]
@@ -754,7 +754,7 @@ mod tests {
                 parameter: "default".into(),
                 correct_type: "string".into()
             })
-        )
+        );
     }
 
     #[test]
@@ -776,7 +776,7 @@ mod tests {
                 parameter: "default".into(),
                 correct_type: "bool".into()
             })
-        )
+        );
     }
 
     #[test]
@@ -788,7 +788,7 @@ mod tests {
             Err(ConversionError::MissingPrompt {
                 var_name: "foo".into(),
             })
-        )
+        );
     }
 
     #[test]
@@ -802,14 +802,14 @@ mod tests {
                 parameter: "prompt".into(),
                 correct_type: "String".into()
             })
-        )
+        );
     }
 
     #[test]
     fn prompt_as_string_is_ok() {
         let result = extract_prompt("foo", Some(&toml::Value::String("hello world".into())));
 
-        assert_eq!(result, Ok("hello world".into()))
+        assert_eq!(result, Ok("hello world".into()));
     }
 
     #[test]
@@ -847,7 +847,7 @@ mod tests {
                 var_name: "foo".into(),
                 value: "bar".into()
             })
-        )
+        );
     }
 
     #[test]
@@ -855,10 +855,10 @@ mod tests {
         let result = extract_regex(
             "foo",
             SupportedVarType::Bool,
-            Some(&toml::Value::String("".into())),
+            Some(&toml::Value::String(String::new())),
         );
 
-        assert!(result.is_err())
+        assert!(result.is_err());
     }
 
     #[test]
@@ -867,7 +867,7 @@ mod tests {
         let result_string = extract_regex("foo", SupportedVarType::String, None);
 
         assert!(result_bool.is_ok());
-        assert!(result_string.is_ok())
+        assert!(result_string.is_ok());
     }
 
     #[test]
@@ -878,7 +878,7 @@ mod tests {
             Some(&toml::Value::String(IDENT_REGEX.into())),
         );
 
-        assert!(result.is_ok())
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -889,6 +889,6 @@ mod tests {
             Some(&toml::Value::String("*".into())),
         );
 
-        assert!(result.is_err())
+        assert!(result.is_err());
     }
 }

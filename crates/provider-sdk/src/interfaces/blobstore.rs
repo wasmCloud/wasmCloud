@@ -124,7 +124,7 @@ pub async fn serve_blobstore(
                             spawn(async move { provider.serve_clear_container(invocation).await });
                         },
                         Some(Err(err)) => {
-                            error!(?err, "failed to accept `wrpc:blobstore/blobstore.clear-container` invocation")
+                            error!(?err, "failed to accept `wrpc:blobstore/blobstore.clear-container` invocation");
                         },
                         None => {
                             warn!("`wrpc:blobstore/blobstore.clear-container` stream unexpectedly finished, resubscribe");
@@ -327,7 +327,7 @@ pub async fn serve_blobstore(
                         },
                     }
                 },
-                _ = &mut shutdown => {
+                () = &mut shutdown => {
                     debug!("shutdown command received");
                     return Ok(())
                 }

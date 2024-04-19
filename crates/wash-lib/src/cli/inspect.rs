@@ -2,11 +2,15 @@ use super::{cached_oci_file, CommandOutput, OutputKind};
 use crate::registry::{get_oci_artifact, OciPullOptions};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use provider_archive::*;
+use provider_archive::ProviderArchive;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
-use term_table::{row::Row, table_cell::*, Table};
+use term_table::{
+    row::Row,
+    table_cell::{Alignment, TableCell},
+    Table,
+};
 use wascap::jwt::{Claims, Component, Token, TokenValidation, WascapEntity};
 
 #[derive(Debug, Parser, Clone)]
@@ -123,7 +127,7 @@ pub async fn handle_command(
             let jwt_only = command.jwt_only;
             let caps = get_caps(command.clone(), &buf).await?;
             let token =
-                caps.with_context(|| format!("No capabilities discovered in : {}", module_name))?;
+                caps.with_context(|| format!("No capabilities discovered in : {module_name}"))?;
 
             if jwt_only {
                 CommandOutput::from_key_and_text("token", token.jwt)
@@ -156,6 +160,7 @@ async fn get_caps(
 }
 
 /// Renders actor claims into provided output format
+#[must_use]
 pub fn render_component_claims(
     claims: Claims<Component>,
     validation: TokenValidation,
@@ -165,7 +170,7 @@ pub fn render_component_claims(
     let name = md.name();
     let friendly_rev = md.rev.unwrap_or(0);
     let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
-    let friendly = format!("{} ({})", friendly_ver, friendly_rev);
+    let friendly = format!("{friendly_ver} ({friendly_rev})");
 
     let tags = if let Some(tags) = &claims.metadata.as_ref().unwrap().tags {
         if tags.is_empty() {
@@ -307,7 +312,7 @@ pub(crate) async fn render_provider_claims(
         super::configure_table_style(&mut table);
 
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!("{} - Capability Provider", name),
+            format!("{name} - Capability Provider"),
             2,
             Alignment::Center,
         )]));

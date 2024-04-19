@@ -16,6 +16,17 @@ pub const RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED: &str = concat!(
     "/rust-builtins-component-reactor-preview2.signed.wasm"
 );
 
+pub const RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER: &str =
+    concat!(env!("OUT_DIR"), "/rust-example-http-keyvalue-counter.wasm");
+pub const RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER_PREVIEW2: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-example-http-keyvalue-counter-preview2.wasm"
+);
+pub const RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER_PREVIEW2_SIGNED: &str = concat!(
+    env!("OUT_DIR"),
+    "/rust-example-http-keyvalue-counter-preview2.signed.wasm"
+);
+
 pub const RUST_INTERFACES_REACTOR: &str = concat!(env!("OUT_DIR"), "/rust-interfaces-reactor.wasm");
 pub const RUST_INTERFACES_REACTOR_PREVIEW2: &str =
     concat!(env!("OUT_DIR"), "/rust-interfaces-reactor-preview2.wasm");

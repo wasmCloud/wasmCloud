@@ -19,7 +19,6 @@ Ensuring you've built your component with `wash build`, you can launch wasmCloud
 
 ```shell
 wash up -d
-wash config put simple-subscription subscriptions=wasmcloud.echo
 wash app deploy ./wadm.yaml
 wash app list
 nats req "wasmcloud.echo" "HELLLLOOOOOO"

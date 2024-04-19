@@ -22,7 +22,7 @@ async fn integration_stop_actor_serial() -> Result<()> {
         success,
         ..
     } = wash_instance
-        .start_actor(HELLO_OCI_REF, "hello_actor_id_from_start")
+        .start_component(HELLO_OCI_REF, "hello_actor_id_from_start")
         .await?;
     assert!(success, "start command returned success");
 

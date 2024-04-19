@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
+use async_nats::HeaderMap;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
@@ -15,6 +16,7 @@ use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
 };
@@ -42,7 +44,7 @@ struct NatsClientBundle {
 impl Drop for NatsClientBundle {
     fn drop(&mut self) {
         for handle in &self.sub_handles {
-            handle.1.abort()
+            handle.1.abort();
         }
     }
 }
@@ -170,14 +172,28 @@ impl NatsMessagingProvider {
             let semaphore = Arc::new(Semaphore::new(75));
 
             // Listen for NATS message(s)
-            while let Some(msg) = subscriber.next().await {
+            while let Some(mut msg) = subscriber.next().await {
                 debug!(?msg, ?component_id, "received messsage");
                 // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", ?component_id);
-
-                span.in_scope(|| {
-                    attach_span_context(&msg);
-                });
+                match msg.headers {
+                    // If there are some headers on the message they might contain a span context
+                    // so attempt to attach them.
+                    Some(ref h) if !h.is_empty() => {
+                        span.in_scope(|| {
+                            attach_span_context(&msg);
+                        });
+                    }
+                    // If the header map is completely missing or present but empty, create a new trace context add it
+                    // to the message that is flowing through -- i.e. None or Some(h) where h is empty
+                    _ => {
+                        let mut headers = HeaderMap::new();
+                        TraceContextInjector::default_with_span()
+                            .iter()
+                            .for_each(|(k, v)| headers.insert(k.as_str(), v.as_str()));
+                        msg.headers = Some(headers);
+                    }
+                };
 
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
@@ -191,7 +207,7 @@ impl NatsMessagingProvider {
                 tokio::spawn(async move {
                     dispatch_msg(component_id.as_str(), msg, permit)
                         .instrument(span)
-                        .await
+                        .await;
                 });
             }
         });
@@ -231,7 +247,7 @@ async fn dispatch_msg(
 }
 
 /// Handle provider control commands
-/// put_link (new actor link command), del_link (remove link command), and shutdown
+/// `put_link` (new actor link command), `del_link` (remove link command), and shutdown
 impl Provider for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -555,6 +571,6 @@ mod test {
         let cc3 = cc1.merge(&cc2);
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
-        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
+        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()));
     }
 }

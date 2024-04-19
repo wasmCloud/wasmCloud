@@ -17,6 +17,7 @@ pub struct HealthCheckResponse {
 ///
 /// When messages are published on this subject, hosts set up and update (if necessary) link information,
 /// which may include calling `receive_link_config_*()` functions on relevant providers.
+#[must_use]
 pub fn link_put_subject(lattice: &str, provider_key: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.put")
 }
@@ -25,6 +26,7 @@ pub fn link_put_subject(lattice: &str, provider_key: &str) -> String {
 ///
 /// When messages are published on this subject, hosts remove link information,
 /// which may include calling `delete_link()` on relevant providers.
+#[must_use]
 pub fn link_del_subject(lattice: &str, provider_key: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.linkdefs.del")
 }
@@ -33,6 +35,7 @@ pub fn link_del_subject(lattice: &str, provider_key: &str) -> String {
 ///
 /// When messages are published on this subject, hosts trigger health checks on providers (i.e. a [`HealthCheckRequest`])
 /// and return relevant results (i.e. a [`HealthCheckResponse`]).
+#[must_use]
 pub fn health_subject(lattice: &str, provider_key: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.health")
 }
@@ -40,6 +43,7 @@ pub fn health_subject(lattice: &str, provider_key: &str) -> String {
 /// Generate the wasmbus RPC subject for shutting down a given provider
 ///
 /// When messages are published on this subject, hosts perform shutdown (cleanly if possible).
+#[must_use]
 pub fn shutdown_subject(lattice: &str, provider_key: &str, link_name: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.{link_name}.shutdown")
 }

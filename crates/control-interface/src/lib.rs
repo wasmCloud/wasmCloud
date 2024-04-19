@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //! All of the [Client] functions are handled by a wasmCloud host running in the specified lattice.
-//! Each function returns a Result<CtlResponse<T>> wrapper around the actual response type. The outer
+//! Each function returns a `Result<CtlResponse<T>>` wrapper around the actual response type. The outer
 //! result should be handled for protocol (timeouts, no hosts available) and deserialization errors (invalid response payload).
 //! The inner result is the actual response from the host(s) and should be handled for application-level errors.
 
@@ -53,7 +53,7 @@ pub type WitInterface = String;
 pub type KnownConfigName = String;
 
 /// Generic result
-type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Helper function that serializes the data and maps the error
 pub(crate) fn json_serialize<T>(item: T) -> Result<Vec<u8>>

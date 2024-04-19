@@ -15,7 +15,7 @@ use tokio::fs;
 use wascap::{jwt, wasm::extract_claims};
 use wasmcloud_control_interface::{Client as WasmCloudCtlClient, CtlResponse};
 
-/// This is a *partial* struct for the ComponentScaled event, which normally consists of more fields
+/// This is a *partial* struct for the `ComponentScaled` event, which normally consists of more fields
 #[derive(Deserialize)]
 struct ComponentScaledEvent {
     pub max_instances: NonZeroUsize,
@@ -68,7 +68,7 @@ pub async fn assert_start_component(
 
     tokio::select! {
         _ = receiver.recv() => {},
-        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+        () = tokio::time::sleep(Duration::from_secs(10)) => {
             bail!("timed out waiting for component started event");
         },
     }
@@ -122,7 +122,7 @@ pub async fn assert_scale_component(
                 let ase: ComponentScaledEvent = serde_json::from_value(TryInto::<serde_json::Value>::try_into(event_data).context("failed to parse event into JSON value")?).context("failed to convert value to")?;
                 assert_eq!(ase.max_instances, expected_count);
         }
-        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+        () = tokio::time::sleep(Duration::from_secs(10)) => {
             bail!("timed out waiting for component scale event");
         },
     }

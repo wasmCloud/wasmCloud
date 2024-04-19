@@ -270,7 +270,7 @@ async fn integration_reg_config() -> Result<()> {
     env::set_var("WASH_REG_USER", "iambatman");
     env::set_var("WASH_REG_PASSWORD", "iamvengeance");
     set_test_file_content(
-        &project_dir.join("wasmcloud.toml").to_path_buf(),
+        &project_dir.join("wasmcloud.toml").clone(),
         r#"
         name = "Hello World"
         language = "rust"
@@ -287,7 +287,7 @@ async fn integration_reg_config() -> Result<()> {
     .await?;
 
     set_test_file_content(
-        &project_dir.join("registry_creds.json").to_path_buf(),
+        &project_dir.join("registry_creds.json").clone(),
         r#"
         {
             "localhost:5001": {
@@ -300,7 +300,7 @@ async fn integration_reg_config() -> Result<()> {
     .await?;
 
     //===== case: Push (with a full artifact url) to test cli args
-    let push_url = format!("{}/hello:0.1.0", LOCAL_REGISTRY);
+    let push_url = format!("{LOCAL_REGISTRY}/hello:0.1.0");
     let cmd = wash()
         .args([
             "push",

@@ -79,3 +79,10 @@ pub struct CallCommandOutput {
     pub success: bool,
     pub response: serde_json::Value,
 }
+
+/// JSON output representation of the `wash pull` command
+#[derive(Debug, Deserialize)]
+pub struct PullCommandOutput {
+    pub success: bool,
+    pub file: String,
+}

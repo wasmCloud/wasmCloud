@@ -34,7 +34,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 const ALIAS_PREFIX: &str = "alias_";
@@ -113,7 +113,7 @@ impl StorageConfig {
         }
 
         if let Ok(endpoint) = env::var("AWS_ENDPOINT") {
-            config.endpoint = Some(endpoint)
+            config.endpoint = Some(endpoint);
         }
 
         // aliases are added from linkdefs in StorageClient::new()
@@ -239,9 +239,9 @@ impl StorageClient {
 
     /// perform alias lookup on bucket name
     /// This can be used either for giving shortcuts to actors in the linkdefs, for example:
-    /// - actor could use bucket names "alias_today", "alias_images", etc. and the linkdef aliases
+    /// - actor could use bucket names `alias_today`, `alias_images`, etc. and the linkdef aliases
     ///   will remap them to the real bucket name
-    /// The 'alias_' prefix is not required, so this also works as a general redirect capability
+    /// The `'alias_'` prefix is not required, so this also works as a general redirect capability
     pub fn unalias<'n, 's: 'n>(&'s self, bucket_or_alias: &'n str) -> &'n str {
         debug!(%bucket_or_alias, aliases = ?self.aliases);
         let name = bucket_or_alias
@@ -330,7 +330,7 @@ impl StorageClient {
             Ok(ListObjectsV2Output { contents, .. }) => Ok(contents
                 .into_iter()
                 .flatten()
-                .flat_map(|Object { key, .. }| key)
+                .filter_map(|Object { key, .. }| key)
                 .skip(offset.unwrap_or_default().try_into().unwrap_or(usize::MAX))
                 .take(limit.unwrap_or(u64::MAX).try_into().unwrap_or(usize::MAX))),
             Err(SdkError::ServiceError(err)) => {
@@ -527,6 +527,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -543,7 +544,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -558,6 +559,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -569,7 +571,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -584,6 +586,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -595,7 +598,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -610,6 +613,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -621,7 +625,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -636,6 +640,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -647,7 +652,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -663,6 +668,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -678,7 +684,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -700,6 +706,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -715,7 +722,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -730,6 +737,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -743,7 +751,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -771,7 +779,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -790,6 +798,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -824,7 +833,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -839,6 +848,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -852,7 +862,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -867,6 +877,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -880,7 +891,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -902,6 +913,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -922,7 +934,7 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -948,6 +960,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         // TODO: Stream value to S3
         let data: BytesMut = match data.try_collect().await {
             Ok(data) => data,
@@ -957,7 +970,7 @@ impl Blobstore for BlobstoreS3Provider {
                     .transmit_static(error_subject, err.to_string())
                     .await
                 {
-                    error!(?err, "failed to transmit error")
+                    error!(?err, "failed to transmit error");
                 }
                 return;
             }
@@ -982,13 +995,13 @@ impl Blobstore for BlobstoreS3Provider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 }
 
 /// Handle provider control commands
-/// put_link (new actor link command), del_link (remove link command), and shutdown
+/// `put_link` (new actor link command), `del_link` (remove link command), and shutdown
 impl Provider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -1047,8 +1060,8 @@ mod test {
         // alias without prefix
         assert_eq!(client.unalias("foo"), "bar");
         // alias with prefix
-        assert_eq!(client.unalias(&format!("{}foo", ALIAS_PREFIX)), "bar");
+        assert_eq!(client.unalias(&format!("{ALIAS_PREFIX}foo")), "bar");
         // undefined alias
-        assert_eq!(client.unalias(&format!("{}baz", ALIAS_PREFIX)), "baz");
+        assert_eq!(client.unalias(&format!("{ALIAS_PREFIX}baz")), "baz");
     }
 }

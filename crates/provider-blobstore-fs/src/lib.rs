@@ -19,7 +19,7 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 #[derive(Default, Debug, Clone)]
@@ -115,6 +115,8 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
+
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -133,11 +135,11 @@ impl Blobstore for FsProvider {
                             if ty.is_dir() {
                                 fs::remove_dir_all(&path).await.with_context(|| {
                                     format!("failed to remove directory at `{}`", path.display())
-                                })?
+                                })?;
                             } else {
                                 fs::remove_file(&path).await.with_context(|| {
                                     format!("failed to remove file at `{}`", path.display())
-                                })?
+                                })?;
                             }
                             Ok(())
                         })
@@ -148,7 +150,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -163,6 +165,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -176,7 +179,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -191,6 +194,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -204,7 +208,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -219,6 +223,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -232,7 +237,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -247,6 +252,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -269,7 +275,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -285,6 +291,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) =
             transmitter
                 .transmit_static(
@@ -310,7 +317,7 @@ impl Blobstore for FsProvider {
                 )
                 .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -332,6 +339,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -353,7 +361,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -368,6 +376,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -385,7 +394,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -400,6 +409,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Vec<String>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -422,7 +432,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -441,6 +451,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -473,7 +484,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -488,6 +499,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -515,7 +527,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -530,6 +542,7 @@ impl Blobstore for FsProvider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -543,7 +556,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -565,6 +578,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -590,7 +604,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 
@@ -616,6 +630,7 @@ impl Blobstore for FsProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         // TODO: Consider streaming to FS
         let data: BytesMut = match data.try_collect().await {
             Ok(data) => data,
@@ -625,7 +640,7 @@ impl Blobstore for FsProvider {
                     .transmit_static(error_subject, err.to_string())
                     .await
                 {
-                    error!(?err, "failed to transmit error")
+                    error!(?err, "failed to transmit error");
                 }
                 return;
             }
@@ -641,7 +656,7 @@ impl Blobstore for FsProvider {
             )
             .await
         {
-            error!(?err, "failed to transmit result")
+            error!(?err, "failed to transmit result");
         }
     }
 }
@@ -654,7 +669,7 @@ impl Provider for FsProvider {
             source_id, config, ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        for (k, v) in config.iter() {
+        for (k, v) in config {
             info!("link definition configuration [{k}] set to [{v}]");
         }
 
