@@ -37,7 +37,9 @@ As WebAssembly is intended to be a "compilation target" for native Python code, 
 
 ## Want to learn more?
 
-To learn more, check out the [SIG Guest Languages Zulip group](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages).
+To learn more about how wasmCloud works, check out the [wasmCloud documentation][wasmcloud-docs].
+
+To learn more WebAssembly ecosystem language support, check out the [SIG Guest Languages Zulip group](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages).
 
 Development on Python support is stewarded by the [Bytecode Alliance][bca].
 
@@ -51,3 +53,4 @@ Work on [`componentize-py`][componentize-py] are done in the open, and you are w
 [wasm-core-modules]: https://webassembly.github.io/spec/core/
 [bca]: https://bytecodealliance.org/
 [wasmtime]: https://github.com/bytecodealliance/wasmtime
+[wasmcloud-docs]: https://wasmcloud.com/docs/intro

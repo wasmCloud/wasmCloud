@@ -58,9 +58,14 @@ curl localhost:8080
 
 ## Examples
 
-### WASI 0.2 WebAssembly Components
+### 👟 Runnable examples
 
-wasmCloud is based on and implements WASI 0.2 (aka the Component Model). For components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples). Examples are organized by language so you can easily find samples in your language of choice.
+wasmCloud is based on and implements [WASI 0.2 (aka the Component Model)][wasi-pt2]. WebAssembly Components that run on wasmCloud consume interfaces defined in [WIT][wit].
+
+Want to get something running quickly? Check out the [`examples` directory of this repository](./examples). Examples are organized by programming language so you can easily find samples in your language of choice.
+
+[wasi-pt2]: https://github.com/WebAssembly/WASI/blob/main/preview2/README.md
+[wit]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
 
 ### 💥 Awesome wasmCloud
 
