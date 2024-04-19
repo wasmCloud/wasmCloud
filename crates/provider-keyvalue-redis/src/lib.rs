@@ -20,7 +20,7 @@ use tracing::{error, info, instrument, warn};
 
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, wasmcloud_tracing, Context, LinkConfig, Provider
 };
 
 use exports::wrpc::keyvalue;
@@ -152,6 +152,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::del(key)).await)
@@ -164,6 +166,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         key: String,
     ) -> anyhow::Result<Result<bool>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::exists(key)).await)
@@ -199,6 +203,8 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         key: String,
         value: Vec<u8>,
     ) -> anyhow::Result<Result<()>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self.exec_cmd(context, &mut Cmd::set(key, value)).await)
@@ -239,6 +245,8 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvRedisProvider {
         key: String,
         delta: u64,
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use bucket
         _ = bucket;
         Ok(self
