@@ -34,7 +34,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 const ALIAS_PREFIX: &str = "alias_";
@@ -527,6 +527,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -558,6 +559,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -584,6 +586,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -610,6 +613,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -636,6 +640,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -663,6 +668,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -700,6 +706,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -730,6 +737,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -790,6 +798,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -839,6 +848,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -867,6 +877,7 @@ impl Blobstore for BlobstoreS3Provider {
             ..
         }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -902,6 +913,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         if let Err(err) = transmitter
             .transmit_static(
                 result_subject,
@@ -948,6 +960,7 @@ impl Blobstore for BlobstoreS3Provider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
         // TODO: Stream value to S3
         let data: BytesMut = match data.try_collect().await {
             Ok(data) => data,
