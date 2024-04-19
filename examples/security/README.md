@@ -1,8 +1,8 @@
-## Overview
+# Security
 
 This directory contains examples to exercise various security measures in wasmCloud. You can read more about our zero trust security model and defense-in-depth measures in our [security documentation](https://wasmcloud.com/docs/hosts/security).
 
-### Policy Server
+## Policy Server
 
 wasmCloud supports pluggable policy servers over a simple NATS API, which is detailed in our [Prevent Untrusted Workloads](https://wasmcloud.com/docs/deployment/security/policy-service) documentation. The [opa](./opa) directory contains an example Go binary and instructions to run an [Open Policy Agent](https://www.openpolicyagent.org) server with a simple policy to ensure that every workload that runs in your wasmCloud lattice is signed by the official wasmCloud issuer.
 

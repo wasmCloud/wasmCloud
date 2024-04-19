@@ -35,7 +35,9 @@ Golang WASI preview 1 support was [announced on the Golang blog][golang-blog-was
 
 ## Want to learn more?
 
-To learn more, check out the [SIG Guest Languages Zulip group](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages) and the [issue noting `go` support](https://github.com/bytecodealliance/governance/issues/72).
+To learn more about how wasmCloud works, check out the [wasmCloud documentation][wasmcloud-docs].
+
+To learn more WebAssembly ecosystem language support, check out the [SIG Guest Languages Zulip group](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages) and the [issue noting `go` support](https://github.com/bytecodealliance/governance/issues/72).
 
 Development on Golang support (along with Tinygo support) is stewarded by the [Bytecode Alliance][bca].
 
@@ -49,3 +51,4 @@ Development on Golang support (along with Tinygo support) is stewarded by the [B
 [wasm-core-modules]: https://webassembly.github.io/spec/core/
 [bca]: https://bytecodealliance.org/
 [tinygo]: https://tinygo.org
+[wasmcloud-docs]: https://wasmcloud.com/docs/intro
