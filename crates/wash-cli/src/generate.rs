@@ -15,10 +15,6 @@ pub enum NewCliCommand {
     #[clap(name = "component", alias = "actor")]
     Component(NewProjectArgs),
 
-    /// Generate a new interface project
-    #[clap(name = "interface")]
-    Interface(NewProjectArgs),
-
     /// Generate a new capability provider project
     #[clap(name = "provider")]
     Provider(NewProjectArgs),
@@ -72,7 +68,6 @@ impl From<NewCliCommand> for Project {
     fn from(cmd: NewCliCommand) -> Project {
         let (args, kind) = match cmd {
             NewCliCommand::Component(args) => (args, ProjectKind::Component),
-            NewCliCommand::Interface(args) => (args, ProjectKind::Interface),
             NewCliCommand::Provider(args) => (args, ProjectKind::Provider),
         };
 
