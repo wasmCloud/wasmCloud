@@ -36,17 +36,11 @@ description = "a hello-world component (in Python) that responds over an HTTP co
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/python/components/http-hello-world"
 
-[[interface]]
-name = "converter-interface"
-description = "an interface for actor-to-actor messages with a single Convert method"
-git = "wasmCloud/project-templates"
-subfolder = "interface/converter-actor"
-
-[[interface]]
-name = "factorial-interface"
-description = "an interface for a capability provider with capability contract"
-git = "wasmCloud/project-templates"
-subfolder = "interface/factorial"
+[[component]]
+name = "echo-messaging"
+description = "a component (in Rust) that echoes a payload received in a message using `wasmcloud:messaging`"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/rust/components/echo-messaging"
 
 [[provider]]
 name = "messaging-nats"
