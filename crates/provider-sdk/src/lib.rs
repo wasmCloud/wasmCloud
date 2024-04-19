@@ -15,6 +15,9 @@ pub mod error;
 pub mod interfaces;
 pub mod provider;
 
+#[cfg(feature = "otel")]
+pub mod otel;
+
 pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
