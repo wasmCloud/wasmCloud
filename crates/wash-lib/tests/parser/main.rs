@@ -215,7 +215,7 @@ fn no_actor_config() {
 
     assert_eq!(
         format!(
-            "missing actor config in {}",
+            "missing component config in {}",
             get_full_path("./tests/parser/files/no_actor.toml")
         ),
         err.to_string().as_str()
