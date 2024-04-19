@@ -2189,7 +2189,11 @@ impl Host {
                                                     &health_provider_id,
                                                 )
                                             ).await {
-                                                warn!(?e, "failed to publish provider health check succeeded event");
+                                                warn!(
+                                                    ?e,
+                                                    provider_id = health_provider_id,
+                                                    "failed to publish provider health check succeeded event",
+                                                );
                                             }
                                         },
                                         (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
@@ -2205,7 +2209,11 @@ impl Host {
                                                     &health_provider_id,
                                                 )
                                             ).await {
-                                                warn!(?e, "failed to publish provider health check failed event");
+                                                warn!(
+                                                    ?e,
+                                                    provider_id = health_provider_id,
+                                                    "failed to publish provider health check failed event",
+                                                );
                                             }
                                         }
                                         // If the provider health status didn't change, we simply publish a health check status event
@@ -2220,14 +2228,21 @@ impl Host {
                                                     &health_provider_id,
                                                 )
                                             ).await {
-                                                warn!(?e, "failed to publish provider health check status event");
+                                                warn!(
+                                                    ?e,
+                                                    provider_id = health_provider_id,
+                                                    "failed to publish provider health check status event",
+                                                );
                                             }
                                         },
-                                        _ => warn!("failed to deserialize provider health check response"),
+                                        _ => warn!(
+                                            provider_id = health_provider_id,
+                                            "failed to deserialize provider health check response"
+                                        ),
                                     }
                                 }
                                 else {
-                                    warn!("failed to request provider health, retrying in 30 seconds");
+                                    warn!(provider_id = health_provider_id, "failed to request provider health, retrying in 30 seconds");
                                 }
                         }
                         exit_status = child.wait() => match exit_status {
