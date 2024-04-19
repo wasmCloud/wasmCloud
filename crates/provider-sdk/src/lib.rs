@@ -196,6 +196,22 @@ pub trait Provider<E = anyhow::Error>: Sync {
         async { Ok(()) }
     }
 
+    fn delete_link_as_target(
+        &self,
+        component_id: &str,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = component_id;
+        async { Ok(()) }
+    }
+
+    fn delete_link_as_source(
+        &self,
+        component_id: &str,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = component_id;
+        async { Ok(()) }
+    }
+
     /// Perform health check. Called at regular intervals by host
     /// Default implementation always returns healthy
     fn health_request(

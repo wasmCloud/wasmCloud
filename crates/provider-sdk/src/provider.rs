@@ -476,6 +476,27 @@ where
     Ok(())
 }
 
+async fn delete_link_for_provider<P>(
+    provider: &P,
+    connection: &ProviderConnection,
+    ld: InterfaceLinkDefinition,
+) -> Result<()>
+where
+    P: Provider,
+{
+    if ld.source_id == connection.provider_key {
+        if let Err(e) = provider.delete_link_as_source(&ld.target).await {
+            error!(error = %e, "failed to delete link");
+        }
+    } else if ld.target == connection.provider_key {
+        connection.delete_link(&ld.source_id).await;
+        if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
+            error!(error = %e, "failed to delete link");
+        }
+    }
+    Ok(())
+}
+
 /// Handle provider commands in a loop.
 async fn handle_provider_commands(
     provider: impl Provider,
@@ -566,11 +587,11 @@ async fn handle_provider_commands(
             }
             req = link_del.recv() => {
                 if let Some((ld, tx)) = req {
-                    connection.delete_link(&ld.source_id).await;
                     // notify provider that link is deleted
-                    if let Err(e) = provider.delete_link(&ld.source_id).await {
-                        error!(error = %e, "failed to delete link");
+                    if let Err(e) = delete_link_for_provider(&provider, connection, ld).await {
+                        error!(error = %e, "failed to delete link for provider");
                     }
+
                     if tx.send(()).is_err() {
                         error!("failed to send link del response")
                     }
