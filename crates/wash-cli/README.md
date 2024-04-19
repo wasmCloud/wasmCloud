@@ -5,7 +5,7 @@
 [![Good first issues](https://img.shields.io/github/issues/wasmCloud/wasmCloud/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22+label%3A%22wash-cli%22)
 [![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli)
 
-```
+```console
                                      _                 _    _____ _          _ _
                                 ____| |               | |  / ____| |        | | |
  __      ____ _ ___ _ __ ___  / ____| | ___  _   _  __| | | (___ | |__   ___| | |
@@ -24,47 +24,24 @@
   - [Windows (choco)](#windows-choco)
   - [Nix](#nix)
 - [Using wash](#using-wash)
-  - [build](#build)
-    - [Common Config](#common-config)
-    - [Language Config - \[tinygo\]](#language-config---tinygo)
-    - [Language Config - \[rust\]](#language-config---rust)
-    - [Language Config - \[other\]](#language-config---other)
-    - [Type Config - \[actor\]](#type-config---actor)
-    - [Type Config - \[provider\]](#type-config---provider)
-    - [Type Config - \[interface\]](#type-config---interface)
-    - [Example](#example)
-  - [call](#call)
-  - [claims](#claims)
-  - [completions](#completions)
-  - [ctl](#ctl)
-  - [ctx](#ctx)
-  - [drain](#drain)
-  - [gen](#gen)
-  - [keys](#keys)
-  - [lint](#lint)
-  - [new](#new)
-  - [par](#par)
-  - [reg](#reg)
-  - [up](#up)
-  - [validate](#validate)
 - [Shell auto-complete](#shell-auto-complete)
 - [Contributing to wash](#contributing-to-wash)
 
 ## Why wash
 
-`wash` is a bundle of command line tools that, together, form a comprehensive CLI for [wasmCloud](https://wasmcloud.dev) development. Everything from generating new wasmCloud projects, managing cryptographic signing keys, and interacting with OCI compliant registries is contained within the subcommands of `wash`. Our goal with `wash` is to encapsulate our tools into a single binary to make developing WebAssembly with wasmCloud painless and simple.
+`wash` is a bundle of command line tools that, together, form a comprehensive CLI for [wasmCloud](https://wasmcloud.com) development. Everything from generating new wasmCloud projects, starting local development infrastructure, interacting with OCI compliant registries, and deploying applications is contained within the subcommands of `wash`. Our goal with `wash` is to encapsulate our tools into a single binary to make developing WebAssembly with wasmCloud painless and simple.
 
 ## Installing wash
 
 ### Cargo
 
-```
+```bash
 cargo install wash-cli
 ```
 
 ### Linux (deb/rpm + apt)
 
-```
+```bash
 # Debian / Ubuntu (deb)
 curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.sh | sudo bash
 # Fedora (rpm)
@@ -75,19 +52,19 @@ sudo apt install wash
 
 ### Linux (snap)
 
-```
+```bash
 sudo snap install wash --edge --devmode
 ```
 
 ### Linux (brew)
 
-```
+```bash
 brew install wasmcloud/wasmcloud/wash
 ```
 
 ### MacOS (brew)
 
-```
+```bash
 brew install wasmcloud/wasmcloud/wash
 ```
 
@@ -99,7 +76,7 @@ choco install wash
 
 ### Nix
 
-```
+```bash
 nix run github:wasmCloud/wash
 ```
 
@@ -107,145 +84,44 @@ nix run github:wasmCloud/wash
 
 `wash` has multiple subcommands, each specializing in one specific area of the wasmCloud development process.
 
-### build
+```console
+Build:
+  new          Create a new project from a template
+  build        Build (and sign) a wasmCloud component or capability provider
+  dev          Start a developer loop to hot-reload a local wasmCloud component
+  inspect      Inspect a capability provider or Wasm component for signing information and interfaces
+  par          Create, inspect, and modify capability provider archive files
 
-Builds and signs the actor, provider, or interface as defined in a `wasmcloud.toml` file. Will look for configuration file in directory where command is being run.  
-There are three main sections of a `wasmcloud.toml` file: common config, language config, and type config.
+Run:
+  up           Bootstrap a local wasmCloud environment
+  down         Tear down a local wasmCloud environment (launched with wash up)
+  app          Manage declarative applications and deployments (wadm)
+  spy          Spy on all invocations a component sends and receives
+  ui           Serve a web UI for wasmCloud
 
-#### Common Config
+Iterate:
+  get          Get information about different running wasmCloud resources
+  start        Start a component or capability provider
+  scale        Scale a component running in a host to a certain level of concurrency
+  stop         Stop a component, capability provider, or host
+  update       Update a component running in a host to newer image reference
+  link         Link one component to another on a set of interfaces
+  call         Invoke a simple function on a component running in a wasmCloud host
+  label        Label (or un-label) a host with a key=value label pair
+  config       Create configuration for components, capability providers and links
 
-| Setting       | Type   | Default                       | Description                                                                            |
-| ------------- | ------ | ----------------------------- | -------------------------------------------------------------------------------------- |
-| name          | string |                               | Name of the project                                                                    |
-| version       | string |                               | Semantic version of the project                                                        |
-| path          | string | `{pwd}`                       | Path to the project directory to determine where built and signed artifacts are output |
-| language      | enum   | [rust, tinygo, other]         | Language that actor or provider is written in                                          |
-| type          | enum   | [actor, provider, interface ] | Type of wasmcloud artifact that is being generated                                     |
-| wasm_bin_name | string | "name" setting                | Expected name of the wasm module binary that will be generated                         |
+Publish:
+  pull         Pull an artifact from an OCI compliant registry
+  push         Push an artifact to an OCI compliant registry
+  reg          Perform operations on an OCI registry
 
-#### Language Config - [tinygo]
-
-> [!IMPORTANT]
-> To build components written in Go, `wash` uses the `tinygo` compiler toolchain. To set up TinyGo, we recommend the [official installation instructions](https://tinygo.org/getting-started/install/).
-
-| Setting     | Type   | Default        | Description                   |
-| ----------- | ------ | -------------- | ----------------------------- |
-| tinygo_path | string | `which tinygo` | The path to the tinygo binary |
-
-#### Language Config - [rust]
-
-> [!IMPORTANT]
-> To build components written in Rust, `wash` uses the `cargo` toolchain. To set up Rust, we recommend using [`rustup`](https://doc.rust-lang.org/cargo/getting-started/installation.html#install-rust-and-cargo).
-
-| Setting     | Type   | Default       | Description                             |
-| ----------- | ------ | ------------- | --------------------------------------- |
-| cargo_path  | string | `which cargo` | The path to the cargo binary            |
-| target_path | string | ./target      | Path to cargo/rust's `target` directory |
-
-#### Language Config - [other]
-
-If you are using a language other than Rust or Go, you can designate your language as any string (ex. `javascript`).
-
-Since `wash` will be unable to infer the build toolchain from the language you provide, you must supply the `build_command` and the path to the `build_artifact` so that the artifact can be built and found before signing.
-
-#### Type Config - [actor]
-
-| Setting        | Type    | Default                                   | Description                                                                                                                                                                                                                                                                                                                   |
-| -------------- | ------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| claims         | list    | []                                        | The list of provider claims that this actor requires. eg. `["wasmcloud:httpserver", "wasmcloud:blobstore"]`                                                                                                                                                                                                                     |
-| registry       | string  | localhost:8080                            | The registry to push to. eg. "localhost:8080"                                                                                                                                                                                                                                                                                 |
-| push_insecure  | boolean | false                                     | Whether to push to the registry insecurely                                                                                                                                                                                                                                                                                    |
-| key_directory  | string  | `~/.wash/keys`                            | The directory to store the private signing keys in                                                                                                                                                                                                                                                                            |
-| wasm_target    | string  | wasm32-unknown-unknown                    | Compile target. Can be one of: wasm32-unknown-unknown, wasm32-wasi-preview1, wasm32-wasi-preview2                                                                                                                                                                                                                             |
-| call_alias     | string  |                                           | The call alias of the actor                                                                                                                                                                                                                                                                                                   |
-| build_artifact | string  | /path/to/project/build/{filename}.wasm    | Optional override path where `wash` can expect to find the built and unsigned WebAssembly artifact                                                                                                                                                                                                                            |
-| build_command  | string  | Language specific command                 | Optional command to run instead of inferring the default language toolchain build command. Supports commands in the format of `command ...arg`. `wash` expects that the build command will result in an artifact under the project `build` folder named either `{wasm_bin_name}.wasm` if supplied or `{name}.wasm` otherwise. |
-| destination    | string  | /path/to/project/build/{filename}\_s.wasm | File path to output the destination WebAssembly artifact after building and signing.                                                                                                                                                                                                                                          |
-
-#### Type Config - [provider]
-
-| Setting       | Type   | Default | Description                       |
-| ------------- | ------ | ------- | --------------------------------- |
-| capability_id | string |         | The capability ID of the provider |
-| vendor        | string |         | The vendor name of the provider   |
-
-#### Type Config - [interface]
-
-| Setting        | Type   | Default | Description               |
-| -------------- | ------ | ------- | ------------------------- |
-| html_target    | string | ./html  | Directory to output HTML  |
-| codegen_config | string | .       | Path to codegen.toml file |
-
-#### Example
-
-```toml
-name = "echo"
-language = "rust"
-type = "actor"
-version = "0.1.0"
-
-[actor]
-claims = ["wasmcloud:httpserver"]
-
-[rust]
-cargo_path = "/tmp/cargo"
+Configure:
+  completions  Generate shell completions for wash
+  ctx          Manage wasmCloud host configuration contexts
+  drain        Manage contents of local wasmCloud caches
+  keys         Utilities for generating and managing signing keys
+  claims       Generate and manage JWTs for wasmCloud components and capability providers
 ```
-
-### call
-
-Invoke a wasmCloud actor directly with a specified payload. This allows you to test actor handlers without the need to manage capabilities and link definitions for a rapid development feedback loop.
-
-### claims
-
-Generate JWTs for components, capability providers, accounts and operators. Sign actor modules with claims including capability IDs, expiration, and keys to verify identity. Inspect actor modules to view their claims.
-
-### completions
-
-Generate shell completion files for Zsh, Bash, Fish, or PowerShell.
-
-### ctl
-
-Interact directly with a wasmCloud [control-interface](https://github.com/wasmCloud/control-interface), allowing you to imperatively schedule components, providers and modify configurations of a wasmCloud host. Can be used to interact with local and remote control-interfaces.
-
-### ctx
-
-Automatically connect to your previously launched wasmCloud lattice with a managed context or use contexts to administer remote wasmCloud lattices.
-
-### drain
-
-Manage contents of the local wasmCloud cache. wasmCloud manages a local cache that will avoid redundant fetching of content when possible. `drain` allows you to manually clear that cache to ensure you're always pulling the latest versions of components and providers that are hosted in remote OCI registries.
-
-### gen
-
-Generate code from [smithy](https://awslabs.github.io/smithy/index.html) files using [weld codegen](https://github.com/wasmCloud/weld/tree/main/codegen). This is the primary method of generating actor and capability provider code from .smithy interfaces. Currently has first class support for Rust components and providers, along with autogenerated HTML documentation.
-
-### keys
-
-Generate ed25519 keys for securely signing and identifying wasmCloud entities (components, providers, hosts). Read more about our decision to use ed25519 keys in our [ADR](https://wasmcloud.github.io/adr/0005-security-nkeys.html).
-
-### lint
-
-Perform lint checks on .smithy models, outputting warnings for best practices with interfaces.
-
-### new
-
-Create new wasmCloud projects from predefined [templates](https://github.com/wasmCloud/project-templates). This command is a one-stop-shop for creating new components, providers, and interfaces for all aspects of your application.
-
-### par
-
-Create, modify and inspect [provider archives](https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-archive), a TAR format that contains a signed JWT and OS/Architecture specific binaries for native capability providers.
-
-### reg
-
-Push and Pull components and capability providers to/from OCI compliant registries. Used extensively in our own CI/CD and in local development, where a local registry is used to store your development artifacts.
-
-### up
-
-Bootstrap a wasmCloud environment in one easy command, supporting both launching NATS and wasmCloud in the background as well as an "interactive" mode for shorter lived hosts.
-
-### validate
-
-Perform validation checks on .smithy models, ensuring that your interfaces are valid and usable for codegen and development.
 
 ## Shell auto-complete
 
