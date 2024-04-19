@@ -2,9 +2,10 @@ use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
 use tokio::spawn;
 use tracing::{debug, error, instrument};
+
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::http::OutgoingHandler;
-use wasmcloud_provider_sdk::{Context, Provider};
+use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, Provider};
 use wrpc_interface_http::try_http_to_outgoing_response;
 use wrpc_transport::AcceptedInvocation;
 
@@ -34,6 +35,7 @@ impl OutgoingHandler for HttpClientProvider {
     async fn serve_handle<Tx: wrpc_transport::Transmitter>(
         &self,
         AcceptedInvocation {
+            context,
             params: (wrpc_interface_http::IncomingRequestHttp(req), opts),
             result_subject,
             transmitter,
@@ -47,6 +49,8 @@ impl OutgoingHandler for HttpClientProvider {
             Tx,
         >,
     ) {
+        propagate_trace_for_ctx!(context);
+
         // TODO: Use opts
         let _ = opts;
         debug!(uri = ?req.uri(), "send HTTP request");
