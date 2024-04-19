@@ -16,7 +16,10 @@ impl Guest for HttpServer {
             .path_with_query()
             .expect("failed to get path with query");
 
-        let bucket = wasi::keyvalue::store::open("foo").expect("failed to open empty bucket");
+        // Note that the keyvalue-redis provider used with this example creates a single global bucket. 
+        // While the wasi-keyvalue interface supports multiple named buckets, the keyvalue-redis provider  
+        // does not, so we refer to our new bucket in the line below with an empty string.
+        let bucket = wasi::keyvalue::store::open("").expect("failed to open empty bucket");
         let count = wasi::keyvalue::atomics::increment(&bucket, &name, 1)
             .expect("failed to increment count");
 
