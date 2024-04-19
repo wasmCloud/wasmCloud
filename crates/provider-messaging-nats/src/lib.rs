@@ -52,8 +52,8 @@ impl Drop for NatsClientBundle {
 /// Nats implementation for wasmcloud:messaging
 #[derive(Default, Clone)]
 pub struct NatsMessagingProvider {
-    // store nats connection client per actor
-    actors: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
+    handler_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
+    consumer_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     default_config: ConnectionConfig,
 }
 
@@ -264,7 +264,10 @@ impl Provider for NatsMessagingProvider {
         } else {
             // create a config from the supplied values and merge that with the existing default
             match ConnectionConfig::from_map(config) {
-                Ok(cc) => self.default_config.merge(&cc),
+                Ok(cc) => self.default_config.merge(&ConnectionConfig {
+                    subscriptions: Vec::new(),
+                    ..cc
+                }),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
                     return Err(anyhow!(e).context("failed to build connection config"));
@@ -272,7 +275,7 @@ impl Provider for NatsMessagingProvider {
             }
         };
 
-        let mut update_map = self.actors.write().await;
+        let mut update_map = self.consumer_components.write().await;
         let bundle = match self.connect(config, source_id).await {
             Ok(b) => b,
             Err(e) => {
@@ -285,29 +288,109 @@ impl Provider for NatsMessagingProvider {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(target_id))]
+    async fn receive_link_config_as_source(
+        &self,
+        LinkConfig {
+            target_id, config, ..
+        }: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let config = if config.is_empty() {
+            self.default_config.clone()
+        } else {
+            // create a config from the supplied values and merge that with the existing default
+            match ConnectionConfig::from_map(config) {
+                Ok(cc) => self.default_config.merge(&cc),
+                Err(e) => {
+                    error!("Failed to build connection configuration: {e:?}");
+                    return Err(anyhow!(e).context("failed to build connection config"));
+                }
+            }
+        };
+
+        let mut update_map = self.handler_components.write().await;
+        let bundle = match self.connect(config, target_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to connect to NATS: {e:?}");
+                bail!(anyhow!(e).context("failed to connect to NATS"))
+            }
+        };
+        update_map.insert(target_id.into(), bundle);
+
+        Ok(())
+    }
+
     /// Handle notification that a link is dropped: close the connection
     #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        let mut aw = self.actors.write().await;
+    async fn delete_link(&self, component_id: &str) -> anyhow::Result<()> {
+        if component_id == get_connection().provider_key() {
+            return self.delete_link_as_source(component_id).await;
+        }
 
-        if let Some(bundle) = aw.remove(source_id) {
+        self.delete_link_as_target(component_id).await
+    }
+
+    #[instrument(level = "info", skip(self))]
+    async fn delete_link_as_source(&self, target_id: &str) -> anyhow::Result<()> {
+        let mut links = self.handler_components.write().await;
+        if let Some(bundle) = links.remove(target_id) {
             // Note: subscriptions will be closed via Drop on the NatsClientBundle
+            let client = &bundle.client;
             debug!(
-                "closing [{}] NATS subscriptions for actor [{}]...",
+                "droping NATS client [{}] and associated subscriptions [{}] for (handler) component [{}]...",
+                format!(
+                    "{}:{}",
+                    client.server_info().server_id,
+                    client.server_info().client_id
+                ),
                 &bundle.sub_handles.len(),
-                source_id,
+                target_id
             );
         }
 
-        debug!("finished processing delete link for actor [{}]", source_id);
+        debug!(
+            "finished processing (handler) link deletion for component [{}]",
+            target_id
+        );
+
+        Ok(())
+    }
+
+    #[instrument(level = "info", skip(self))]
+    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
+        let mut links = self.consumer_components.write().await;
+        if let Some(bundle) = links.remove(source_id) {
+            let client = &bundle.client;
+            debug!(
+                "droping NATS client [{}] for (consumer) component [{}]...",
+                format!(
+                    "{}:{}",
+                    client.server_info().server_id,
+                    client.server_info().client_id
+                ),
+                source_id
+            );
+        }
+
+        debug!(
+            "finished processing (consumer) link deletion for component [{}]",
+            source_id
+        );
+
         Ok(())
     }
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
-        let mut aw = self.actors.write().await;
-        // empty the actor link data and stop all servers
-        aw.clear();
+        // clear the handler components
+        let mut handlers = self.handler_components.write().await;
+        handlers.clear();
+
+        // clear the consumer components
+        let mut consumers = self.consumer_components.write().await;
+        consumers.clear();
+
         // dropping all connections should send unsubscribes and close the connections, so no need
         // to handle that here
         Ok(())
@@ -324,7 +407,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
     ) -> anyhow::Result<Result<(), String>> {
         let nats_client =
             if let Some(ref source_id) = ctx.and_then(|Context { component, .. }| component) {
-                let actors = self.actors.read().await;
+                let actors = self.consumer_components.read().await;
                 let nats_bundle = match actors.get(source_id) {
                     Some(nats_bundle) => nats_bundle,
                     None => {
@@ -376,7 +459,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
         let nats_client =
             if let Some(ref source_id) = ctx.and_then(|Context { component, .. }| component) {
-                let actors = self.actors.read().await;
+                let actors = self.consumer_components.read().await;
                 let nats_bundle = match actors.get(source_id) {
                     Some(nats_bundle) => nats_bundle,
                     None => {
