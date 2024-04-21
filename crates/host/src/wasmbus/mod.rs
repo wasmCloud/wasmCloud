@@ -1438,7 +1438,7 @@ impl Host {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn stop_actor(&self, actor: &Actor, host_id: &str) -> anyhow::Result<()> {
+    async fn stop_actor(&self, actor: &Actor, _host_id: &str) -> anyhow::Result<()> {
         trace!(component_id = %actor.id, "stopping component");
 
         // TODO: How to know if abort was successful?
