@@ -1441,7 +1441,6 @@ impl Host {
     async fn stop_actor(&self, actor: &Actor, _host_id: &str) -> anyhow::Result<()> {
         trace!(component_id = %actor.id, "stopping component");
 
-        // TODO: How to know if abort was successful?
         actor.calls.abort();
 
         Ok(())
@@ -1895,7 +1894,6 @@ impl Host {
             self.stop_actor(actor, host_id)
                 .await
                 .context("failed to stop old component")?;
-            // TODO: How to differentiate between old and new component if image reference is the same?
             self.publish_event(
                 "component_scaled",
                 event::component_scaled(
