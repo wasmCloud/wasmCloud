@@ -1865,6 +1865,11 @@ impl Host {
                 .context("component not found")?;
             let annotations = annotations.unwrap_or_default().into_iter().collect();
 
+            if existing_component.image_reference == new_component_ref {
+                info!(%component_id, %new_component_ref, "component already updated");
+                return Ok(());
+            }
+
             let new_component = self.fetch_component(new_component_ref).await?;
             let new_claims = new_component.claims();
             if let Some(claims) = new_claims.cloned() {
