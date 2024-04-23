@@ -76,7 +76,6 @@
             "README.md"
             "ROADMAP.md"
             "rust-toolchain.toml"
-            "sample-manifest.yaml"
             "SECURITY.md"
           ]
           ++ washboardExclude;
