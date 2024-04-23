@@ -76,6 +76,15 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         );
     };
 
+    if component_ref == cmd.new_component_ref {
+        bail!(
+            "Host [{}] is already running component [{}] with reference [{}]",
+            host_id,
+            cmd.component_id,
+            cmd.new_component_ref
+        );
+    }
+
     let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
     if !ack.success {
         bail!("Operation failed: {}", ack.message);
