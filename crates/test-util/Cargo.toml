@@ -3,7 +3,7 @@ name = "wasmcloud-test-util"
 version = "0.1.0"
 rust-version = "1.75"
 description = """
-Utilities for testing wasmCloud hosts, providers, and actors.
+Utilities for testing wasmCloud hosts, providers, and components.
 """
 
 authors.workspace = true
