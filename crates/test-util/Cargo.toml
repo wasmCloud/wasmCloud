@@ -29,4 +29,10 @@ tracing = { workspace = true }
 url = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
+wasmcloud-core = { workspace = true }
 wasmcloud-host = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = [ "rt", "macros" ]  }
+tempfile = { workspace = true }

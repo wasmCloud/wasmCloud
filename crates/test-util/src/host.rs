@@ -60,15 +60,33 @@ pub struct WasmCloudTestHost {
 
 #[allow(unused)]
 impl WasmCloudTestHost {
-    /// Start a test wasmCloud [`Host`]
-    pub async fn start(
-        nats_url: impl Into<&Url>,
+    /// Start a test wasmCloud [`Host`] instance, with generated cluster & host keys.
+    ///
+    /// # Arguments
+    ///
+    /// * `nats_url` - URL of the NATS instance to which we should connect (ex. "nats://localhost:4222")
+    /// * `lattice_name` - Name of the wasmCloud lattice to which we should connect (ex. "default")
+    pub async fn start(nats_url: impl AsRef<str>, lattice_name: impl AsRef<str>) -> Result<Self> {
+        Self::start_custom(nats_url, lattice_name, None, None, None).await
+    }
+
+    /// Start a test wasmCloud [`Host`], with customization for the host that is started
+    ///
+    /// # Arguments
+    ///
+    /// * `nats_url` - URL of the NATS instance to which we should connect (ex. "nats://localhost:4222")
+    /// * `lattice_name` - Name of the wasmCloud lattice to which we should connect (ex. "default")
+    /// * `cluster_key` - An optional `nkeys::KeyPair` to use for the lattice. If not specified, one is generated.
+    /// * `host_key` - An optional `nkeys::KeyPair` to use for the host. If not specified, one is generated.
+    /// * `policy_service_config` - Configuration for a [Policy Service](https://wasmcloud.com/docs/deployment/security/policy-service) to use with the host
+    pub async fn start_custom(
+        nats_url: impl AsRef<str>,
         lattice_name: impl AsRef<str>,
         cluster_key: Option<KeyPair>,
         host_key: Option<KeyPair>,
         policy_service_config: Option<PolicyService>,
     ) -> Result<Self> {
-        let nats_url = nats_url.into();
+        let nats_url = Url::try_from(nats_url.as_ref()).context("failed to parse NATS URL")?;
         let lattice_name = lattice_name.as_ref();
         let cluster_key = Arc::new(cluster_key.unwrap_or(KeyPair::new_cluster()));
         let host_key = Arc::new(host_key.unwrap_or(KeyPair::new_server()));
@@ -108,7 +126,7 @@ impl WasmCloudTestHost {
             .context("failed to perform shutdown hook")
     }
 
-    /// Get a usable NATS client for the host
+    /// Get a usable NATS client for the lattice control plane
     pub async fn get_ctl_client(
         &self,
         nats_client: Option<NatsClient>,
@@ -128,5 +146,17 @@ impl WasmCloudTestHost {
     #[must_use]
     pub fn host_key(&self) -> Arc<KeyPair> {
         self.host_key.clone()
+    }
+
+    /// Get the cluster key
+    #[must_use]
+    pub fn cluster_key(&self) -> Arc<KeyPair> {
+        self.cluster_key.clone()
+    }
+
+    /// Get the lattice name for the host
+    #[must_use]
+    pub fn lattice_name(&self) -> &str {
+        self.lattice_name.as_ref()
     }
 }

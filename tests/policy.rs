@@ -35,7 +35,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     let rust_http_client_id = rust_http_client.subject.public_key();
 
     // Build the host
-    let host = WasmCloudTestHost::start(
+    let host = WasmCloudTestHost::start_custom(
         &nats_url,
         LATTICE,
         None,

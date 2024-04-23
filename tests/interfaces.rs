@@ -78,7 +78,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, LATTICE, None, None, None)
+    let host = WasmCloudTestHost::start(&nats_url, LATTICE)
         .await
         .context("failed to start test host")?;
 
