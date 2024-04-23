@@ -153,5 +153,28 @@ async fn integration_update_actor_serial() -> Result<()> {
         }
     }
     
+    // Check update with the same image ref
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "update",
+            "component",
+            "--host-id",
+            wash_instance.host_id.as_str(),
+            "hello",
+            HELLO_OCI_REF,
+            "--output",
+            "json",
+            "--timeout-ms",
+            "40000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .context("failed to update actor")?;
+
+    assert!(!output.status.success(), "update with same image ref should fail");
+
     Ok(())
 }
