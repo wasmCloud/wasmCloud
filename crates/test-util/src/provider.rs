@@ -40,11 +40,11 @@ struct ProviderHealthCheckResponse {
     message: Option<String>,
 }
 
-/// Start an actor, ensuring that the provider starts properly
+/// Start a provider, ensuring that the provider starts properly
 ///
 /// # Errors
 ///
-/// Returns an `Err` if the actor fails to start
+/// Returns an `Err` if the provider fails to start
 pub async fn assert_start_provider(
     StartProviderArgs {
         client,
