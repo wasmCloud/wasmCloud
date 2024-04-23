@@ -43,7 +43,7 @@ jobs:
           ct lint --config chart/ct.yaml
 
       - name: Create kind cluster
-        uses: helm/kind-action@v1.9.0
+        uses: helm/kind-action@v1.10.0
 
       - name: Run chart-testing (install)
         run: ct install --config chart/ct.yaml
