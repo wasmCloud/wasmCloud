@@ -46,3 +46,6 @@ pub mod registry;
 pub mod spier;
 #[cfg(feature = "nats")]
 pub mod wait;
+
+#[cfg(feature = "plugin")]
+pub mod plugin;

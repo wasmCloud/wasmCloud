@@ -1,0 +1,7 @@
+name = "hello-plugin"
+language = "rust"
+type = "component"
+
+[actor]
+wit_world = "plugin"
+wasm_target = "wasm32-wasi-preview2"

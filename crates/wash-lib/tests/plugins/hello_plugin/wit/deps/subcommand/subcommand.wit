@@ -1,0 +1,23 @@
+/// The interface for a subcommand plugin. This is used to register plugins and to provide the host
+/// with an interface it can use to interact with the plugin. 
+interface subcommand {
+    /// The metadata for a plugin used for registration and setup
+    record metadata {
+        /// The friendly name of the plugin
+        name: string,
+        /// The ID of the plugin. This must be unique across all plugins and is used as the name of
+        /// the subcommand added to wash. This ID should contain no whitespace
+        id: string,
+        /// The version of the plugin
+        version: string,
+        /// The author of the plugin
+        author: string,
+        /// The description of the plugin. This will be used as the top level help text for the plugin
+        description: string,
+        /// The list of flags and their documentation that can be used with this plugin.
+        %flags: list<tuple<string, string>>,
+    }
+
+    /// The function to register a plugin. This is called by the host to register the plugin.
+    register: func() -> metadata;
+}
