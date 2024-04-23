@@ -12,6 +12,7 @@ use tokio_stream::StreamExt;
 use tracing::warn;
 use url::Url;
 use wasmcloud_control_interface::CtlResponse;
+use wasmcloud_core::health_subject;
 
 /// Helper method for deserializing content, so that we can easily switch out implementations
 pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
@@ -74,11 +75,7 @@ pub async fn assert_start_provider(
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
         .then(|_| rpc_client.request(
-            format!(
-                "wasmbus.rpc.{}.{}.health",
-                lattice,
-                provider_key.public_key(),
-            ),
+            health_subject(lattice, &provider_key.public_key()),
             "".into(),
         ))
         .filter_map(|res| {
