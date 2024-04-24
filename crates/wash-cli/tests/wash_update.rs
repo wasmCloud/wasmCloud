@@ -152,7 +152,7 @@ async fn integration_update_actor_serial() -> Result<()> {
             break;
         }
     }
-    
+
     // Check update with the same image ref
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -174,7 +174,10 @@ async fn integration_update_actor_serial() -> Result<()> {
         .await
         .context("failed to update actor")?;
 
-    assert!(!output.status.success(), "update with same image ref should fail");
+    assert!(
+        !output.status.success(),
+        "update with same image ref should fail"
+    );
 
     Ok(())
 }
