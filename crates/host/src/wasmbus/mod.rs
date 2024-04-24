@@ -1829,9 +1829,37 @@ impl Host {
             "handling update component"
         );
 
-        let component_id = component_id.to_string();
-        let new_component_ref = new_component_ref.to_string();
+        // Find the component and extract the image reference
+        let Some(component_ref) = self
+            .components
+            .read()
+            .await
+            .get(&component_id)
+            .map(|component| component.image_reference.clone())
+        else {
+            return Ok(CtlResponse::error(&format!(
+                "component {} not found",
+                component_id
+            )));
+        };
+
+        // If the component image reference is the same or not found, respond with an appropriate message
+        if component_ref == new_component_ref {
+            return Ok(CtlResponse {
+                success: true,
+                message: format!(
+                    "component {} already updated to {}",
+                    component_id, new_component_ref
+                ),
+                response: None,
+            });
+        }
+
         let host_id = host_id.to_string();
+        let message = format!(
+            "component {} updating from {} to {}",
+            component_id, component_ref, new_component_ref
+        );
         spawn(async move {
             if let Err(e) = self
                 .handle_update_component_task(
@@ -1846,7 +1874,11 @@ impl Host {
             }
         });
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse {
+            success: true,
+            message,
+            response: None,
+        })
     }
 
     async fn handle_update_component_task(
@@ -1865,6 +1897,7 @@ impl Host {
                 .context("component not found")?;
             let annotations = annotations.unwrap_or_default().into_iter().collect();
 
+            // task is a no-op if the component image reference is the same
             if existing_component.image_reference == new_component_ref {
                 info!(%component_id, %new_component_ref, "component already updated");
                 return Ok(());
