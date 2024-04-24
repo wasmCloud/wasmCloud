@@ -48,7 +48,10 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
             .await
             .map(|inventory| inventory.response)
             .map_err(boxed_err_to_anyhow)?
-            .context("Supplied host did not respond to inventory query")?
+            .context(format!(
+                "Supplied host [{}] did not respond to inventory query",
+                host_id
+            ))?
     } else {
         let inventories = get_all_inventories(&client).await?;
         inventories
@@ -70,31 +73,36 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
     else {
         bail!(
-            "No component with id [{}] found on host [{}]",
+            "Component {} not found on host [{}]",
             cmd.component_id,
-            inventory.host_id
+            inventory.host_id,
         );
     };
 
     if component_ref == cmd.new_component_ref {
         bail!(
-            "Host [{}] is already running component [{}] with reference [{}]",
-            host_id,
+            "Component {} already updated to {} on host [{}]",
             cmd.component_id,
-            cmd.new_component_ref
+            cmd.new_component_ref,
+            host_id
         );
     }
 
     let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
     if !ack.success {
-        bail!("Operation failed: {}", ack.message);
+        bail!("Operation failed on host [{}]: {}", host_id, ack.message);
     }
+
+    let message = match ack.message {
+        message if message.is_empty() => format!(
+            "component {} updating from {} to {}",
+            cmd.component_id, component_ref, cmd.new_component_ref
+        ),
+        message => message,
+    };
 
     Ok(CommandOutput::from_key_and_text(
         "result",
-        format!(
-            "Component {} updating from {component_ref} to {}",
-            cmd.component_id, cmd.new_component_ref
-        ),
+        format!("Host [{}]: {}", host_id, message),
     ))
 }
