@@ -30,6 +30,10 @@ impl SubcommandRunner {
     /// Creates a new subcommand runner with no plugins loaded.
     pub fn new() -> anyhow::Result<Self> {
         let mut config = Config::new();
+        // Attempt to use caching, but only warn if it fails
+        if let Err(e) = config.cache_config_load_default() {
+            tracing::warn!(err = ?e, "Failed to load wasm cache");
+        }
         config.wasm_component_model(true);
         config.async_support(true);
         let engine = Engine::new(&config)?;
