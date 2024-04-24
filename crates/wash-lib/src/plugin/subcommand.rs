@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::Context;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine};
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 use wasmtime_wasi_http::WasiHttpCtx;
 
 use super::Data;
@@ -116,16 +116,25 @@ impl SubcommandRunner {
         self.plugins.values().map(|data| &data.metadata).collect()
     }
 
-    /// Run a subcommand with the given name. The plugin will inherit all stdout/stderr/stdin/env
-    /// and the remaining non-parsed args and flags. An error will only be returned if there was a
-    /// problem with the plugin or the subcommand itself.
-    // TODO: We probably want to pass a limited sets of env vars and allowed files here (probably a specific directory space for the plugin to use)
-    pub async fn run(&mut self, plugin_id: &str, args: &[impl AsRef<str>]) -> anyhow::Result<()> {
+    /// Run a subcommand with the given name and args. The plugin will inherit all
+    /// stdout/stderr/stdin/env. The given plugin_dir is used to grant the plugin access to the
+    /// filesystem in a specific directory, and should already exist. An error will only be returned
+    /// if there was a problem with the plugin (such as the plugin_dir not existing) or the
+    /// subcommand itself.
+    // TODO: We probably want to pass a limited set of env vars
+    pub async fn run(
+        &mut self,
+        plugin_id: &str,
+        plugin_dir: impl AsRef<Path>,
+        args: &[impl AsRef<str>],
+    ) -> anyhow::Result<()> {
         let plugin = self
             .plugins
             .get_mut(plugin_id)
             .ok_or_else(|| anyhow::anyhow!("Plugin with id {plugin_id} does not exist"))?;
 
+        let dir = cap_std::fs::Dir::open_ambient_dir(plugin_dir, cap_std::ambient_authority())
+            .context("Failed to open plugin directory")?;
         plugin.store.data_mut().ctx = WasiCtxBuilder::new()
             .inherit_env()
             .inherit_network()
@@ -133,6 +142,7 @@ impl SubcommandRunner {
             .inherit_stdin()
             .inherit_stdio()
             .inherit_stdout()
+            .preopened_dir(dir, DirPerms::all(), FilePerms::all(), "/")
             .args(args)
             .build();
         plugin

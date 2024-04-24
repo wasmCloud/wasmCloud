@@ -50,9 +50,17 @@ async fn test_subcommand() {
     assert_eq!(metadata.version, "0.1.0");
     assert_eq!(metadata.id, "hello");
 
+    let temp = tempfile::tempdir().unwrap();
+
     // TODO: allow configuration of stdout/stderr so we can check for output
     subcommand
-        .run("hello", &["world"])
+        .run("hello", temp.path(), &["world"])
         .await
         .expect("Should be able to run plugin");
+
+    // Check that the file was written
+    let file = tokio::fs::read_to_string(temp.path().join("hello.txt"))
+        .await
+        .unwrap();
+    assert_eq!(file, "Hello from the plugin");
 }

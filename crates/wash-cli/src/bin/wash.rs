@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
@@ -220,7 +220,7 @@ async fn main() {
     let mut command = Cli::command();
     // Load plugins if they are not disabled
     let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
-        let plugins = load_plugins().await;
+        let (plugins, dir) = load_plugins().await;
         for plugin in plugins.all_metadata().into_iter().cloned() {
             if command.find_subcommand(&plugin.id).is_some() {
                 eprintln!(
@@ -246,7 +246,7 @@ async fn main() {
                 );
             command = command.subcommand(subcmd);
         }
-        Some(plugins)
+        Some((plugins, dir))
     } else {
         None
     };
@@ -257,7 +257,7 @@ async fn main() {
 
     let cli = match (Cli::from_arg_matches(&matches), plugins) {
         (Ok(cli), _) => cli,
-        (Err(mut e), Some(mut plugins)) => {
+        (Err(mut e), Some((mut plugins, plugin_dir))) => {
             let (id, _sub_matches) = match matches.subcommand() {
                 Some(data) => data,
                 None => {
@@ -279,7 +279,14 @@ async fn main() {
             // revisit this later with something if we need to. I did do some basic testing that
             // even if you wrap wash in a shell script, it still works.
             let args: Vec<String> = std::env::args().skip(1).collect();
-            if let Err(e) = plugins.run(id, &args).await {
+            let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
+                Ok(dir) => dir,
+                Err(e) => {
+                    eprintln!("Error creating plugin scratch directory: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = plugins.run(id, dir, &args).await {
                 eprintln!("Error running plugin: {}", e);
                 std::process::exit(1);
             } else {
@@ -434,7 +441,7 @@ fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
 
 /// Helper for loading plugins. This function does not return an error because it will exit the
 /// process in case of a fatal error. As such, this shouldn't be called after the CLI is parsed.
-async fn load_plugins() -> SubcommandRunner {
+async fn load_plugins() -> (SubcommandRunner, PathBuf) {
     // We need to use env vars here because the plugin loading needs to be initialized before
     // the CLI is parsed
     let plugin_dir = std::env::var("WASH_PLUGIN_DIR")
@@ -466,7 +473,7 @@ async fn load_plugins() -> SubcommandRunner {
         }
     };
 
-    let mut readdir = match tokio::fs::read_dir(plugin_dir).await {
+    let mut readdir = match tokio::fs::read_dir(&plugin_dir).await {
         Ok(readdir) => readdir,
         Err(e) => {
             eprintln!("Could not read plugin directory: {e:?}");
@@ -496,5 +503,18 @@ async fn load_plugins() -> SubcommandRunner {
         }
     }
 
-    plugins
+    (plugins, plugin_dir)
+}
+
+async fn ensure_plugin_scratch_dir_exists(
+    plugin_dir: impl AsRef<Path>,
+    id: &str,
+) -> anyhow::Result<PathBuf> {
+    let dir = plugin_dir.as_ref().join("scratch").join(id);
+    if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            bail!("Could not create plugin scratch directory: {e:?}");
+        }
+    }
+    Ok(dir)
 }
