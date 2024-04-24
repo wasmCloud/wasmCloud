@@ -1843,7 +1843,7 @@ impl Host {
             )));
         };
 
-        // If the component image reference is the same or not found, respond with an appropriate message
+        // If the component image reference is the same, respond with an appropriate message
         if component_ref == new_component_ref {
             return Ok(CtlResponse {
                 success: true,
