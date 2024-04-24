@@ -107,19 +107,15 @@ impl SubcommandRunner {
         self.plugins.get(id).map(|p| &p.metadata)
     }
 
-    /// Returns a map of all loaded plugins and their metadata. The key of the map is the plugin ID
-    /// and the value is the metadata.
-    pub fn all_metadata(&self) -> HashMap<&str, &Metadata> {
-        self.plugins
-            .iter()
-            .map(|(k, v)| (k.as_str(), &v.metadata))
-            .collect()
+    /// Returns a list of all metadata for all plugins.
+    pub fn all_metadata(&self) -> Vec<&Metadata> {
+        self.plugins.values().map(|data| &data.metadata).collect()
     }
 
     /// Run a subcommand with the given name. The plugin will inherit all stdout/stderr/stdin/env
     /// and the remaining non-parsed args and flags. An error will only be returned if there was a
     /// problem with the plugin or the subcommand itself.
-    // TODO: We probably want to pass a limited sets of env vars and allowed files here
+    // TODO: We probably want to pass a limited sets of env vars and allowed files here (probably a specific directory space for the plugin to use)
     pub async fn run(&mut self, plugin_id: &str, args: &[impl AsRef<str>]) -> anyhow::Result<()> {
         let plugin = self
             .plugins

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::bail;
-use clap::{self, Parser, Subcommand};
+use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 use wash_cli::app::{self, AppCliCommand};
@@ -32,7 +33,10 @@ use wash_lib::cli::start::StartCommand;
 use wash_lib::cli::stop::StopCommand;
 use wash_lib::cli::update::UpdateCommand;
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::cfg_dir;
 use wash_lib::drain::Drain as DrainSelection;
+use wash_lib::plugin::subcommand::SubcommandRunner;
+use wash_lib::plugin::PLUGIN_DIR;
 
 const HELP: &str = r"
 _________________________________________________________________________________
@@ -213,7 +217,79 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cli: Cli = Parser::parse();
+    let mut command = Cli::command();
+    // Load plugins if they are not disabled
+    let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
+        let plugins = load_plugins().await;
+        for plugin in plugins.all_metadata().into_iter().cloned() {
+            if command.find_subcommand(&plugin.id).is_some() {
+                eprintln!(
+                    "Plugin ID {} matches an existing subcommand, skipping",
+                    plugin.id
+                );
+                continue;
+            }
+            let subcmd = Command::new(plugin.id)
+                .about(plugin.description)
+                .author(plugin.author)
+                .version(plugin.version)
+                .display_name(plugin.name)
+                .args(plugin.flags.into_iter().map(|(flag, help)| {
+                    let trimmed = flag.trim_start_matches('-').to_owned();
+                    Arg::new(trimmed.clone()).long(trimmed).help(help)
+                }))
+                .args(
+                    plugin
+                        .arguments
+                        .into_iter()
+                        .map(|(name, help)| Arg::new(name).help(help)),
+                );
+            command = command.subcommand(subcmd);
+        }
+        Some(plugins)
+    } else {
+        None
+    };
+
+    command.build();
+
+    let matches = command.get_matches();
+
+    let cli = match (Cli::from_arg_matches(&matches), plugins) {
+        (Ok(cli), _) => cli,
+        (Err(mut e), Some(mut plugins)) => {
+            let (id, _sub_matches) = match matches.subcommand() {
+                Some(data) => data,
+                None => {
+                    e.exit();
+                }
+            };
+
+            if plugins.metadata(id).is_none() {
+                e.insert(
+                    clap::error::ContextKind::InvalidSubcommand,
+                    clap::error::ContextValue::String("No plugin found for subcommand".to_string()),
+                );
+                e.exit();
+            }
+
+            // NOTE(thomastaylor312): This is a hack to get the raw args to pass to the plugin. I
+            // don't really love this, but we can't add nice help text and structured arguments to
+            // the CLI if we just get the raw args with `allow_external_subcommands(true)`. We can
+            // revisit this later with something if we need to. I did do some basic testing that
+            // even if you wrap wash in a shell script, it still works.
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if let Err(e) = plugins.run(id, &args).await {
+                eprintln!("Error running plugin: {}", e);
+                std::process::exit(1);
+            } else {
+                std::process::exit(0);
+            }
+        }
+        (Err(e), None) => {
+            e.exit();
+        }
+    };
 
     let output_kind = cli.output;
 
@@ -354,4 +430,71 @@ async fn main() {
 
 fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
     bail!("The `wash {command}` command is experimental and may change in future releases. Set the `WASH_EXPERIMENTAL` environment variable or `--experimental` flag to `true` to use this command.")
+}
+
+/// Helper for loading plugins. This function does not return an error because it will exit the
+/// process in case of a fatal error. As such, this shouldn't be called after the CLI is parsed.
+async fn load_plugins() -> SubcommandRunner {
+    // We need to use env vars here because the plugin loading needs to be initialized before
+    // the CLI is parsed
+    let plugin_dir = std::env::var("WASH_PLUGIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let dir = match cfg_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    eprintln!("Could not load wash directory: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            dir.join(PLUGIN_DIR)
+        });
+
+    // Ensure the plugin directory exists
+    if !tokio::fs::try_exists(&plugin_dir).await.unwrap_or(false) {
+        if let Err(e) = tokio::fs::create_dir(&plugin_dir).await {
+            eprintln!("Could not create plugin directory: {e:?}");
+            std::process::exit(1);
+        }
+    }
+
+    let mut plugins = match SubcommandRunner::new() {
+        Ok(plugins) => plugins,
+        Err(e) => {
+            eprintln!("Could not load plugins: {e:?}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut readdir = match tokio::fs::read_dir(plugin_dir).await {
+        Ok(readdir) => readdir,
+        Err(e) => {
+            eprintln!("Could not read plugin directory: {e:?}");
+            std::process::exit(1);
+        }
+    };
+
+    // We load each plugin separately so we only warn if a plugin fails to load
+    while let Some(entry) = readdir.next_entry().await.transpose() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("WARN: Could not read plugin directory entry. Skipping: {e:?}");
+                continue;
+            }
+        };
+
+        if !entry
+            .file_type()
+            .await
+            .map(|ft| ft.is_dir())
+            .unwrap_or(false)
+        {
+            if let Err(e) = plugins.add_plugin(entry.path()).await {
+                eprintln!("WARN: Couldn't load plugin, skipping: {:?}", e);
+            }
+        }
+    }
+
+    plugins
 }

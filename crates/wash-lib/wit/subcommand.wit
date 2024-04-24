@@ -14,8 +14,12 @@ interface subcommand {
         author: string,
         /// The description of the plugin. This will be used as the top level help text for the plugin
         description: string,
-        /// The list of flags and their documentation that can be used with this plugin.
+        /// The list of flags and their documentation that can be used with this plugin. The key is
+        /// the name of the flag and the value is the documentation for the flag.
         %flags: list<tuple<string, string>>,
+        /// The list of positional arguments that can be used with this plugin. The key is the name
+        /// of the argument and the value is the documentation for the argument.
+        arguments: list<tuple<string, string>>,
     }
 
     /// The function to register a plugin. This is called by the host to register the plugin.
