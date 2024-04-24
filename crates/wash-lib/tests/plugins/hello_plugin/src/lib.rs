@@ -6,6 +6,8 @@ use std::io::Read;
 use exports::wasi::cli::run::Guest as RunGuest;
 use exports::wasmcloud::wash::subcommand::{Guest as SubcommandGuest, Metadata};
 use wasi::cli::environment;
+use wasi::filesystem::preopens::get_directories;
+use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 use wasi::http::types::*;
 
 #[derive(serde::Deserialize)]
@@ -74,6 +76,19 @@ impl RunGuest for HelloPlugin {
                 println!("Got error when trying to fetch dog: {}", e);
             }
         }
+        if let Some(dir) = get_directories().into_iter().next().map(|(d, _)| d) {
+            let file = dir
+                .open_at(
+                    PathFlags::empty(),
+                    "hello.txt",
+                    OpenFlags::CREATE,
+                    DescriptorFlags::READ | DescriptorFlags::WRITE,
+                )
+                .expect("Should be able to access file");
+            file.write(b"Hello from the plugin", 0)
+                .expect("Should be able to write to file");
+        }
+
         println!("Hello from the plugin");
         Ok(())
     }
