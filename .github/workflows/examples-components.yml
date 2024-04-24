@@ -5,6 +5,10 @@ on:
     branches:
       - main
     tags:
+      - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
+      - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
   pull_request:
     branches: [main]
@@ -31,8 +35,7 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          # TODO: Use this once 0.27.0 is released
-          # - 0.27.0
+          - 0.27.0
           - current
     steps:
       - uses: actions/checkout@v4
@@ -68,26 +71,37 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          # TODO: Use this once 0.27.0 is released
-          # - 0.27.0
+          - 0.27.0
           - current
         project:
+          # Golang example components
           - lang: "golang"
             lang_version: "1.20"
             name: "http-echo-tinygo"
           - lang: "golang"
             lang_version: "1.20"
             name: "http-hello-world"
+          # Rust example components
           - lang: "rust"
             name: "blobby"
+            wasm-bin: "blobby_s.wasm"
           - lang: "rust"
             name: "http-hello-world"
+            wasm-bin: "http_hello_world_s.wasm"
           - lang: "rust"
             name: "http-jsonify"
             wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
+          - lang: "rust"
+            name: "http-keyvalue-counter"
+            wasm-bin: "http_keyvalue_counter_s.wasm"
+          - lang: "rust"
+            name: "echo-messaging"
+            wasm-bin: "echo_messaging_s.wasm"
+          # Python example components
           - lang: "python"
             lang_version: "3.10"
             name: "http-hello-world"
+          # Typescript example components
           - lang: "typescript"
             lang_version: "20.x"
             name: "http-hello-world"
@@ -153,9 +167,25 @@ jobs:
         wash-version:
           - current
         project:
+          # Rust example components (to publish)
           - lang: "rust"
             name: "http-jsonify"
             wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
+          - lang: "rust"
+            name: "blobby"
+            wasm-bin: "blobby_s.wasm"
+          - lang: "rust"
+            name: "http-keyvalue-counter"
+            wasm-bin: "http_keyvalue_counter_s.wasm"
+          - lang: "rust"
+            name: "http-hello-world"
+            wasm-bin: "http_hello_world_s.wasm"
+          - lang: "rust"
+            name: "http-jsonify"
+            wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
+          - lang: "rust"
+            name: "echo-messaging"
+            wasm-bin: "echo_messaging_s.wasm"
     steps:
       - uses: actions/checkout@v4
       # Determine tag version (if this is a release tag), without the 'v'
