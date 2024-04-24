@@ -87,9 +87,16 @@ async fn integration_build_rust_actor_signed_with_signing_keys_directory_configu
         .context("test command failed to run and complete")?;
 
     assert!(output.status.success());
-    let output =
-        String::from_utf8(output.stderr).context("Failed to convert output bytes to String")?;
-    assert!(output.contains(expected_default_key_dir.to_str().unwrap()));
+
+    // Ensure that the key was generated in the default directory
+    let generated_key = expected_default_key_dir.join("http_hello_world_module.nk");
+    assert!(
+        std::fs::metadata(&generated_key).is_ok(),
+        "Key should be present and accessible in ~/.wash/keys"
+    );
+
+    // assert ./keys directory is not created for generated keys
+    assert!(std::fs::metadata(project_dir.join("keys")).is_err());
 
     // case: keys directory configured via cli arg --keys-directory
     let key_directory = project_dir.join("batmankeys").to_string_lossy().to_string();
