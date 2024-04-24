@@ -87,7 +87,8 @@ impl SubcommandGuest for HelloPlugin {
             description: "A simple plugin that says hello and logs a bunch of things".to_string(),
             author: "WasmCloud".to_string(),
             version: "0.1.0".to_string(),
-            flags: Vec::with_capacity(0),
+            flags: vec![("--foo".to_string(), "A foo variable".to_string())],
+            arguments: vec![("name".to_string(), "A random name".to_string())],
         }
     }
 }
