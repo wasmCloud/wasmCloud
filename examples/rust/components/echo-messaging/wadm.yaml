@@ -11,6 +11,7 @@ spec:
       type: component
       properties:
         image: file://./build/echo_messaging_s.wasm
+        id: echo
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -22,13 +23,20 @@ spec:
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
-            target_config:
-              - name: simple-subscription
-                properties:
-                  subscriptions: wasmcloud.echo
 
     # Add a capability provider that implements `wasmcloud:messaging` using NATS
     - name: nats
       type: capability
       properties:
         image: ghcr.io/wasmcloud/messaging-nats:canary
+      traits:
+        - type: link
+          properties:
+            target: echo
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            source_config:
+              - name: simple-subscription
+                properties:
+                  subscriptions: wasmcloud.echo

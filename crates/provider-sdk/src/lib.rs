@@ -200,6 +200,7 @@ pub trait Provider<E = anyhow::Error>: Sync {
         async { Ok(()) }
     }
 
+    /// Notify the provider that the link is dropped where the provider is the target
     fn delete_link_as_target(
         &self,
         component_id: &str,
@@ -208,6 +209,7 @@ pub trait Provider<E = anyhow::Error>: Sync {
         async { Ok(()) }
     }
 
+    /// Notify the provider that the link is dropped where the provider is the source
     fn delete_link_as_source(
         &self,
         component_id: &str,
