@@ -121,7 +121,9 @@ impl SubcommandRunner {
     /// filesystem in a specific directory, and should already exist. An error will only be returned
     /// if there was a problem with the plugin (such as the plugin_dir not existing) or the
     /// subcommand itself.
-    // TODO: We probably want to pass a limited set of env vars
+    ///
+    /// All plugins will be passed environment variables starting with
+    /// `WASH_PLUGIN_${plugin_id.to_upper()}_` from the current process. Other vars will be ignored
     pub async fn run(
         &mut self,
         plugin_id: &str,
@@ -135,8 +137,11 @@ impl SubcommandRunner {
 
         let dir = cap_std::fs::Dir::open_ambient_dir(plugin_dir, cap_std::ambient_authority())
             .context("Failed to open plugin directory")?;
+        let env_prefix = format!("WASH_PLUGIN_{}_", plugin_id.to_uppercase());
+        let vars: Vec<_> = std::env::vars()
+            .filter(|(k, _)| k.starts_with(&env_prefix))
+            .collect();
         plugin.store.data_mut().ctx = WasiCtxBuilder::new()
-            .inherit_env()
             .inherit_network()
             .inherit_stderr()
             .inherit_stdin()
@@ -144,6 +149,7 @@ impl SubcommandRunner {
             .inherit_stdout()
             .preopened_dir(dir, DirPerms::all(), FilePerms::all(), "/")
             .args(args)
+            .envs(&vars)
             .build();
         plugin
             .instance
