@@ -21,16 +21,16 @@ wasmCloud runs [WebAssembly Components][docs-components]. Write business logic i
 
 You can get started quickly by trying out of our example projects:
 
-| Language                  | Where you should start                                                                 | OCI Artifact                                     |
-|---------------------------|----------------------------------------------------------------------------------------|--------------------------------------------------|
-| Golang ([TinyGo][tinygo]) | [`./golang/components/http-hello-world`](./golang/components/http-hello-world)         |                                                  |
-| Golang ([TinyGo][tinygo]) | [`./golang/components/http-echo-tinygo`](./golang/components/http-echo-tinygo)         |                                                  |
-| [Python][python]          | [`./python/components/http-hello-world`](./golang/components/http-hello-world)         |                                                  |
-| [Rust][rust]              | [`./rust/components/echo-messaging`](./golang/components/echo-messaging)               |                                                  |
-| [Rust][rust]              | [`./rust/components/blobby`](./golang/components/blobby)                               |                                                  |
-| [Rust][rust]              | [`./rust/components/http-hello-world`](./golang/components/http-hello-world)           |                                                  |
-| [Rust][rust]              | [`./rust/components/http-jsonify`](./golang/components/http-jsonify)                   | `ghcr.io/wasmcloud/component-http-jsonify:0.1.1` |
-| [Rust][rust]              | [`./rust/components/http-keyvalue-counter`](./golang/components/http-keyvalue-counter) |                                                  |
+| Language                  | Where you should start                                                                 | OCI Artifact                                              |
+|---------------------------|----------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| Golang ([TinyGo][tinygo]) | [`./golang/components/http-hello-world`](./golang/components/http-hello-world)         |                                                           |
+| Golang ([TinyGo][tinygo]) | [`./golang/components/http-echo-tinygo`](./golang/components/http-echo-tinygo)         |                                                           |
+| [Python][python]          | [`./python/components/http-hello-world`](./golang/components/http-hello-world)         |                                                           |
+| [Rust][rust]              | [`./rust/components/echo-messaging`](./golang/components/echo-messaging)               | `ghcr.io/wasmcloud/component-echo-messaging:0.1.0`        |
+| [Rust][rust]              | [`./rust/components/blobby`](./golang/components/blobby)                               | `ghcr.io/wasmcloud/component-blobby:0.4.0`                |
+| [Rust][rust]              | [`./rust/components/http-hello-world`](./golang/components/http-hello-world)           | `ghcr.io/wasmcloud/component-http-hello-world:0.1.0`      |
+| [Rust][rust]              | [`./rust/components/http-jsonify`](./golang/components/http-jsonify)                   | `ghcr.io/wasmcloud/component-http-jsonify:0.1.1`          |
+| [Rust][rust]              | [`./rust/components/http-keyvalue-counter`](./golang/components/http-keyvalue-counter) | `ghcr.io/wasmcloud/component-http-keyvalue-counter:0.1.0` |
 
 Start components with `wash`, either from file or OCI reference (if available):
 
