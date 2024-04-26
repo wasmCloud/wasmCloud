@@ -174,7 +174,8 @@ impl SubcommandRunner {
             .filter(|(k, _)| k.starts_with(&env_prefix))
             .collect();
         plugin.store.data_mut().ctx = WasiCtxBuilder::new()
-            .inherit_network()
+            // Disable socket connections for now. We may gradually open this up later
+            .socket_addr_check(|_, _| false)
             .inherit_stderr()
             .inherit_stdin()
             .inherit_stdio()
