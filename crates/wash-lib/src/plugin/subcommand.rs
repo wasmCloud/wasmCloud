@@ -95,7 +95,7 @@ impl SubcommandRunner {
 
         let component = Component::from_file(&self.engine, &path)?;
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::command::add_to_linker(&mut linker)?;
+        wasmtime_wasi::bindings::Command::add_to_linker(&mut linker, |state: &mut Data| state)?;
         wasmtime_wasi_http::bindings::http::outgoing_handler::add_to_linker(
             &mut linker,
             |state: &mut Data| state,
@@ -167,8 +167,6 @@ impl SubcommandRunner {
             .get_mut(plugin_id)
             .ok_or_else(|| anyhow::anyhow!("Plugin with id {plugin_id} does not exist"))?;
 
-        let dir = cap_std::fs::Dir::open_ambient_dir(plugin_dir, cap_std::ambient_authority())
-            .context("Failed to open plugin directory")?;
         let env_prefix = format!("WASH_PLUGIN_{}_", plugin_id.to_uppercase());
         let vars: Vec<_> = std::env::vars()
             .filter(|(k, _)| k.starts_with(&env_prefix))
@@ -180,7 +178,8 @@ impl SubcommandRunner {
             .inherit_stdin()
             .inherit_stdio()
             .inherit_stdout()
-            .preopened_dir(dir, DirPerms::all(), FilePerms::all(), "/")
+            .preopened_dir(plugin_dir, "/", DirPerms::all(), FilePerms::all())
+            .context("Error when preopening plugin dir")?
             .args(args)
             .envs(&vars)
             .build();
