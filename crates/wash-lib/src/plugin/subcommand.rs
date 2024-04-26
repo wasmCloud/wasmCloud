@@ -1,7 +1,12 @@
-wasmtime::component::bindgen!({
-    world: "subcommands",
-    async: true,
-});
+mod bindings {
+    wasmtime::component::bindgen!({
+        world: "subcommands",
+        async: true,
+    });
+}
+
+pub use bindings::exports::wasmcloud::wash::subcommand::Metadata;
+use bindings::Subcommands;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +18,6 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 use wasmtime_wasi_http::WasiHttpCtx;
 
 use super::Data;
-use exports::wasmcloud::wash::subcommand::Metadata;
 
 struct InstanceData {
     instance: Subcommands,
@@ -102,8 +106,10 @@ impl SubcommandRunner {
         )?;
 
         let (instance, _) = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
-
-        let metadata = instance.interface0.call_register(&mut store).await?;
+        let metadata = instance
+            .wasmcloud_wash_subcommand()
+            .call_register(&mut store)
+            .await?;
         let maybe_existing = self.plugins.insert(
             metadata.id.clone(),
             InstanceData {
@@ -179,7 +185,7 @@ impl SubcommandRunner {
             .build();
         plugin
             .instance
-            .interface1
+            .wasi_cli_run()
             .call_run(&mut plugin.store)
             .await
             .context("Error when running wasm component")?

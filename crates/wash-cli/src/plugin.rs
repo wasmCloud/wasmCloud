@@ -205,9 +205,10 @@ pub async fn handle_install(
         digest.update(data);
         let hash = format!("{:x}", digest.finalize());
         let sanitized = expected_digest.trim().to_lowercase();
-        if hash != sanitized {
-            anyhow::bail!("Digest mismatch. Expected {sanitized}, got {hash}",);
-        }
+        anyhow::ensure!(
+            hash != sanitized,
+            "Digest mismatch. Expected {sanitized}, got {hash}"
+        );
     }
 
     spinner.update_spinner_message(" Loading existing plugins");
