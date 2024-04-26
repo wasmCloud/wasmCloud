@@ -42,6 +42,12 @@ description = "a component (in Rust) that echoes a payload received in a message
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/components/echo-messaging"
 
+[[component]]
+name = "wash-plugin-rust"
+description = "a component (in Rust) that can be used as a plugin for the Wash CLI"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/rust/components/wash-plugin-rust"
+
 [[provider]]
 name = "messaging-nats"
 description = "a capability provider with scaffolding to implement the `wasmcloud:messaging` interface for pubsub"
