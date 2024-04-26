@@ -1,0 +1,27 @@
+name: Publish Wash Plugins wit
+
+on:
+  push:
+    tags:
+      - 'wash-plugin-v*'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Extract tag context
+      id: ctx
+      run: |
+          version=${GITHUB_REF_NAME#wash-plugin-v}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "version is ${version}"
+    - name: Build
+      run: |
+        cd crates/
+        tar czf wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz wash-lib/wit
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: crates/wash-plugin-${{ steps.ctx.outputs.version }}.tar.gz

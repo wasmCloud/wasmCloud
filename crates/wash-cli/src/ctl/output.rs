@@ -7,9 +7,7 @@ use term_table::{
     table_cell::{Alignment, TableCell},
     Table,
 };
-use wash_lib::{
-    cli::CommandOutput, plugin::subcommand::exports::wasmcloud::wash::subcommand::Metadata,
-};
+use wash_lib::{cli::CommandOutput, plugin::subcommand::Metadata};
 use wasmcloud_control_interface::{Host, HostInventory, InterfaceLinkDefinition};
 
 use crate::util::format_optional;

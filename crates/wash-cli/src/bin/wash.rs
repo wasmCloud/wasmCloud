@@ -88,6 +88,7 @@ Configure:
   drain        Manage contents of local wasmCloud caches
   keys         Utilities for generating and managing signing keys
   claims       Generate and manage JWTs for wasmCloud components and capability providers
+  plugin       Manage wash plugins
 
 Options:
   -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
@@ -223,33 +224,36 @@ async fn main() {
     let mut command = Cli::command();
     // Load plugins if they are not disabled
     let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
-        let (plugins, dir) = load_plugins().await;
-        for plugin in plugins.all_metadata().into_iter().cloned() {
-            if command.find_subcommand(&plugin.id).is_some() {
-                eprintln!(
-                    "Plugin ID {} matches an existing subcommand, skipping",
-                    plugin.id
-                );
-                continue;
+        if let Some((plugins, dir)) = load_plugins().await {
+            for plugin in plugins.all_metadata().into_iter().cloned() {
+                if command.find_subcommand(&plugin.id).is_some() {
+                    tracing::error!(
+                        id = %plugin.id,
+                        "Plugin ID matches an existing subcommand, skipping",
+                    );
+                    continue;
+                }
+                let subcmd = Command::new(plugin.id)
+                    .about(plugin.description)
+                    .author(plugin.author)
+                    .version(plugin.version)
+                    .display_name(plugin.name)
+                    .args(plugin.flags.into_iter().map(|(flag, help)| {
+                        let trimmed = flag.trim_start_matches('-').to_owned();
+                        Arg::new(trimmed.clone()).long(trimmed).help(help)
+                    }))
+                    .args(
+                        plugin
+                            .arguments
+                            .into_iter()
+                            .map(|(name, help)| Arg::new(name).help(help)),
+                    );
+                command = command.subcommand(subcmd);
             }
-            let subcmd = Command::new(plugin.id)
-                .about(plugin.description)
-                .author(plugin.author)
-                .version(plugin.version)
-                .display_name(plugin.name)
-                .args(plugin.flags.into_iter().map(|(flag, help)| {
-                    let trimmed = flag.trim_start_matches('-').to_owned();
-                    Arg::new(trimmed.clone()).long(trimmed).help(help)
-                }))
-                .args(
-                    plugin
-                        .arguments
-                        .into_iter()
-                        .map(|(name, help)| Arg::new(name).help(help)),
-                );
-            command = command.subcommand(subcmd);
+            Some((plugins, dir))
+        } else {
+            None
         }
-        Some((plugins, dir))
     } else {
         None
     };
@@ -443,28 +447,28 @@ fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
     bail!("The `wash {command}` command is experimental and may change in future releases. Set the `WASH_EXPERIMENTAL` environment variable or `--experimental` flag to `true` to use this command.")
 }
 
-/// Helper for loading plugins. This function does not return an error because it will exit the
-/// process in case of a fatal error. As such, this shouldn't be called after the CLI is parsed.
-async fn load_plugins() -> (SubcommandRunner, PathBuf) {
+/// Helper for loading plugins. If plugins fail to load, we log the error and return `None` so
+/// execution can continue
+async fn load_plugins() -> Option<(SubcommandRunner, PathBuf)> {
     // We need to use env vars here because the plugin loading needs to be initialized before
     // the CLI is parsed
     let plugin_dir = match ensure_plugin_dir(std::env::var("WASH_PLUGIN_DIR").ok()).await {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!("Could not load wash plugin directory: {}", e);
-            std::process::exit(1);
+            tracing::error!(err = ?e, "Could not load wash plugin directory");
+            return None;
         }
     };
 
     let plugins = match wash_cli::util::load_plugins(&plugin_dir).await {
         Ok(plugins) => plugins,
         Err(e) => {
-            eprintln!("Could not load wash plugins: {}", e);
-            std::process::exit(1);
+            tracing::error!(err = ?e, "Could not load wash plugins");
+            return None;
         }
     };
 
-    (plugins, plugin_dir)
+    Some((plugins, plugin_dir))
 }
 
 async fn ensure_plugin_scratch_dir_exists(
