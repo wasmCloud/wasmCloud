@@ -1,8 +1,15 @@
-use std::{fs::File, io::Read};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use term_table::{Table, TableStyle};
-use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
+use wash_lib::{
+    config::{cfg_dir, DEFAULT_NATS_TIMEOUT_MS},
+    plugin::{subcommand::SubcommandRunner, PLUGIN_DIR},
+};
 
 pub fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
@@ -30,6 +37,52 @@ pub fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     let json: serde_json::Value =
         serde_json::from_str(payload).context("failed to encode string as JSON")?;
     rmp_serde::to_vec_named(&json).context("failed to encode JSON as msgpack")
+}
+
+/// Ensure that the given plugin directory exists or return the default plugin dir path
+pub async fn ensure_plugin_dir(dir: Option<impl AsRef<Path>>) -> Result<PathBuf> {
+    let plugin_dir = match dir.map(|dir| dir.as_ref().to_path_buf()) {
+        Some(dir) => dir,
+        None => cfg_dir()?.join(PLUGIN_DIR),
+    };
+
+    if !tokio::fs::try_exists(&plugin_dir).await.unwrap_or(false) {
+        tokio::fs::create_dir(&plugin_dir).await?;
+    }
+    Ok(plugin_dir)
+}
+
+/// Helper for loading plugins from the given directory
+pub async fn load_plugins(plugin_dir: impl AsRef<Path>) -> anyhow::Result<SubcommandRunner> {
+    let mut readdir = tokio::fs::read_dir(&plugin_dir)
+        .await
+        .context("Unable to read plugin directory")?;
+
+    let mut plugins = SubcommandRunner::new().context("Could not inititalize plugin runner")?;
+
+    // We load each plugin separately so we only warn if a plugin fails to load
+    while let Some(entry) = readdir.next_entry().await.transpose() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("WARN: Could not read plugin directory entry. Skipping: {e:?}");
+                continue;
+            }
+        };
+
+        if entry
+            .file_type()
+            .await
+            .map(|ft| ft.is_file())
+            .unwrap_or(false)
+        {
+            if let Err(e) = plugins.add_plugin(entry.path()).await {
+                eprintln!("WARN: Couldn't load plugin, skipping: {:?}", e);
+            }
+        }
+    }
+
+    Ok(plugins)
 }
 
 use once_cell::sync::OnceCell;

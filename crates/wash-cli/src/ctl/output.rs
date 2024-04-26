@@ -7,7 +7,9 @@ use term_table::{
     table_cell::{Alignment, TableCell},
     Table,
 };
-use wash_lib::cli::CommandOutput;
+use wash_lib::{
+    cli::CommandOutput, plugin::subcommand::exports::wasmcloud::wash::subcommand::Metadata,
+};
 use wasmcloud_control_interface::{Host, HostInventory, InterfaceLinkDefinition};
 
 use crate::util::format_optional;
@@ -263,6 +265,31 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
             2,
             Alignment::Center,
         )]));
+    });
+
+    table.render()
+}
+
+/// Helper function to transform a list of plugin metadata into a table string for printing
+pub fn plugins_table(list: Vec<&Metadata>) -> String {
+    let mut table = Table::new();
+    crate::util::configure_table_style(&mut table);
+
+    table.add_row(Row::new(vec![
+        TableCell::new_with_alignment("Name", 1, Alignment::Left),
+        TableCell::new_with_alignment("ID", 1, Alignment::Left),
+        TableCell::new_with_alignment("Version", 1, Alignment::Left),
+        TableCell::new_with_alignment("Author", 1, Alignment::Left),
+        TableCell::new_with_alignment("Description", 1, Alignment::Left),
+    ]));
+    list.into_iter().for_each(|metadata| {
+        table.add_row(Row::new(vec![
+            TableCell::new_with_alignment(&metadata.name, 1, Alignment::Left),
+            TableCell::new_with_alignment(&metadata.id, 1, Alignment::Left),
+            TableCell::new_with_alignment(&metadata.version, 1, Alignment::Left),
+            TableCell::new_with_alignment(&metadata.author, 1, Alignment::Left),
+            TableCell::new_with_alignment(&metadata.description, 1, Alignment::Left),
+        ]));
     });
 
     table.render()

@@ -45,11 +45,13 @@ serde_json = { workspace = true, features = ["raw_value"] }
 serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 term-table = { workspace = true }
 termcolor = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tar = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = [
@@ -87,7 +89,6 @@ assert-json-diff = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
-tempfile = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }

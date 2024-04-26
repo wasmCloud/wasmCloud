@@ -18,8 +18,10 @@ use wash_cli::drain;
 use wash_cli::generate::{self, NewCliCommand};
 use wash_cli::keys::{self, KeysCliCommand};
 use wash_cli::par::{self, ParCliCommand};
+use wash_cli::plugin::{self, PluginCommand};
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::up::{self, UpCommand};
+use wash_cli::util::ensure_plugin_dir;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
 use wash_lib::cli::get::GetCommand;
@@ -33,10 +35,8 @@ use wash_lib::cli::start::StartCommand;
 use wash_lib::cli::stop::StopCommand;
 use wash_lib::cli::update::UpdateCommand;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::cfg_dir;
 use wash_lib::drain::Drain as DrainSelection;
 use wash_lib::plugin::subcommand::SubcommandRunner;
-use wash_lib::plugin::PLUGIN_DIR;
 
 const HELP: &str = r"
 _________________________________________________________________________________
@@ -177,6 +177,9 @@ enum CliCommand {
     /// Create, inspect, and modify capability provider archive files
     #[clap(name = "par", subcommand)]
     Par(ParCliCommand),
+    /// Manage wash plugins
+    #[clap(name = "plugin", subcommand)]
+    Plugin(PluginCommand),
     /// Push an artifact to an OCI compliant registry
     #[clap(name = "push")]
     RegPush(RegistryPushCommand),
@@ -337,6 +340,7 @@ async fn main() {
         CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
+        CliCommand::Plugin(plugin_cli) => plugin::handle_command(plugin_cli, output_kind).await,
         CliCommand::RegPush(reg_push_cli) => {
             common::registry_cmd::registry_push(reg_push_cli, output_kind).await
         }
@@ -444,64 +448,21 @@ fn experimental_error_message(command: &str) -> anyhow::Result<CommandOutput> {
 async fn load_plugins() -> (SubcommandRunner, PathBuf) {
     // We need to use env vars here because the plugin loading needs to be initialized before
     // the CLI is parsed
-    let plugin_dir = std::env::var("WASH_PLUGIN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let dir = match cfg_dir() {
-                Ok(dir) => dir,
-                Err(e) => {
-                    eprintln!("Could not load wash directory: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            dir.join(PLUGIN_DIR)
-        });
-
-    // Ensure the plugin directory exists
-    if !tokio::fs::try_exists(&plugin_dir).await.unwrap_or(false) {
-        if let Err(e) = tokio::fs::create_dir(&plugin_dir).await {
-            eprintln!("Could not create plugin directory: {e:?}");
+    let plugin_dir = match ensure_plugin_dir(std::env::var("WASH_PLUGIN_DIR").ok()).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Could not load wash plugin directory: {}", e);
             std::process::exit(1);
         }
-    }
+    };
 
-    let mut plugins = match SubcommandRunner::new() {
+    let plugins = match wash_cli::util::load_plugins(&plugin_dir).await {
         Ok(plugins) => plugins,
         Err(e) => {
-            eprintln!("Could not load plugins: {e:?}");
+            eprintln!("Could not load wash plugins: {}", e);
             std::process::exit(1);
         }
     };
-
-    let mut readdir = match tokio::fs::read_dir(&plugin_dir).await {
-        Ok(readdir) => readdir,
-        Err(e) => {
-            eprintln!("Could not read plugin directory: {e:?}");
-            std::process::exit(1);
-        }
-    };
-
-    // We load each plugin separately so we only warn if a plugin fails to load
-    while let Some(entry) = readdir.next_entry().await.transpose() {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                eprintln!("WARN: Could not read plugin directory entry. Skipping: {e:?}");
-                continue;
-            }
-        };
-
-        if !entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_dir())
-            .unwrap_or(false)
-        {
-            if let Err(e) = plugins.add_plugin(entry.path()).await {
-                eprintln!("WARN: Couldn't load plugin, skipping: {:?}", e);
-            }
-        }
-    }
 
     (plugins, plugin_dir)
 }

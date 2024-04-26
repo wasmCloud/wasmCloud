@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use wash_lib::cli::OutputKind;
@@ -36,7 +38,7 @@ impl Spinner {
 
     /// Handles updating the spinner for text output
     /// JSON output will be corrupted with a spinner
-    pub fn update_spinner_message(&self, msg: String) {
+    pub fn update_spinner_message(&self, msg: impl Into<Cow<'static, str>>) {
         match &self.spinner {
             Some(spinner) => {
                 spinner.set_prefix(">>>");
