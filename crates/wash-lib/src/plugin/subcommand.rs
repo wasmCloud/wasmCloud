@@ -4,9 +4,9 @@ wasmtime::component::bindgen!({
 });
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, Ok};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
@@ -18,6 +18,7 @@ use exports::wasmcloud::wash::subcommand::Metadata;
 struct InstanceData {
     instance: Subcommands,
     metadata: Metadata,
+    loaded_path: PathBuf,
     store: wasmtime::Store<Data>,
 }
 
@@ -62,6 +63,21 @@ impl SubcommandRunner {
     /// or if a plugin with the same ID has already been loaded. As such, errors from this function
     /// should be treated as a warning as execution can continue
     pub async fn add_plugin(&mut self, path: impl AsRef<Path>) -> anyhow::Result<Metadata> {
+        self.add_plugin_internal(path, false).await
+    }
+
+    /// Same as [`add_plugin`](Self::add_plugin), but will not return an error if the plugin exists,
+    /// instead updating the metadata for the plugin. This is an upsert operation and will register
+    /// the plugin if it does not exist.
+    pub async fn update_plugin(&mut self, path: impl AsRef<Path>) -> anyhow::Result<Metadata> {
+        self.add_plugin_internal(path, true).await
+    }
+
+    async fn add_plugin_internal(
+        &mut self,
+        path: impl AsRef<Path>,
+        update: bool,
+    ) -> anyhow::Result<Metadata> {
         // We create a bare context here for registration and then update the store with a new context before running
         let ctx = WasiCtxBuilder::new().build();
 
@@ -73,7 +89,7 @@ impl SubcommandRunner {
 
         let mut store = wasmtime::Store::new(&self.engine, ctx);
 
-        let component = Component::from_file(&self.engine, path)?;
+        let component = Component::from_file(&self.engine, &path)?;
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::command::add_to_linker(&mut linker)?;
         wasmtime_wasi_http::bindings::http::outgoing_handler::add_to_linker(
@@ -84,26 +100,31 @@ impl SubcommandRunner {
             &mut linker,
             |state: &mut Data| state,
         )?;
-        // Don't think we need this, but keeping it for reference
-        // Subcommands::add_to_linker(&mut linker, |state: &mut Data| state)?;
 
         let (instance, _) = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
 
         let metadata = instance.interface0.call_register(&mut store).await?;
-        if let Some(plugin) = self.plugins.insert(
+        let maybe_existing = self.plugins.insert(
             metadata.id.clone(),
             InstanceData {
                 instance,
                 metadata: metadata.clone(),
+                loaded_path: path.as_ref().to_owned(),
                 store,
             },
-        ) {
-            // Insert the existing plugin back into the map
-            let id = plugin.metadata.id.clone();
-            self.plugins.insert(plugin.metadata.id.clone(), plugin);
-            return Err(anyhow::anyhow!("Plugin with id {id} already exists"));
+        );
+
+        match (update, maybe_existing) {
+            // If we're updating and the plugin exists already, overwrite is ok.
+            (true, _) | (false, None) => Ok(metadata),
+            // If update isn't set, then we don't allow the update
+            (false, Some(plugin)) => {
+                // Insert the existing plugin back into the map
+                let id = plugin.metadata.id.clone();
+                self.plugins.insert(plugin.metadata.id.clone(), plugin);
+                Err(anyhow::anyhow!("Plugin with id {id} already exists"))
+            }
         }
-        Ok(metadata)
     }
 
     /// Get the metadata for a plugin with the given ID if it exists.
@@ -114,6 +135,11 @@ impl SubcommandRunner {
     /// Returns a list of all metadata for all plugins.
     pub fn all_metadata(&self) -> Vec<&Metadata> {
         self.plugins.values().map(|data| &data.metadata).collect()
+    }
+
+    /// Returns the path to the plugin with the given ID.
+    pub fn path(&self, id: &str) -> Option<&Path> {
+        self.plugins.get(id).map(|p| p.loaded_path.as_path())
     }
 
     /// Run a subcommand with the given name and args. The plugin will inherit all
