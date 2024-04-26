@@ -258,6 +258,41 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvRedisProvider {
     }
 }
 
+impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
+    async fn get_many(
+        &self,
+        ctx: Option<Context>,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
+        // TODO: Use bucket
+        _ = bucket;
+        Ok(self.exec_cmd(ctx, &mut Cmd::mget(&keys)).await)
+    }
+
+    async fn set_many(
+        &self,
+        ctx: Option<Context>,
+        bucket: String,
+        items: Vec<(String, Vec<u8>)>,
+    ) -> anyhow::Result<Result<()>> {
+        // TODO: Use bucket
+        _ = bucket;
+        Ok(self.exec_cmd(ctx, &mut Cmd::mset(&items)).await)
+    }
+
+    async fn delete_many(
+        &self,
+        ctx: Option<Context>,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> anyhow::Result<Result<()>> {
+        // TODO: Use bucket
+        _ = bucket;
+        Ok(self.exec_cmd(ctx, &mut Cmd::del(&keys)).await)
+    }
+}
+
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
