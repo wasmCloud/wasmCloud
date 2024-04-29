@@ -5974,7 +5974,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "async-nats",
