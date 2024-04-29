@@ -27,35 +27,35 @@ use crate::{
 /// keys, capability claims, and additional friendly information like name, version, revision, etc.
 ///
 /// # Arguments
-/// * `actor_config`: [`ActorConfig`] for required information to find, build, and sign an actor
+/// * `component_config`: [`ComponentConfig`] for required information to find, build, and sign an actor
 /// * `language_config`: [`LanguageConfig`] specifying which language the actor is written in
 /// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and [`CommonConfig::version`]
 /// * `signing`: Optional [`SignConfig`] with information for signing the actor. If omitted, the actor will only be built
 pub fn build_actor(
-    actor_config: &ComponentConfig,
+    component_config: &ComponentConfig,
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
-    let actor_wasm_path = if let Some(raw_command) = actor_config.build_command.as_ref() {
-        build_custom_actor(common_config, actor_config, raw_command)?
+    let actor_wasm_path = if let Some(raw_command) = component_config.build_command.as_ref() {
+        build_custom_actor(common_config, component_config, raw_command)?
     } else {
         // Build actor based on language toolchain
         let actor_wasm_path = match language_config {
             LanguageConfig::Rust(rust_config) => {
-                build_rust_actor(common_config, rust_config, actor_config)?
+                build_rust_actor(common_config, rust_config, component_config)?
             }
             LanguageConfig::TinyGo(tinygo_config) => {
                 let actor_wasm_path =
-                    build_tinygo_actor(common_config, tinygo_config, actor_config)?;
+                    build_tinygo_actor(common_config, tinygo_config, component_config)?;
 
                 // Perform embedding, if necessary
                 if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 =
-                    &actor_config.wasm_target
+                    &component_config.wasm_target
                 {
                     embed_wasm_component_metadata(
                     &common_config.path,
-                    actor_config
+                    component_config
                         .wit_world
                         .as_ref()
                         .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
@@ -65,12 +65,12 @@ pub fn build_actor(
                 };
                 actor_wasm_path
             }
-            LanguageConfig::Other(_) if actor_config.build_command.is_some() => {
+            LanguageConfig::Other(_) if component_config.build_command.is_some() => {
                 // SAFETY: We checked that the build command is not None above
                 build_custom_actor(
                     common_config,
-                    actor_config,
-                    actor_config.build_command.as_ref().unwrap(),
+                    component_config,
+                    component_config.build_command.as_ref().unwrap(),
                 )?
             }
             LanguageConfig::Other(other) => {
@@ -79,8 +79,8 @@ pub fn build_actor(
         };
 
         // If the actor has been configured as WASI Preview2, adapt it from preview1
-        if actor_config.wasm_target == WasmTarget::WasiPreview2 {
-            let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
+        if component_config.wasm_target == WasmTarget::WasiPreview2 {
+            let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
             // Adapt the component, using the adapter that is available locally
             let wasm_bytes = adapt_wasi_preview1_component(&actor_wasm_path, adapter_wasm_bytes)
                 .with_context(|| {
@@ -103,7 +103,7 @@ pub fn build_actor(
 
     // Sign the wasm file (if configured)
     if let Some(cfg) = signing_config {
-        sign_actor_wasm(common_config, actor_config, cfg, actor_wasm_path)
+        sign_actor_wasm(common_config, component_config, cfg, actor_wasm_path)
     } else {
         Ok(actor_wasm_path)
     }
@@ -112,14 +112,14 @@ pub fn build_actor(
 /// Sign the component at `actor_wasm_path` using the provided configuration
 pub fn sign_actor_wasm(
     common_config: &CommonConfig,
-    actor_config: &ComponentConfig,
+    component_config: &ComponentConfig,
     signing_config: &SignConfig,
     actor_wasm_path: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     // If we're building for WASI preview1 or preview2, we're targeting components-first
     // functionality, and the signed module should be marked as experimental
-    let mut tags = actor_config.tags.clone().unwrap_or_default();
-    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+    let mut tags = component_config.tags.clone().unwrap_or_default();
+    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &component_config.wasm_target {
         tags.insert(WASMCLOUD_WASM_TAG_EXPERIMENTAL.into());
     };
 
@@ -130,7 +130,7 @@ pub fn sign_actor_wasm(
         .to_string();
 
     // Output the signed file in the same directory with a _s suffix
-    let destination = if let Some(destination) = actor_config.destination.clone() {
+    let destination = if let Some(destination) = component_config.destination.clone() {
         destination
     } else {
         PathBuf::from(source.replace(".wasm", "_s.wasm"))
@@ -143,7 +143,7 @@ pub fn sign_actor_wasm(
             name: Some(common_config.name.clone()),
             ver: Some(common_config.version.to_string()),
             rev: Some(common_config.revision),
-            call_alias: actor_config.call_alias.clone(),
+            call_alias: component_config.call_alias.clone(),
             issuer: signing_config.issuer.clone(),
             subject: signing_config.subject.clone(),
             common: GenerateCommon {
@@ -167,7 +167,7 @@ pub fn sign_actor_wasm(
 fn build_rust_actor(
     common_config: &CommonConfig,
     rust_config: &RustConfig,
-    actor_config: &ComponentConfig,
+    component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let mut command = match rust_config.cargo_path.as_ref() {
         Some(path) => process::Command::new(path),
@@ -177,7 +177,7 @@ fn build_rust_actor(
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
-    let build_target: &str = rust_config.build_target(&actor_config.wasm_target);
+    let build_target: &str = rust_config.build_target(&component_config.wasm_target);
     let result = command
         .args(["build", "--release", "--target", build_target])
         .status()
@@ -238,7 +238,7 @@ fn build_rust_actor(
 fn build_tinygo_actor(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
-    actor_config: &ComponentConfig,
+    component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
     let file_path = PathBuf::from(&filename);
@@ -272,11 +272,11 @@ fn build_tinygo_actor(
     // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
     // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
     // we check for the `wit` directory which would be passed through to bindgen.
-    if actor_config.wit_world.is_some() {
+    if component_config.wit_world.is_some() {
         generate_tinygo_bindgen(
             &output_dir,
             common_config.path.join("wit"),
-            actor_config.wit_world.as_ref().context(
+            component_config.wit_world.as_ref().context(
                 "missing `wit_world` in wasmcloud.toml ([actor] section) to run go bindgen generate",
             )?,
         )
@@ -289,7 +289,7 @@ fn build_tinygo_actor(
             "-o",
             filename.as_str(),
             "-target",
-            tinygo_config.build_target(&actor_config.wasm_target),
+            tinygo_config.build_target(&component_config.wasm_target),
             "-scheduler",
             "none",
             "-no-debug",
@@ -323,7 +323,7 @@ fn build_tinygo_actor(
 /// Builds a wasmCloud actor using a custom override command, then returns the path to the file.
 fn build_custom_actor(
     common_config: &CommonConfig,
-    actor_config: &ComponentConfig,
+    component_config: &ComponentConfig,
     raw_command: &str,
 ) -> Result<PathBuf> {
     // Change directory into the project directory
@@ -350,7 +350,7 @@ fn build_custom_actor(
         );
     }
 
-    let actor_path = actor_config
+    let actor_path = component_config
         .build_artifact
         .clone()
         .map(|p| {
