@@ -20,7 +20,9 @@ use tokio::{select, spawn, try_join};
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::rpc::{health_subject, link_del_subject, link_put_subject, shutdown_subject};
-use wasmcloud_core::{HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition};
+use wasmcloud_core::{
+    HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, LatticeTarget,
+};
 
 #[cfg(feature = "otel")]
 use wasmcloud_core::TraceContext;
@@ -486,15 +488,14 @@ where
 {
     if ld.source_id == connection.provider_key {
         if let Err(e) = provider.delete_link_as_source(&ld.target).await {
-            error!(error = %e, "failed to delete link");
+            error!(error = %e, target = &ld.target, "failed to delete link to component");
         }
     } else if ld.target == connection.provider_key {
-        connection.delete_link(&ld.source_id).await;
         if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
-            error!(error = %e, "failed to delete link");
+            error!(error = %e, source = &ld.source_id, "failed to delete link from component");
         }
     }
-    Ok(())
+    Ok(connection.delete_link(&ld.source_id, &ld.target).await)
 }
 
 /// Handle provider commands in a loop.
@@ -563,8 +564,8 @@ async fn handle_provider_commands(
             req = link_put.recv() => {
                 if let Some((ld, tx)) = req {
                     // If the link has already been put, return early
-                    if connection.is_linked(&ld.source_id).await {
-                        warn!("Ignoring duplicate link put");
+                    if connection.is_linked(&ld.source_id, &ld.target).await {
+                        warn!(source = &ld.source_id, target = &ld.target, "Ignoring duplicate link put");
                     } else {
                         info!("Linking component with provider");
                         if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
@@ -651,8 +652,7 @@ pub async fn run_provider(
     })?;
     let connection = get_connection();
 
-    // Pre-populate provider and bridge with initial set of link definitions
-    // Initialization of any link is fatal for provider startup
+    // Provide all links to the provider at startup to establish the initial state
     for ld in link_definitions {
         if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
             error!(
@@ -661,6 +661,8 @@ pub async fn run_provider(
             );
         }
     }
+
+    debug!(?friendly_name, "provider finished initialization");
     Ok(handle_provider_commands(
         provider, connection, quit_rx, quit_tx, commands,
     ))
@@ -671,8 +673,12 @@ type SourceId = String;
 
 #[derive(Clone)]
 pub struct ProviderConnection {
-    /// Links currently active on the provider, by Source ID
-    links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
+    /// Links from the provider to other components, aka where the provider is the
+    /// source of the link. Indexed by the component ID of the target
+    source_links: Arc<RwLock<HashMap<LatticeTarget, InterfaceLinkDefinition>>>,
+    /// Links from other components to the provider, aka where the provider is the
+    /// target of the link. Indexed by the component ID of the source
+    target_links: Arc<RwLock<HashMap<SourceId, InterfaceLinkDefinition>>>,
 
     /// NATS client used for performing RPCs
     nats: Arc<async_nats::Client>,
@@ -680,6 +686,7 @@ pub struct ProviderConnection {
     /// Lattice name
     lattice: String,
     host_id: String,
+    // TODO: remove link name
     link_name: String,
     provider_key: String,
 
@@ -728,7 +735,8 @@ impl ProviderConnection {
         config: HashMap<String, String>,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
-            links: Arc::default(),
+            source_links: Arc::default(),
+            target_links: Arc::default(),
             nats,
             lattice,
             host_id,
@@ -780,28 +788,50 @@ impl ProviderConnection {
         ))
     }
 
-    /// Get the provider key that was assigned to this host @ startup
+    /// Get the provider key that was assigned to this host at startup
     #[must_use]
     pub fn provider_key(&self) -> &str {
         &self.provider_key
     }
 
-    /// Stores component with link definition
+    /// Stores link in the [ProviderConnection], either as a source link or target link
+    /// depending on if the provider is the source or target of the link
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
-        let mut update = self.links.write().await;
-        update.insert(ld.source_id.to_string(), ld);
+        if ld.source_id == self.provider_key {
+            self.source_links
+                .write()
+                .await
+                .insert(ld.target.to_string(), ld);
+        } else {
+            self.target_links
+                .write()
+                .await
+                .insert(ld.source_id.to_string(), ld);
+        }
     }
 
-    /// Deletes link
-    pub async fn delete_link(&self, component_id: &str) {
-        let mut update = self.links.write().await;
-        update.remove(component_id);
+    /// Deletes link from the [ProviderConnection], either a source link or target link
+    /// based on if the provider is the source or target of the link
+    pub async fn delete_link(&self, source_id: &str, target: &str) {
+        if source_id == self.provider_key {
+            self.source_links.write().await.remove(source_id);
+        } else if target == self.provider_key {
+            self.target_links.write().await.remove(target);
+        }
     }
 
-    /// Returns true if the component is linked
-    pub async fn is_linked(&self, component_id: &str) -> bool {
-        let read = self.links.read().await;
-        read.contains_key(component_id)
+    /// Returns true if the source is linked to this provider or if the provider is linked to the target
+    pub async fn is_linked(&self, source_id: &str, target_id: &str) -> bool {
+        // Provider is the source of the link, so we check if the target is linked
+        if self.provider_key == source_id {
+            self.source_links.read().await.contains_key(target_id)
+        // Provider is the target of the link, so we check if the source is linked
+        } else if self.provider_key == target_id {
+            self.target_links.read().await.contains_key(source_id)
+        // Shouldn't occur, but if the provider is neither source nor target, it's not linked
+        } else {
+            false
+        }
     }
 
     /// flush nats - called before main process exits
