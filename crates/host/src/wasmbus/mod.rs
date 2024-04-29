@@ -36,7 +36,7 @@ use serde_json::json;
 use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{interval_at, Instant};
+use tokio::time::{interval_at, timeout, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -460,6 +460,7 @@ pub struct Host {
     component_claims: Arc<RwLock<HashMap<ComponentId, jwt::Claims<jwt::Component>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
+    max_execution_time: Duration,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -938,6 +939,7 @@ impl Host {
             component_claims: Arc::default(),
             provider_claims: Arc::default(),
             metrics: Arc::new(metrics),
+            max_execution_time: Duration::from_secs(10 * 60),
         };
 
         let host = Arc::new(host);
@@ -1324,8 +1326,9 @@ impl Host {
             }
         }
 
-        let _calls = spawn({
+        spawn({
             let actor = Arc::clone(&actor);
+            let max_execution_time = self.max_execution_time;
             Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
                 max_instances.get(),
                 move |invocation| {
@@ -1344,11 +1347,12 @@ impl Host {
                                 return;
                             }
                         };
-                        if let Err(err) = {
-                            actor
-                                .handle_invocation(context, params, result_subject, &transmitter)
-                                .await
-                        } {
+                        if let Err(err) = timeout(
+                            max_execution_time,
+                            actor.handle_invocation(context, params, result_subject, &transmitter),
+                        )
+                        .await
+                        {
                             error!(?err, "failed to handle invocation");
                             if let Err(err) = transmitter
                                 .transmit_static(error_subject, format!("{err:#}"))
