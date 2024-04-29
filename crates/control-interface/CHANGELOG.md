@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-4a51868f45b6bff8472b1e9337ca83243ee102e8/>
+<csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
+<csr-id-0c193ff7cdf626b1ad8da11f933456d21be21246/>
+<csr-id-74eb7525a8b0a32d5dfaeb16d347ef3a0ec48b7c/>
+<csr-id-647a6358ffd0355bf00fb53aef18d937ee0e5324/>
+<csr-id-39d4de57e25af8cb4686d53410037c1cc93027ba/>
+<csr-id-5301084bde0db0c65811aa30c48de2a63e091fcf/>
+<csr-id-f43d88283ddc17ed81b1f95bf64b5985bda70fd3/>
+<csr-id-723ae50ea0eff41875f65622ba72cf2c4f53489f/>
+<csr-id-18791e7666b4de2526628e2a973c47b7f51d9481/>
+<csr-id-84fc7a928697c8fc9c6a03e94ed2053783577a4f/>
+<csr-id-6417be87afb6df3e14892022148f38815056104c/>
+<csr-id-a61723a12a298f10e28eb7464a2bb623b5cfe244/>
+<csr-id-17db669d79e242144eeffbd8d2ac2b1ae9edeb35/>
+<csr-id-c654448653db224c6a676ecf43150d880a9daf8c/>
+<csr-id-c49a6ef0b6460b3eb463315fe31878eb71ae5364/>
+<csr-id-7de31820034c4b70ab6edc772713e64aafe294a9/>
+<csr-id-65d2e28d54929b8f4d0b39077ee82ddad2387c8e/>
+<csr-id-57d014fb7fe11542d2e64068ba86e42a19f64f98/>
+<csr-id-4e9bae34fe95ecaffbc81fd452bf29746b4e5856/>
+<csr-id-bdb72eed8778a5d8c59d0b8939f147c374cb671f/>
+<csr-id-d3e6269dc1441b21d4c06d7620e9e7c6d839e211/>
+<csr-id-413410bad26d148aeda28b6403add7842570efac/>
+<csr-id-f8846e022a49d4c9158250af1ab9ae6661bceaf0/>
+<csr-id-79a8f1b03a63a4b5a5295cdf86ef69780bade052/>
+<csr-id-b604a8c7a5f1c9d3b417a178d68d90104d817b3a/>
+<csr-id-98a59529e451214d61acdffe4703552a5f4a231a/>
+<csr-id-f8c2d51f1b049e2035ea0d5df096a129482da7e4/>
+<csr-id-ae3c37c61b20c38abbf8e09b37c546dd1db4db42/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-d4bf78a704affaa84808fb167d3ab1636ffc35ac/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -97,20 +131,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This feature was motivated by 2 major reasons:
    
    1. We have been needing something like this for a while, at the very least for
-      being able to configure link names in an actor at runtime
-   2. There aren't currently any active (yes there were some in the past) efforts
+   being able to configure link names in an actor at runtime
+2. There aren't currently any active (yes there were some in the past) efforts
       to add a generic `wasi:cloud/guest-config` interface that can allow any host
       to provide config values to a component. I want to use this as a springboard
       for the conversation in wasi-cloud as we will start to use it and can give
       active feedback as to how the interface should be shaped
-   
-   With that said, note that this is only going to be added for actors built against
-   the component model. Since this is net new functionality, I didn't think it was
-   worth it to try to backport.
-   
-   As for testing, I have tested that an actor can import the functions and get the values
-   via the various e2e tests and also manually validated that all of the new topics
-   work.
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -202,9 +229,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 63 commits contributed to the release over the course of 171 calendar days.
- - 1092 days passed between releases.
- - 61 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 64 commits contributed to the release over the course of 175 calendar days.
+ - 1096 days passed between releases.
+ - 62 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -214,6 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Bump to v1.0.0 ([`4a51868`](https://github.com/wasmCloud/wasmCloud/commit/4a51868f45b6bff8472b1e9337ca83243ee102e8))
     - Indicate get_response usage ([`7d0a977`](https://github.com/wasmCloud/wasmCloud/commit/7d0a9774b24c182b0e38ecaa0c1c4383c517af45))
@@ -278,6 +306,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Integrate `control-interface` into the workspace ([`18791e7`](https://github.com/wasmCloud/wasmCloud/commit/18791e7666b4de2526628e2a973c47b7f51d9481))
     - Add 'crates/control-interface/' from commit 'cea335729f3bf368178cc6b8745478bdd01c54b5' ([`84fc7a9`](https://github.com/wasmCloud/wasmCloud/commit/84fc7a928697c8fc9c6a03e94ed2053783577a4f))
 </details>
+
+<csr-unknown>
+With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork.<csr-unknown/>
 
 ## v0.3.1 (2021-04-29)
 

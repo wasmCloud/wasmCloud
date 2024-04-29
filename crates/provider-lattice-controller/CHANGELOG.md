@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-4da9d22ea1c578a80107ed010ac174baa46f6a05/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+
 ### Chore
 
  - <csr-id-4da9d22ea1c578a80107ed010ac174baa46f6a05/> remove contract_id
@@ -17,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    necessary before.
    
    This commit removes `contract_id()` as a requirement for providers.
+
+### New Features
+
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Refactor
 
@@ -31,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 36 calendar days.
- - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 5 commits contributed to the release over the course of 41 calendar days.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -42,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
     - Return wrapped `WrpcClient` directly ([`87eb6c8`](https://github.com/wasmCloud/wasmCloud/commit/87eb6c8b2c0bd31def1cfdc6121c612c4dc90871))
     - Remove `ProviderHandler` ([`8082135`](https://github.com/wasmCloud/wasmCloud/commit/8082135282f66b5d56fe6d14bb5ce6dc510d4b63))
     - Remove contract_id ([`4da9d22`](https://github.com/wasmCloud/wasmCloud/commit/4da9d22ea1c578a80107ed010ac174baa46f6a05))

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-955a6893792e86292883e76de57434616c28d380/>
+<csr-id-4da9d22ea1c578a80107ed010ac174baa46f6a05/>
+<csr-id-073b3c21581632f135d47b14b6b13ad13d7d7592/>
+<csr-id-f032a962c6f1c5e1988fb65fd62ad4bc89dd1e54/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -20,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    This commit removes `contract_id()` as a requirement for providers.
 
+### Chore
+
+ - <csr-id-5b1ba2bd545038381c03c5b68615982f360caaf6/> bump to 0.20.0
+
 ### New Features
 
  - <csr-id-71df023d931085ee4ab3e7ff43dade9da161e19b/> add context if missing to messaging-nats-provider
@@ -27,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    part of this process is adopting `wit-bindgen-wrpc` in the host
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
  - <csr-id-f56492ac6b5e6f1274a1f11b061c42cace372122/> migrate to `wrpc:keyvalue`
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -56,8 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 14 commits contributed to the release over the course of 36 calendar days.
- - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 16 commits contributed to the release over the course of 41 calendar days.
+ - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -67,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Bump to 0.20.0 ([`5b1ba2b`](https://github.com/wasmCloud/wasmCloud/commit/5b1ba2bd545038381c03c5b68615982f360caaf6))
     - Wasmcloud messaging provider directionality ([`27cb86d`](https://github.com/wasmCloud/wasmCloud/commit/27cb86d9e86b09c2da9e23a4ebfbddf22f3abad2))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Add context if missing to messaging-nats-provider ([`71df023`](https://github.com/wasmCloud/wasmCloud/commit/71df023d931085ee4ab3e7ff43dade9da161e19b))

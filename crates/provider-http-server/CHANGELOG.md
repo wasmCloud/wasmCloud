@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-f032a962c6f1c5e1988fb65fd62ad4bc89dd1e54/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### Bug Fixes
+
+ - <csr-id-99e0292434e84d062f0c0a1f00486c9160dc3af0/> handle incoming requests in task
+
+### Chore
+
+ - <csr-id-61e61a6cc174396ea091ed59b88dfd92ef4dba46/> bump to 0.20.1
 
 ### New Features
 
@@ -18,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    order to enable telemetry for provider -> component calls.
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
  - <csr-id-07b5e70a7f1321d184962d7197a8d98d1ecaaf71/> use native TLS roots along webpki
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Other
 
@@ -38,8 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 8 commits contributed to the release over the course of 36 calendar days.
- - 8 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 11 commits contributed to the release over the course of 41 calendar days.
+ - 11 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -49,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Bump to 0.20.1 ([`61e61a6`](https://github.com/wasmCloud/wasmCloud/commit/61e61a6cc174396ea091ed59b88dfd92ef4dba46))
+    - Handle incoming requests in task ([`99e0292`](https://github.com/wasmCloud/wasmCloud/commit/99e0292434e84d062f0c0a1f00486c9160dc3af0))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Implement OTEL tracing for HTTP server provider ([`1eb192d`](https://github.com/wasmCloud/wasmCloud/commit/1eb192defa322368ffe8e037b458c5579f140e5e))
     - Return wrapped `WrpcClient` directly ([`87eb6c8`](https://github.com/wasmCloud/wasmCloud/commit/87eb6c8b2c0bd31def1cfdc6121c612c4dc90871))

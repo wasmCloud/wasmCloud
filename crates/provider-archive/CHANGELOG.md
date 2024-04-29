@@ -7,17 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### New Features
+
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 1 commit contributed to the release over the course of 7 calendar days.
- - 7 days passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 2 commits contributed to the release over the course of 11 calendar days.
+ - 12 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -27,10 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
 </details>
 
 ## v0.10.0 (2024-04-17)
+
+<csr-id-de379871b3741d50223229c1b0b1fc118f9dd028/>
 
 ### Documentation
 
@@ -66,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.9.0 (2024-03-17)
+
+<csr-id-6b52afa7b8af453234574fe7e5116c512521f4be/>
+<csr-id-18791e7666b4de2526628e2a973c47b7f51d9481/>
+<csr-id-ee9d552c7ea1c017d8aa646f64002a85ffebefb8/>
+<csr-id-9de9ae3de8799661525b2458303e72cd24cd666f/>
 
 ### Chore
 

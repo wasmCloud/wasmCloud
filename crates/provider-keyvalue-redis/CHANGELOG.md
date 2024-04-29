@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-073b3c21581632f135d47b14b6b13ad13d7d7592/>
+<csr-id-f032a962c6f1c5e1988fb65fd62ad4bc89dd1e54/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -20,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
  - <csr-id-a84492d15d154a272de33680f6338379fc036a3a/> introduce provider interface sdk
  - <csr-id-f56492ac6b5e6f1274a1f11b061c42cace372122/> migrate to `wrpc:keyvalue`
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-8b9d96b7391938d95519200e54dd3d68159cd67e/> allow missing default connection for redis
+   Without a default connection the redis KV provider would normally
+   fail to start -- this can be quite confusing considering usually a
+   connetion is not expected to be made yet.
+   
+   This commit refactors the conenction logic to allow running a provider
+   without a pre-made default connection, and creates one upon the first
+   connection of an actor that relies on the default
+   connection (i.e. doesn't have a connection specified via link config).
+ - <csr-id-4ef1a370cb94b0dc7f07cbde051e8f8239f32adc/> implement wasi:kevalue/batch
+   Implement the wasi:keyvalue/batch interface for the Redis keyvalue
+   provider.
 
 ### Other
 
@@ -48,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 13 commits contributed to the release over the course of 36 calendar days.
- - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 16 commits contributed to the release over the course of 41 calendar days.
+ - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -59,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Allow missing default connection for redis ([`8b9d96b`](https://github.com/wasmCloud/wasmCloud/commit/8b9d96b7391938d95519200e54dd3d68159cd67e))
+    - Implement wasi:kevalue/batch ([`4ef1a37`](https://github.com/wasmCloud/wasmCloud/commit/4ef1a370cb94b0dc7f07cbde051e8f8239f32adc))
     - Pass along tracing context for kv-redis ([`74353ee`](https://github.com/wasmCloud/wasmCloud/commit/74353eeeb1ee7c1023c296c92b21369e48a1a66b))
     - Pass along tracing context for kv-redis ([`e48d562`](https://github.com/wasmCloud/wasmCloud/commit/e48d562740be942349d3834b56a75a7cab0b560c))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))

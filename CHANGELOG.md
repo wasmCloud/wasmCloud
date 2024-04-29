@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -20,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 7 calendar days.
- - 7 days passed between releases.
+ - 2 commits contributed to the release over the course of 11 calendar days.
+ - 11 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -39,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v1.0.0 (2024-04-17)
 
 ## v1.0.0-rc.2 (2024-04-13)
+
+<csr-id-346753ab823f911b12de763225dfd154272f1d3a/>
+<csr-id-9886a34a239d06b8b6c8375bb0cd0f97e3a188c3/>
 
 ### Chore
 
@@ -79,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v1.0.0-rc.1 (2024-04-09)
 
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+
 ### New Features
 
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
@@ -112,7 +120,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Remove `ProviderHandler` ([`8082135`](https://github.com/wasmCloud/wasmCloud/commit/8082135282f66b5d56fe6d14bb5ce6dc510d4b63))
 </details>
 
+## v1.0.0-prealpha.1 (2024-03-13)
+
+<csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/>
+<csr-id-b882f8f76973ea6afd24dbce7a123619f0a2da25/>
+<csr-id-9014806ae104a162edd1b6e8acab92d079d73cef/>
+
+### Chore
+
+ - <csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/> Use traces instead of tracing user-facing language to align with OTEL signal names
+ - <csr-id-b882f8f76973ea6afd24dbce7a123619f0a2da25/> Mark enable-observability conflicting with individiual enable-<signal> flags
+ - <csr-id-9014806ae104a162edd1b6e8acab92d079d73cef/> prefix NATS_PORT and NATS_URL with WASMCLOUD
+   This adds a `WASMCLOUD` prefix to both the `NATS_PORT` and `NATS_URL`
+   env vars, since there are potentially conficts with those variables in other
+   systems. Specifically this would play badly deploying in Kubernetes with
+   a service named `nats` running in the same namespace, since a
+   `NATS_PORT` env var is automatically injected in that case which stops
+   the wasmcloud binary from starting. It is also a good practice to have
+   all of our environment variables using the same prefix.
+   
+   This is a breaking change to wasmCloud CLI args for the host.
+
+### New Features
+
+<csr-id-17648fedc2a1907b2f0c6d053b9747e72999addb/>
+
+ - <csr-id-6fe14b89d4c26e5c01e54773268c6d0f04236e71/> Add flags for overriding the default OpenTelemetry endpoint
+ - <csr-id-868570be8d94a6d73608c7cde5d2422e15f9eb0c/> Switch to using --enable-observability and --enable-<signal> flags
+ - <csr-id-82c249b15dba4dbe4c14a6afd2b52c7d3dc99985/> Glues in named config to actors
+   This introduces a new config bundle that can watch for config changes. There
+   is probably a way to reduce the number of allocations here, but it is good
+   enough for now.
+   
+   Also, sorry for the new file. I renamed `config.rs` to `host_config.rs` so
+   I could reuse the `config.rs` file, but I forgot to git mv. So that file
+   hasn't changed
+ - <csr-id-7d51408440509c687b01e00b77a3672a8e8c30c9/> add invocation and error counts for actor invocations
+   Add two new metrics for actors:
+   * the count of the number of invocations (`wasmcloud_host.actor.invocations`)
+* the count of errors (`wasmcloud_host.actor.invocation.errors`)
+* the lattice ID
+* the host ID
+* provider information if a provider invoked the actor: ** the contract ID
+   ** the provider ID
+   ** the name of the linkdef
+
+### New Features (BREAKING)
+
+ - <csr-id-42d069eee87d1b5befff1a95b49973064f1a1d1b/> Updates topics to the new standard
+   This is a wide ranging PR that changes all the topics as described
+   in #1108. This also involved removing the start and stop actor
+   operations. While I was in different parts of the code I did some small
+   "campfire rule" cleanups mostly of clippy lints and removal of
+   clippy pedant mode.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 9 commits contributed to the release over the course of 26 calendar days.
+ - 28 days passed between releases.
+ - 9 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Use traces instead of tracing user-facing language to align with OTEL signal names ([`d65512b`](https://github.com/wasmCloud/wasmCloud/commit/d65512b5e86eb4d13e64cffa220a5a842c7bb72b))
+    - Mark enable-observability conflicting with individiual enable-<signal> flags ([`b882f8f`](https://github.com/wasmCloud/wasmCloud/commit/b882f8f76973ea6afd24dbce7a123619f0a2da25))
+    - Add flags for overriding the default OpenTelemetry endpoint ([`6fe14b8`](https://github.com/wasmCloud/wasmCloud/commit/6fe14b89d4c26e5c01e54773268c6d0f04236e71))
+    - Switch to using --enable-observability and --enable-<signal> flags ([`868570b`](https://github.com/wasmCloud/wasmCloud/commit/868570be8d94a6d73608c7cde5d2422e15f9eb0c))
+    - Glues in named config to actors ([`82c249b`](https://github.com/wasmCloud/wasmCloud/commit/82c249b15dba4dbe4c14a6afd2b52c7d3dc99985))
+    - Prefix NATS_PORT and NATS_URL with WASMCLOUD ([`9014806`](https://github.com/wasmCloud/wasmCloud/commit/9014806ae104a162edd1b6e8acab92d079d73cef))
+    - Add invocation and error counts for actor invocations ([`7d51408`](https://github.com/wasmCloud/wasmCloud/commit/7d51408440509c687b01e00b77a3672a8e8c30c9))
+    - Updates topics to the new standard ([`42d069e`](https://github.com/wasmCloud/wasmCloud/commit/42d069eee87d1b5befff1a95b49973064f1a1d1b))
+    - Add initial support for metrics ([`17648fe`](https://github.com/wasmCloud/wasmCloud/commit/17648fedc2a1907b2f0c6d053b9747e72999addb))
+</details>
+
+<csr-unknown>
+This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
+Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics<csr-unknown/>
+
 ## v1.0.0-alpha.5 (2024-04-04)
+
+<csr-id-44a7d3a0484efe5137eaaf7755a5483437c7a251/>
 
 ### Chore
 
@@ -138,6 +233,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v1.0.0-alpha.4 (2024-03-29)
+
+<csr-id-073b3c21581632f135d47b14b6b13ad13d7d7592/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
 
 ### New Features
 
@@ -187,95 +285,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v1.0.0-alpha.1 (2024-03-13)
 
-## v1.0.0-prealpha.1 (2024-03-13)
-
-### Chore
-
- - <csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/> Use traces instead of tracing user-facing language to align with OTEL signal names
- - <csr-id-b882f8f76973ea6afd24dbce7a123619f0a2da25/> Mark enable-observability conflicting with individiual enable-<signal> flags
- - <csr-id-9014806ae104a162edd1b6e8acab92d079d73cef/> prefix NATS_PORT and NATS_URL with WASMCLOUD
-   This adds a `WASMCLOUD` prefix to both the `NATS_PORT` and `NATS_URL`
-   env vars, since there are potentially conficts with those variables in other
-   systems. Specifically this would play badly deploying in Kubernetes with
-   a service named `nats` running in the same namespace, since a
-   `NATS_PORT` env var is automatically injected in that case which stops
-   the wasmcloud binary from starting. It is also a good practice to have
-   all of our environment variables using the same prefix.
-   
-   This is a breaking change to wasmCloud CLI args for the host.
-
-### New Features
-
- - <csr-id-6fe14b89d4c26e5c01e54773268c6d0f04236e71/> Add flags for overriding the default OpenTelemetry endpoint
- - <csr-id-868570be8d94a6d73608c7cde5d2422e15f9eb0c/> Switch to using --enable-observability and --enable-<signal> flags
- - <csr-id-82c249b15dba4dbe4c14a6afd2b52c7d3dc99985/> Glues in named config to actors
-   This introduces a new config bundle that can watch for config changes. There
-   is probably a way to reduce the number of allocations here, but it is good
-   enough for now.
-   
-   Also, sorry for the new file. I renamed `config.rs` to `host_config.rs` so
-   I could reuse the `config.rs` file, but I forgot to git mv. So that file
-   hasn't changed
- - <csr-id-7d51408440509c687b01e00b77a3672a8e8c30c9/> add invocation and error counts for actor invocations
-   Add two new metrics for actors:
-   * the count of the number of invocations (`wasmcloud_host.actor.invocations`)
-   * the count of errors (`wasmcloud_host.actor.invocation.errors`)
-   
-   This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:
-   * the lattice ID
-   * the host ID
-   * provider information if a provider invoked the actor: ** the contract ID
-   ** the provider ID
-   ** the name of the linkdef
-   
-   For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.
-   
-   An example of what this looks like as an exported Prometheus metric:
-   
-   ```
-   wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
-   ```
-   
-   Provider metrics will likely need to wait until the wRPC work is finished.
- - <csr-id-17648fedc2a1907b2f0c6d053b9747e72999addb/> Add initial support for metrics
-
-### New Features (BREAKING)
-
- - <csr-id-42d069eee87d1b5befff1a95b49973064f1a1d1b/> Updates topics to the new standard
-   This is a wide ranging PR that changes all the topics as described
-   in #1108. This also involved removing the start and stop actor
-   operations. While I was in different parts of the code I did some small
-   "campfire rule" cleanups mostly of clippy lints and removal of
-   clippy pedant mode.
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 9 commits contributed to the release over the course of 26 calendar days.
- - 28 days passed between releases.
- - 9 commits were understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Use traces instead of tracing user-facing language to align with OTEL signal names ([`d65512b`](https://github.com/wasmCloud/wasmCloud/commit/d65512b5e86eb4d13e64cffa220a5a842c7bb72b))
-    - Mark enable-observability conflicting with individiual enable-<signal> flags ([`b882f8f`](https://github.com/wasmCloud/wasmCloud/commit/b882f8f76973ea6afd24dbce7a123619f0a2da25))
-    - Add flags for overriding the default OpenTelemetry endpoint ([`6fe14b8`](https://github.com/wasmCloud/wasmCloud/commit/6fe14b89d4c26e5c01e54773268c6d0f04236e71))
-    - Switch to using --enable-observability and --enable-<signal> flags ([`868570b`](https://github.com/wasmCloud/wasmCloud/commit/868570be8d94a6d73608c7cde5d2422e15f9eb0c))
-    - Glues in named config to actors ([`82c249b`](https://github.com/wasmCloud/wasmCloud/commit/82c249b15dba4dbe4c14a6afd2b52c7d3dc99985))
-    - Prefix NATS_PORT and NATS_URL with WASMCLOUD ([`9014806`](https://github.com/wasmCloud/wasmCloud/commit/9014806ae104a162edd1b6e8acab92d079d73cef))
-    - Add invocation and error counts for actor invocations ([`7d51408`](https://github.com/wasmCloud/wasmCloud/commit/7d51408440509c687b01e00b77a3672a8e8c30c9))
-    - Updates topics to the new standard ([`42d069e`](https://github.com/wasmCloud/wasmCloud/commit/42d069eee87d1b5befff1a95b49973064f1a1d1b))
-    - Add initial support for metrics ([`17648fe`](https://github.com/wasmCloud/wasmCloud/commit/17648fedc2a1907b2f0c6d053b9747e72999addb))
-</details>
-
 ## v0.82.0-rc1 (2024-02-13)
+
+<csr-id-8e8f6d29518ec6d986fad9426fbe8224171660ab/>
+<csr-id-1855d1e241f7856a0b1daaf2b79c5ccf3e823023/>
+<csr-id-fe7592b1a5501f3faa8bcf3bf45edf4032e92f0b/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
 
 ### Chore
 
@@ -371,6 +386,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.81.0-alpha1 (2023-11-03)
 
+<csr-id-8805873d6f556e1581b47846836aa249efd41caa/>
+<csr-id-5af1c68bf86b62b4e2f81cbf1cc9ca1d5542ac37/>
+
 ### Chore
 
  - <csr-id-8805873d6f556e1581b47846836aa249efd41caa/> un-hide policy options
@@ -463,6 +481,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.79.1 (2023-10-21)
 
+<csr-id-2b0c1a82f4354dabed8b1dc538162e486734279d/>
+<csr-id-8a6780ab5b348e812470996ac5d98910b90b4910/>
+<csr-id-70b20a12553e84697ffe9f8dbf32219162bdf946/>
+<csr-id-372e81e2da3a60ee8cbf3f2525bf27284dc62332/>
+<csr-id-571a25ddb7d8f18b2bb1d3f6b22401503d31f719/>
+<csr-id-d53bf1b5e3be1cd8d076939cc80460305e30d8c5/>
+<csr-id-13cb1907d4f70235059899fb329287d1b44736e5/>
+
 ### Chore
 
  - <csr-id-2b0c1a82f4354dabed8b1dc538162e486734279d/> bump wasmcloud 0.79.0 wadm 0.7.1
@@ -535,39 +561,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Update async_nats,ctl,wasmbus_rpc to latest ([`70b20a1`](https://github.com/wasmCloud/wasmCloud/commit/70b20a12553e84697ffe9f8dbf32219162bdf946))
 </details>
 
-## v0.79.0-rc4 (2023-10-13)
-
-### Bug Fixes
-
- - <csr-id-50950e44d693c487ca25827a5e2d84de18e41e6b/> Fixes issue with cached links not populating
-   The initial implementation of the cached KV client had issues due
-   to the drop implementation for the caching thread. It was only behind
-   and arc, so any time a clone was dropped, the thread would stop polling.
-   
-   This also adds some additional logging around the caching and fixes the
-   client builder based off of real life usage in wadm
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 3 commits contributed to the release over the course of 1 calendar day.
- - 2 days passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Merge pull request #60 from thomastaylor312/fix/y_no_linkz ([`62fb192`](https://github.com/wasmCloud/wasmCloud/commit/62fb192cde9bd27bc99e55abaa14b5b11dfd3280))
-    - Fixes issue with cached links not populating ([`50950e4`](https://github.com/wasmCloud/wasmCloud/commit/50950e44d693c487ca25827a5e2d84de18e41e6b))
-    - Merge pull request #867 from lachieh/fix-wash-build-after-upgrade ([`dcfbaf3`](https://github.com/wasmCloud/wasmCloud/commit/dcfbaf37cbcff146a7471828abe9c4baf7c06a93))
-</details>
-
 ## v0.79.0 (2023-10-10)
 
 ### New Features
@@ -612,7 +605,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Update imports after package update and move to root ([`1bf2a20`](https://github.com/wasmCloud/wasmCloud/commit/1bf2a2042cd3ef180ca465cb5dd3faf3db647d10))
 </details>
 
+## v0.79.0-rc4 (2023-10-13)
+
+### Bug Fixes
+
+ - <csr-id-50950e44d693c487ca25827a5e2d84de18e41e6b/> Fixes issue with cached links not populating
+   The initial implementation of the cached KV client had issues due
+   to the drop implementation for the caching thread. It was only behind
+   and arc, so any time a clone was dropped, the thread would stop polling.
+   
+   This also adds some additional logging around the caching and fixes the
+   client builder based off of real life usage in wadm
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #60 from thomastaylor312/fix/y_no_linkz ([`62fb192`](https://github.com/wasmCloud/wasmCloud/commit/62fb192cde9bd27bc99e55abaa14b5b11dfd3280))
+    - Fixes issue with cached links not populating ([`50950e4`](https://github.com/wasmCloud/wasmCloud/commit/50950e44d693c487ca25827a5e2d84de18e41e6b))
+    - Merge pull request #867 from lachieh/fix-wash-build-after-upgrade ([`dcfbaf3`](https://github.com/wasmCloud/wasmCloud/commit/dcfbaf37cbcff146a7471828abe9c4baf7c06a93))
+</details>
+
 ## v0.79.0-rc3 (2023-10-05)
+
+<csr-id-f057b40eb847467d5874e2d14b90fa6b2687f53c/>
 
 ### Chore
 
@@ -659,6 +687,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.79.0-rc2 (2023-10-04)
 
+<csr-id-016c37812b8cf95615a6ad34ee49de669c66886b/>
+
 ### Chore
 
  - <csr-id-016c37812b8cf95615a6ad34ee49de669c66886b/> fix lint
@@ -698,19 +728,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.79.0-rc1 (2023-09-28)
 
+<csr-id-7f87247071ddf99ea2912504b2701e6eea0e9ad3/>
+
 ### New Features
 
  - <csr-id-99262d8b1c0bdb09657407663e2d5d4a3fb7651c/> move update-actor for wash ctl update to wash-lib.
 
 ### Bug Fixes
 
+<csr-id-6dd214c2ea3befb5170d5a711a2eef0f3d14cc09/>
+
  - <csr-id-2314f5f4d49c5b98949fe5d4a1eb692f1fad92b7/> rework host shutdown
    - Always include a timeout for graceful shutdown (e.g. if NATS
-     connection dies, it will never finish)
-   - Stop if one of the core wasmbus tasks dies
-   - Flush NATS queues concurrently on shutdown
-   - Handle `stopped` method errors
- - <csr-id-6dd214c2ea3befb5170d5a711a2eef0f3d14cc09/> validate jwt has 3 segments
+   connection dies, it will never finish)
+- Stop if one of the core wasmbus tasks dies
+- Flush NATS queues concurrently on shutdown
+- Handle `stopped` method errors
 
 ### Other
 
@@ -742,7 +775,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Move update-actor for wash ctl update to wash-lib. ([`99262d8`](https://github.com/wasmCloud/wasmCloud/commit/99262d8b1c0bdb09657407663e2d5d4a3fb7651c))
 </details>
 
-## v0.78.0-rc10 (2023-09-21)
+<csr-unknown>
+ validate jwt has 3 segments<csr-unknown/>
 
 ## v0.78.0-rc9 (2023-09-21)
 
@@ -782,6 +816,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.78.0-rc6 (2023-09-07)
 
+<csr-id-892d6dd777ed6fe2998afcd37fe7add8b751b012/>
+
 ### Chore
 
  - <csr-id-892d6dd777ed6fe2998afcd37fe7add8b751b012/> run wasmcloud 0.78.0-rc6
@@ -805,6 +841,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.78.0-rc5 (2023-09-07)
+
+<csr-id-5befc1bf86d022bb6ecb2885ac746d777d49dc94/>
+<csr-id-eab7a7b18a626bd790c42ab23a5ce571baf0c56b/>
+<csr-id-bbf0b1a6074108a96d9534500c97c8ad5ed13dd6/>
 
 ### Chore
 
@@ -837,12 +877,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.78.0-rc3 (2023-09-03)
 
+<csr-id-f4a9cd6d2f1c29b0cc7eb4c3509114ed81eb7983/>
+
 ### New Features
 
  - <csr-id-78b99fde8606febf59e30f1d12ac558b29d425bf/> set default to Rust host
    - update paths to release binary
-   - allow-file-upload default bug
-   - mention dashboard ui cmd
+- allow-file-upload default bug
+- mention dashboard ui cmd
 
 ### Other
 
@@ -872,6 +914,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.78.0-rc2 (2023-09-02)
 
+<csr-id-e15878948673f9ad1cfbbafdc01c48c2d2678955/>
+<csr-id-e459a7a2434ce926d211ff37c1f6ebef2b5faef5/>
+<csr-id-c2f765d5c25a18e5f79379955cd77ed4858954bd/>
+<csr-id-c9fef73977b86172afc5d3f2e8c4830c0277aff3/>
+<csr-id-abb2de11f159191357f1676b11fe07bd39c5573c/>
+<csr-id-710ab08386bd57da080c8a207ed18ea7f9ed217f/>
+<csr-id-c8a2d0b99bed8c92cd51d95c8a62addb67f2bb1d/>
+<csr-id-9d94dccea42c486c95e9fa497c1d1e7cf7cd5a0b/>
+<csr-id-22d374a1d750c0803a52bd93bb057018576e804d/>
+<csr-id-c51fa5e51115ccf001d916b3882e819d4ec7cea8/>
+<csr-id-315c808777c4800dbbd52efacf7bf36b2b245f5a/>
+<csr-id-bc35010697e1eca3eb2093ee6aa5302a9bd1d437/>
+<csr-id-ed4282c9ea1bb95e346c9a981acdc264b0fc9d3f/>
+<csr-id-77ed1441bdd1da15e13ce9196138cfe7c037f6ba/>
+<csr-id-82915861e422c845d97b3a8680738d55bd9bfce2/>
+<csr-id-088cbe0a20c7486bfaa80ec0d69e18ab2a2a6902/>
+<csr-id-48eafc861099b08a531b7eeb033802ab8a215baf/>
+<csr-id-0dca3ef4bb3db38aae6dbea57b520a36ef058e2f/>
+<csr-id-52ef5b6b1b6b01bc5e7a2c8fe3cbb2a08d4ad864/>
+<csr-id-7d0e031a57564cd550e7e2db48f939403ad22cd8/>
+<csr-id-1f2ad935620548acc4f2a51a4956056fa99e2e93/>
+<csr-id-0bbdd4032b3bc1b63df6724b0d636176c2d49226/>
+<csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/>
+<csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/>
+<csr-id-0db5a5ba5b20535e16af46fd92f7040c8174d636/>
+<csr-id-8806ef1ff0afeb42986639d254e8d9cb918e1633/>
+<csr-id-fa064101e82385c2fb9c9cd0ce958d800a65d660/>
+<csr-id-010129a272ce327cbb251b874f6f4cf57a950f91/>
+<csr-id-a4902e25212f7261ed444f7483a07aa210283a16/>
+<csr-id-909e04f06139de52304babfeef6839e172aac5c2/>
+<csr-id-f3f6c21f25632940a6cc1d5290f8e84271609496/>
+<csr-id-c6acc2c6f6183515441d1dcaca073ba1df109df2/>
+<csr-id-8cff2e5b65fbb8b5e0578d1ce5ccb892e14caba7/>
+
 ### Chore
 
  - <csr-id-e15878948673f9ad1cfbbafdc01c48c2d2678955/> remove irrelevant ipv6 flag
@@ -896,6 +972,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features
 
+<csr-id-e9fe020a0906cb377f6ea8bd3a9879e5bad877b7/>
+<csr-id-8c96789f1c793c5565715080b84fecfbe0653b43/>
+<csr-id-e58c6a60928a7157ffbbc95f9eabcc9cae3db2a7/>
+<csr-id-d2bc21681306ef2251be4347224249e2ce8c4c18/>
+<csr-id-6923ce7efb721f8678c33f42647b87ea33a7653a/>
+<csr-id-4daf51be422d395bc0142d62b8d59060b89feafa/>
+<csr-id-128f7603c67443f23e76c3cb4bd1468ffd8f5462/>
+<csr-id-2a6c401834b4cb55ef420538e15503b98281eaf1/>
+<csr-id-24bba484009be9e87bfcbd926a731534e936c339/>
+<csr-id-caa965ac17eeda67c35f41b38a236f1b682cf462/>
+<csr-id-7cca2e76f0048bd37a50960c8df5b40ed0e16d7d/>
+<csr-id-79e66a64a8d20926a18967e8efb970d2104e6596/>
+<csr-id-d8900ccc62f1383ed231bee1b6a28fd434f74c5a/>
+<csr-id-bb89f2c516339e155a6c942871907a2c044ee014/>
+<csr-id-4db7517586aec531137e7f83836da3fcd684d18e/>
+<csr-id-fc65c2cb27ad15e0ef27fa45e61a3d62c2d0c033/>
+<csr-id-fc6620a5ba92b1e6fce4e16c21cc4b6cb5ccae0d/>
+<csr-id-3d19c94128bcb6643f6e939f930a503ab9b9ca94/>
+<csr-id-4d7b83df95ef8d039b9ceac96c34b9773744aa9d/>
+<csr-id-a645105802b22a719c8c5ae9232c6ea27170a019/>
+<csr-id-84b95392993cbbc65da36bc8b872241cce32a63e/>
+<csr-id-a62b07b8ff321c400c6debefdb6199e273445490/>
+<csr-id-b1bf6b1ac7851dc09e6757d7c2bde4558ec48098/>
+<csr-id-189639f98aa5b9669da8143010c09600e2be449d/>
+<csr-id-4e16308d4f12fbac49d3de8340495c5e29266009/>
+<csr-id-95b325246e34bbe47d81799acfcd07cd6cc6b9ea/>
+<csr-id-a867a07ca60f1391fbfea56d9ad246a71792652f/>
+
  - <csr-id-2ebdab7551f6da93967d921316cae5d04a409a43/> support policy service
  - <csr-id-675d364d2f53f9dbf7ebb6c655d5fbbbba6c62b6/> support OTEL traces end-to-end
  - <csr-id-48d4557c8ee895278055261bccb1293806b308b0/> support registry settings via config service and command-line flags
@@ -906,85 +1010,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-ef20466a04d475159088b127b46111b80a5e1eb2/> introduce wasmbus lattice
  - <csr-id-7364dd8afae5c8884ca923b39c5680c60d8d0e3d/> implement data streaming
    - make claims optional (at least for now)
-   - add streaming support to `wasmcloud:bus`
-   - rename `wasmcloud_host` -> `wasmcloud_runtime`
-   - remove all `wasmcloud-interface-*` usages
-   - add support for `command` executables (I/O actors)
-   - add local lattice proving the concept, which is used for testing of the feature
-   - implement an actor instance pool
- - <csr-id-e9fe020a0906cb377f6ea8bd3a9879e5bad877b7/> add wash dev command
- - <csr-id-8c96789f1c793c5565715080b84fecfbe0653b43/> Adds a new experimental `wash capture` command
-   This one is very experimental, so I didn't even add it to the top
-   level help text, but it is all manually tested and good to go
- - <csr-id-e58c6a60928a7157ffbbc95f9eabcc9cae3db2a7/> Adds `wash spy` command with experimental flag support
- - <csr-id-d2bc21681306ef2251be4347224249e2ce8c4c18/> add deprecation warnings for changed CLI commands
- - <csr-id-6923ce7efb721f8678c33f42647b87ea33a7653a/> flatten multiple commands into wash get
- - <csr-id-4daf51be422d395bc0142d62b8d59060b89feafa/> flatten wash reg push/pull into wash push/pull
- - <csr-id-128f7603c67443f23e76c3cb4bd1468ffd8f5462/> flatten `wash ctl stop` into `wash stop`
- - <csr-id-2a6c401834b4cb55ef420538e15503b98281eaf1/> flatten `wash ctl start` into `wash start`
- - <csr-id-24bba484009be9e87bfcbd926a731534e936c339/> flatten `wash ctl link` into `wash link`
- - <csr-id-caa965ac17eeda67c35f41b38a236f1b682cf462/> implement builtin capabilities via WIT
- - <csr-id-7cca2e76f0048bd37a50960c8df5b40ed0e16d7d/> enable WASMCLOUD_ALLOW_FILE_LOAD by default
- - <csr-id-79e66a64a8d20926a18967e8efb970d2104e6596/> avoid capability checking by default
-   The host does not have enough context to do so reliably
- - <csr-id-d8900ccc62f1383ed231bee1b6a28fd434f74c5a/> support running actors in binary
- - <csr-id-bb89f2c516339e155a6c942871907a2c044ee014/> introduce `Actor` abstraction
-   This also includes a `call` method on `Actor` as well as the lower-level
-   modules and components, which lets the consumer of the library bypass
-   the instantiation step
- - <csr-id-4db7517586aec531137e7f83836da3fcd684d18e/> provide `HostHandlerBuilder`
- - <csr-id-fc65c2cb27ad15e0ef27fa45e61a3d62c2d0c033/> introduce `Runtime`-wide instance config
- - <csr-id-fc6620a5ba92b1e6fce4e16c21cc4b6cb5ccae0d/> introduce `Runtime`-wide handler
- - <csr-id-3d19c94128bcb6643f6e939f930a503ab9b9ca94/> include `claims` as capability handler parameter
- - <csr-id-4d7b83df95ef8d039b9ceac96c34b9773744aa9d/> introduce a `Handler` trait
-   Untie `actor` module from capability handling for better separation of
-   concerns, which has nice side effects of:
-   - simplifying the generic bounds
-   - providing a more extensible way of handling capabilities
-   - removing a need for custom result type within actor module
-   - making future addition of different Wasm engines easier
- - <csr-id-a645105802b22a719c8c5ae9232c6ea27170a019/> add initial host implementation
-   The initial host implementation:
-   - executes actors via wasmtime
-   - implements the `wasmbus` FFI interface
-   - contains built-in provider implementation adaptors for `log` and `rand` crates
- - <csr-id-84b95392993cbbc65da36bc8b872241cce32a63e/> Moves claims and registry code into wash lib
-   Sorry for the big PR here, but due to a bunch of codependent code,
-   I had to move a bunch of stuff at once. There are two main threads
-   to this PR. First, I noticed that the claims code is all CLI specific,
-   but it is likely that anyone building a CLI will not want to rewrite that
-   again. If you are doing this purely in code, you can just use the
-   wascap library. To make this work, I started added the CLI specific stuff
-   to the `cli` module of wash lib. There will probably be other things we
-   add to it as we finish this refactor
-   
-   Second, this moves the reusable registry bits into its own module, which
-   is super handy even for those not doing a CLI as it avoids direct
-   interaction with the lower level OCI crates
- - <csr-id-a62b07b8ff321c400c6debefdb6199e273445490/> Adds new keys module to wash-lib
-   Please note that this introduces one small breaking change to output
-   that removes the `.nk` suffix from the list of keys. However, there is
-   backward compatibility for providing <key_name>.nk to `wash keys get`
-   so it will still function as it did previously. This change was
-   specifically made because the key name is more important than the suffix.
-   If desired, I can back out that change, but it seemed to make more sense
-   to make it less like a wash-specific `ls` of a directory
- - <csr-id-b1bf6b1ac7851dc09e6757d7c2bde4558ec48098/> Adds drain command to wash lib
-   This also starts the process of creating a `config` module that I'll
-   continue to update as I push forward the other PRs. Please note that
-   this is the first of many PRs. I plan on doing each command as a separate
-   PR instead of a mega PR
- - <csr-id-189639f98aa5b9669da8143010c09600e2be449d/> Implement wait for `ctl` commands
-   * add wait for start actor
- - <csr-id-4e16308d4f12fbac49d3de8340495c5e29266009/> warning if contract IDs look like an nkey
-   * feat(ctl): warning if a contract ID looks like an nkey
- - <csr-id-95b325246e34bbe47d81799acfcd07cd6cc6b9ea/> fetch from wasmcloud cache on inspect commands
-   * feat(*): fetch from wasmcloud cache on inspect commands
-   
-   - includes new --no-cache option for inspect commands
- - <csr-id-a867a07ca60f1391fbfea56d9ad246a71792652f/> Add stop host
-   This updates a few libraries so we could add the stop host command. I also
-   did a small cleanup of some clippy lints
+- add streaming support to `wasmcloud:bus`
+- rename `wasmcloud_host` -> `wasmcloud_runtime`
+- remove all `wasmcloud-interface-*` usages
+- add support for `command` executables (I/O actors)
+- add local lattice proving the concept, which is used for testing of the feature
+- implement an actor instance pool
+- simplifying the generic bounds
+- providing a more extensible way of handling capabilities
+- removing a need for custom result type within actor module
+- making future addition of different Wasm engines easier
+- executes actors via wasmtime
+- implements the `wasmbus` FFI interface
+- contains built-in provider implementation adaptors for `log` and `rand` crates
+* add wait for start actor
+* feat(ctl): warning if a contract ID looks like an nkey
+* feat(*): fetch from wasmcloud cache on inspect commands
+- includes new --no-cache option for inspect commands
 
 ### Bug Fixes
 
@@ -1114,9 +1156,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-673f8bc4e4bfebb49088dddd749c41acf42ae242/> async_nats 0.30, removed wasmbus_rpc dep
  - <csr-id-6a7dd430b64e5506996155bd6c64423e0065265e/> add support for `component-model`
    - Add `wasm32-wasi` to `rust-toolchain.toml`
-   - Update `wascap` to `0.10.0` for component model support
-   - Introduce ActorModule and ActorComponent distinction
-   - Make implementation async by default (requirement for WASI)
+- Update `wascap` to `0.10.0` for component model support
+- Introduce ActorModule and ActorComponent distinction
+- Make implementation async by default (requirement for WASI)
 
 ### Refactor (BREAKING)
 
@@ -1566,6 +1608,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Add some flags to call actor so it can call a test actor ([`2d60924`](https://github.com/wasmCloud/wasmCloud/commit/2d609242c43f1dfe8372983d6995d8170908d6d3))
 </details>
 
+<csr-unknown>
+ add wash dev command Adds a new experimental wash capture commandThis one is very experimental, so I didn’t even add it to the toplevel help text, but it is all manually tested and good to go Adds wash spy command with experimental flag support add deprecation warnings for changed CLI commands flatten multiple commands into wash get flatten wash reg push/pull into wash push/pull flatten wash ctl stop into wash stop flatten wash ctl start into wash start flatten wash ctl link into wash link implement builtin capabilities via WIT enable WASMCLOUD_ALLOW_FILE_LOAD by default avoid capability checking by defaultThe host does not have enough context to do so reliably support running actors in binary introduce Actor abstractionThis also includes a call method on Actor as well as the lower-levelmodules and components, which lets the consumer of the library bypassthe instantiation step provide HostHandlerBuilder introduce Runtime-wide instance config introduce Runtime-wide handler include claims as capability handler parameter introduce a Handler traitUntie actor module from capability handling for better separation ofconcerns, which has nice side effects of: add initial host implementationThe initial host implementation: Moves claims and registry code into wash libSorry for the big PR here, but due to a bunch of codependent code,I had to move a bunch of stuff at once. There are two main threadsto this PR. First, I noticed that the claims code is all CLI specific,but it is likely that anyone building a CLI will not want to rewrite thatagain. If you are doing this purely in code, you can just use thewascap library. To make this work, I started added the CLI specific stuffto the cli module of wash lib. There will probably be other things weadd to it as we finish this refactorSecond, this moves the reusable registry bits into its own module, whichis super handy even for those not doing a CLI as it avoids directinteraction with the lower level OCI crates Adds new keys module to wash-libPlease note that this introduces one small breaking change to outputthat removes the .nk suffix from the list of keys. However, there isbackward compatibility for providing <key_name>.nk to wash keys getso it will still function as it did previously. This change wasspecifically made because the key name is more important than the suffix.If desired, I can back out that change, but it seemed to make more senseto make it less like a wash-specific ls of a directory Adds drain command to wash libThis also starts the process of creating a config module that I’llcontinue to update as I push forward the other PRs. Please note thatthis is the first of many PRs. I plan on doing each command as a separatePR instead of a mega PR Implement wait for ctl commands warning if contract IDs look like an nkey fetch from wasmcloud cache on inspect commands Add stop hostThis updates a few libraries so we could add the stop host command. I alsodid a small cleanup of some clippy lints<csr-unknown/>
+
+## v0.78.0-rc10 (2023-09-21)
+
 ## v0.18.2 (2021-05-14)
 
 ### Commit Statistics
@@ -1674,6 +1721,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.16.0 (2021-03-26)
 
+<csr-id-68e15f2a2caa6031cdad617b906383b06cb197a5/>
+
 ### Other
 
  - <csr-id-68e15f2a2caa6031cdad617b906383b06cb197a5/> don't panic on invalid URL in claims inspect
@@ -1752,6 +1801,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.15.0 (2021-02-17)
+
+<csr-id-e54d40cf9d3f60d0ee7b6473b34f7fb653dcb503/>
 
 ### Other
 

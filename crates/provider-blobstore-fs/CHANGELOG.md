@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-f032a962c6f1c5e1988fb65fd62ad4bc89dd1e54/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-8ef4d158b7c263a1741da06d66e30ed787b22144/>
+<csr-id-4ce65d0e76d6d918a586fc984c87ab50cf5fa695/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -16,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-6d4ad85067c5d6c59895b2721dbb363747c130bd/> pass along OTEL context for blobstore-fs
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
  - <csr-id-a84492d15d154a272de33680f6338379fc036a3a/> introduce provider interface sdk
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -52,8 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 13 commits contributed to the release over the course of 36 calendar days.
- - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 14 commits contributed to the release over the course of 41 calendar days.
+ - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -63,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
     - Pass along OTEL context for blobstore-fs ([`6d4ad85`](https://github.com/wasmCloud/wasmCloud/commit/6d4ad85067c5d6c59895b2721dbb363747c130bd))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Rename actor to component ([`9039550`](https://github.com/wasmCloud/wasmCloud/commit/903955009340190283c813fa225bae514fb15c03))
