@@ -56,7 +56,6 @@ use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
-use wrpc_types::DynamicFunction;
 
 use crate::bindings::wasmcloud;
 use crate::{
@@ -1396,7 +1395,6 @@ impl Host {
             .await?;
 
         // Map the imports to pull out the result types of the functions for lookup when invoking them
-        let imports = get_import_results(&component);
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
@@ -1404,7 +1402,7 @@ impl Host {
             component_id: component_id.clone(),
             targets: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
-            polyfilled_imports: imports,
+            polyfills: Arc::clone(component.polyfills()),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
 
@@ -1860,8 +1858,6 @@ impl Host {
             }
 
             let max = actor.max_instances;
-            let mut handler = actor.handler.copy_for_new();
-            handler.polyfilled_imports = get_import_results(&new_actor);
             let Ok(new_actor) = self
                 .instantiate_actor(
                     &annotations,
@@ -1869,7 +1865,7 @@ impl Host {
                     component_id.to_string(),
                     max,
                     new_actor.clone(),
-                    handler,
+                    actor.handler.copy_for_new(),
                 )
                 .await
             else {
@@ -3451,33 +3447,6 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             let name = async_nats::header::HeaderName::from_str(k.as_str()).ok()?;
             let value = async_nats::header::HeaderValue::from_str(v.as_str()).ok()?;
             Some((name, value))
-        })
-        .collect()
-}
-
-fn get_import_results(
-    component: &wasmcloud_runtime::Component,
-) -> HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>> {
-    let polyfilled_imports = component.polyfilled_imports().clone();
-    // Map the imports to pull out the result types of the functions for lookup when invoking them
-    polyfilled_imports
-        .iter()
-        .map(|(instance, funcs)| {
-            (
-                instance.clone(),
-                funcs
-                    .iter()
-                    .filter_map(|(name, func)| {
-                        match func {
-                            DynamicFunction::Static { results, .. } => {
-                                Some((name.clone(), results.clone()))
-                            }
-                            // We do not support method imports (on resources) at this time.
-                            DynamicFunction::Method { .. } => None,
-                        }
-                    })
-                    .collect::<HashMap<_, _>>(),
-            )
         })
         .collect()
 }

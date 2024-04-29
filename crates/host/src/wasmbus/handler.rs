@@ -51,12 +51,12 @@ pub struct Handler {
     #[allow(clippy::type_complexity)]
     pub interface_links:
         Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>>,
-    /// Map of interface -> function name -> function result types
+    /// Map of interface -> function name -> function type
     ///
     /// When invoking a function that the component imports, this map is consulted to determine the
     /// result types of the function, which is required for the wRPC protocol to set up proper
     /// subscriptions for the return types.
-    pub polyfilled_imports: HashMap<String, HashMap<String, Arc<[wrpc_types::Type]>>>,
+    pub polyfills: Arc<HashMap<String, HashMap<String, wrpc_types::DynamicFunction>>>,
 
     pub invocation_timeout: Duration,
 }
@@ -72,7 +72,7 @@ impl Handler {
             component_id: self.component_id.clone(),
             targets: Arc::default(),
             interface_links: self.interface_links.clone(),
-            polyfilled_imports: self.polyfilled_imports.clone(),
+            polyfills: self.polyfills.clone(),
             invocation_timeout: self.invocation_timeout,
         }
     }
@@ -504,17 +504,25 @@ impl Bus for Handler {
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         if let TargetEntity::Lattice(LatticeInterfaceTarget { id, .. }) = target {
-            let results = self
-                .polyfilled_imports
+            let result_ty = self
+                .polyfills
                 .get(instance)
-                .and_then(|functions| functions.get(name)).with_context(|| format!("polyfilled import {instance}/{name} not found, could not determine result types"))?;
-
+                .and_then(|functions| match functions.get(name) {
+                    Some(
+                        wrpc_types::DynamicFunction::Static { results, .. }
+                        | wrpc_types::DynamicFunction::Method { results, .. },
+                    ) => Some(results),
+                    None => None,
+                })
+                .with_context(|| {
+                    format!("export {instance}/{name} not found, could not determine result types")
+                })?;
             let injector = TraceContextInjector::default_with_span();
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
             let (results, tx) = self
                 .wrpc_client(&id)
-                .invoke_dynamic(instance, name, DynamicTuple(params), results)
+                .invoke_dynamic(instance, name, DynamicTuple(params), result_ty)
                 .await?;
             tx.await.context("failed to transmit parameters")?;
             Ok(results)
