@@ -175,8 +175,8 @@ async fn integration_update_actor_serial() -> Result<()> {
         .context("failed to update actor")?;
 
     assert!(
-        !output.status.success(),
-        "update with same image ref should fail"
+        output.status.success(),
+        "update with same image ref should still succeed"
     );
 
     Ok(())

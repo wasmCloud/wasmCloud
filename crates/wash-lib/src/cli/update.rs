@@ -80,12 +80,13 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
     };
 
     if component_ref == cmd.new_component_ref {
-        bail!(
-            "Component {} already updated to {} on host [{}]",
-            cmd.component_id,
-            cmd.new_component_ref,
-            host_id
-        );
+        return Ok(CommandOutput::from_key_and_text(
+            "result",
+            format!(
+                "Component {} already updated to {} on host [{}]",
+                cmd.component_id, cmd.new_component_ref, host_id
+            ),
+        ));
     }
 
     let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
