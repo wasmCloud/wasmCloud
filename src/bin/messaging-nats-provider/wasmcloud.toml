@@ -1,6 +1,11 @@
 name = "Messaging NATS"
 language = "rust"
 type = "provider"
+version = "0.20.0"
+
+[rust]
+target_dir = "../../"
 
 [provider]
+bin_name = "messaging-nats-provider"
 vendor = "wasmCloud"

@@ -1,11 +1,11 @@
-name = "Blobstore FS"
+name = "HTTP Client"
 language = "rust"
+version = "0.9.0"
 type = "provider"
-version = "0.6.0"
 
 [rust]
 target_dir = "../../"
 
 [provider]
-bin_name = "blobstore-fs-provider"
+bin_name = "http-client-provider"
 vendor = "wasmCloud"

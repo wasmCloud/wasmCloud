@@ -1,11 +1,11 @@
-name = "KV Redis"
+name = "KV Vault"
 language = "rust"
 type = "provider"
-version = "0.24.0"
+version = "0.8.0"
 
 [rust]
 target_path = "../../"
 
 [provider]
-bin_name = "keyvalue-redis-provider"
+bin_name = "keyvalue-vault-provider"
 vendor = "wasmCloud"
