@@ -17,7 +17,7 @@ jobs:
   fmt:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4.1.1
+    - uses: actions/checkout@v4
     - uses: ./.github/actions/install-nix
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -26,7 +26,7 @@ jobs:
   run:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4.1.1
+    - uses: actions/checkout@v4
     - uses: ./.github/actions/install-nix
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -35,7 +35,7 @@ jobs:
   develop:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4.1.1
+    - uses: actions/checkout@v4
     - uses: ./.github/actions/install-nix
       with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
