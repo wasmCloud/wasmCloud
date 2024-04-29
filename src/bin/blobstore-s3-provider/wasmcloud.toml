@@ -1,11 +1,11 @@
-name = "Blobstore FS"
+name = "Blobstore S3"
 language = "rust"
+version = "0.7.0"
 type = "provider"
-version = "0.6.0"
 
 [rust]
 target_dir = "../../"
 
 [provider]
-bin_name = "blobstore-fs-provider"
+bin_name = "blobstore-s3-provider"
 vendor = "wasmCloud"

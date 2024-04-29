@@ -1,10 +1,11 @@
 name = "HTTP Server"
 language = "rust"
+version = "0.20.0"
 type = "provider"
 
 [rust]
-target_dir = "../"
+target_dir = "../../"
 
 [provider]
-bin_name = "httpserver"
+bin_name = "http-server-provider"
 vendor = "wasmCloud"

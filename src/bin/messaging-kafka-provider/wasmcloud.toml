@@ -1,11 +1,11 @@
-name = "Blobstore FS"
+name = "Messaging Kafka"
 language = "rust"
 type = "provider"
-version = "0.6.0"
+version = "0.2.1"
 
 [rust]
 target_dir = "../../"
 
 [provider]
-bin_name = "blobstore-fs-provider"
+bin_name = "messaging-kafka-provider"
 vendor = "wasmCloud"
