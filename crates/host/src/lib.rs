@@ -106,29 +106,33 @@ impl ResourceRef<'_> {
     }
 }
 
-/// Fetch an actor from a reference.
+/// Fetch an component from a reference.
 #[instrument(level = "debug", skip(allow_file_load, registry_config))]
-pub async fn fetch_actor(
-    actor_ref: &str,
+pub async fn fetch_component(
+    component_ref: &str,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
-    match ResourceRef::try_from(actor_ref)? {
-        ResourceRef::File(actor_ref) => {
+    match ResourceRef::try_from(component_ref)? {
+        ResourceRef::File(component_ref) => {
             ensure!(
                 allow_file_load,
-                "unable to start actor from file, file loading is disabled"
+                "unable to start component from file, file loading is disabled"
             );
-            fs::read(actor_ref).await.context("failed to read actor")
+            fs::read(component_ref)
+                .await
+                .context("failed to read component")
         }
-        ref oci_ref @ ResourceRef::Oci(actor_ref) => oci_ref
+        ref oci_ref @ ResourceRef::Oci(component_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
-            .fetch_actor(actor_ref)
+            .fetch_component(component_ref)
             .await
-            .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
+            .with_context(|| {
+                format!("failed to fetch component under OCI reference `{component_ref}`")
+            }),
     }
 }
 
