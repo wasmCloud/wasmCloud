@@ -301,7 +301,11 @@ impl Provider for KvRedisProvider {
             source_id, config, ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let conn = if let Some(url) = config.get(CONFIG_REDIS_URL_KEY) {
+        let conn = if let Some(url) = config
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+            .and_then(|url_key| config.get(url_key))
+        {
             match redis::Client::open(url.to_string()) {
                 Ok(client) => match client.get_connection_manager().await {
                     Ok(conn) => {
