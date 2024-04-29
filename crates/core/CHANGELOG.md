@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
+<csr-id-95233cbade898a8b17df2fec3d6aed8ce8ceca2a/>
+<csr-id-6b369d49cd37a87dca1f92f31c4d4d3e33dec501/>
+<csr-id-d65512b5e86eb4d13e64cffa220a5a842c7bb72b/>
+<csr-id-0d9002340ca8776c92a7d1e8b2caa4f804bb1bfb/>
+<csr-id-eb0599fbdc6e1ac58616c7676b89bf7b19d4c662/>
+<csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
+<csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/>
+<csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/>
+<csr-id-95cfb6d99f0e54243b2fb2618de39210d8f3694f/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-5d7383137897d28a1bc5df9b1c48f75281dab55b/>
+<csr-id-b6a6b04229730d6783c3fee61c6e078cd3b962ef/>
+<csr-id-c654448653db224c6a676ecf43150d880a9daf8c/>
+<csr-id-c49a6ef0b6460b3eb463315fe31878eb71ae5364/>
+<csr-id-123e53611e6d0b2bd4e92358783213784653fbf6/>
+<csr-id-7402a1f5cc4515e270fa66bbdd3d8bf2c03f35cb/>
+<csr-id-0319a9245589709d96b03786374d8026beb5d5d0/>
+<csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-8e7d6c80b56e143bb09dc441e8b21104328d0ab0/>
+<csr-id-6abbcac954a9834d871ea69b8a40bd79d258c0f1/>
+<csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
@@ -68,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    targeting via Component IDs.
  - <csr-id-813ce52a9c11270814eec051dfaa8817bf9f567d/> support chunking and dechunking of requests
  - <csr-id-675d364d2f53f9dbf7ebb6c655d5fbbbba6c62b6/> support OTEL traces end-to-end
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -147,8 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 45 commits contributed to the release over the course of 240 calendar days.
- - 44 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 46 commits contributed to the release over the course of 245 calendar days.
+ - 45 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -158,6 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Remove cluster_seed/cluster_issuers ([`bc5d296`](https://github.com/wasmCloud/wasmCloud/commit/bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f))
     - Return wrapped `WrpcClient` directly ([`87eb6c8`](https://github.com/wasmCloud/wasmCloud/commit/87eb6c8b2c0bd31def1cfdc6121c612c4dc90871))
