@@ -5,6 +5,7 @@ use crate::Runtime;
 use core::fmt::{self, Debug};
 use core::iter::zip;
 use core::ops::{Deref, DerefMut};
+use core::time::Duration;
 
 use std::collections::{hash_map, HashMap};
 use std::sync::Arc;
@@ -265,6 +266,7 @@ pub struct Component {
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     ty: types::Component,
     instance_pre: wasmtime::component::InstancePre<Ctx>,
+    max_execution_time: Duration,
 }
 
 impl Debug for Component {
@@ -276,6 +278,7 @@ impl Debug for Component {
             .field("polyfills", &self.polyfills)
             .field("exports", &self.exports)
             .field("ty", &self.ty)
+            .field("max_execution_time", &self.max_execution_time)
             .finish_non_exhaustive()
     }
 }
@@ -445,6 +448,7 @@ fn instantiate(
     handler: impl Into<builtin::Handler>,
     ty: types::Component,
     instance_pre: InstancePre<Ctx>,
+    max_execution_time: Duration,
 ) -> anyhow::Result<Instance> {
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
@@ -489,7 +493,8 @@ fn instantiate(
         handler,
         stderr,
     };
-    let store = wasmtime::Store::new(engine, ctx);
+    let mut store = wasmtime::Store::new(engine, ctx);
+    store.set_epoch_deadline(max_execution_time.as_secs());
     Ok(Instance {
         store,
         instance_pre,
@@ -563,6 +568,7 @@ impl Component {
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
             instance_pre,
+            max_execution_time: rt.max_execution_time,
         })
     }
 
@@ -625,7 +631,13 @@ impl Component {
     pub fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Component>>)> {
-        let instance = instantiate(&self.engine, self.handler, self.ty, self.instance_pre)?;
+        let instance = instantiate(
+            &self.engine,
+            self.handler,
+            self.ty,
+            self.instance_pre,
+            self.max_execution_time,
+        )?;
         Ok((instance, self.claims))
     }
 
@@ -637,6 +649,7 @@ impl Component {
             self.handler.clone(),
             self.ty.clone(),
             self.instance_pre.clone(),
+            self.max_execution_time,
         )
     }
 

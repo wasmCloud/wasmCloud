@@ -6,11 +6,13 @@ use crate::ComponentConfig;
 
 use core::fmt;
 use core::fmt::Debug;
+use core::time::Duration;
 
 use std::sync::Arc;
 
 use anyhow::Context;
 use builtin::Config;
+use tokio::{spawn, time};
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
 const KB: u64 = 1024;
@@ -23,6 +25,7 @@ pub struct RuntimeBuilder {
     engine_config: wasmtime::Config,
     max_components: u32,
     max_component_size: u64,
+    max_execution_time: Duration,
     handler: builtin::HandlerBuilder,
     actor_config: ComponentConfig,
 }
@@ -33,8 +36,9 @@ impl RuntimeBuilder {
     pub fn new() -> Self {
         let mut engine_config = wasmtime::Config::default();
         engine_config.async_support(true);
-        engine_config.wasm_component_model(true);
+        engine_config.epoch_interruption(true);
         engine_config.memory_init_cow(false);
+        engine_config.wasm_component_model(true);
 
         Self {
             engine_config,
@@ -42,6 +46,7 @@ impl RuntimeBuilder {
             // Why so large you ask? Well, python components are chonky, like 35MB for a hello world
             // chonky. So this is pretty big for now.
             max_component_size: 50 * MB,
+            max_execution_time: Duration::from_secs(10 * 60),
             handler: builtin::HandlerBuilder::default(),
             actor_config: ComponentConfig::default(),
         }
@@ -167,6 +172,17 @@ impl RuntimeBuilder {
         }
     }
 
+    /// Sets the maximum execution time of a component. Defaults to 10 minutes.
+    /// This operates on second precision and value of 1 second is the minimum.
+    /// Any value below 1 second will be interpreted as 1 second limit.
+    #[must_use]
+    pub fn max_execution_time(self, max_execution_time: Duration) -> Self {
+        Self {
+            max_execution_time: max_execution_time.max(Duration::from_secs(1)),
+            ..self
+        }
+    }
+
     /// Turns this builder into a [`Runtime`]
     ///
     /// # Errors
@@ -208,10 +224,24 @@ impl RuntimeBuilder {
             .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
         let engine =
             wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?;
+        spawn({
+            let engine = engine.weak();
+            async move {
+                let mut interval = time::interval(Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    let Some(engine) = engine.upgrade() else {
+                        return;
+                    };
+                    engine.increment_epoch();
+                }
+            }
+        });
         Ok(Runtime {
             engine,
             handler: self.handler,
             actor_config: self.actor_config,
+            max_execution_time: self.max_execution_time,
         })
     }
 }
@@ -230,6 +260,7 @@ pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) handler: builtin::HandlerBuilder,
     pub(crate) actor_config: ComponentConfig,
+    pub(crate) max_execution_time: Duration,
 }
 
 impl Debug for Runtime {
