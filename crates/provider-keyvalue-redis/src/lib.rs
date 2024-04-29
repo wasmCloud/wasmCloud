@@ -12,11 +12,11 @@ use core::num::NonZeroU64;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{bail, Context as _};
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
@@ -38,7 +38,7 @@ type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
 #[derive(Clone)]
 pub enum DefaultConnection {
-    Client(redis::Client),
+    ClientConfig(HashMap<String, String>),
     Conn(ConnectionManager),
 }
 
@@ -58,14 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
 impl KvRedisProvider {
     pub async fn run() -> anyhow::Result<()> {
         let HostData { config, .. } = load_host_data().context("failed to load host data")?;
-        let client = redis::Client::open(retrieve_default_url(config))
-            .context("failed to construct default Redis client")?;
-        let default_connection = if let Ok(conn) = client.get_connection_manager().await {
-            DefaultConnection::Conn(conn)
-        } else {
-            DefaultConnection::Client(client)
-        };
-        let provider = KvRedisProvider::new(default_connection);
+        let provider = KvRedisProvider::new(config.clone());
         let shutdown = run_provider(provider.clone(), "keyvalue-redis-provider")
             .await
             .context("failed to run provider")?;
@@ -79,10 +72,12 @@ impl KvRedisProvider {
     }
 
     #[must_use]
-    pub fn new(default_connection: DefaultConnection) -> Self {
+    pub fn new(initial_config: HashMap<String, String>) -> Self {
         KvRedisProvider {
             sources: Arc::default(),
-            default_connection: Arc::new(RwLock::new(default_connection)),
+            default_connection: Arc::new(RwLock::new(DefaultConnection::ClientConfig(
+                initial_config,
+            ))),
         }
     }
 
@@ -94,8 +89,9 @@ impl KvRedisProvider {
             let mut default_conn = self.default_connection.write().await;
             match &mut *default_conn {
                 DefaultConnection::Conn(conn) => Ok(conn.clone()),
-                DefaultConnection::Client(client) => {
-                    let conn = client
+                DefaultConnection::ClientConfig(cfg) => {
+                    let conn = redis::Client::open(retrieve_default_url(cfg))
+                        .context("failed to construct default Redis client")?
                         .get_connection_manager()
                         .await
                         .context("failed to construct Redis connection manager")?;
@@ -111,13 +107,13 @@ impl KvRedisProvider {
         if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
             let sources = self.sources.read().await;
             let Some(conn) = sources.get(source_id) else {
-                error!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL");
+                error!(source_id, "no Redis connection found for component");
                 bail!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
             };
             Ok(conn.clone())
         } else {
             self.get_default_connection().await.map_err(|err| {
-                error!(?err, "failed to get default connection for invocation");
+                error!(error = ?err, "failed to get default connection for invocation");
                 err
             })
         }
@@ -318,7 +314,7 @@ impl Provider for KvRedisProvider {
                             ?err,
                         "Could not create Redis connection manager for source [{source_id}], keyvalue operations will fail",
                     );
-                        return Err(anyhow!("failed to create redis connection manager"));
+                        bail!("failed to create redis connection manager");
                     }
                 },
                 Err(err) => {
@@ -326,12 +322,12 @@ impl Provider for KvRedisProvider {
                         ?err,
                         "Could not create Redis client for source [{source_id}], keyvalue operations will fail",
                     );
-                    return Err(anyhow!("failed to create redis client"));
+                    bail!("failed to create redis client");
                 }
             }
         } else {
             self.get_default_connection().await.map_err(|err| {
-                error!(?err, "failed to get default connection for link");
+                error!(error = ?err, "failed to get default connection for link");
                 err
             })?
         };
@@ -346,7 +342,10 @@ impl Provider for KvRedisProvider {
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.sources.write().await;
         if let Some(conn) = aw.remove(source_id) {
-            info!("redis closing connection for actor {}", source_id);
+            debug!(
+                component_id = source_id,
+                "redis closing connection for component"
+            );
             drop(conn);
         }
         Ok(())
@@ -373,10 +372,10 @@ pub fn retrieve_default_url(config: &HashMap<String, String>) -> String {
         .and_then(|url_key| config.get(url_key));
 
     if let Some(url) = config_supplied_url {
-        info!(url, "Using Redis URL from config");
+        debug!(url, "using Redis URL from config");
         url.to_string()
     } else {
-        info!(DEFAULT_CONNECT_URL, "Using default Redis URL");
+        debug!(DEFAULT_CONNECT_URL, "using default Redis URL");
         DEFAULT_CONNECT_URL.to_string()
     }
 }
