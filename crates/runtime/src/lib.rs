@@ -17,7 +17,12 @@ pub mod runtime;
 /// wasmCloud I/O functionality
 pub mod io;
 
-pub use actor::{Component, ComponentInstance, Config as ActorConfig};
+#[deprecated(
+    since = "0.3.1",
+    note = "ActorConfig has been renamed to ComponentConfig"
+)]
+pub use actor::Config as ActorConfig;
+pub use actor::{Component, ComponentInstance, Config as ComponentConfig};
 pub use runtime::*;
 
 pub use async_trait::async_trait;

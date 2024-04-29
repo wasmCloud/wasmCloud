@@ -2,7 +2,7 @@ use crate::capability::{
     builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
     OutgoingHttp,
 };
-use crate::ActorConfig;
+use crate::ComponentConfig;
 
 use core::fmt;
 use core::fmt::Debug;
@@ -24,7 +24,7 @@ pub struct RuntimeBuilder {
     max_components: u32,
     max_component_size: u64,
     handler: builtin::HandlerBuilder,
-    actor_config: ActorConfig,
+    actor_config: ComponentConfig,
 }
 
 impl RuntimeBuilder {
@@ -43,13 +43,13 @@ impl RuntimeBuilder {
             // chonky. So this is pretty big for now.
             max_component_size: 50 * MB,
             handler: builtin::HandlerBuilder::default(),
-            actor_config: ActorConfig::default(),
+            actor_config: ComponentConfig::default(),
         }
     }
 
-    /// Set a custom [`ActorConfig`] to use for all actor instances
+    /// Set a custom [`ComponentConfig`] to use for all actor instances
     #[must_use]
-    pub fn actor_config(self, actor_config: ActorConfig) -> Self {
+    pub fn actor_config(self, actor_config: ComponentConfig) -> Self {
         Self {
             actor_config,
             ..self
@@ -229,7 +229,7 @@ impl TryFrom<RuntimeBuilder> for Runtime {
 pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) handler: builtin::HandlerBuilder,
-    pub(crate) actor_config: ActorConfig,
+    pub(crate) actor_config: ComponentConfig,
 }
 
 impl Debug for Runtime {
