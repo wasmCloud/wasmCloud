@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context as _};
 use bytes::{Bytes, BytesMut};
@@ -258,13 +258,24 @@ impl Blobstore for FsProvider {
                 result_subject,
                 async {
                     let path = self.get_container(context, container).await?;
-                    let md = fs::metadata(path)
+                    let md = fs::metadata(&path)
                         .await
                         .context("failed to lookup directory metadata")?;
-                    let created_at = md.created().context("failed to lookup creation date")?;
-                    let created_at = created_at
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .context("creation time before Unix epoch")?;
+
+                    let created_at = match md.created() {
+                        Ok(created_time) => created_time
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .context("creation time before Unix epoch")?,
+                        Err(e) => {
+                            // NOTE: Some platforms don't have support for creation time, so we default to the unix epoch
+                            debug!(
+                                error = ?e,
+                                ?path,
+                                "failed to get creation time for container, defaulting to 0"
+                            );
+                            Duration::from_secs(0)
+                        }
+                    };
                     // NOTE: The `created_at` format is currently undefined
                     // https://github.com/WebAssembly/wasi-blobstore/issues/7
                     anyhow::Ok(wrpc_interface_blobstore::ContainerMetadata {
@@ -505,13 +516,24 @@ impl Blobstore for FsProvider {
                 result_subject,
                 async {
                     let path = self.get_object(context, id).await?;
-                    let md = fs::metadata(path)
+                    let md = fs::metadata(&path)
                         .await
                         .context("failed to lookup file metadata")?;
-                    let created_at = md.created().context("failed to lookup creation date")?;
-                    let created_at = created_at
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .context("creation time before Unix epoch")?;
+
+                    let created_at = match md.created() {
+                        Ok(created_time) => created_time
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .context("creation time before Unix epoch")?,
+                        Err(e) => {
+                            // NOTE: Some platforms don't have support for creation time, so we default to the unix epoch
+                            debug!(
+                                error = ?e,
+                                ?path,
+                                "failed to get creation time for object, defaulting to 0"
+                            );
+                            Duration::from_secs(0)
+                        }
+                    };
                     // NOTE: The `created_at` format is currently undefined
                     // https://github.com/WebAssembly/wasi-blobstore/issues/7
                     #[cfg(unix)]
