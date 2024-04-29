@@ -141,7 +141,10 @@ pub enum HttpServerError {
 ///   tokio::task::spawn(task);
 /// ```
 pub struct HttpServerCore {
+    /// The handle to the server handling incoming requests
     handle: axum_server::Handle,
+    /// The asynchronous task running the server
+    task: tokio::task::JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -338,7 +341,10 @@ impl HttpServerCore {
 
         let settings = Arc::clone(&settings);
         let handle = axum_server::Handle::new();
-        if let Tls {
+
+        let task_handle = handle.clone();
+        let target = target.to_owned();
+        let task = if let Tls {
             cert_file: Some(crt),
             priv_key_file: Some(key),
         } = &settings.tls
@@ -347,35 +353,47 @@ impl HttpServerCore {
             let tls = RustlsConfig::from_pem_file(crt, key)
                 .await
                 .context("failed to construct TLS config")?;
-            axum_server::bind_rustls(addr, tls)
-                .handle(handle.clone())
-                .serve(
-                    service
-                        .with_state(RequestContext {
-                            target: target.into(),
-                            settings,
-                            scheme: http::uri::Scheme::HTTPS,
-                        })
-                        .into_make_service(),
-                )
-                .await
+
+            tokio::spawn(async move {
+                if let Err(e) = axum_server::bind_rustls(addr, tls)
+                    .handle(task_handle)
+                    .serve(
+                        service
+                            .with_state(RequestContext {
+                                target: target.clone(),
+                                settings,
+                                scheme: http::uri::Scheme::HTTPS,
+                            })
+                            .into_make_service(),
+                    )
+                    .await
+                {
+                    error!(error = %e, component_id = target, "failed to serve HTTPS for component");
+                }
+            })
         } else {
             debug!(?addr, "bind HTTP listener");
-            axum_server::bind(addr)
-                .handle(handle.clone())
-                .serve(
-                    service
-                        .with_state(RequestContext {
-                            target: target.into(),
-                            settings,
-                            scheme: http::uri::Scheme::HTTP,
-                        })
-                        .into_make_service(),
-                )
-                .await
-        }
-        .context("failed to start server")?;
-        Ok(Self { handle })
+
+            tokio::spawn(async move {
+                if let Err(e) = axum_server::bind(addr)
+                    .handle(task_handle)
+                    .serve(
+                        service
+                            .with_state(RequestContext {
+                                target: target.clone(),
+                                settings,
+                                scheme: http::uri::Scheme::HTTP,
+                            })
+                            .into_make_service(),
+                    )
+                    .await
+                {
+                    error!(error = %e, component_id = target, "failed to serve HTTP for component");
+                }
+            })
+        };
+
+        Ok(Self { handle, task })
     }
 }
 
@@ -383,5 +401,6 @@ impl Drop for HttpServerCore {
     /// Drop the client connection. Does not block or fail if the client has already been closed.
     fn drop(&mut self) {
         self.handle.shutdown();
+        self.task.abort();
     }
 }
