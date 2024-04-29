@@ -21,7 +21,7 @@ jobs:
   package:
     runs-on: ubuntu-22.04-16-cores
     steps:
-    - uses: actions/checkout@v4.1.1
+    - uses: actions/checkout@v4
     - name: Extract tag context
       id: ctx
       run: |

@@ -19,7 +19,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4.1.1
+      - uses: actions/checkout@v4
 
       - uses: oras-project/setup-oras@v1.1.0
         with:
