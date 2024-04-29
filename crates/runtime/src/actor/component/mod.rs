@@ -19,9 +19,8 @@ use wascap::jwt;
 use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::{
-    self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Type, Val,
+    self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Val,
 };
-use wasmtime_wasi::command;
 use wasmtime_wasi::pipe::{AsyncWriteStream, ClosedInputStream, ClosedOutputStream};
 use wasmtime_wasi::{
     HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
@@ -238,7 +237,6 @@ struct Ctx {
     table: ResourceTable,
     handler: builtin::Handler,
     stderr: StdioStream<Box<dyn HostOutputStream>>,
-    custom_result_types: HashMap<String, HashMap<String, Vec<Type>>>,
 }
 
 impl WasiView for Ctx {
@@ -263,7 +261,7 @@ pub struct Component {
     engine: wasmtime::Engine,
     claims: Option<jwt::Claims<jwt::Component>>,
     handler: builtin::HandlerBuilder,
-    polyfilled_imports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
+    polyfills: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     ty: types::Component,
     instance_pre: wasmtime::component::InstancePre<Ctx>,
@@ -275,7 +273,7 @@ impl Debug for Component {
             .field("claims", &self.claims)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
-            .field("polyfilled_imports", &self.polyfilled_imports)
+            .field("polyfills", &self.polyfills)
             .field("exports", &self.exports)
             .field("ty", &self.ty)
             .finish_non_exhaustive()
@@ -287,7 +285,8 @@ impl Debug for Component {
 fn polyfill<'a, T>(
     resolve: &wit_parser::Resolve,
     imports: T,
-    component: &component::Component,
+    engine: &wasmtime::Engine,
+    ty: &types::Component,
     linker: &mut Linker<Ctx>,
 ) -> HashMap<String, HashMap<String, DynamicFunction>>
 where
@@ -295,7 +294,7 @@ where
     T::IntoIter: ExactSizeIterator,
 {
     let imports = imports.into_iter();
-    let mut polyfilled_imports = HashMap::with_capacity(imports.len());
+    let mut polyfills = HashMap::with_capacity(imports.len());
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
         // Avoid polyfilling instances, for which static bindings are linked
@@ -340,6 +339,16 @@ where
             package: package_name.name.to_string(),
             interface: interface_name.to_string(),
         });
+        let Some(types::ComponentItem::ComponentInstance(instance)) =
+            ty.get_import(engine, &instance_name)
+        else {
+            trace!(
+                instance_name,
+                "component does not import the parsed instance"
+            );
+            continue;
+        };
+
         let mut linker = linker.root();
         let mut linker = match linker.instance(&instance_name) {
             Ok(linker) => linker,
@@ -352,8 +361,7 @@ where
                 continue;
             }
         };
-        let hash_map::Entry::Vacant(instance_import) =
-            polyfilled_imports.entry(instance_name.to_string())
+        let hash_map::Entry::Vacant(instance_import) = polyfills.entry(instance_name.to_string())
         else {
             error!("duplicate instance import");
             continue;
@@ -379,20 +387,29 @@ where
                 error!("duplicate function import");
                 continue;
             };
+            let Some(types::ComponentItem::ComponentFunc(func)) =
+                instance.get_export(engine, func_name)
+            else {
+                trace!(
+                    ?instance_name,
+                    func_name,
+                    "instance does not export the parsed function"
+                );
+                continue;
+            };
             let instance_name = Arc::clone(&instance_name);
             let func_name = Arc::new(func_name.to_string());
             let target = Arc::clone(&target);
             if let Err(err) = linker.func_new_async(
-                component,
                 Arc::clone(&func_name).as_str(),
                 move |mut store, params, results| {
                     let instance_name = Arc::clone(&instance_name);
                     let func_name = Arc::clone(&func_name);
                     let target = Arc::clone(&target);
+                    let func = func.clone();
                     Box::new(async move {
-                        let params: Vec<_> = params
-                            .iter()
-                            .map(|val| to_wrpc_value(&mut store, val))
+                        let params: Vec<_> = zip(params, func.params())
+                            .map(|(val, ty)| to_wrpc_value(&mut store, val, &ty))
                             .collect::<anyhow::Result<_>>()
                             .context("failed to convert wasmtime values to wRPC values")?;
                         let handler = &store.data().handler;
@@ -404,14 +421,8 @@ where
                             .call(target, &instance_name, &func_name, params)
                             .await
                             .context("failed to call target interface")?;
-                        let result_ty = store
-                            .data()
-                            .custom_result_types
-                            .get(instance_name.as_str())
-                            .and_then(|instance| instance.get(func_name.as_str()))
-                            .context("unknown result type")?;
-                        for (i, (val, ty)) in zip(result_values, result_ty).enumerate() {
-                            let val = from_wrpc_value(val, ty)?;
+                        for (i, (val, ty)) in zip(result_values, func.results()).enumerate() {
+                            let val = from_wrpc_value(&mut store, val, &ty)?;
                             let result = results.get_mut(i).context("invalid result vector")?;
                             *result = val;
                         }
@@ -425,7 +436,7 @@ where
         }
         instance_import.insert(function_imports);
     }
-    polyfilled_imports
+    polyfills
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -448,7 +459,7 @@ fn instantiate(
         .build();
 
     let imports = ty.imports(engine);
-    let mut custom_result_types = HashMap::with_capacity(imports.len());
+    let mut polyfills = HashMap::with_capacity(imports.len());
     for (instance_name, item) in imports {
         // Skip static bindings, since the runtime types of their results are not needed by the
         // runtime - those will not be constructed using reflection, but rather directly returned
@@ -463,10 +474,10 @@ fn instantiate(
             let component::types::ComponentItem::ComponentFunc(ty) = item else {
                 continue;
             };
-            instance.insert(func_name.to_string(), ty.results().collect());
+            instance.insert(func_name.to_string(), ty);
         }
         if !instance.is_empty() {
-            custom_result_types.insert(instance_name.to_string(), instance);
+            polyfills.insert(instance_name.to_string(), instance);
         }
     }
 
@@ -477,7 +488,6 @@ fn instantiate(
         table,
         handler,
         stderr,
-        custom_result_types,
     };
     let store = wasmtime::Store::new(engine, ctx);
     Ok(Instance {
@@ -522,7 +532,8 @@ impl Component {
         )
         .context("failed to link `wasi:http/outgoing-handler` interface")?;
 
-        command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
+        wasmtime_wasi::add_to_linker_async(&mut linker)
+            .context("failed to link core WASI interfaces")?;
 
         let (resolve, world) =
             match wit_component::decode(wasm).context("failed to decode WIT component")? {
@@ -540,17 +551,15 @@ impl Component {
             .find_map(|(id, w)| (id == world).then_some(w))
             .context("component world missing")?;
 
-        let polyfilled_imports = Arc::new(polyfill(&resolve, imports, &component, &mut linker));
-        let ty = linker
-            .substituted_component_type(&component)
-            .context("failed to introspect component type")?;
+        let ty = component.component_type();
+        let polyfills = Arc::new(polyfill(&resolve, imports, &engine, &ty, &mut linker));
         let instance_pre = linker.instantiate_pre(&component)?;
         // TODO: Record the substituted type exports, not parser exports
         Ok(Self {
             engine,
             claims,
             handler: rt.handler.clone(),
-            polyfilled_imports,
+            polyfills,
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
             instance_pre,
@@ -595,8 +604,8 @@ impl Component {
     /// Top level map is keyed by the instance name.
     /// Inner map is keyed by exported function name.
     #[must_use]
-    pub fn polyfilled_imports(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
-        &self.polyfilled_imports
+    pub fn polyfills(&self) -> &Arc<HashMap<String, HashMap<String, DynamicFunction>>> {
+        &self.polyfills
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
@@ -725,7 +734,7 @@ impl Instance {
             .with_context(|| format!("function `{name}` not found"))?
         };
         let params: Vec<_> = zip(params, func.params(&self.store).iter())
-            .map(|(val, ty)| from_wrpc_value(val, ty))
+            .map(|(val, ty)| from_wrpc_value(&mut self.store, val, ty))
             .collect::<anyhow::Result<_>>()
             .context("failed to convert wasmtime values to wRPC values")?;
         let results_ty = func.results(&self.store);
@@ -736,9 +745,8 @@ impl Instance {
         func.post_return_async(&mut self.store)
             .await
             .context("failed to perform post-return cleanup")?;
-        results
-            .iter()
-            .map(|val| to_wrpc_value(&mut self.store, val))
+        zip(results, results_ty.iter())
+            .map(|(val, ty)| to_wrpc_value(&mut self.store, &val, ty))
             .collect::<anyhow::Result<_>>()
             .context("failed to convert wasmtime values to wRPC values")
     }

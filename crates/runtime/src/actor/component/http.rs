@@ -13,7 +13,7 @@ use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
     HostFutureIncomingResponse, IncomingResponseInternal, OutgoingRequest,
 };
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::{HttpError, HttpResult, WasiHttpCtx, WasiHttpView};
 
 pub mod incoming_http_bindings {
     wasmtime::component::bindgen!({
@@ -37,24 +37,28 @@ impl WasiHttpView for Ctx {
     fn send_request(
         &mut self,
         request: OutgoingRequest,
-    ) -> wasmtime::Result<Resource<HostFutureIncomingResponse>>
+    ) -> HttpResult<Resource<HostFutureIncomingResponse>>
     where
         Self: Sized,
     {
         let handler = self.handler.clone();
         let between_bytes_timeout = request.between_bytes_timeout;
-        let res = HostFutureIncomingResponse::new(wasmtime_wasi::spawn(async move {
+        let res = HostFutureIncomingResponse::new(wasmtime_wasi::runtime::spawn(async move {
             match OutgoingHttp::handle(&handler, request).await {
                 Ok(Ok(resp)) => Ok(Ok(IncomingResponseInternal {
                     resp,
-                    worker: Arc::new(wasmtime_wasi::spawn(async {})),
+                    worker: Arc::new(wasmtime_wasi::runtime::spawn(async {})),
                     between_bytes_timeout,
                 })),
                 Ok(Err(err)) => Ok(Err(err)),
                 Err(e) => Err(e),
             }
         }));
-        let res = self.table().push(res).context("failed to push response")?;
+        let res = self
+            .table()
+            .push(res)
+            .context("failed to push response")
+            .map_err(HttpError::trap)?;
         Ok(res)
     }
 }

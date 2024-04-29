@@ -8,8 +8,6 @@ pub use builtin::{
     LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
     OutgoingHttpRequest, TargetEntity,
 };
-
-// NOTE: this import is used below in bindgen
 pub use wasmcloud_core::CallTargetInterface;
 
 #[allow(clippy::doc_markdown)]
@@ -29,30 +27,21 @@ mod bindgen {
     wasmtime::component::bindgen!({
         world: "interfaces",
         async: true,
+        tracing: true,
         with: {
            "wasi:blobstore/container/container": blobstore::Container,
            "wasi:blobstore/container/stream-object-names": blobstore::StreamObjectNames,
            "wasi:blobstore/types/incoming-value": blobstore::IncomingValue,
            "wasi:blobstore/types/outgoing-value": blobstore::OutgoingValue,
-           "wasi:cli/environment": wasmtime_wasi::bindings::cli::environment,
-           "wasi:cli/exit": wasmtime_wasi::bindings::cli::exit,
-           "wasi:cli/preopens": wasmtime_wasi::bindings::cli::preopens,
-           "wasi:cli/stderr": wasmtime_wasi::bindings::cli::stderr,
-           "wasi:cli/stdin": wasmtime_wasi::bindings::cli::stdin,
-           "wasi:cli/stdout": wasmtime_wasi::bindings::cli::stdout,
-           "wasi:clocks/monotonic-clock": wasmtime_wasi::bindings::clocks::monotonic_clock,
-           "wasi:clocks/timezone": wasmtime_wasi::bindings::clocks::timezone,
-           "wasi:clocks/wall_clock": wasmtime_wasi::bindings::clocks::wall_clock,
-           "wasi:filesystem/filesystem": wasmtime_wasi::bindings::filesystem::filesystem,
-           "wasi:http/incoming-handler": wasmtime_wasi_http::bindings::http::incoming_handler,
-           "wasi:http/outgoing-handler": wasmtime_wasi_http::bindings::http::outgoing_handler,
-           "wasi:http/types": wasmtime_wasi_http::bindings::http::types,
-           "wasi:io/error": wasmtime_wasi::bindings::io::error,
-           "wasi:io/poll": wasmtime_wasi::bindings::io::poll,
-           "wasi:io/streams": wasmtime_wasi::bindings::io::streams,
+           "wasi:cli": wasmtime_wasi::bindings::cli,
+           "wasi:clocks": wasmtime_wasi::bindings::clocks,
+           "wasi:filesystem": wasmtime_wasi::bindings::filesystem,
+           "wasi:http": wasmtime_wasi_http::bindings::http,
+           "wasi:io": wasmtime_wasi::bindings::io,
            "wasi:keyvalue/store/bucket": keyvalue::Bucket,
-           "wasi:random/random": wasmtime_wasi::bindings::random::random,
-           "wasmcloud:bus/lattice/call-target-interface": super::CallTargetInterface,
+           "wasi:random": wasmtime_wasi::bindings::random,
+           "wasi:sockets": wasmtime_wasi::bindings::sockets,
+           "wasmcloud:bus/lattice/call-target-interface": wasmcloud_core::CallTargetInterface,
         },
     });
 }
