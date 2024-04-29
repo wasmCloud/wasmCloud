@@ -184,11 +184,10 @@ async fn subscribe_shutdown(
     quit: broadcast::Sender<()>,
     lattice: &str,
     provider_key: &str,
-    link_name: &str,
     host_id: &'static str,
 ) -> ProviderInitResult<mpsc::Receiver<oneshot::Sender<()>>> {
     let mut sub = nats
-        .subscribe(shutdown_subject(lattice, provider_key, link_name))
+        .subscribe(shutdown_subject(lattice, provider_key, "default"))
         .await?;
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
     spawn({
@@ -327,7 +326,6 @@ pub(crate) struct ProviderInitState {
     pub quit_tx: broadcast::Sender<()>,
     pub host_id: String,
     pub lattice_rpc_prefix: String,
-    pub link_name: String,
     pub provider_key: String,
     pub link_definitions: Vec<InterfaceLinkDefinition>,
     pub commands: ProviderCommandReceivers,
@@ -339,7 +337,6 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
     let HostData {
         host_id,
         lattice_rpc_prefix,
-        link_name,
         lattice_rpc_user_jwt,
         lattice_rpc_user_seed,
         lattice_rpc_url,
@@ -353,6 +350,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         structured_logging,
         log_level,
         otel_config,
+        link_name: _link_name,
     } = spawn_blocking(load_host_data).await.map_err(|e| {
         ProviderInitError::Initialization(format!("failed to load host data: {e}"))
     })??;
@@ -405,7 +403,6 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             quit_tx.clone(),
             lattice_rpc_prefix,
             provider_key,
-            link_name,
             host_id
         ),
         subscribe_link_put(
@@ -427,7 +424,6 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         quit_tx,
         host_id: host_id.clone(),
         lattice_rpc_prefix: lattice_rpc_prefix.clone(),
-        link_name: link_name.clone(),
         provider_key: provider_key.clone(),
         link_definitions: link_definitions.clone(),
         config: config.clone(),
@@ -449,7 +445,7 @@ async fn receive_link_for_provider<P>(
 where
     P: Provider,
 {
-    match if ld.source_id == connection.provider_key {
+    match if ld.source_id == connection.provider_id {
         provider
             .receive_link_config_as_source(LinkConfig {
                 source_id: &ld.source_id,
@@ -458,7 +454,7 @@ where
                 config: &ld.source_config,
             })
             .await
-    } else if ld.target == connection.provider_key {
+    } else if ld.target == connection.provider_id {
         provider
             .receive_link_config_as_target(LinkConfig {
                 source_id: &ld.source_id,
@@ -486,16 +482,17 @@ async fn delete_link_for_provider<P>(
 where
     P: Provider,
 {
-    if ld.source_id == connection.provider_key {
+    if ld.source_id == connection.provider_id {
         if let Err(e) = provider.delete_link_as_source(&ld.target).await {
             error!(error = %e, target = &ld.target, "failed to delete link to component");
         }
-    } else if ld.target == connection.provider_key {
+    } else if ld.target == connection.provider_id {
         if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
             error!(error = %e, source = &ld.source_id, "failed to delete link from component");
         }
     }
-    Ok(connection.delete_link(&ld.source_id, &ld.target).await)
+    connection.delete_link(&ld.source_id, &ld.target).await;
+    Ok(())
 }
 
 /// Handle provider commands in a loop.
@@ -632,7 +629,6 @@ pub async fn run_provider(
         quit_tx,
         host_id,
         lattice_rpc_prefix,
-        link_name,
         provider_key,
         link_definitions,
         commands,
@@ -644,7 +640,6 @@ pub async fn run_provider(
         provider_key,
         lattice_rpc_prefix.clone(),
         host_id,
-        link_name,
         config,
     )?;
     CONNECTION.set(connection).map_err(|_| {
@@ -686,9 +681,7 @@ pub struct ProviderConnection {
     /// Lattice name
     lattice: String,
     host_id: String,
-    // TODO: remove link name
-    link_name: String,
-    provider_key: String,
+    provider_id: String,
 
     // TODO: Reference this field to get static config
     #[allow(unused)]
@@ -700,7 +693,6 @@ impl fmt::Debug for ProviderConnection {
         f.debug_struct("ProviderConnection")
             .field("provider_id", &self.provider_key())
             .field("host_id", &self.host_id)
-            .field("link", &self.link_name)
             .field("lattice", &self.lattice)
             .finish()
     }
@@ -728,10 +720,9 @@ pub fn invocation_context(headers: &HeaderMap) -> Context {
 impl ProviderConnection {
     pub(crate) fn new(
         nats: Arc<async_nats::Client>,
-        provider_key: String,
+        provider_id: String,
         lattice: String,
         host_id: String,
-        link_name: String,
         config: HashMap<String, String>,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
@@ -740,8 +731,7 @@ impl ProviderConnection {
             nats,
             lattice,
             host_id,
-            link_name,
-            provider_key,
+            provider_id,
             config,
         })
     }
@@ -777,7 +767,7 @@ impl ProviderConnection {
                 hmap.insert(k.as_str(), v.as_str());
             }
         }
-        hmap.insert("source-id", self.provider_key.as_str());
+        hmap.insert("source-id", self.provider_id.as_str());
         hmap.insert("target-id", target);
         WrpcClient(wasmcloud_core::wrpc::Client::new(
             Arc::clone(&self.nats),
@@ -791,13 +781,13 @@ impl ProviderConnection {
     /// Get the provider key that was assigned to this host at startup
     #[must_use]
     pub fn provider_key(&self) -> &str {
-        &self.provider_key
+        &self.provider_id
     }
 
     /// Stores link in the [ProviderConnection], either as a source link or target link
     /// depending on if the provider is the source or target of the link
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
-        if ld.source_id == self.provider_key {
+        if ld.source_id == self.provider_id {
             self.source_links
                 .write()
                 .await
@@ -813,9 +803,9 @@ impl ProviderConnection {
     /// Deletes link from the [ProviderConnection], either a source link or target link
     /// based on if the provider is the source or target of the link
     pub async fn delete_link(&self, source_id: &str, target: &str) {
-        if source_id == self.provider_key {
+        if source_id == self.provider_id {
             self.source_links.write().await.remove(source_id);
-        } else if target == self.provider_key {
+        } else if target == self.provider_id {
             self.target_links.write().await.remove(target);
         }
     }
@@ -823,10 +813,10 @@ impl ProviderConnection {
     /// Returns true if the source is linked to this provider or if the provider is linked to the target
     pub async fn is_linked(&self, source_id: &str, target_id: &str) -> bool {
         // Provider is the source of the link, so we check if the target is linked
-        if self.provider_key == source_id {
+        if self.provider_id == source_id {
             self.source_links.read().await.contains_key(target_id)
         // Provider is the target of the link, so we check if the source is linked
-        } else if self.provider_key == target_id {
+        } else if self.provider_id == target_id {
             self.target_links.read().await.contains_key(source_id)
         // Shouldn't occur, but if the provider is neither source nor target, it's not linked
         } else {
