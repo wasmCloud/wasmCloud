@@ -5892,7 +5892,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "bytes",
