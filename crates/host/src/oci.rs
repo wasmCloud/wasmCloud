@@ -207,12 +207,12 @@ impl Fetcher {
         Ok(cache_file)
     }
 
-    /// Fetch actor from OCI
+    /// Fetch component from OCI
     ///
     /// # Errors
     ///
     /// Returns an error if either fetching fails or reading the fetched OCI path fails
-    pub async fn fetch_actor(&self, oci_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
+    pub async fn fetch_component(&self, oci_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
         let path = self
             .fetch_path(oci_ref, vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE])
             .await
