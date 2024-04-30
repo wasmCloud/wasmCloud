@@ -4,6 +4,20 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      crate:
+        type: choice
+        description: crate to smart-release
+        options:
+          - wasmcloud
+          - wasmcloud-core
+          - wasmcloud-tracing
+          - wash-cli
+          - wash-lib
+          - wascap
+      execute:
+        type: boolean
+        description: check this box to release, leave unchecked to compute changes and PR
   push:
     branches:
       - main
@@ -677,3 +691,44 @@ jobs:
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
         working-directory: ./crates/${{ matrix.crate }}
+
+  smart-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - name: Install cmake for smart-release
+        run: sudo apt update && sudo apt install cmake -y
+
+      - name: install smart-release
+        env:
+          RUSTFLAGS: ''
+        run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
+      - name: dry run release
+        if: ${{ !inputs.execute }}
+        run: |
+          git config --global user.email "automation@wasmcloud.com"
+          git config --global user.name "wasmCloud automation"
+          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.crate }}
+      - name: Create Pull Request
+        if: ${{ !inputs.execute }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          signoff: true
+          title: Release ${{ inputs.crate }}
+          commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
+
+      - name: release
+        if: ${{ inputs.execute }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global user.email "automation@wasmcloud.com"
+          git config --global user.name "wasmCloud automation"
+          cargo smart-release --update-crates-index --execute --no-changelog-preview ${{ inputs.crate }}
