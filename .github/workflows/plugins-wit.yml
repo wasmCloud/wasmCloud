@@ -24,4 +24,5 @@ jobs:
     - name: Release
       uses: softprops/action-gh-release@v2
       with:
-        files: crates/wash-plugin-${{ steps.ctx.outputs.version }}.tar.gz
+        files: crates/wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz
+        make_latest: "false"
