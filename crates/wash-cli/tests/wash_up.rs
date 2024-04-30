@@ -15,10 +15,7 @@ const RGX_ACTOR_START_MSG: &str = r"Component \[(?P<actor_id>[^]]+)\] \(ref: \[(
 
 #[tokio::test]
 #[serial]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");

@@ -24,6 +24,7 @@ async fn record_reachability(host: &str) {
 async fn main() {
     join!(
         record_reachability("github.com"),
+        record_reachability("ghcr.io"),
         record_reachability("wasmcloud.azurecr.io"),
     );
 }
