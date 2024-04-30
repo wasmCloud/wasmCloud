@@ -117,6 +117,11 @@ impl NatsMessagingProvider {
         // Use the first visible cluster_uri
         let url = cfg.cluster_uris.first().unwrap();
 
+        // Override inbox prefix if specified
+        if let Some(prefix) = cfg.custom_inbox_prefix {
+            opts = opts.custom_inbox_prefix(prefix);
+        }
+
         let client = opts
             .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
             .connect(url)
@@ -535,6 +540,7 @@ fn add_tls_ca(
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_default_connection_serialize() {
@@ -551,6 +557,7 @@ mod test {
         assert_eq!(config.auth_jwt.unwrap(), "authy");
         assert_eq!(config.auth_seed.unwrap(), "seedy");
         assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
+        assert_eq!(config.custom_inbox_prefix, None);
         assert!(config.subscriptions.is_empty());
         assert!(config.ping_interval_sec.is_none());
     }
@@ -561,6 +568,7 @@ mod test {
         let cc1 = ConnectionConfig {
             cluster_uris: vec!["old_server".to_string()],
             subscriptions: vec!["topic1".to_string()],
+            custom_inbox_prefix: Some("_NOPE.>".into()),
             ..Default::default()
         };
         let cc2 = ConnectionConfig {
@@ -572,5 +580,16 @@ mod test {
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
         assert_eq!(cc3.auth_jwt, Some("jawty".to_string()));
+        assert_eq!(cc3.custom_inbox_prefix, Some("_NOPE.>".to_string()));
+    }
+
+    #[test]
+    fn test_from_map() -> anyhow::Result<()> {
+        let cc = ConnectionConfig::from_map(&HashMap::from([(
+            "custom_inbox_prefix".to_string(),
+            "_TEST.>".to_string(),
+        )]))?;
+        assert_eq!(cc.custom_inbox_prefix, Some("_TEST.>".to_string()));
+        Ok(())
     }
 }
