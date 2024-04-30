@@ -1351,7 +1351,7 @@ impl Host {
                                 return;
                             }
                         };
-                        if let Err(err) = timeout(
+                        match timeout(
                             max_execution_time,
                             tokio::spawn({
                                 let transmitter = transmitter.clone();
@@ -1369,13 +1369,34 @@ impl Host {
                         )
                         .await
                         {
-                            error!(?err, "failed to handle invocation");
-                            if let Err(err) = transmitter
-                                .transmit_static(error_subject, format!("{err:#}"))
-                                .await
-                            {
-                                error!(?err, "failed to transmit error to invoker");
+                            Err(err) => {
+                                error!(?err, "invocation handling timed out");
+                                if let Err(err) = transmitter
+                                    .transmit_static(error_subject, format!("{err:#}"))
+                                    .await
+                                {
+                                    error!(?err, "failed to transmit invocation task timeout error to invoker");
+                                }
+                            },
+                            Ok(Err(err)) => {
+                                error!(?err, "invocation task panicked");
+                                if let Err(err) = transmitter
+                                    .transmit_static(error_subject, format!("{err:#}"))
+                                    .await
+                                {
+                                    error!(?err, "failed to transmit invocation task panic error to invoker");
+                                }
+                            },
+                            Ok(Ok(Err(err))) => {
+                                error!(?err, "failed to handle invocation");
+                                if let Err(err) = transmitter
+                                    .transmit_static(error_subject, format!("{err:#}"))
+                                    .await
+                                {
+                                    error!(?err, "failed to transmit error to invoker");
+                                }
                             }
+                            Ok(Ok(Ok(()))) => {}
                         }
                     }
                 },
