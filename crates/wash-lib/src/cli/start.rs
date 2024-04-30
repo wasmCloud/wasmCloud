@@ -217,10 +217,36 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
-    let provider_ref = if cmd.provider_ref.starts_with('/') {
-        format!("file://{}", &cmd.provider_ref) // prefix with file:// if it's an absolute path
-    } else {
-        cmd.provider_ref.to_string()
+    // Attempt to parse the provider_ref from strings that may look lke paths or be OCI references
+    let provider_ref = match cmd.provider_ref {
+        // If provider ref starts with '/', then prefix with 'file://', as it's an absolute path
+        ref s if s.starts_with('/') => format!("file://{}", &cmd.provider_ref),
+        // If the provided ref happens to be an existing path, convert
+        ref s if tokio::fs::try_exists(s).await.is_ok_and(|exists| exists) => {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(&s)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        // If a URI-formatted relative path was provided, resolve it
+        ref s
+            if s.starts_with("file://")
+                && tokio::fs::try_exists(s.split_at(7).1)
+                    .await
+                    .is_ok_and(|exists| exists) =>
+        {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(s.split_at(7).1)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        _ => cmd.provider_ref.to_string(),
     };
 
     let host = match cmd.host_id {
