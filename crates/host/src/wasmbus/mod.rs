@@ -1353,7 +1353,19 @@ impl Host {
                         };
                         if let Err(err) = timeout(
                             max_execution_time,
-                            actor.handle_invocation(context, params, result_subject, &transmitter),
+                            tokio::spawn({
+                                let transmitter = transmitter.clone();
+                                async move {
+                                    actor
+                                        .handle_invocation(
+                                            context,
+                                            params,
+                                            result_subject,
+                                            &transmitter,
+                                        )
+                                        .await
+                                }
+                            }),
                         )
                         .await
                         {
