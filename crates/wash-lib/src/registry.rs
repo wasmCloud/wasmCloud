@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use oci_distribution::manifest::OciImageManifest;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer},
@@ -177,7 +177,9 @@ pub async fn push_oci_artifact(
     };
 
     let mut artifact_buf = vec![];
-    let mut f = File::open(artifact).await?;
+    let mut f = File::open(&artifact)
+        .await
+        .with_context(|| format!("failed to open artifact [{}]", artifact.as_ref().display()))?;
     f.read_to_end(&mut artifact_buf).await?;
 
     let (artifact_media_type, config_media_type) = match validate_artifact(&artifact_buf).await? {
@@ -191,7 +193,9 @@ pub async fn push_oci_artifact(
     let mut config_buf = vec![];
     match options.config {
         Some(config_file) => {
-            let mut f = File::open(config_file).await?;
+            let mut f = File::open(&config_file).await.with_context(|| {
+                format!("failed to open config file [{}]", config_file.display())
+            })?;
             f.read_to_end(&mut config_buf).await?;
         }
         None => {

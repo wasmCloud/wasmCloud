@@ -64,7 +64,15 @@ pub struct ReadCapture {
 impl ReadCapture {
     /// Loads the given capture file from the path and returns all of the data
     pub async fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let file = File::open(path).await?;
+        let file = File::open(&path).await.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to load capture from file [{}]: {e}",
+                    path.as_ref().display()
+                ),
+            )
+        })?;
         let mut archive = Archive::new(GzipDecoder::new(tokio::io::BufReader::new(file)));
 
         let mut capture = ReadCapture {

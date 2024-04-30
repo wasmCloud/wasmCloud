@@ -75,7 +75,12 @@ pub async fn handle_command(
     let command = command.into();
     let mut buf = Vec::new();
     if PathBuf::from(command.target.clone()).as_path().is_dir() {
-        let mut f = File::open(command.target.clone())?;
+        let mut f = File::open(&command.target).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("failed to target file [{}]: {e}", &command.target),
+            )
+        })?;
         f.read_to_end(&mut buf)?;
     } else {
         let cache_file = (!command.no_cache).then(|| cached_oci_file(&command.target.clone()));
