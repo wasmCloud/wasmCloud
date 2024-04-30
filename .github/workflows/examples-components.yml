@@ -169,9 +169,6 @@ jobs:
         project:
           # Rust example components (to publish)
           - lang: "rust"
-            name: "http-jsonify"
-            wasm-bin: "wasmcloud_component_http_jsonify_s.wasm"
-          - lang: "rust"
             name: "blobby"
             wasm-bin: "blobby_s.wasm"
           - lang: "rust"
