@@ -9,10 +9,7 @@ use wash_lib::cli::output::{GetHostInventoriesCommandOutput, ScaleCommandOutput}
 
 #[tokio::test]
 #[serial]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 async fn integration_scale_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
