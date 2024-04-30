@@ -137,7 +137,15 @@ impl ProviderArchive {
     /// [`load`] or [`try_load_target_from_file`]  methods if you only want to load a single binary
     /// into memory.
     pub async fn try_load_file(path: impl AsRef<Path>) -> Result<ProviderArchive> {
-        let mut file = File::open(path).await?;
+        let mut file = File::open(&path).await.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to load PAR from file [{}]: {e}",
+                    path.as_ref().display()
+                ),
+            )
+        })?;
         Self::load(&mut file, None).await
     }
 
@@ -154,7 +162,15 @@ impl ProviderArchive {
         path: impl AsRef<Path>,
         target: &str,
     ) -> Result<ProviderArchive> {
-        let mut file = File::open(path).await?;
+        let mut file = File::open(&path).await.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to load target [{target}] from PAR from file [{}]: {e}",
+                    path.as_ref().display()
+                ),
+            )
+        })?;
         Self::load(&mut file, Some(target)).await
     }
 
