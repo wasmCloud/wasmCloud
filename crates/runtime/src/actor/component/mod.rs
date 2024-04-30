@@ -572,6 +572,14 @@ impl Component {
         })
     }
 
+    /// Sets maximum execution time for functionality exported by this component.
+    /// Values below 1 second will be interpreted as 1 second.
+    #[instrument(level = "trace", skip_all)]
+    pub fn set_max_execution_time(&mut self, max_execution_time: Duration) -> &mut Self {
+        self.max_execution_time = max_execution_time.max(Duration::from_secs(1));
+        self
+    }
+
     /// Reads the WebAssembly binary asynchronously and calls [Component::new].
     ///
     /// # Errors

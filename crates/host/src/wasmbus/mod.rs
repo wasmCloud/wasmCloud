@@ -1207,7 +1207,7 @@ impl Host {
         component_ref: String,
         component_id: String,
         max_instances: NonZeroUsize,
-        component: wasmcloud_runtime::Component,
+        mut component: wasmcloud_runtime::Component,
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
         trace!(component_ref, max_instances, "instantiating component");
@@ -1221,19 +1221,6 @@ impl Host {
             async_nats::HeaderMap::new(),
             Duration::default(), // this client should not invoke anything
         );
-        let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
-        let actor = Arc::new(Component {
-            component: component.clone(),
-            id: component_id,
-            calls: calls_abort,
-            handler: handler.clone(),
-            annotations: annotations.clone(),
-            max_instances,
-            policy_manager: Arc::clone(&self.policy_manager),
-            image_reference: component_ref,
-            metrics: Arc::clone(&self.metrics),
-        });
-
         let mut exports: Vec<Pin<Box<dyn Stream<Item = _> + Send>>> = Vec::new();
         for (instance, functions) in component.exports().iter() {
             match instance.as_str() {
@@ -1326,9 +1313,22 @@ impl Host {
             }
         }
 
+        let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
+        let max_execution_time = self.max_execution_time;
+        component.set_max_execution_time(max_execution_time);
+        let actor = Arc::new(Component {
+            component,
+            id: component_id,
+            calls: calls_abort,
+            handler: handler.clone(),
+            annotations: annotations.clone(),
+            max_instances,
+            policy_manager: Arc::clone(&self.policy_manager),
+            image_reference: component_ref,
+            metrics: Arc::clone(&self.metrics),
+        });
         spawn({
             let actor = Arc::clone(&actor);
-            let max_execution_time = self.max_execution_time;
             Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
                 max_instances.get(),
                 move |invocation| {
@@ -1383,8 +1383,8 @@ impl Host {
         debug!(component_ref, ?max_instances, "starting new component");
 
         let annotations = annotations.into();
-        let claims = component.claims();
-        if let Some(claims) = claims {
+        let claims = component.claims().cloned();
+        if let Some(ref claims) = claims {
             self.store_claims(Claims::Component(claims.clone()))
                 .await
                 .context("failed to store claims")?;
@@ -1415,7 +1415,7 @@ impl Host {
                 component_ref.clone(),
                 component_id.clone(),
                 max_instances,
-                component.clone(),
+                component,
                 handler.clone(),
             )
             .await
@@ -1425,7 +1425,7 @@ impl Host {
         self.publish_event(
             "component_scaled",
             event::component_scaled(
-                claims,
+                claims.as_ref(),
                 &annotations,
                 &self.host_key.public_key(),
                 max_instances,
@@ -1904,9 +1904,9 @@ impl Host {
             }
 
             let new_component = self.fetch_component(new_component_ref).await?;
-            let new_claims = new_component.claims();
-            if let Some(claims) = new_claims.cloned() {
-                self.store_claims(Claims::Component(claims))
+            let new_claims = new_component.claims().cloned();
+            if let Some(ref claims) = new_claims {
+                self.store_claims(Claims::Component(claims.clone()))
                     .await
                     .context("failed to store claims")?;
             }
@@ -1918,7 +1918,7 @@ impl Host {
                     new_component_ref.to_string(),
                     component_id.to_string(),
                     max,
-                    new_component.clone(),
+                    new_component,
                     existing_component.handler.copy_for_new(),
                 )
                 .await
@@ -1930,7 +1930,7 @@ impl Host {
             self.publish_event(
                 "component_scaled",
                 event::component_scaled(
-                    new_claims,
+                    new_claims.as_ref(),
                     &component.annotations,
                     host_id,
                     max,
