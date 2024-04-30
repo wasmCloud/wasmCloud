@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
 <csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
 <csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
+<csr-id-5b1ba2bd545038381c03c5b68615982f360caaf6/>
 
 ### Chore
 
@@ -31,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chore
 
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
+### Chore
+
  - <csr-id-5b1ba2bd545038381c03c5b68615982f360caaf6/> bump to 0.20.0
 
 ### New Features
@@ -41,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
  - <csr-id-f56492ac6b5e6f1274a1f11b061c42cace372122/> migrate to `wrpc:keyvalue`
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-5fa6db2ba2601977932468ce9ca431cf230ed675/> custom inbox prefix for NATS messaging provider
+   This commit enables a custom inbox prefix for the NATS messaging
+   provider.
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -70,8 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 16 commits contributed to the release over the course of 41 calendar days.
- - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 18 commits contributed to the release over the course of 41 calendar days.
+ - 18 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -81,7 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Custom inbox prefix for NATS messaging provider ([`5fa6db2`](https://github.com/wasmCloud/wasmCloud/commit/5fa6db2ba2601977932468ce9ca431cf230ed675))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Bump to 0.20.0 ([`5b1ba2b`](https://github.com/wasmCloud/wasmCloud/commit/5b1ba2bd545038381c03c5b68615982f360caaf6))
     - Wasmcloud messaging provider directionality ([`27cb86d`](https://github.com/wasmCloud/wasmCloud/commit/27cb86d9e86b09c2da9e23a4ebfbddf22f3abad2))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))

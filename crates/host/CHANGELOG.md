@@ -109,6 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-a1e8d3f09e039723d28d738d98b47bce54e4450d/>
 <csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+<csr-id-ec3bae5c03c77a0b77884b84754e33e1a8361a89/>
+<csr-id-45a3d3f477b48e8a79e77880950bb785175a990d/>
+<csr-id-95081cacfc3fc04911c91c32f462d643be2e12ed/>
+<csr-id-e6dd0b2809510e785f4ee4c531f5666e6ab21998/>
 
 ### Chore
 
@@ -169,6 +173,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-b77767e6d3c32ceba0b4e5b421b532ac0788dc15/> rename friendly noun
  - <csr-id-5cd8afe68e4c481dcf09c9bebb125a9e4667ed1e/> refactor connection opts
  - <csr-id-478f775eb79bc955af691a7b5c7911cc36e8c98f/> made fetch arg ordering consistent
+
+### Refactor
+
+ - <csr-id-1610702ad0f8cd3ba221c1b6b8ba2ce8fe57c6ae/> remove redundant handler clone
+
+### Other
+
+ - <csr-id-c4b82f28947f06253aa997ae65ab11ebcc507f49/> document invocation handling failures
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
 
 ### Style
 
@@ -336,6 +352,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
  - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
  - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
+ - <csr-id-b8c34346137edf5492fe70abeb22336a33e85bc0/> handle invocations in tasks
+ - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
 
 ### Bug Fixes
 
@@ -418,9 +438,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-2314f5f4d49c5b98949fe5d4a1eb692f1fad92b7/> rework host shutdown
    - Always include a timeout for graceful shutdown (e.g. if NATS
    connection dies, it will never finish)
-- Stop if one of the core wasmbus tasks dies
-- Flush NATS queues concurrently on shutdown
-- Handle `stopped` method errors
+ - <csr-id-3cabf109f5b986079cceb7f125f75bf53348712e/> handle invocation handling errors
 
 ### Other
 
@@ -563,9 +581,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 294 commits contributed to the release over the course of 370 calendar days.
+ - 301 commits contributed to the release over the course of 370 calendar days.
  - 1082 days passed between releases.
- - 289 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 296 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -575,7 +593,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
+    - Count epoch in a separate OS thread ([`3eb4534`](https://github.com/wasmCloud/wasmCloud/commit/3eb453405aa144599f43bbaf56197566c9f0cf0a))
+    - Document invocation handling failures ([`c4b82f2`](https://github.com/wasmCloud/wasmCloud/commit/c4b82f28947f06253aa997ae65ab11ebcc507f49))
+    - Handle invocation handling errors ([`3cabf10`](https://github.com/wasmCloud/wasmCloud/commit/3cabf109f5b986079cceb7f125f75bf53348712e))
+    - Handle invocations in tasks ([`b8c3434`](https://github.com/wasmCloud/wasmCloud/commit/b8c34346137edf5492fe70abeb22336a33e85bc0))
+    - Remove redundant handler clone ([`1610702`](https://github.com/wasmCloud/wasmCloud/commit/1610702ad0f8cd3ba221c1b6b8ba2ce8fe57c6ae))
+    - Propagate `max_execution_time` to the runtime ([`a66921e`](https://github.com/wasmCloud/wasmCloud/commit/a66921edd9be3202d1296a165c34faf597b1dec1))
     - Comment ([`ec3bae5`](https://github.com/wasmCloud/wasmCloud/commit/ec3bae5c03c77a0b77884b84754e33e1a8361a89))
     - Check component update ref and respond with a message before task ([`45a3d3f`](https://github.com/wasmCloud/wasmCloud/commit/45a3d3f477b48e8a79e77880950bb785175a990d))
     - Check component image reference on component update ([`95081ca`](https://github.com/wasmCloud/wasmCloud/commit/95081cacfc3fc04911c91c32f462d643be2e12ed))
@@ -872,8 +897,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-This also adds a bunch of new attributes to the existing actor metrics so that they make sense in an environment with multiple hosts. Specifically this adds:For actor to actor calls, instead of having the provider metadata it instead has the public key of the invoking actor.An example of what this looks like as an exported Prometheus metric:wasmcloud_host_actor_invocations_total{actor_ref="wasmcloud.azurecr.io/echo:0.3.8", caller_provider_contract_id="wasmcloud:httpserver", caller_provider_id="VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M", caller_provider_link_name="default", host="ND7L3RZ6NLYJGN25E6DKYS665ITWXAPXZXGZXLCUQEDDU65RB5TVUHEN", job="wasmcloud-host", lattice="default", operation="HttpServer.HandleRequest"}
-Provider metrics will likely need to wait until the wRPC work is finished. Add initial support for metrics remove requirement for actors to have capabilities in claims add event name as suffix on event topic enable updating host labels via the control interface Adds some additional context around test failures I was seeing Adds support for actor configThis is a fairly large PR because it is adding several new control interfacetopics as well as actually adding the actor config feature.This feature was motivated by 2 major reasons:With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork. implement wasifills for simple types implement outgoing HTTP handle ctl requests concurrently parse labels from args support annotation filters for stop/scale publish periodic provider health status implement wasi:logging for actors ignore stop_provider annotations support policy service add support for call aliases support chunking and dechunking of requests implement wasi:blobstore support OTEL traces end-to-end send OTEL config via HostData add support for putting registry credentials via control interface support registry settings via config service and command-line flags partially implement wasi:keyvalue/atomic implement wasmcloud:http/incoming-handler support delete claims when actors or providers are stopped remove actor links on deletion implement link names and a2a calls fill in missing data in host pings and heartbeat messages implement ctl_topic_prefix add claims and link query functionality introduce wasmcloud-compat crate generate host name based on a random number add support for non-default link names add support for custom lattice prefix implement wasmcloud:messaging/consumer support implement wasi:keyvalue/readwrite support handle launch commands concurrently implement actor -> provider linking implement update actor implement linkdef add/delete implement start and stop provider commands implement actor operations implement inventory implement host stop implement host ping apply labels from environment introduce wasmbus lattice implement data streaming implement builtin capabilities via WIT enforce unique image references for actors properly format actors_started claims Flushes clients when responding to ctl requestsIn cases where wadm was fairly busy, we started getting errors that thehost wasn’t acking our scale actor commands (even though it was actuallyscaling). So I added in some flushing when we send responses so we can besure that the response actually got sent proxy SYSTEMROOT to providers on Windows use named fields when publishing link definitions to providers allow namespaces with slashes look for invocation responses from providers store claims on fetch clean-up imports expose registry as a public module attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses Flushes NATS clients on host stopWithout this, sending responses to things like a host stop command orpublishing the host stop event can fail as we don’t ensure all messagesin the NATS client queue have been sent unwrap expired handle stored claims without config_schema return invocation responses for host failures pub the context mod only with the otel feature enabled use cached links for queries remove redundant claim clone always include cluster key as a valid issuer pass OTEL settings to providers via deprecated env vars ignore empty responses store typed keys, not strings properly handle empty responses do not proxy env vars from host to providers Matches up base64 encoding to what providers expected<csr-unknown/>
+Stop if one of the core wasmbus tasks diesFlush NATS queues concurrently on shutdownHandle stopped method errors<csr-unknown/>
 
 ## v0.18.2 (2021-05-13)
 

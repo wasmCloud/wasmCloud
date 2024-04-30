@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-b5aac8ea84af9cc37282b99826b2da0c0ec297bc/>
 <csr-id-2540b2a2776c8977e47232993b2af5086dc92e18/>
 <csr-id-5f922256e679091e6acbb3e0f39852abb840c8b0/>
+<csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/>
 
 ### Chore
 
@@ -85,6 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
  - <csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/> mark non-exhaustive Debug impls as such
  - <csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/> remove noisy fields from instruments
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
 
 ### Chore
 
@@ -197,6 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
  - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
  - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
+ - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
 
 ### Bug Fixes
 
@@ -226,9 +234,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
-- Uncomments implementation from the host for wasmcloud:messaging
-- Adds an invoker component that reacts to messaging rather than HTTP
-- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
@@ -285,8 +290,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 121 commits contributed to the release over the course of 293 calendar days.
- - 117 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 124 commits contributed to the release over the course of 293 calendar days.
+ - 120 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -296,7 +301,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
+    - Count epoch in a separate OS thread ([`3eb4534`](https://github.com/wasmCloud/wasmCloud/commit/3eb453405aa144599f43bbaf56197566c9f0cf0a))
+    - Propagate `max_execution_time` to the runtime ([`a66921e`](https://github.com/wasmCloud/wasmCloud/commit/a66921edd9be3202d1296a165c34faf597b1dec1))
     - Limit max execution time to 10 minutes ([`e928020`](https://github.com/wasmCloud/wasmCloud/commit/e928020fd774abcc213fec560d89f128464da319))
     - Replace references to 'actor' with 'component' ([`7702e69`](https://github.com/wasmCloud/wasmCloud/commit/7702e695cd9ab9436aaeb337373c3c1cb31f324a))
     - Update to Wasmtime 20 ([`33b50c2`](https://github.com/wasmCloud/wasmCloud/commit/33b50c2d258ca9744ed65b153a6580f893172e0c))
@@ -420,5 +428,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork. implement wasifills for simple types implement outgoing HTTP add support for call aliases support chunking and dechunking of requests implement wasi:blobstore partially implement wasi:keyvalue/atomic implement wasmcloud:http/incoming-handler support move builtin smithy structs to compat implement link names and a2a calls implement wasmcloud:messaging/consumer support implement wasi:keyvalue/readwrite support introduce Blobstore trait implement actor -> provider linking provide wasmCloud interface stubs implement linkdef add/delete implement data streamingWith this, we have an easy to understand way to test every providerthat we have in the repository. do not polyfill logging tone down instrumentation level bindgen issues preventing buildsThis commit fixes the provider bindgen issues for non http-serverbuilds (ex. kv-redis) parse package fix clippy warning, added ; for consistency, return directly the instance instead of wrapping the instance’s components in a future Add comments, remove useless future::ready fmt return Ready on trailers allow namespaces with slashes properly handle path_with_query switch to wasmCloud messaging WIT<csr-unknown/>
+Uncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single test<csr-unknown/>
 

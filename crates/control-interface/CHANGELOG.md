@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-18791e7666b4de2526628e2a973c47b7f51d9481/> integrate `control-interface` into the workspace
  - <csr-id-84fc7a928697c8fc9c6a03e94ed2053783577a4f/> add 'crates/control-interface/' from commit 'cea335729f3bf368178cc6b8745478bdd01c54b5'
 
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### Documentation
 
  - <csr-id-7d0a9774b24c182b0e38ecaa0c1c4383c517af45/> indicate get_response usage
@@ -138,6 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       for the conversation in wasi-cloud as we will start to use it and can give
       active feedback as to how the interface should be shaped
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -229,9 +234,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 64 commits contributed to the release over the course of 175 calendar days.
+ - 65 commits contributed to the release over the course of 175 calendar days.
  - 1096 days passed between releases.
- - 62 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 63 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -241,7 +246,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Bump to v1.0.0 ([`4a51868`](https://github.com/wasmCloud/wasmCloud/commit/4a51868f45b6bff8472b1e9337ca83243ee102e8))
     - Indicate get_response usage ([`7d0a977`](https://github.com/wasmCloud/wasmCloud/commit/7d0a9774b24c182b0e38ecaa0c1c4383c517af45))
@@ -306,9 +312,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Integrate `control-interface` into the workspace ([`18791e7`](https://github.com/wasmCloud/wasmCloud/commit/18791e7666b4de2526628e2a973c47b7f51d9481))
     - Add 'crates/control-interface/' from commit 'cea335729f3bf368178cc6b8745478bdd01c54b5' ([`84fc7a9`](https://github.com/wasmCloud/wasmCloud/commit/84fc7a928697c8fc9c6a03e94ed2053783577a4f))
 </details>
-
-<csr-unknown>
-With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork.<csr-unknown/>
 
 ## v0.3.1 (2021-04-29)
 

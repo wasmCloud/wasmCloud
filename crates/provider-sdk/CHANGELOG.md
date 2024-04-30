@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
  - <csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/> fix format
 
+### Refactor (BREAKING)
+
+ - <csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/> remove link_name, rename provider_key
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### New Features
 
  - <csr-id-e19f77dee5fef7d211965a4a07946a0533bbc4a0/> add macro for propagating context
@@ -134,6 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This is now manually tested and in a state where I think we should have it
    in the repo. We should be able to keep iterating from there
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Bug Fixes
 
@@ -151,9 +160,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
-- Uncomments implementation from the host for wasmcloud:messaging
-- Adds an invoker component that reacts to messaging rather than HTTP
-- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
@@ -213,6 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    With both of these explicit methods, users should be able to configure
    their providers appropriately depending on how the link has been put
    to them.
+ - <csr-id-88aedb17e90011cb602f48845c3896a3d836c980/> support storing directional links
 
 ### Bug Fixes (BREAKING)
 
@@ -242,8 +249,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 73 commits contributed to the release over the course of 278 calendar days.
- - 71 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 76 commits contributed to the release over the course of 279 calendar days.
+ - 74 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -253,7 +260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Remove link_name, rename provider_key ([`e1e50d7`](https://github.com/wasmCloud/wasmCloud/commit/e1e50d7366716b61ddce52244e3dd66758ee0b82))
+    - Support storing directional links ([`88aedb1`](https://github.com/wasmCloud/wasmCloud/commit/88aedb17e90011cb602f48845c3896a3d836c980))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Minor changes from pr feedback ([`7c664a8`](https://github.com/wasmCloud/wasmCloud/commit/7c664a88cd7bbaa201b9b07a2bb9ba1c215a3b56))
     - Wasmcloud messaging provider directionality ([`27cb86d`](https://github.com/wasmCloud/wasmCloud/commit/27cb86d9e86b09c2da9e23a4ebfbddf22f3abad2))
     - Add macro for propagating context ([`e19f77d`](https://github.com/wasmCloud/wasmCloud/commit/e19f77dee5fef7d211965a4a07946a0533bbc4a0))
@@ -329,5 +339,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-With this, we have an easy to understand way to test every providerthat we have in the repository. use send_request to handle request timeout add what clippy took from me attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses enable ansi feature<csr-unknown/>
+Uncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single test<csr-unknown/>
 
