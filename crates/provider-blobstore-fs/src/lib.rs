@@ -472,7 +472,9 @@ impl Blobstore for FsProvider {
                         .context("`end` must be greater than `start`")?;
                     let path = self.get_object(context, id).await?;
                     debug!(path = ?path.display(), "open file");
-                    let mut object = File::open(path).await.context("failed to open file")?;
+                    let mut object = File::open(&path).await.with_context(|| {
+                        format!("failed to open object file [{}]", path.display())
+                    })?;
                     if start > 0 {
                         debug!("seek file");
                         object
