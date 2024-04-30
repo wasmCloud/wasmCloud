@@ -1,4 +1,4 @@
-name: wasmCloud
+name: wasmcloud
 
 on:
   pull_request:

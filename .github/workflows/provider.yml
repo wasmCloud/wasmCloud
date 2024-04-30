@@ -1,4 +1,4 @@
-name: Build and, optionally, release a capability provider
+name: providers-build-and-release
 
 on:
   workflow_call:

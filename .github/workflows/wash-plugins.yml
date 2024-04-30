@@ -1,4 +1,4 @@
-name: Publish Wash Plugins wit
+name: wash-plugins-publish
 
 on:
   push:
