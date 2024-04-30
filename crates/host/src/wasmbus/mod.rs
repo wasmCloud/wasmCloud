@@ -850,7 +850,7 @@ impl Host {
         let (stop_tx, stop_rx) = watch::channel(None);
 
         // TODO: Configure
-        let runtime = Runtime::builder()
+        let (runtime, epoch) = Runtime::builder()
             .actor_config(wasmcloud_runtime::ComponentConfig {
                 require_signature: true,
             })
@@ -1086,6 +1086,11 @@ impl Host {
             // thought were sent (like the host_stopped event)
             try_join!(host.ctl_nats.flush(), host.rpc_nats.flush(),)
                 .context("failed to flush NATS clients")?;
+            if !epoch.is_finished() {
+                bail!("epoch thread has not finished")
+            } else if let Err(_err) = epoch.join() {
+                bail!("epoch thread panicked")
+            }
             Ok(())
         }))
     }

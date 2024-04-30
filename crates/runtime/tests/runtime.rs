@@ -3,6 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
@@ -209,7 +210,7 @@ fn new_runtime(
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     sent: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
     config: HashMap<String, String>,
-) -> Runtime {
+) -> (Runtime, thread::JoinHandle<()>) {
     let handler = Arc::new(Handler {
         blobstore: Arc::clone(&blobstore),
         logging: logs,
@@ -259,8 +260,8 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
         ),
     ]);
 
-    let res = {
-        let rt = new_runtime(
+    let (res, epoch) = {
+        let (rt, epoch) = new_runtime(
             Arc::clone(&blobstore),
             Arc::clone(&keyvalue),
             Arc::clone(&logs),
@@ -295,8 +296,10 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .handle(req, tx)
             .await
             .context("failed to call `wasi:http/incoming-handler.handle`")?;
-        rx.await.context("response not set")?
+        let res = rx.await.context("response not set")?;
+        (res, epoch)
     };
+    epoch.join().expect("failed to join epoch thread");
     let res = res.context("request failed")?;
     let (
         http::response::Parts {
