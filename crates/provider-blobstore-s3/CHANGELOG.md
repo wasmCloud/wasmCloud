@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
  - <csr-id-2badff2d8b7f791f8930272c3556bd9cf41c665b/> remove redundant `tower_service` dep
 
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### New Features
 
  - <csr-id-1e8fd3cacdd9eb097f3ec1f554858fabff76f5b9/> pass along OTEL context for blobstore-s3
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-a84492d15d154a272de33680f6338379fc036a3a/> introduce provider interface sdk
  - <csr-id-07b5e70a7f1321d184962d7197a8d98d1ecaaf71/> use native TLS roots along webpki
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Other
 
@@ -63,8 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 13 commits contributed to the release over the course of 41 calendar days.
- - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 14 commits contributed to the release over the course of 41 calendar days.
+ - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -74,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Pass along OTEL context for blobstore-s3 ([`1e8fd3c`](https://github.com/wasmCloud/wasmCloud/commit/1e8fd3cacdd9eb097f3ec1f554858fabff76f5b9))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Rename actor to component ([`9039550`](https://github.com/wasmCloud/wasmCloud/commit/903955009340190283c813fa225bae514fb15c03))

@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
 
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### New Features
 
  - <csr-id-2c9a9d0ae77b07b70a3e3e3a12c08618576a386b/> pass along tracing context for kv-vault
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-a84492d15d154a272de33680f6338379fc036a3a/> introduce provider interface sdk
  - <csr-id-f56492ac6b5e6f1274a1f11b061c42cace372122/> migrate to `wrpc:keyvalue`
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Other
 
@@ -50,8 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 12 commits contributed to the release over the course of 41 calendar days.
- - 12 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 13 commits contributed to the release over the course of 41 calendar days.
+ - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -61,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Pass along tracing context for kv-vault ([`2c9a9d0`](https://github.com/wasmCloud/wasmCloud/commit/2c9a9d0ae77b07b70a3e3e3a12c08618576a386b))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
     - Rename actor to component ([`9039550`](https://github.com/wasmCloud/wasmCloud/commit/903955009340190283c813fa225bae514fb15c03))

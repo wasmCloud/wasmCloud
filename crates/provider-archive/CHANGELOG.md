@@ -13,17 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
 
+### Refactor
+
+ - <csr-id-569f5636c924c855c1098f63cd9521e2f2e65fa2/> more informative file open error
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### New Features
 
  - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 11 calendar days.
+ - 4 commits contributed to the release over the course of 12 calendar days.
  - 12 days passed between releases.
- - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -33,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
+    - More informative file open error ([`569f563`](https://github.com/wasmCloud/wasmCloud/commit/569f5636c924c855c1098f63cd9521e2f2e65fa2))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
 </details>
 

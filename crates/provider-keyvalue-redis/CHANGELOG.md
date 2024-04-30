@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
 
+### Bug Fixes
+
+ - <csr-id-63fb1ebbe7c89e962d170753d1224826641c31d4/> ignore URL config key vase for kv redis provider
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
 ### New Features
 
  - <csr-id-74353eeeb1ee7c1023c296c92b21369e48a1a66b/> pass along tracing context for kv-redis
@@ -39,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-4ef1a370cb94b0dc7f07cbde051e8f8239f32adc/> implement wasi:kevalue/batch
    Implement the wasi:keyvalue/batch interface for the Redis keyvalue
    provider.
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
 
 ### Other
 
@@ -67,8 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 16 commits contributed to the release over the course of 41 calendar days.
- - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 18 commits contributed to the release over the course of 41 calendar days.
+ - 18 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -78,7 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
-    - Generate crate changelogs ([`cda9f72`](https://github.com/wasmCloud/wasmCloud/commit/cda9f724d2d2e4ea55006a43b166d18875148c48))
+    - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
+    - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
+    - Ignore URL config key vase for kv redis provider ([`63fb1eb`](https://github.com/wasmCloud/wasmCloud/commit/63fb1ebbe7c89e962d170753d1224826641c31d4))
     - Allow missing default connection for redis ([`8b9d96b`](https://github.com/wasmCloud/wasmCloud/commit/8b9d96b7391938d95519200e54dd3d68159cd67e))
     - Implement wasi:kevalue/batch ([`4ef1a37`](https://github.com/wasmCloud/wasmCloud/commit/4ef1a370cb94b0dc7f07cbde051e8f8239f32adc))
     - Pass along tracing context for kv-redis ([`74353ee`](https://github.com/wasmCloud/wasmCloud/commit/74353eeeb1ee7c1023c296c92b21369e48a1a66b))
