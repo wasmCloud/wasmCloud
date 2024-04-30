@@ -235,7 +235,8 @@ pub async fn handle_command(
 
 /// Creates a provider archive using an initial architecture target, provider, and signing keys
 pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let mut f = File::open(cmd.binary.clone())?;
+    let mut f = File::open(cmd.binary.clone())
+        .with_context(|| format!("failed to load binary [{}]", &cmd.binary))?;
     let mut lib = Vec::new();
     f.read_to_end(&mut lib)?;
 
@@ -294,10 +295,12 @@ pub async fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resul
 /// Loads a provider archive and attempts to insert an additional provider into it
 pub async fn handle_insert(cmd: InsertCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     let mut buf = Vec::new();
-    let mut f = File::open(cmd.archive.clone())?;
+    let mut f = File::open(cmd.archive.clone())
+        .with_context(|| format!("failed to load provider archive [{}]", &cmd.archive))?;
     f.read_to_end(&mut buf)?;
 
-    let mut f = File::open(cmd.binary.clone())?;
+    let mut f = File::open(cmd.binary.clone())
+        .with_context(|| format!("failed to load binary [{}]", &cmd.archive))?;
     let mut lib = Vec::new();
     f.read_to_end(&mut lib)?;
 
