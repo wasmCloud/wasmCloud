@@ -1370,6 +1370,10 @@ impl Host {
                         .await
                         {
                             Err(err) => {
+                                // Tokio task did not complete within `max_execution_time`
+                                // This is most likely a bug in the runtime, but may occasionally
+                                // happen if the wasmtime epoch interrupt is too slow in shutting
+                                // down the component.
                                 error!(?err, "invocation handling timed out");
                                 if let Err(err) = transmitter
                                     .transmit_static(error_subject, format!("{err:#}"))
@@ -1379,6 +1383,7 @@ impl Host {
                                 }
                             },
                             Ok(Err(err)) => {
+                                // Tokio task panicked. This is most definitely a bug.
                                 error!(?err, "invocation task panicked");
                                 if let Err(err) = transmitter
                                     .transmit_static(error_subject, format!("{err:#}"))
@@ -1388,6 +1393,12 @@ impl Host {
                                 }
                             },
                             Ok(Ok(Err(err))) => {
+                                // Component invocation failed - this is the error returned by
+                                // `handle_invocation`.
+                                // This could happen for a variety of reasons, for example:
+                                // - if the component failed to instantiate
+                                // - if the invocation exceeded `max_execution_time`
+                                // - etc...
                                 error!(?err, "failed to handle invocation");
                                 if let Err(err) = transmitter
                                     .transmit_static(error_subject, format!("{err:#}"))
