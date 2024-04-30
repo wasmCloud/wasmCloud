@@ -1,4 +1,4 @@
-name: wasmCloud example components
+name: example-components
 
 on:
   push:
