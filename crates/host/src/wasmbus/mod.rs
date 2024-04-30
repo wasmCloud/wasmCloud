@@ -1204,18 +1204,22 @@ impl Host {
     async fn instantiate_component(
         &self,
         annotations: &Annotations,
-        component_ref: String,
-        component_id: String,
+        image_reference: String,
+        id: String,
         max_instances: NonZeroUsize,
         mut component: wasmcloud_runtime::Component,
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
-        trace!(component_ref, max_instances, "instantiating component");
+        trace!(
+            component_ref = image_reference,
+            max_instances,
+            "instantiating component"
+        );
 
         let wrpc = wasmcloud_core::wrpc::Client::new(
             self.rpc_nats.clone(),
             &self.host_config.lattice,
-            &component_id,
+            &id,
             // NOTE(brooksmtownsend): We only use this client for serving functions,
             // and the headers will be set by the incoming invocation.
             async_nats::HeaderMap::new(),
@@ -1318,14 +1322,14 @@ impl Host {
         component.set_max_execution_time(max_execution_time);
         let actor = Arc::new(Component {
             component,
-            id: component_id,
+            id,
             calls: calls_abort,
-            handler: handler.clone(),
+            handler,
             annotations: annotations.clone(),
             max_instances,
-            policy_manager: Arc::clone(&self.policy_manager),
-            image_reference: component_ref,
+            image_reference,
             metrics: Arc::clone(&self.metrics),
+            policy_manager: Arc::clone(&self.policy_manager),
         });
         spawn({
             let actor = Arc::clone(&actor);
