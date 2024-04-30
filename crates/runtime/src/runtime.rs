@@ -9,10 +9,10 @@ use core::fmt::Debug;
 use core::time::Duration;
 
 use std::sync::Arc;
+use std::thread;
 
 use anyhow::Context;
 use builtin::Config;
-use tokio::{spawn, time};
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
 const KB: u64 = 1024;
@@ -188,7 +188,7 @@ impl RuntimeBuilder {
     /// # Errors
     ///
     /// Fails if the configuration is not valid
-    pub fn build(mut self) -> anyhow::Result<Runtime> {
+    pub fn build(mut self) -> anyhow::Result<(Runtime, thread::JoinHandle<()>)> {
         let mut pooling_config = PoolingAllocationConfig::default();
 
         // Right now we assume tables_per_component is the same as memories_per_component just like
@@ -224,29 +224,29 @@ impl RuntimeBuilder {
             .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
         let engine =
             wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?;
-        spawn({
+        let epoch = {
             let engine = engine.weak();
-            async move {
-                let mut interval = time::interval(Duration::from_secs(1));
-                loop {
-                    interval.tick().await;
-                    let Some(engine) = engine.upgrade() else {
-                        return;
-                    };
-                    engine.increment_epoch();
-                }
-            }
-        });
-        Ok(Runtime {
-            engine,
-            handler: self.handler,
-            actor_config: self.actor_config,
-            max_execution_time: self.max_execution_time,
-        })
+            thread::spawn(move || loop {
+                thread::sleep(Duration::from_secs(1));
+                let Some(engine) = engine.upgrade() else {
+                    return;
+                };
+                engine.increment_epoch();
+            })
+        };
+        Ok((
+            Runtime {
+                engine,
+                handler: self.handler,
+                actor_config: self.actor_config,
+                max_execution_time: self.max_execution_time,
+            },
+            epoch,
+        ))
     }
 }
 
-impl TryFrom<RuntimeBuilder> for Runtime {
+impl TryFrom<RuntimeBuilder> for (Runtime, thread::JoinHandle<()>) {
     type Error = anyhow::Error;
 
     fn try_from(builder: RuntimeBuilder) -> Result<Self, Self::Error> {
@@ -279,7 +279,7 @@ impl Runtime {
     /// # Errors
     ///
     /// Returns an error if the default configuration is invalid
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<(Self, thread::JoinHandle<()>)> {
         Self::builder().try_into()
     }
 
