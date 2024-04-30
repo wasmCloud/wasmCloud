@@ -202,7 +202,8 @@ impl ContextManager for ContextDir {
     /// Loads the named context from disk
     fn load_context(&self, name: &str) -> Result<WashContext> {
         let path = context_path_from_name(&self.0, name);
-        let file = std::fs::File::open(path).context("failed to open context file")?;
+        let file = std::fs::File::open(&path)
+            .with_context(|| format!("failed to open context file [{}]", path.display()))?;
         let reader = BufReader::new(file);
         serde_json::from_reader(reader).context("failed to parse context")
     }
