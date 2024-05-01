@@ -23,6 +23,7 @@ status = "actively-developed"
 [features]
 providers = [
     "dep:redis",
+    "dep:wasmcloud-provider-blobstore-azure",
     "dep:wasmcloud-provider-blobstore-fs",
     "dep:wasmcloud-provider-blobstore-s3",
     "dep:wasmcloud-provider-http-client",
@@ -35,6 +36,10 @@ providers = [
     "dep:wasmcloud-provider-sdk",
 ]
 default = ["providers"]
+
+[[bin]]
+name = "blobstore-azure-provider"
+required-features = ["providers"]
 
 [[bin]]
 name = "blobstore-fs-provider"
@@ -95,6 +100,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-host = { workspace = true }
+wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-fs = { workspace = true, optional = true }
 wasmcloud-provider-blobstore-s3 = { workspace = true, optional = true }
 wasmcloud-provider-http-client = { workspace = true, optional = true }
@@ -276,6 +282,7 @@ wasmcloud-component-adapters = { version = "0.9", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "0.5", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0", path = "./crates/host", default-features = false }
+wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
 wasmcloud-provider-blobstore-fs = { version = "*", path = "./crates/provider-blobstore-fs", default-features = false }
 wasmcloud-provider-blobstore-s3 = { version = "*", path = "./crates/provider-blobstore-s3", default-features = false }
 wasmcloud-provider-http-client = { version = "*", path = "./crates/provider-http-client", default-features = false }
