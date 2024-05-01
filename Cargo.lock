@@ -776,7 +776,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34ce3de4b65b1ee2667c81d1fc692949049502a4cf9c38118d811d6d79a7eaef"
 dependencies = [
  "async-trait",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "dyn-clone",
  "futures",
@@ -888,9 +888,9 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9475866fec1451be56a3c2400fd081ff546538961565ccb5b7142cbd22bc7a51"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64-simd"
@@ -4100,7 +4100,7 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "566cafdd92868e0939d3fb961bd0dc25fcfaaed179291093b3d43e6b3150ea10"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "futures-core",
  "futures-util",
@@ -4354,7 +4354,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29993a25686778eb88d4189742cd713c9bce943bc54251a33509dc63cbacf73d"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "rustls-pki-types",
 ]
 
@@ -6009,7 +6009,7 @@ version = "1.0.1"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "futures",
@@ -6202,7 +6202,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "async-trait",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "cloudevents-sdk",
  "futures",
@@ -6261,7 +6261,7 @@ dependencies = [
  "azure_core",
  "azure_storage",
  "azure_storage_blobs",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "futures",
  "path-clean",
@@ -6304,7 +6304,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "futures",
  "hyper-rustls 0.25.0",
@@ -6344,7 +6344,7 @@ dependencies = [
  "async-nats",
  "axum 0.7.5",
  "axum-server",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "dashmap",
  "futures",
@@ -6384,7 +6384,7 @@ name = "wasmcloud-provider-keyvalue-vault"
 version = "0.8.0"
 dependencies = [
  "anyhow",
- "base64 0.22.0",
+ "base64 0.22.1",
  "simple_env_load",
  "tokio",
  "tracing",
@@ -6449,7 +6449,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-nats",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes",
  "futures",
  "nkeys",
