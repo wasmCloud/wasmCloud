@@ -229,7 +229,7 @@ pub async fn handle_install(
 
     // We already have ensured that this plugin is valid, so we can overwrite it even if it already
     // exists in the plugin dir.
-    let final_location = plugin_dir.join(metadata.name.clone());
+    let final_location = plugin_dir.join(metadata.id.clone());
     tokio::fs::rename(temp_location, final_location)
         .await
         .context("Unable to install plugin in the plugin directory")?;
