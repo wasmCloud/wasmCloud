@@ -11,31 +11,21 @@ repository.workspace = true
 anyhow = { workspace = true }
 async-nats = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
+azure_core = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
+azure_storage = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
+azure_storage_blobs = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
 path-clean = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+simple_env_load = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-blobstore = { workspace = true }
 wrpc-transport = { workspace = true }
-base64 = { workspace = true }
-bytes = { workspace = true }
-
-simple_env_load = "0.2.0"
-# NOTE: Unlike the other azure crates we import, this one has a default feature of enabling reqwest
-# with the native-tls feature. So we disable all default features just for good measure, but this
-# was the culprit for having an issue with building the provider
-azure_storage_blobs = { version = "0.20", features = [
-    "enable_reqwest_rustls",
-], default-features = false }
-azure_storage = { version = "0.20", features = [
-    "enable_reqwest_rustls",
-], default-features = false }
-azure_core = { version = "0.20", features = [
-    "enable_reqwest_rustls",
-], default-features = false }
-time = { version = "0.3" }
-futures = { version = "0.3" }
-serde_json = "1.0.114"
