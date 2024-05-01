@@ -7,8 +7,6 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = { workspace = true }
 async-nats = { workspace = true }
@@ -26,9 +24,18 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 
 simple_env_load = "0.2.0"
-azure_storage_blobs = { version = "0.19" }
-azure_storage = { version = "0.19" }
-azure_core = { version = "0.19" }
+# NOTE: Unlike the other azure crates we import, this one has a default feature of enabling reqwest
+# with the native-tls feature. So we disable all default features just for good measure, but this
+# was the culprit for having an issue with building the provider
+azure_storage_blobs = { version = "0.20", features = [
+    "enable_reqwest_rustls",
+], default-features = false }
+azure_storage = { version = "0.20", features = [
+    "enable_reqwest_rustls",
+], default-features = false }
+azure_core = { version = "0.20", features = [
+    "enable_reqwest_rustls",
+], default-features = false }
 time = { version = "0.3" }
 futures = { version = "0.3" }
 serde_json = "1.0.114"
