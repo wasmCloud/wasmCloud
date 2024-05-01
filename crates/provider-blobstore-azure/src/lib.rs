@@ -1,26 +1,17 @@
-use core::future::Future;
-use core::pin::pin;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
-use async_nats::HeaderMap;
-use async_trait::async_trait;
+use anyhow::{bail, Context as _, Result};
+use azure_storage_blobs::prelude::*;
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, TryStreamExt as _};
+use futures::{Stream, StreamExt, TryStreamExt as _};
 use tokio::sync::RwLock;
-use tokio::{select, spawn};
-use tracing::{debug, error, instrument, warn};
-use wasmcloud_provider_sdk::provider::invocation_context;
-use wasmcloud_provider_sdk::{
-    get_connection, Context, LinkConfig, ProviderHandler, ProviderOperationResult,
-};
+use tracing::{error, instrument};
+use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
+use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
 use wrpc_transport::{AcceptedInvocation, Transmitter};
 
-use anyhow::Result;
-use azure_storage_blobs::prelude::*;
 use config::StorageConfig;
-use futures::StreamExt;
 
 mod config;
 
@@ -36,19 +27,17 @@ pub struct BlobstoreAzblobProvider {
 
 /// Handle provider control commands
 /// put_link (new component link command), del_link (remove link command), and shutdown
-#[async_trait]
-impl ProviderHandler for BlobstoreAzblobProvider {
+impl Provider for BlobstoreAzblobProvider {
     #[instrument(level = "info", skip_all)]
     async fn receive_link_config_as_target(
         &self,
-        link_config: impl LinkConfig,
-    ) -> ProviderOperationResult<()> {
-        let config = link_config.get_config();
-        let config = match StorageConfig::from_values(config) {
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let config = match StorageConfig::from_values(link_config.config) {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, source_id = %link_config.get_source_id(), "failed to read storage config");
-                return Err(e.into());
+                error!(error = %e, source_id = %link_config.source_id, "failed to read storage config");
+                return Err(e);
             }
         };
         let link =
@@ -56,28 +45,25 @@ impl ProviderHandler for BlobstoreAzblobProvider {
                 .blob_service_client();
 
         let mut update_map = self.config.write().await;
-        update_map.insert(link_config.get_source_id().to_string(), link);
+        update_map.insert(link_config.source_id.to_string(), link);
 
         Ok(())
     }
 
-    async fn delete_link(&self, source_id: &str) -> ProviderOperationResult<()> {
+    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         self.config.write().await.remove(source_id);
         Ok(())
     }
 
-    async fn shutdown(&self) -> ProviderOperationResult<()> {
+    async fn shutdown(&self) -> anyhow::Result<()> {
         self.config.write().await.drain();
         Ok(())
     }
 }
 
 impl BlobstoreAzblobProvider {
-    async fn get_config(&self, headers: Option<&HeaderMap>) -> anyhow::Result<BlobServiceClient> {
-        if let Some(ref source_id) = headers
-            .map(invocation_context)
-            .and_then(|Context { actor, .. }| actor)
-        {
+    async fn get_config(&self, context: Option<&Context>) -> anyhow::Result<BlobServiceClient> {
+        if let Some(source_id) = context.and_then(|Context { component, .. }| component.as_ref()) {
             self.config
                 .read()
                 .await
@@ -90,314 +76,9 @@ impl BlobstoreAzblobProvider {
             )
         }
     }
-
-    #[instrument(level = "trace", skip_all)]
-    pub async fn serve(&self, commands: impl Future<Output = ()>) -> anyhow::Result<()> {
-        let connection = get_connection();
-        let wrpc = connection.get_wrpc_client(connection.provider_key());
-        let mut commands = pin!(commands);
-        'outer: loop {
-            use wrpc_interface_blobstore::Blobstore as _;
-            let clear_container_invocations = wrpc.serve_clear_container().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.clear-container` invocations",
-            )?;
-            let mut clear_container_invocations = pin!(clear_container_invocations);
-
-            let container_exists_invocations = wrpc.serve_container_exists().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.container-exists` invocations",
-            )?;
-            let mut container_exists_invocations = pin!(container_exists_invocations);
-
-            let create_container_invocations = wrpc.serve_create_container().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.create-container` invocations",
-            )?;
-            let mut create_container_invocations = pin!(create_container_invocations);
-
-            let delete_container_invocations = wrpc.serve_delete_container().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.delete-container` invocations",
-            )?;
-            let mut delete_container_invocations = pin!(delete_container_invocations);
-
-            let get_container_info_invocations = wrpc.serve_get_container_info().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.get-container-info` invocations",
-            )?;
-            let mut get_container_info_invocations = pin!(get_container_info_invocations);
-
-            let list_container_objects_invocations =
-                wrpc.serve_list_container_objects().await.context(
-                    "failed to serve `wrpc:blobstore/blobstore.list-container-objects` invocations",
-                )?;
-            let mut list_container_objects_invocations = pin!(list_container_objects_invocations);
-
-            let copy_object_invocations = wrpc
-                .serve_copy_object()
-                .await
-                .context("failed to serve `wrpc:blobstore/blobstore.copy-object` invocations")?;
-            let mut copy_object_invocations = pin!(copy_object_invocations);
-
-            let delete_object_invocations = wrpc
-                .serve_delete_object()
-                .await
-                .context("failed to serve `wrpc:blobstore/blobstore.delete-object` invocations")?;
-            let mut delete_object_invocations = pin!(delete_object_invocations);
-
-            let delete_objects_invocations = wrpc
-                .serve_delete_objects()
-                .await
-                .context("failed to serve `wrpc:blobstore/blobstore.delete-objects` invocations")?;
-            let mut delete_objects_invocations = pin!(delete_objects_invocations);
-
-            let get_container_data_invocations = wrpc.serve_get_container_data().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.get-container-data` invocations",
-            )?;
-            let mut get_container_data_invocations = pin!(get_container_data_invocations);
-
-            let get_object_info_invocations = wrpc.serve_get_object_info().await.context(
-                "failed to serve `wrpc:blobstore/blobstore.get-object-info` invocations",
-            )?;
-            let mut get_object_info_invocations = pin!(get_object_info_invocations);
-
-            let has_object_invocations = wrpc
-                .serve_has_object()
-                .await
-                .context("failed to serve `wrpc:blobstore/blobstore.has-object` invocations")?;
-            let mut has_object_invocations = pin!(has_object_invocations);
-
-            let move_object_invocations = wrpc
-                .serve_move_object()
-                .await
-                .context("failed to serve `wrpc:blobstore/blobstore.move-object` invocations")?;
-            let mut move_object_invocations = pin!(move_object_invocations);
-
-            let write_container_data_invocations =
-                wrpc.serve_write_container_data().await.context(
-                    "failed to serve `wrpc:blobstore/blobstore.write-container-data` invocations",
-                )?;
-            let mut write_container_data_invocations = pin!(write_container_data_invocations);
-
-            loop {
-                select! {
-                    invocation = clear_container_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_clear_container(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.clear-container` invocation")
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.clear-container` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            }
-                        }
-                    },
-                    invocation = container_exists_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_container_exists(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = create_container_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_create_container(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.container-exists` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.container-exists` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = delete_container_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_delete_container(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-container` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.delete-container` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = get_container_info_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_get_container_info(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-info` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.get-container-info` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = list_container_objects_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_list_container_objects(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.list-container-objects` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.list-container-objects` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = copy_object_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_copy_object(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.copy-object` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.copy-object` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = delete_object_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_delete_object(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-object` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.delete-object` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = delete_objects_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_delete_objects(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.delete-objects` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.delete-objects` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = get_container_data_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_get_container_data(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-container-data` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.get-container-data` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = get_object_info_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_get_object_info(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.get-object-info` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.get-object-info` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = has_object_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_has_object(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.has-object` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.has-object` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = move_object_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_move_object(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.move-object` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.move-object` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    invocation = write_container_data_invocations.next() => {
-                        match invocation {
-                            Some(Ok(invocation)) => {
-                                let provider = self.clone();
-                                spawn(async move { provider.serve_write_container_data(invocation).await });
-                            },
-                            Some(Err(err)) => {
-                                error!(?err, "failed to accept `wrpc:blobstore/blobstore.write-container-data` invocation") ;
-                            },
-                            None => {
-                                warn!("`wrpc:blobstore/blobstore.write-container-data` stream unexpectedly finished, resubscribe");
-                                continue 'outer
-                            },
-                        }
-                    },
-                    _ = &mut commands => {
-                        debug!("shutdown command received");
-                        return Ok(())
-                    }
-                }
-            }
-        }
-    }
 }
 
-impl BlobstoreAzblobProvider {
+impl Blobstore for BlobstoreAzblobProvider {
     #[instrument(level = "trace", skip(self, result_subject, transmitter))]
     async fn serve_clear_container<Tx: Transmitter>(
         &self,
@@ -407,7 +88,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+        }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -454,7 +135,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+        }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -488,7 +169,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+        }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -522,7 +203,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+        }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -556,7 +237,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, String, Tx>,
+        }: AcceptedInvocation<Option<Context>, String, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -601,7 +282,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, Option<u64>, Option<u64>), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -656,7 +337,7 @@ impl BlobstoreAzblobProvider {
             transmitter,
             ..
         }: AcceptedInvocation<
-            Option<HeaderMap>,
+            Option<Context>,
             (
                 wrpc_interface_blobstore::ObjectId,
                 wrpc_interface_blobstore::ObjectId,
@@ -704,7 +385,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -740,7 +421,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, (String, Vec<String>), Tx>,
+        }: AcceptedInvocation<Option<Context>, (String, Vec<String>), Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -783,7 +464,7 @@ impl BlobstoreAzblobProvider {
             transmitter,
             ..
         }: AcceptedInvocation<
-            Option<HeaderMap>,
+            Option<Context>,
             (wrpc_interface_blobstore::ObjectId, u64, u64),
             Tx,
         >,
@@ -837,7 +518,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -883,7 +564,7 @@ impl BlobstoreAzblobProvider {
             result_subject,
             transmitter,
             ..
-        }: AcceptedInvocation<Option<HeaderMap>, wrpc_interface_blobstore::ObjectId, Tx>,
+        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
     ) {
         if let Err(err) = transmitter
             .transmit_static(
@@ -919,7 +600,7 @@ impl BlobstoreAzblobProvider {
             transmitter,
             ..
         }: AcceptedInvocation<
-            Option<HeaderMap>,
+            Option<Context>,
             (
                 wrpc_interface_blobstore::ObjectId,
                 wrpc_interface_blobstore::ObjectId,
@@ -981,7 +662,7 @@ impl BlobstoreAzblobProvider {
             transmitter,
             ..
         }: AcceptedInvocation<
-            Option<HeaderMap>,
+            Option<Context>,
             (
                 wrpc_interface_blobstore::ObjectId,
                 impl Stream<Item = anyhow::Result<Bytes>> + Send,
