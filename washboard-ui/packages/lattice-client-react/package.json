@@ -32,6 +32,8 @@
     "src"
   ],
   "scripts": {
+    "lint": "yarn lint:eslint",
+    "lint:fix": "yarn lint:eslint:fix",
     "lint:eslint": "eslint --ext .ts,.tsx ./src",
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
