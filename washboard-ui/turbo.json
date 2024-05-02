@@ -2,22 +2,22 @@
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env.*local"],
   "pipeline": {
-    "lint:eslint": {
-      "dependsOn": ["^lint:eslint", "^build"]
+    "lint": {
+      "dependsOn": ["^lint", "^build"]
     },
-    "lint:eslint:fix": {
-      "dependsOn": ["^lint:eslint:fix"]
+    "lint:fix": {
+      "dependsOn": ["^lint:fix"]
     },
-    "format:prettier:check": {
-      "dependsOn": ["^format:prettier:check"]
+    "format": {
+      "dependsOn": ["^format"]
     },
-    "format:prettier:fix": {
-      "dependsOn": ["^format:prettier:fix"]
+    "format:fix": {
+      "dependsOn": ["^format:fix"]
     },
-    "test:playwright:headless": {
+    "test:e2e": {
       "outputs": ["playwright-report", "test-results"]
     },
-    "test:vitest": {},
+    "test:unit": {},
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "build/**"],

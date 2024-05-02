@@ -7,13 +7,17 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "lint": "yarn lint:eslint",
+    "lint:fix": "yarn lint:eslint:fix",
     "lint:eslint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:eslint:fix": "yarn lint:eslint --fix",
+    "test:e2e": "yarn test:playwright:headless",
     "test:playwright:headless": "playwright test",
     "test:playwright:ui": "playwright test --ui",
-    "format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern '**/*'",
-    "format:prettier:fix": "yarn format:prettier --write",
-    "format:prettier:check": "yarn format:prettier --check"
+    "format": "yarn format:prettier",
+    "format:fix": "yarn format:prettier:fix",
+    "format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern '**/*' --check",
+    "format:prettier:fix": "yarn format:prettier --write"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",

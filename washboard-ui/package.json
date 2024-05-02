@@ -9,16 +9,15 @@
   "scripts": {
     "turbo:build": "turbo run build --cache-dir .turbo/cache",
     "turbo:dev": "turbo run dev",
-    "turbo:lint:eslint": "turbo run lint:eslint",
-    "turbo:lint:eslint:fix": "turbo run lint:eslint:fix",
-    "turbo:format:prettier:fix": "turbo run format:prettier:fix",
-    "turbo:format:prettier:check": "turbo run format:prettier:check",
-    "turbo:test:playwright:headless": "turbo run test:playwright:headless",
-    "turbo:test:vitest": "turbo run test:vitest",
-    "turbo:storybook:build": "turbo run storybook:build",
-    "format:prettier": "prettier --ignore-unknown --no-error-on-unmatched-pattern '**/*'",
-    "format:prettier:fix": "yarn format:prettier --write",
-    "format:prettier:check": "yarn format:prettier --check"
+    "turbo:lint": "turbo run lint",
+    "turbo:lint:fix": "turbo run lint:fix",
+    "turbo:format": "turbo run format",
+    "turbo:format:fix": "turbo run format:fix",
+    "turbo:test": "turbo run test",
+    "turbo:test:e2e": "turbo run test:e2e",
+    "turbo:test:unit": "turbo run test:unit",
+    "format": "prettier --ignore-unknown --no-error-on-unmatched-pattern '**/*' --check",
+    "format:fix": "yarn format:prettier --write"
   },
   "devDependencies": {
     "@types/node": "^20.11.28",
