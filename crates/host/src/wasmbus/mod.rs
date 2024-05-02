@@ -36,7 +36,7 @@ use serde_json::json;
 use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{interval_at, timeout, Instant};
+use tokio::time::{interval_at, timeout, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -850,10 +850,7 @@ impl Host {
         let (stop_tx, stop_rx) = watch::channel(None);
 
         // TODO: Configure
-        let (runtime, epoch) = Runtime::builder()
-            .actor_config(wasmcloud_runtime::ComponentConfig {
-                require_signature: true,
-            })
+        let (runtime, epoch, epoch_end) = Runtime::builder()
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
@@ -1086,10 +1083,21 @@ impl Host {
             // thought were sent (like the host_stopped event)
             try_join!(host.ctl_nats.flush(), host.rpc_nats.flush(),)
                 .context("failed to flush NATS clients")?;
-            if !epoch.is_finished() {
-                bail!("epoch thread has not finished")
-            } else if let Err(_err) = epoch.join() {
-                bail!("epoch thread panicked")
+            let deadline = host.stop_rx.borrow().unwrap_or_else(|| {
+                let now = Instant::now();
+                // epoch ticks operate on a second precision
+                now.checked_add(Duration::from_secs(1)).unwrap_or(now)
+            });
+            // NOTE: Epoch interrupt thread will only stop once there are no more references to the engine
+            drop(host);
+            match timeout_at(deadline, epoch_end).await {
+                Err(_) => bail!("epoch interrupt thread timed out"),
+                Ok(Err(_)) => bail!("epoch interrupt end receiver dropped"),
+                Ok(Ok(())) => {
+                    if let Err(_err) = epoch.join() {
+                        bail!("epoch interrupt thread panicked")
+                    }
+                }
             }
             Ok(())
         }))

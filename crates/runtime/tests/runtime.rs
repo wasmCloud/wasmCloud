@@ -210,7 +210,11 @@ fn new_runtime(
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     sent: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
     config: HashMap<String, String>,
-) -> (Runtime, thread::JoinHandle<()>) {
+) -> (
+    Runtime,
+    thread::JoinHandle<Result<(), ()>>,
+    oneshot::Receiver<()>,
+) {
     let handler = Arc::new(Handler {
         blobstore: Arc::clone(&blobstore),
         logging: logs,
@@ -260,8 +264,8 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
         ),
     ]);
 
-    let (res, epoch) = {
-        let (rt, epoch) = new_runtime(
+    let (res, epoch, epoch_end) = {
+        let (rt, epoch, epoch_end) = new_runtime(
             Arc::clone(&blobstore),
             Arc::clone(&keyvalue),
             Arc::clone(&logs),
@@ -297,9 +301,13 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .await
             .context("failed to call `wasi:http/incoming-handler.handle`")?;
         let res = rx.await.context("response not set")?;
-        (res, epoch)
+        (res, epoch, epoch_end)
     };
-    epoch.join().expect("failed to join epoch thread");
+    epoch_end.await.expect("epoch thread notify sender dropped");
+    epoch
+        .join()
+        .expect("failed to join epoch thread")
+        .expect("epoch thread notify receiver dropped");
     let res = res.context("request failed")?;
     let (
         http::response::Parts {

@@ -394,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
         },
         deadline = host.stopped() => deadline?,
     };
+    drop(host);
     if let Some(deadline) = deadline {
         timeout_at(deadline, shutdown)
     } else {
