@@ -18,6 +18,9 @@
       "outputs": ["playwright-report", "test-results"]
     },
     "test:unit": {},
+    "test": {
+      "dependsOn": ["test:unit", "test:e2e"]
+    },
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "build/**"],

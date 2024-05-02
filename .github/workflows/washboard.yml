@@ -52,19 +52,19 @@ jobs:
         run: yarn install --immutable
 
       - name: Prettier
-        run: yarn run turbo:format:prettier:check
+        run: yarn run turbo:format
 
       - name: ESLint
-        run: yarn run turbo:lint:eslint
+        run: yarn run turbo:lint
 
-      - name: Vitest
-        run: yarn run turbo:test:vitest
+      - name: Unit Tests
+        run: yarn run turbo:test:unit
 
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Playwright Tests
-        run: yarn run test:playwright:headless
+      - name: E2E Tests
+        run: yarn run turbo:test:e2e
 
       - name: Build
         run: yarn run turbo:build
