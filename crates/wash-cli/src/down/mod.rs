@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use anyhow::Result;
+use anyhow::{bail, Context as _, Result};
 use clap::Parser;
 use serde_json::json;
 use tokio::process::Command;
@@ -103,7 +103,15 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             );
             return Ok(CommandOutput::new(out_text, out_json));
         } else {
-            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+            let wasmcloud_pid_file_path = install_dir.join(WASMCLOUD_PID_FILE);
+            tokio::fs::remove_file(&wasmcloud_pid_file_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to find wasmcloud pid file [{}]",
+                        wasmcloud_pid_file_path.display()
+                    )
+                })?;
         }
     } else {
         warn!("Couldn't connect to NATS, unable to stop running hosts")
@@ -111,7 +119,12 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
 
     match stop_wadm(&install_dir).await {
         Ok(_) => {
-            tokio::fs::remove_file(&install_dir.join(WADM_PID)).await?;
+            let pid_file_path = &install_dir.join(WADM_PID);
+            tokio::fs::remove_file(&pid_file_path)
+                .await
+                .with_context(|| {
+                    format!("failed to find WADM pid file [{}]", pid_file_path.display())
+                })?;
             out_json.insert("wadm_stopped".to_string(), json!(true));
             out_text.push_str("✅ wadm stopped successfully\n");
         }
@@ -176,13 +189,14 @@ pub async fn stop_wadm<P>(install_dir: P) -> Result<Output>
 where
     P: AsRef<Path>,
 {
-    if let Ok(pid) = tokio::fs::read_to_string(&install_dir.as_ref().join(WADM_PID)).await {
+    let wadm_pidfile_path = install_dir.as_ref().join(WADM_PID);
+    if let Ok(pid) = tokio::fs::read_to_string(&wadm_pidfile_path).await {
         tokio::process::Command::new("kill")
             .arg(pid)
             .output()
             .await
             .map_err(|e| anyhow::anyhow!(e))
     } else {
-        Err(anyhow::anyhow!("No pidfile found"))
+        bail!("No pidfile found at [{}]", wadm_pidfile_path.display())
     }
 }
