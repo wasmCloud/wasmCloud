@@ -25,14 +25,6 @@ module.exports = {
   plugins: ['react-refresh'],
   rules: {
     '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
-    '@typescript-eslint/explicit-function-return-type': [
-      'warn',
-      {
-        allowExpressions: true,
-        allowHigherOrderFunctions: false,
-        allowTypedFunctionExpressions: true,
-      },
-    ],
     '@typescript-eslint/explicit-member-accessibility': 'warn',
     '@typescript-eslint/member-ordering': [
       'warn',
@@ -111,6 +103,7 @@ module.exports = {
       'error',
       {
         replacements: {
+          args: false,
           prop: false,
           props: false,
           ref: false,
@@ -121,20 +114,13 @@ module.exports = {
   },
   overrides: [
     {
-      files: [
-        '*rc.cjs',
-        '*rc.ts',
-        '*rc.js',
-        '*.config.js',
-        '*.config.cjs',
-        '*.config.ts',
-        'vite.config.ts',
-      ],
+      files: ['*@(rc|.config).@(cjs|js|ts)', 'tests/**/*.ts'],
       env: {
         node: true,
       },
       rules: {
         '@typescript-eslint/no-var-requires': 'off',
+        'import/no-default-export': 'off',
       },
     },
   ],
