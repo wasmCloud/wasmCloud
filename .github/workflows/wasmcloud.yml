@@ -505,10 +505,32 @@ jobs:
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
-          draft: true
+          draft: false
           prerelease: true
           generate_release_notes: true
           files: ./wash/*
+
+      - name: Extract version
+        if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+        run: |
+          VERSION=$(echo "${GITHUB_REF##*/}" | sed -e 's/wash-cli-v//')
+          echo "wash_version=$VERSION" >> $GITHUB_ENV
+      - name: Release homebrew
+        uses: peter-evans/repository-dispatch@v3
+        if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+        with:
+          token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
+          event-type: brew-formula-update
+          client-payload: |
+            {"tag_prefix": "wash-cli", "tag_version": "${{ env.wash_version }}"}
+      - name: Release chocolatey
+        uses: peter-evans/repository-dispatch@v3
+        if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+        with:
+          token: ${{ secrets.HOMEBREW_CHOCOLATEY_DISPATCH_TOKEN }}
+          event-type: choco-formula-update
+          client-payload: |
+            {"wash_version": "${{ env.wash_version }}"}
 
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
