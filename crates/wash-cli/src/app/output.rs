@@ -3,7 +3,7 @@ use term_table::{
     table_cell::{Alignment, TableCell},
     Table,
 };
-use wadm::server::{Status, VersionInfo};
+use wadm_types::api::{Status, VersionInfo};
 
 use super::ModelSummary;
 

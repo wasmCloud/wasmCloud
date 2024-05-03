@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use async_nats::{Client, Message};
 use regex::Regex;
 use tracing::warn;
-use wadm::server::{
+use wadm_types::api::{
     DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
     GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, StatusResponse,
     UndeployModelRequest, VersionResponse,
@@ -197,14 +197,13 @@ pub async fn undeploy_model(
     client: &Client,
     lattice: Option<String>,
     model_name: &str,
-    non_destructive: bool,
 ) -> Result<DeployModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Undeploy,
         lattice,
         Some(model_name),
-        serde_json::to_vec(&UndeployModelRequest { non_destructive })?,
+        serde_json::to_vec(&UndeployModelRequest {})?,
     )
     .await?;
 
@@ -343,17 +342,13 @@ pub async fn delete_model_version(
     lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
-    delete_all: bool,
 ) -> Result<DeleteModelResponse> {
     let res = model_request(
         client,
         ModelOperation::Delete,
         lattice,
         Some(model_name),
-        serde_json::to_vec(&DeleteModelRequest {
-            version: version.unwrap_or_default(),
-            delete_all,
-        })?,
+        serde_json::to_vec(&DeleteModelRequest { version })?,
     )
     .await?;
 
