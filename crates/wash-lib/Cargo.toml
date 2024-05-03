@@ -28,7 +28,7 @@ cli = [
     "indicatif",
     "path-absolutize",
 ]
-nats = ["async-nats", "wadm"]
+nats = ["async-nats", "wadm-types"]
 docs = ["wasmcloud-component-adapters/docs"]
 plugin = ["wasmtime", "wasmtime-wasi", "wasmtime-wasi-http"]
 
@@ -84,7 +84,7 @@ tokio-util = { workspace = true }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
-wadm = { workspace = true, optional = true }
+wadm-types = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
 wasm-encoder = { workspace = true }

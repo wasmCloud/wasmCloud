@@ -19,7 +19,7 @@ use tokio::{
     process::Child,
 };
 use tracing::{error, warn};
-use wadm::server::{DeployModelResponse, DeployResult};
+use wadm_types::api::{DeployModelResponse, DeployResult};
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::{
@@ -627,7 +627,7 @@ async fn deploy_wadm_application(
     lattice: &str,
 ) -> Result<()> {
     let model_name = manifest.name().context("failed to find model name")?;
-    let _ = wash_lib::app::undeploy_model(client, Some(lattice.into()), model_name, false).await;
+    let _ = wash_lib::app::undeploy_model(client, Some(lattice.into()), model_name).await;
     match deploy_model_from_manifest(client, Some(lattice.into()), manifest, None).await {
         // Successful invocation but deploy model failure
         Ok(DeployModelResponse {
@@ -759,7 +759,7 @@ async fn run_wasmcloud_interactive(
                     // If we successfully loaded the manifest, attempt to undeploy the existing model
                     Ok(manifest) => {
                         if let Some(model_name) = manifest.name() {
-                            match wash_lib::app::undeploy_model(&client, Some(lattice), model_name, false).await {
+                            match wash_lib::app::undeploy_model(&client, Some(lattice), model_name).await {
                                 Ok(DeployModelResponse { result: DeployResult::Error, message }) => {
                                     error!("failed to undeploy manifest during cleanup: {message}");
                                     eprintln!("🟨 Failed to undeploy manifest during cleanup");

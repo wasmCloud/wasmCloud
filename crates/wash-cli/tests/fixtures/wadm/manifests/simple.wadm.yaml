@@ -1,0 +1,18 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: sample
+  annotations:
+    version: v0.0.1
+    description: Sample manifest that passes
+spec:
+  components:
+    - name: http-component
+      type: component
+      properties:
+        image: ghcr.io/wasmcloud/component-http-hello-world:0.1.0
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1

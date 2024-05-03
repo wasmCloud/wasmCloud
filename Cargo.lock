@@ -430,9 +430,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.30.0"
+version = "1.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57cdcd97b590e00e635b17126a1a8f3199dd05333a2d6a6d810ab6693bf4f674"
+checksum = "2924dd7efd0112a5a88ec7d1c2dbf371966f018e90f3f45db7c8027ef895662a"
 dependencies = [
  "ahash",
  "aws-credential-types",
@@ -523,9 +523,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-checksums"
-version = "0.60.8"
+version = "0.60.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509e33efbd853e1e670c47e49af2f4df3d2ae0de8b845b068ddbf04636a6700d"
+checksum = "6242d6a54d3b4b83458f4abd7057ba93c4419dc71e8217e9acd3a748d656d99e"
 dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
@@ -2171,12 +2171,6 @@ dependencies = [
  "redox_syscall 0.4.1",
  "windows-sys 0.52.0",
 ]
-
-[[package]]
-name = "finl_unicode"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdc7a0362c9f4444381a9e697c79d435fe65b52a37466fc2c1184cee9edc6"
 
 [[package]]
 name = "flate2"
@@ -5282,13 +5276,13 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "stringprep"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb41d74e231a107a1b4ee36bd1214b11285b77768d2e3824aedafa988fd36ee6"
+checksum = "7b4df3d392d81bd458a8a621b8bffbd2302a12ffe288a9d931670948749463b1"
 dependencies = [
- "finl_unicode",
  "unicode-bidi",
  "unicode-normalization",
+ "unicode-properties",
 ]
 
 [[package]]
@@ -6052,6 +6046,7 @@ checksum = "34778c17965aa2a08913b57e1f34db9b4a63f5de31768b55bf20d2795f921259"
 dependencies = [
  "getrandom 0.2.14",
  "rand 0.8.5",
+ "serde",
  "web-time 1.1.0",
 ]
 
@@ -6084,6 +6079,12 @@ checksum = "a56d1686db2308d901306f92a263857ef59ea39678a5458e7cb17f01415101f5"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unicode-properties"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4259d9d4425d9f0661581b804cb85fe66a4c631cadd8f490d1c13a35d5d9291"
 
 [[package]]
 name = "unicode-segmentation"
@@ -6195,10 +6196,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
-name = "wadm"
-version = "0.11.2"
+name = "wadm-types"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25c15f591631338229521c5636b4226b29ba8fa13fbebce24d02eb89e0d4e595"
+checksum = "af535df65c0387b6a8ef521aca58a239af817f03ebf676f91e982b9b919bc513"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6223,6 +6224,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-futures",
+ "ulid",
  "uuid 1.8.0",
  "wasmcloud-control-interface 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -6364,7 +6366,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "wadm",
+ "wadm-types",
  "warp",
  "wascap 0.14.0",
  "wash-lib",
@@ -6431,7 +6433,7 @@ dependencies = [
  "toml 0.8.13",
  "tracing",
  "url",
- "wadm",
+ "wadm-types",
  "walkdir",
  "wascap 0.14.0",
  "wasm-encoder 0.208.1",
