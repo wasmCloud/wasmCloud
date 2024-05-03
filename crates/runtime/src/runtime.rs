@@ -29,6 +29,7 @@ pub struct RuntimeBuilder {
     max_execution_time: Duration,
     handler: builtin::HandlerBuilder,
     actor_config: ComponentConfig,
+    force_pooling_allocator: bool,
 }
 
 impl RuntimeBuilder {
@@ -50,6 +51,7 @@ impl RuntimeBuilder {
             max_execution_time: Duration::from_secs(10 * 60),
             handler: builtin::HandlerBuilder::default(),
             actor_config: ComponentConfig::default(),
+            force_pooling_allocator: false,
         }
     }
 
@@ -155,7 +157,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Sets the maximum number of components that can be run simultaneously. Defaults to 20000
+    /// Sets the maximum number of components that can be run simultaneously. Defaults to 10000
     #[must_use]
     pub fn max_components(self, max_components: u32) -> Self {
         Self {
@@ -164,7 +166,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Sets the maximum size of a component instance, in bytes. Defaults to 10MB
+    /// Sets the maximum size of a component instance, in bytes. Defaults to 50MB
     #[must_use]
     pub fn max_component_size(self, max_component_size: u64) -> Self {
         Self {
@@ -180,6 +182,15 @@ impl RuntimeBuilder {
     pub fn max_execution_time(self, max_execution_time: Duration) -> Self {
         Self {
             max_execution_time: max_execution_time.max(Duration::from_secs(1)),
+            ..self
+        }
+    }
+
+    /// Forces the use of the pooling allocator. This may cause the runtime to fail if there isn't enough memory for the pooling allocator
+    #[must_use]
+    pub fn force_pooling_allocator(self) -> Self {
+        Self {
+            force_pooling_allocator: true,
             ..self
         }
     }
@@ -206,7 +217,7 @@ impl RuntimeBuilder {
         let memories_per_component = 1;
         let tables_per_component = 1;
         let max_core_instances_per_component = 30;
-        let table_elements = 20000;
+        let table_elements = 15000;
 
         #[allow(clippy::cast_possible_truncation)]
         pooling_config
@@ -230,8 +241,20 @@ impl RuntimeBuilder {
             .table_keep_resident((10 * MB) as usize);
         self.engine_config
             .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
-        let engine =
-            wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?;
+        let engine = match wasmtime::Engine::new(&self.engine_config)
+            .context("failed to construct engine")
+        {
+            Ok(engine) => engine,
+            Err(e) if self.force_pooling_allocator => {
+                anyhow::bail!("failed to construct engine with pooling allocator: {}", e)
+            }
+            Err(e) => {
+                tracing::warn!(err = %e, "failed to construct engine with pooling allocator, falling back to dynamic allocator which may result in slower startup and execution of components.");
+                self.engine_config
+                    .allocation_strategy(InstanceAllocationStrategy::OnDemand);
+                wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?
+            }
+        };
         let (epoch_tx, epoch_rx) = oneshot::channel();
         let epoch = {
             let engine = engine.weak();
