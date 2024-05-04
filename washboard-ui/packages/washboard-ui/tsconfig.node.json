@@ -6,7 +6,8 @@
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "types": ["node"]
+    "types": ["node"],
+    "target": "ES2020"
   },
   "include": ["*.config.ts", "tests/**/*.ts"]
 }
