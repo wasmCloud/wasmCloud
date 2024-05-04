@@ -11,6 +11,7 @@
     "./**/*.config.cjs",
     "./**/*rc.js",
     "./**/*rc.ts",
-    ".eslintrc.cjs"
+    ".eslintrc.cjs",
+    "tests/**/*.ts"
   ]
 }

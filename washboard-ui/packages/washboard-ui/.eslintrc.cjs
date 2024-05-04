@@ -25,12 +25,12 @@ module.exports = {
   plugins: ['react-refresh'],
   rules: {
     '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
-    '@typescript-eslint/explicit-member-accessibility': 'warn',
+    '@typescript-eslint/explicit-member-accessibility': ['warn', {accessibility: 'no-public'}],
     '@typescript-eslint/member-ordering': [
       'warn',
       {
         default: 'never',
-        classes: ['field', 'constructor', 'method'],
+        classes: ['field', ['get', 'set'], 'constructor', 'method'],
       },
     ],
     '@typescript-eslint/no-loss-of-precision': 'warn',
@@ -87,6 +87,13 @@ module.exports = {
             message: 'Relative imports are not allowed. Please use the @/ alias.',
           },
         ],
+      },
+    ],
+    'no-restricted-syntax': [
+      'error',
+      {
+        selector: ':matches(PropertyDefinition, MethodDefinition)[accessibility="private"]',
+        message: 'Use #private instead',
       },
     ],
     'no-undef': 'warn',
