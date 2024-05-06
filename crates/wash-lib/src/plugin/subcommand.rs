@@ -19,6 +19,9 @@ use wasmtime_wasi_http::WasiHttpCtx;
 
 use super::Data;
 
+const DIRECTORY_ALLOW: DirPerms = DirPerms::all();
+const DIRECTORY_DENY: DirPerms = DirPerms::READ;
+
 struct InstanceData {
     instance: Subcommands,
     metadata: Metadata,
@@ -26,9 +29,20 @@ struct InstanceData {
     store: wasmtime::Store<Data>,
 }
 
+/// A struct that manages loading and running subcommand plugins
 pub struct SubcommandRunner {
     engine: Engine,
     plugins: HashMap<String, InstanceData>,
+}
+
+/// Host directory mapping to provide to plugins
+pub struct DirMapping {
+    /// The path on the host that should be opened. If this is a file, its parent directory will be
+    /// added with no RW access, but with RW access to the files in that directory. If it is a
+    /// directory, it will be added with RW access to that directory
+    pub host_path: PathBuf,
+    /// The path that will be accessible in the component. Otherwise defaults to the `host_path`
+    pub component_path: Option<String>,
 }
 
 impl SubcommandRunner {
@@ -149,18 +163,19 @@ impl SubcommandRunner {
     }
 
     /// Run a subcommand with the given name and args. The plugin will inherit all
-    /// stdout/stderr/stdin/env. The given plugin_dir is used to grant the plugin access to the
-    /// filesystem in a specific directory, and should already exist. An error will only be returned
-    /// if there was a problem with the plugin (such as the plugin_dir not existing) or the
-    /// subcommand itself.
+    /// stdout/stderr/stdin/env. The given plugin_dirs will be mapped into the plugin after
+    /// canonicalizing all paths and normalizing them to use `/` instead of `\`. An error will only
+    /// be returned if there was a problem with the plugin (such as the plugin dirs not existing or
+    /// failure to canonicalize) or the subcommand itself.
     ///
     /// All plugins will be passed environment variables starting with
     /// `WASH_PLUGIN_${plugin_id.to_upper()}_` from the current process. Other vars will be ignored
     pub async fn run(
         &mut self,
         plugin_id: &str,
-        plugin_dir: impl AsRef<Path>,
-        args: &[impl AsRef<str>],
+        plugin_dir: PathBuf,
+        dirs: Vec<DirMapping>,
+        mut args: Vec<String>,
     ) -> anyhow::Result<()> {
         let plugin = self
             .plugins
@@ -171,18 +186,81 @@ impl SubcommandRunner {
         let vars: Vec<_> = std::env::vars()
             .filter(|(k, _)| k.starts_with(&env_prefix))
             .collect();
-        plugin.store.data_mut().ctx = WasiCtxBuilder::new()
-            // Disable socket connections for now. We may gradually open this up later
-            .socket_addr_check(|_, _| false)
-            .inherit_stderr()
-            .inherit_stdin()
+        let mut ctx = WasiCtxBuilder::new();
+        for dir in dirs {
+            // To avoid relative dirs and permissions issues, we canonicalize the host path
+            let canonicalized = tokio::fs::canonicalize(&dir.host_path)
+                .await
+                .context("Error when canonicalizing given path")?;
+            // We need this later and will have to return an error anyway if this fails
+            let str_canonical = canonicalized.to_str().ok_or_else(|| anyhow::anyhow!("Canonicalized path cannot be converted to a string for use in a plugin. This is a limitation of the WASI API"))?.to_string();
+            // Check if the path is a file or a dir so we can handle permissions accordingly
+            let is_dir = tokio::fs::metadata(&canonicalized)
+                .await
+                .map(|m| m.is_dir())
+                .context("Error when checking if path is a file or a dir")?;
+            let (host_path, guest_path, dir_perms) = match (is_dir, dir.component_path) {
+                (true, Some(path)) => (canonicalized.clone(), path, DIRECTORY_ALLOW),
+                (false, Some(path)) => (
+                    canonicalized
+                        .parent()
+                        .ok_or_else(|| anyhow::anyhow!("Could not get parent of given file"))?
+                        .to_path_buf(),
+                    path,
+                    DIRECTORY_DENY,
+                ),
+                (true, None) => (
+                    canonicalized.clone(),
+                    str_canonical.clone(),
+                    DIRECTORY_ALLOW,
+                ),
+                (false, None) => {
+                    let parent = canonicalized
+                        .parent()
+                        .ok_or_else(|| anyhow::anyhow!("Could not get parent of given file"))?
+                        .to_path_buf();
+                    (
+                        parent.clone(),
+                        // SAFETY: We already checked that canonicalized was a string above so we
+                        // can just unwrap here
+                        parent.to_str().unwrap().to_string(),
+                        DIRECTORY_DENY,
+                    )
+                }
+            };
+
+            // On Windows, we need to normalize the path separators to "/" since that is what is
+            // expected by things like `PathBuf` when built for WASI.
+            #[cfg(target_family = "windows")]
+            let guest_path = guest_path.replace('\\', "/");
+            #[cfg(target_family = "windows")]
+            let str_canonical = str_canonical.replace('\\', "/");
+            ctx.preopened_dir(host_path, guest_path, dir_perms, FilePerms::all())
+                .context("Error when preopening path argument")?;
+            // Substitute the path in the args with the canonicalized path
+            let matching = args
+                .iter_mut()
+                .find(|arg| {
+                    <&mut std::string::String as std::convert::AsRef<Path>>::as_ref(arg)
+                        == dir.host_path
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Could not find host path {} in args for replacement",
+                        dir.host_path.display()
+                    )
+                })?;
+            *matching = str_canonical;
+        }
+        // Disable socket connections for now. We may gradually open this up later
+        ctx.socket_addr_check(|_, _| false)
             .inherit_stdio()
-            .inherit_stdout()
-            .preopened_dir(plugin_dir, "/", DirPerms::all(), FilePerms::all())
+            .preopened_dir(plugin_dir, "/", DIRECTORY_ALLOW, FilePerms::all())
             .context("Error when preopening plugin dir")?
-            .args(args)
-            .envs(&vars)
-            .build();
+            .args(&args)
+            .envs(&vars);
+
+        plugin.store.data_mut().ctx = ctx.build();
         plugin
             .instance
             .wasi_cli_run()

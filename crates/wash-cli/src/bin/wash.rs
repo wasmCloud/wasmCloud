@@ -36,7 +36,7 @@ use wash_lib::cli::stop::StopCommand;
 use wash_lib::cli::update::UpdateCommand;
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::drain::Drain as DrainSelection;
-use wash_lib::plugin::subcommand::SubcommandRunner;
+use wash_lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 
 const HELP: &str = r"
 _________________________________________________________________________________
@@ -225,6 +225,7 @@ async fn main() {
     // Load plugins if they are not disabled
     let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
         if let Some((plugins, dir)) = load_plugins().await {
+            let mut plugin_paths = HashMap::new();
             for plugin in plugins.all_metadata().into_iter().cloned() {
                 if command.find_subcommand(&plugin.id).is_some() {
                     tracing::error!(
@@ -233,24 +234,52 @@ async fn main() {
                     );
                     continue;
                 }
-                let subcmd = Command::new(plugin.id)
+                let (flag_args, path_ids): (Vec<_>, Vec<_>) = plugin
+                    .flags
+                    .into_iter()
+                    .map(|(flag, arg)| {
+                        let trimmed = flag.trim_start_matches('-').to_owned();
+                        // Return a list of args with an Option containing the ID of the flag if it was a path
+                        (
+                            Arg::new(trimmed.clone())
+                                .long(trimmed.clone())
+                                .help(arg.description)
+                                .required(arg.required),
+                            arg.is_path.then_some(trimmed),
+                        )
+                    })
+                    .unzip();
+                let (positional_args, positional_ids): (Vec<_>, Vec<_>) = plugin
+                    .arguments
+                    .into_iter()
+                    .map(|(name, arg)| {
+                        let trimmed = name.trim().to_owned();
+                        // Return a list of args with an Option containing the ID of the argument if it was a path
+                        (
+                            Arg::new(trimmed.clone())
+                                .help(arg.description)
+                                .required(arg.required),
+                            arg.is_path.then_some(trimmed),
+                        )
+                    })
+                    .unzip();
+                let subcmd = Command::new(plugin.id.clone())
                     .about(plugin.description)
                     .author(plugin.author)
                     .version(plugin.version)
                     .display_name(plugin.name)
-                    .args(plugin.flags.into_iter().map(|(flag, help)| {
-                        let trimmed = flag.trim_start_matches('-').to_owned();
-                        Arg::new(trimmed.clone()).long(trimmed).help(help)
-                    }))
-                    .args(
-                        plugin
-                            .arguments
-                            .into_iter()
-                            .map(|(name, help)| Arg::new(name).help(help)),
-                    );
+                    .args(flag_args.into_iter().chain(positional_args));
                 command = command.subcommand(subcmd);
+                plugin_paths.insert(
+                    plugin.id,
+                    path_ids
+                        .into_iter()
+                        .chain(positional_ids)
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                );
             }
-            Some((plugins, dir))
+            Some((plugins, dir, plugin_paths))
         } else {
             None
         }
@@ -264,13 +293,38 @@ async fn main() {
 
     let cli = match (Cli::from_arg_matches(&matches), plugins) {
         (Ok(cli), _) => cli,
-        (Err(mut e), Some((mut plugins, plugin_dir))) => {
-            let (id, _sub_matches) = match matches.subcommand() {
+        (Err(mut e), Some((mut plugins, plugin_dir, plugin_paths))) => {
+            let (id, sub_matches) = match matches.subcommand() {
                 Some(data) => data,
                 None => {
                     e.exit();
                 }
             };
+
+            let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
+                Ok(dir) => dir,
+                Err(e) => {
+                    eprintln!("Error creating plugin scratch directory: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let mut plugin_dirs = Vec::new();
+
+            // Try fetching all path matches from args marked as paths
+            plugin_dirs.extend(
+                plugin_paths
+                    .get(id)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|id| {
+                        sub_matches.get_one::<String>(&id).map(|path| DirMapping {
+                            host_path: path.into(),
+                            component_path: None,
+                        })
+                    }),
+            );
 
             if plugins.metadata(id).is_none() {
                 e.insert(
@@ -286,14 +340,7 @@ async fn main() {
             // revisit this later with something if we need to. I did do some basic testing that
             // even if you wrap wash in a shell script, it still works.
             let args: Vec<String> = std::env::args().skip(1).collect();
-            let dir = match ensure_plugin_scratch_dir_exists(plugin_dir, id).await {
-                Ok(dir) => dir,
-                Err(e) => {
-                    eprintln!("Error creating plugin scratch directory: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = plugins.run(id, dir, &args).await {
+            if let Err(e) = plugins.run(id, dir, plugin_dirs, args).await {
                 eprintln!("Error running plugin: {}", e);
                 std::process::exit(1);
             } else {

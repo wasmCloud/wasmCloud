@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use tokio::process::Command;
+use wash_lib::plugin::subcommand::DirMapping;
 
 /// Builds the plugin in the given directory. It must exist inside of tests/plugins/ and the
 /// directory name must match the name of the built binary. Returns the path to the built binary.
@@ -51,10 +52,40 @@ async fn test_subcommand() {
     assert_eq!(metadata.id, "hello");
 
     let temp = tempfile::tempdir().unwrap();
+    let extra_dir = tempfile::tempdir().unwrap();
+    tokio::fs::write(extra_dir.path().join("hello.txt"), "hello")
+        .await
+        .unwrap();
+    tokio::fs::write(extra_dir.path().join("world.txt"), "world")
+        .await
+        .unwrap();
+
+    let file_dir = tempfile::tempdir().unwrap();
+    let file = file_dir.path().join("hello.txt");
+    tokio::fs::write(&file, "Hello from a file").await.unwrap();
 
     // TODO: allow configuration of stdout/stderr so we can check for output
     subcommand
-        .run("hello", temp.path(), &["world"])
+        .run(
+            "hello",
+            temp.path().to_path_buf(),
+            vec![
+                DirMapping {
+                    host_path: extra_dir.path().to_path_buf(),
+                    component_path: None,
+                },
+                DirMapping {
+                    host_path: file.clone(),
+                    component_path: None,
+                },
+            ],
+            vec![
+                "hello".to_string(),
+                "--foo".to_string(),
+                extra_dir.path().to_str().unwrap().to_string(),
+                file.to_str().unwrap().to_string(),
+            ],
+        )
         .await
         .expect("Should be able to run plugin");
 
