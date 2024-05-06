@@ -33,6 +33,7 @@ providers = [
     "dep:wasmcloud-provider-lattice-controller",
     "dep:wasmcloud-provider-messaging-kafka",
     "dep:wasmcloud-provider-messaging-nats",
+    "dep:wasmcloud-provider-sqldb-postgres",
     "dep:wasmcloud-provider-sdk",
 ]
 default = ["providers"]
@@ -77,6 +78,10 @@ required-features = ["providers"]
 name = "messaging-nats-provider"
 required-features = ["providers"]
 
+[[bin]]
+name = "sqldb-postgres-provider"
+required-features = ["providers"]
+
 [profile.release]
 strip = true
 opt-level = "z"
@@ -110,6 +115,7 @@ wasmcloud-provider-keyvalue-vault = { workspace = true, optional = true }
 wasmcloud-provider-lattice-controller = { workspace = true, optional = true }
 wasmcloud-provider-messaging-kafka = { workspace = true, optional = true }
 wasmcloud-provider-messaging-nats = { workspace = true, optional = true }
+wasmcloud-provider-sqldb-postgres = { workspace = true, optional = true }
 wasmcloud-provider-sdk = { workspace = true, features = [
     "otel",
 ], optional = true }
@@ -179,6 +185,8 @@ axum-server = { version = "0.6", default-features = false }
 azure_core = { version = "0.20", default-features = false }
 azure_storage = { version = "0.20", default-features = false }
 azure_storage_blobs = { version = "0.20", default-features = false }
+bigdecimal = { version = "0.4", default-features = false }
+bit-vec = { version = "0.6", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bytes = { version = "1", default-features = false }
 cap-std = { version = "3", default-features = false }
@@ -186,6 +194,7 @@ cargo_metadata = { version = "0.18", default-features = false }
 cargo_toml = { version = "0.15", default-features = false }
 cbindgen = { version = "0.25", default-features = false }
 chrono = { version = "0.4", default-features = false }
+cidr = { version = "0.2", default-features = false }
 claims = { version = "0.7", default-features = false }
 clap = { version = "4", default-features = false }
 clap_complete = { version = "4", default-features = false }
@@ -195,9 +204,11 @@ config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
 dashmap = { version = "5", default-features = false }
 data-encoding = { version = "2", default-features = false }
+deadpool-postgres = { version = "0.13", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 dirs = { version = "4", default-features = false }
 futures = { version = "0.3", default-features = false }
+geo-types = { version = "0.7", default-features = false }
 heck = { version = "0.5", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "1", default-features = false, features = ["std"] }
@@ -215,6 +226,7 @@ nkeys = { version = "0.3", default-features = false }
 normpath = { version = "1", default-features = false }
 notify = { version = "6", default-features = false }
 nuid = { version = "0.4", default-features = false }
+num = { version = "0.2", default-features = false }
 oci-distribution = { version = "0.11", default-features = false }
 oci-wasm = { version = "0.0.2", default-features = false }
 once_cell = { version = "1", default-features = false }
@@ -225,6 +237,8 @@ opentelemetry-otlp = { version = "0.16", default-features = false }
 opentelemetry_sdk = { version = "0.23", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 path-clean = { version = "1", default-features = false }
+pg_bigdecimal = { version = "0.1", default-features = false }
+postgres-types = { version = "0.2", default-features = false }
 provider-archive = { version = "^0.10.2", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
@@ -262,6 +276,8 @@ test-case = { version = "3", default-features = false }
 thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
+tokio-postgres = { version = "0.7", default-features = false }
+tokio-postgres-rustls = { version = "0.12", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
@@ -300,6 +316,7 @@ wasmcloud-provider-lattice-controller = { version = "*", path = "./crates/provid
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
 wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
 wasmcloud-provider-sdk = { version = "^0.5.0", path = "./crates/provider-sdk", default-features = false }
+wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-test-util = { version = "^0.2.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.4.0", path = "./crates/tracing", default-features = false }

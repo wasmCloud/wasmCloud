@@ -1,0 +1,15 @@
+[package]
+name = "sqldb-postgres-managed"
+edition = "2021"
+version = "0.1.0"
+description = """
+An example component that performs queries with the wasmcloud-sqldb-postgres provider, using only the wasmcloud:postgres/managed interface.
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.24", features = ["default"] }

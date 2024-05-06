@@ -1,0 +1,6 @@
+package wasmcloud:providers;
+
+world provider-sqldb-postgres {
+    export wasmcloud:postgres/query@0.1.0-draft;
+    export wasmcloud:postgres/prepared@0.1.0-draft;
+}

@@ -1,0 +1,41 @@
+[package]
+name = "wasmcloud-provider-sqldb-postgres"
+version = "0.1.0"
+description = """
+wasmCloud SQL database provider for Postgres
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = [ "rustls" ]
+rustls = [ "dep:tokio-postgres-rustls" ]
+
+[dependencies]
+anyhow = { workspace = true }
+bigdecimal = { workspace = true }
+bit-vec = { workspace = true, features = [ "std" ] }
+bytes = { workspace = true }
+chrono = { workspace = true, features = [ "std" ] }
+cidr = { workspace = true, features = [ "std" ] }
+deadpool-postgres = { workspace = true, features = [ "rt_tokio_1" ] }
+futures = { workspace = true }
+geo-types = { workspace = true }
+num = { workspace = true }
+pg_bigdecimal = { workspace = true }
+postgres-types = { workspace = true, features = [ "with-cidr-0_2" ] }
+rustls = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true, features = [ "runtime", "with-serde_json-1", "with-chrono-0_4", "with-uuid-0_8", "with-geo-types-0_7", "array-impls", "with-bit-vec-0_6", "with-uuid-1" ]  }
+tokio-postgres-rustls = { workspace = true, optional = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+uuid = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
+ 

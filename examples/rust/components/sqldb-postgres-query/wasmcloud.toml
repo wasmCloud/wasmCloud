@@ -1,0 +1,8 @@
+name = "sqldb-postgres-managed"
+version = "0.1.0"
+language = "rust"
+type = "component"
+
+[actor]
+wit_world = "component"
+wasm_target = "wasm32-wasi-preview2"

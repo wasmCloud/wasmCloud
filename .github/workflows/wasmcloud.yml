@@ -56,6 +56,8 @@ on:
       - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
       - 'runtime-v[0-9].[0-9]+.[0-9]+'
@@ -172,6 +174,7 @@ jobs:
       - run: move "target/release/lattice-controller-provider.exe" "artifact/bin/lattice-controller-provider.exe"
       - run: move "target/release/messaging-kafka-provider.exe" "artifact/bin/messaging-kafka-provider.exe"
       - run: move "target/release/messaging-nats-provider.exe" "artifact/bin/messaging-nats-provider.exe"
+      - run: move "target/release/sqldb-postgres-provider.exe" "artifact/bin/sqldb-postgres-provider.exe"
 
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
       - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
@@ -305,6 +308,9 @@ jobs:
 
           - name: messaging-nats
             subject: MESSAGING_NATS_SUBJECT
+
+          - name: sqldb-postgres
+            subject: SQLDB_POSTGRES_SUBJECT
 
     needs:
       - build-bin

@@ -1,0 +1,4 @@
+[postgres]
+url = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-postgres-v0.1.0-draft/wit-wasmcloud-postgres-0.1.0-draft.tar.gz"
+sha256 = "dc180a915c3716a5f2f41ceee0d312baa75c9ae2b2fa429ad99ab5bced83e4b1"
+sha512 = "5954c6f59c804ae32d3c619f442273b749e60181c0154c50aba54c20a2d3dff4f31f714ee6c347cea053ac88101e63b8761c17b37ba88c0d9bc2209cbc132930"
