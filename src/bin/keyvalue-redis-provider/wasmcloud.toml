@@ -4,7 +4,7 @@ type = "provider"
 version = "0.24.0"
 
 [rust]
-target_path = "../../"
+target_path = "../../target"
 
 [provider]
 bin_name = "keyvalue-redis-provider"
