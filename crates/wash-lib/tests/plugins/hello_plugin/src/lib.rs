@@ -2,13 +2,42 @@
 wit_bindgen::generate!();
 
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
+use clap::builder::ValueParser;
+use clap::{Arg, CommandFactory, FromArgMatches};
 use exports::wasi::cli::run::Guest as RunGuest;
-use exports::wasmcloud::wash::subcommand::{Guest as SubcommandGuest, Metadata};
+use exports::wasmcloud::wash::subcommand::{Argument, Guest as SubcommandGuest, Metadata};
 use wasi::cli::environment;
 use wasi::filesystem::preopens::get_directories;
-use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
 use wasi::http::types::*;
+
+impl From<&Arg> for Argument {
+    fn from(arg: &Arg) -> Self {
+        Self {
+            description: arg.get_help().map(ToString::to_string).unwrap_or_default(),
+            is_path: arg.get_value_parser().type_id() == ValueParser::path_buf().type_id(),
+            required: arg.is_required_set(),
+        }
+    }
+}
+
+#[derive(clap::Parser)]
+#[clap(name = "hello")]
+struct Hello {
+    /// A random string
+    #[clap(long = "bar")]
+    bar: Option<String>,
+
+    /// A directory to read
+    #[clap(long = "foo")]
+    foo: PathBuf,
+
+    /// A file to read
+    #[clap(id = "path")]
+    path: PathBuf,
+}
 
 #[derive(serde::Deserialize)]
 struct DogResponse {
@@ -20,11 +49,29 @@ struct HelloPlugin;
 
 impl RunGuest for HelloPlugin {
     fn run() -> Result<(), ()> {
-        println!("I got some arguments: {:?}", environment::get_arguments());
+        let args = environment::get_arguments();
+        println!("I got some arguments: {:?}", args);
         println!(
             "I got some environment variables: {:?}",
             environment::get_environment()
         );
+
+        let cmd = Hello::command();
+        let matches = match cmd.try_get_matches_from(args) {
+            Ok(matches) => matches,
+            Err(err) => {
+                eprintln!("Error parsing arguments: {}", err);
+                return Err(());
+            }
+        };
+        let args = match Hello::from_arg_matches(&matches) {
+            Ok(args) => args,
+            Err(err) => {
+                eprintln!("Error parsing arguments: {}", err);
+                return Err(());
+            }
+        };
+
         let req = wasi::http::outgoing_handler::OutgoingRequest::new(Fields::new());
         req.set_scheme(Some(&Scheme::Https))?;
         req.set_authority(Some("dog.ceo"))?;
@@ -66,17 +113,17 @@ impl RunGuest for HelloPlugin {
                         dog_response.status, dog_response.message
                     );
                 } else {
-                    println!("HTTP request failed with status code {}", response.status());
+                    eprintln!("HTTP request failed with status code {}", response.status());
                 }
             }
             Ok(_) => {
-                println!("Got response, but it wasn't ready");
+                eprintln!("Got response, but it wasn't ready");
             }
             Err(e) => {
-                println!("Got error when trying to fetch dog: {}", e);
+                eprintln!("Got error when trying to fetch dog: {}", e);
             }
         }
-        if let Some(dir) = get_directories().into_iter().next().map(|(d, _)| d) {
+        if let Ok(dir) = get_dir("/") {
             let file = dir
                 .open_at(
                     PathFlags::empty(),
@@ -89,6 +136,39 @@ impl RunGuest for HelloPlugin {
                 .expect("Should be able to write to file");
         }
 
+        if let Ok(dir) = get_dir(&args.foo) {
+            let entries = dir.read_directory().map_err(|e| {
+                eprintln!("Failed to read directory: {}", e);
+            })?;
+            println!("Directory entries for {}:", args.foo.display());
+            while let Some(res) = entries.read_directory_entry().transpose() {
+                let entry = res.map_err(|e| {
+                    eprintln!("Failed to read directory entry: {}", e);
+                })?;
+                println!("{}", entry.name);
+            }
+        }
+
+        let file =
+            open_file(&args.path, OpenFlags::empty(), DescriptorFlags::READ).map_err(|e| {
+                eprintln!("Failed to open file: {}", e);
+            })?;
+
+        let mut body = file.read_via_stream(0).map_err(|e| {
+            eprintln!("Failed to read file: {}", e);
+        })?;
+        let mut buf = vec![];
+        InputStreamReader::from(&mut body)
+            .read_to_end(&mut buf)
+            .map_err(|e| {
+                eprintln!("Failed to read file: {}", e);
+            })?;
+        println!(
+            "The file {} has the contents {}",
+            args.path.display(),
+            String::from_utf8_lossy(&buf)
+        );
+
         println!("Hello from the plugin");
         Ok(())
     }
@@ -96,16 +176,68 @@ impl RunGuest for HelloPlugin {
 
 impl SubcommandGuest for HelloPlugin {
     fn register() -> Metadata {
+        let cmd = Hello::command();
+        let (arguments, flags): (Vec<_>, Vec<_>) =
+            cmd.get_arguments().partition(|arg| arg.is_positional());
+        // There isn't a partition_map function without importing another crate
+        let arguments = arguments
+            .into_iter()
+            .map(|arg| (arg.get_id().to_string(), Argument::from(arg)))
+            .collect();
+        let flags = flags
+            .into_iter()
+            .map(|arg| (arg.get_id().to_string(), Argument::from(arg)))
+            .collect();
         Metadata {
             name: "Hello Plugin".to_string(),
             id: "hello".to_string(),
             description: "A simple plugin that says hello and logs a bunch of things".to_string(),
             author: "WasmCloud".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            flags: vec![("--foo".to_string(), "A foo variable".to_string())],
-            arguments: vec![("name".to_string(), "A random name".to_string())],
+            flags,
+            arguments,
         }
     }
+}
+
+fn get_dir(path: impl AsRef<Path>) -> Result<Descriptor, String> {
+    get_directories()
+        .into_iter()
+        .find_map(|(dir, dir_path)| {
+            (<std::string::String as std::convert::AsRef<Path>>::as_ref(&dir_path) == path.as_ref())
+                .then_some(dir)
+        })
+        .ok_or_else(|| format!("Could not find directory {}", path.as_ref().display()))
+}
+
+/// Opens the given file. This should be the canonicalized path to the file.
+fn open_file(
+    path: impl AsRef<Path>,
+    open_flags: OpenFlags,
+    descriptor_flags: DescriptorFlags,
+) -> Result<Descriptor, String> {
+    let dir = path
+        .as_ref()
+        .parent()
+        // I mean, if someone passed a path that is at the root, that probably wasn't a good idea
+        .ok_or_else(|| {
+            format!(
+                "Could not find parent directory of {}",
+                path.as_ref().display()
+            )
+        })?;
+    let dir = get_dir(dir)?;
+    dir.open_at(
+        PathFlags::empty(),
+        path.as_ref()
+            .file_name()
+            .ok_or_else(|| format!("Path did not have a file name: {}", path.as_ref().display()))?
+            .to_str()
+            .ok_or_else(|| "Path is not a valid string".to_string())?,
+        open_flags,
+        descriptor_flags,
+    )
+    .map_err(|e| format!("Failed to open file {}: {}", path.as_ref().display(), e))
 }
 
 pub struct InputStreamReader<'a> {
