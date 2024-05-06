@@ -2605,7 +2605,7 @@ __metadata:
     "@types/eslint": "npm:~8.56.5"
     "@wasmcloud/tsconfig": "workspace:^"
     immer: "npm:^10.1.1"
-    nats.ws: "npm:^1.24.0"
+    nats.ws: "npm:^1.25.0"
     rxjs: "npm:^7.8.1"
     tsup: "npm:^8.0.2"
   languageName: unknown
@@ -2702,13 +2702,13 @@ __metadata:
     eslint-plugin-tailwindcss: "npm:^3.15.1"
     eslint-plugin-unicorn: "npm:^52.0.0"
     immer: "npm:^10.1.1"
-    lucide-react: "npm:^0.376.0"
-    nats.ws: "npm:^1.24.0"
+    lucide-react: "npm:^0.378.0"
+    nats.ws: "npm:^1.25.0"
     postcss: "npm:^8.4.38"
     prettier: "npm:^3.2.5"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
-    react-hook-form: "npm:^7.51.3"
+    react-hook-form: "npm:^7.51.4"
     react-router-dom: "npm:^6.23.0"
     rxjs: "npm:^7.8.1"
     tailwind-merge: "npm:^2.3.0"
@@ -2720,7 +2720,7 @@ __metadata:
     vite: "npm:^5.2.11"
     vite-plugin-svgr: "npm:^4.2.0"
     vite-tsconfig-paths: "npm:^4.3.2"
-    zod: "npm:^3.23.4"
+    zod: "npm:^3.23.6"
   languageName: unknown
   linkType: soft
 
@@ -5730,12 +5730,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.376.0":
-  version: 0.376.0
-  resolution: "lucide-react@npm:0.376.0"
+"lucide-react@npm:^0.378.0":
+  version: 0.378.0
+  resolution: "lucide-react@npm:0.378.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0
-  checksum: 5ffb6c352dfc7b51b64ae0ea63b3edd2d57c52db366814332a799da9a812c9c9f5d3f6cd76957d5ad481f22ba888f9ad0cda22ecbf2ae8d76adfa2532baa5989
+  checksum: ecdd8c1be974346a03f078e9213336aa01ebee13b65815e338e626cba68ca326ac63058ddd8e9d396a7c2e2253beb9af9c34e521b6aac42fd96abf84f4788122
   languageName: node
   linkType: hard
 
@@ -5964,15 +5964,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nats.ws@npm:^1.24.0":
-  version: 1.24.0
-  resolution: "nats.ws@npm:1.24.0"
+"nats.ws@npm:^1.25.0":
+  version: 1.25.0
+  resolution: "nats.ws@npm:1.25.0"
   dependencies:
     nkeys.js: "npm:1.1.0"
   dependenciesMeta:
     nkeys.js:
       optional: true
-  checksum: fa5199c34d7615dd10880b94f32767b138237e4df4a17c931ba42b848d00970734e9b78e7a436080d4d3af5c64f4d68a818cb511113c411b4f5057c0b04a81a9
+  checksum: 236a1241c71468e330a2ea53a9abae866d8d193a688ccc3f2d30b83784927f2bc523875fc965157222f950683c58d579b808c276fb3ce4b55ba9821c18fd7d2a
   languageName: node
   linkType: hard
 
@@ -6555,12 +6555,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-hook-form@npm:^7.51.3":
-  version: 7.51.3
-  resolution: "react-hook-form@npm:7.51.3"
+"react-hook-form@npm:^7.51.4":
+  version: 7.51.4
+  resolution: "react-hook-form@npm:7.51.4"
   peerDependencies:
     react: ^16.8.0 || ^17 || ^18
-  checksum: 37f5d681b0f9d6a64b56e38c6ea98941c78d2634e175e7722e66a6bd72b4b22a73a5b912ada8cc010b5ec9e1019b8e2d4a6b0f38e87280600f8e921dee96aaca
+  checksum: 1edb032284c127756ad4b99be5da55407dac311afa05f534ad882971088efef6c1debd339f2d9783a572fe17f97d206dbeb9b5b0cdd4e7599cd86a3485e45ad0
   languageName: node
   linkType: hard
 
@@ -8305,9 +8305,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^3.23.4":
-  version: 3.23.4
-  resolution: "zod@npm:3.23.4"
-  checksum: 29117ce59f16af155d9a3aab024d18e858e55b4b51c1f848772516ec6f019e617a0cdaf4c6e20f15154360a9f4c160056aba34502ec68072c8f0af31dfd653d6
+"zod@npm:^3.23.6":
+  version: 3.23.6
+  resolution: "zod@npm:3.23.6"
+  checksum: a3b0ea904f0615c67ef01ab3abc4e917d3bb87d46fc39515bcb68e59450b54f175dc9d29ddc7e13217dd456099729afa0b76609db135ca158e3ccebcac6153d9
   languageName: node
   linkType: hard
