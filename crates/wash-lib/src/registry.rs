@@ -165,11 +165,12 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
         .collect::<Vec<_>>())
 }
 
+/// Pushes the artifact to the given repo and returns a tuple containing the tag (if one was set) and the digest
 pub async fn push_oci_artifact(
     url: String,
     artifact: impl AsRef<Path>,
     options: OciPushOptions,
-) -> Result<()> {
+) -> Result<(Option<String>, String)> {
     let image: Reference = url.to_lowercase().parse()?;
 
     if image.tag().unwrap() == "latest" && !options.allow_latest {
@@ -230,11 +231,12 @@ pub async fn push_oci_artifact(
     };
 
     let manifest = OciImageManifest::build(&layer, &config, options.annotations);
+    let digest = manifest.config.digest.clone();
 
     client
         .push(&image, &layer, config, &auth, Some(manifest))
         .await?;
-    Ok(())
+    Ok((image.tag().map(ToString::to_string), digest))
 }
 
 /// Helper function to determine artifact type and validate that it is
