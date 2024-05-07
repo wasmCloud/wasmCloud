@@ -86,3 +86,11 @@ pub struct PullCommandOutput {
     pub success: bool,
     pub file: String,
 }
+
+/// JSON output representation of the `wash label` command
+#[derive(Debug, Deserialize)]
+pub struct LabelHostCommandOutput {
+    pub success: bool,
+    pub deleted: bool,
+    pub processed: Vec<(String, String)>,
+}
