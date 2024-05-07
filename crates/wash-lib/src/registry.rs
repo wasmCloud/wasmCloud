@@ -30,7 +30,7 @@ const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 pub const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
 /// Additional options for pulling an OCI artifact
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct OciPullOptions {
     /// The digest of the content you expect to receive. This is used for validation purposes only
     pub digest: Option<String>,

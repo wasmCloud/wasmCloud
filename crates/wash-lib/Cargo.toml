@@ -15,7 +15,7 @@ repository.workspace = true
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["start", "parser", "nats", "plugin"]
+default = ["start", "parser", "nats", "plugin", "run"]
 start = ["semver"]
 parser = ["config", "semver"]
 cli = [
@@ -31,6 +31,7 @@ cli = [
 nats = ["async-nats", "wadm"]
 docs = ["wasmcloud-component-adapters/docs"]
 plugin = ["wasmtime", "wasmtime-wasi", "wasmtime-wasi-http"]
+run = ["wasmtime", "wasmtime-wasi"]
 
 [package.metadata.docs.rs]
 features = ["start", "parser", "nats", "docs"]
