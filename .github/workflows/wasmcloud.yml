@@ -404,57 +404,83 @@ jobs:
         run: nix profile install --inputs-from . 'nixpkgs#buildah'
 
       - name: Build `${{ matrix.bin }}` image
-        run: nix run -L .#build-${{ matrix.bin }}-oci-debian ${{ matrix.bin }}
+        run: |
+          nix run -L .#build-${{ matrix.bin }}-oci-debian ${{ matrix.bin }}:debian
+          nix run -L .#build-${{ matrix.bin }}-oci-wolfi ${{ matrix.bin }}:wolfi
 
       - name: Test `${{ matrix.bin }}` image
         run: |
-          buildah push ${{ matrix.bin }}:amd64 docker-daemon:${{ matrix.bin }}:test
-          docker run --rm ${{ matrix.bin }}:test ${{ matrix.bin }} --version
+          buildah push ${{ matrix.bin }}:debian docker-daemon:${{ matrix.bin }}:debian-test
+          buildah push ${{ matrix.bin }}:wolfi docker-daemon:${{ matrix.bin }}:wolfi-test
+          docker run --rm ${{ matrix.bin }}:debian-test ${{ matrix.bin }} --version
+          docker run --rm ${{ matrix.bin }}:wolfi-test ${{ matrix.bin }} --version
 
       - name: Push `${{ matrix.bin }}` commit rev tag
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi
 
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}-wolfi ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}-wolfi ${{ matrix.bin }} --version
 
       - name: Push `${{ matrix.bin }}` `canary` tag
         if: github.ref == 'refs/heads/main'
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary-wolfi ${{ matrix.bin }} --version
 
       - name: Push `${{ matrix.bin }}` version tag
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}-wolfi ${{ matrix.bin }} --version
 
       - name: Push `${{ matrix.bin }}` `latest` tag
         if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !steps.ctx.outputs.prerelease
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: |
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
-          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:debian docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
+          buildah manifest push --all --format 'v2s2' ${{ matrix.bin }}:wolfi docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi
 
           docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
           docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
           docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
+          docker run --rm ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
+          docker run --rm ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
+          docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest-wolfi ${{ matrix.bin }} --version
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')

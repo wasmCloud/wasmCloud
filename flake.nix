@@ -277,6 +277,30 @@
             sha256 = "sha256-k+x4aUW10YAQ7X20xxJxqW57y2k20sc4e7unh/kqQZQ=";
           };
 
+          pullWolfi = {
+            imageDigest,
+            sha256,
+          }:
+            pkgs.dockerTools.pullImage {
+              inherit
+                imageDigest
+                sha256
+                ;
+
+              imageName = "cgr.dev/chainguard/wolfi-base";
+              finalImageTag = "latest";
+              finalImageName = "cgr.dev/chainguard/wolfi-base";
+            };
+
+          wolfi.aarch64 = pullWolfi {
+            imageDigest = "sha256:e8c9aae5f4f1cddf9ed0449f626772a55a1a45e86155698c9d6e34c862b79736";
+            sha256 = "0wjpvlnashghp5d9vxj9s6685rvahxvd7ygndsjmq3nr9h1xbw2x";
+          };
+          wolfi.x86_64 = pullWolfi {
+            imageDigest = "sha256:4e00b653d9ad1cc7c82856d827ec003e496747d608fd842196fc888f39ddc59d";
+            sha256 = "1rbm5afznmbhrx8xhkx7pbxkjmw1aqxfh3wwm7sdf9w9n1qbjbw7";
+          };
+
           buildImage = {
             fromImage ? null,
             pkg,
@@ -351,6 +375,16 @@
             fromImage = debian.x86_64;
             architecture = "amd64";
           };
+          wash-aarch64-unknown-linux-musl-oci-wolfi = buildWashImage {
+            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            fromImage = wolfi.aarch64;
+            architecture = "arm64";
+          };
+          wash-x86_64-unknown-linux-musl-oci-wolfi = buildWashImage {
+            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            fromImage = wolfi.x86_64;
+            architecture = "amd64";
+          };
 
           buildWasmcloudImage = {
             pkg,
@@ -376,6 +410,16 @@
             fromImage = debian.x86_64;
             architecture = "amd64";
           };
+          wasmcloud-aarch64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
+            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            fromImage = wolfi.aarch64;
+            architecture = "arm64";
+          };
+          wasmcloud-x86_64-unknown-linux-musl-oci-wolfi = buildWasmcloudImage {
+            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            fromImage = wolfi.x86_64;
+            architecture = "amd64";
+          };
 
           build-wash-oci-debian = pkgs.writeShellScriptBin "build-wash-oci-debian" ''
             set -xe
@@ -391,6 +435,20 @@
             }
             build "''${1:-wash:debian}"
           '';
+          build-wash-oci-wolfi = pkgs.writeShellScriptBin "build-wash-oci-wolfi" ''
+            set -xe
+
+            build() {
+              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-aarch64-unknown-linux-musl-oci-wolfi}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-aarch64-unknown-linux-musl-oci-wolfi}
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-x86_64-unknown-linux-musl-oci-wolfi}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-x86_64-unknown-linux-musl-oci-wolfi}
+            }
+            build "''${1:-wash:wolfi}"
+          '';
           build-wasmcloud-oci-debian = pkgs.writeShellScriptBin "build-wasmcloud-oci-debian" ''
             set -xe
 
@@ -405,19 +463,39 @@
             }
             build "''${1:-wasmcloud:debian}"
           '';
+          build-wasmcloud-oci-wolfi = pkgs.writeShellScriptBin "build-wasmcloud-oci-wolfi" ''
+            set -xe
+
+            build() {
+              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-wolfi}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-wolfi}
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-wolfi}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-wolfi}
+            }
+            build "''${1:-wasmcloud:wolfi}"
+          '';
         in
           packages
           // {
             inherit
               build-wash-oci-debian
+              build-wash-oci-wolfi
               build-wasmcloud-oci-debian
+              build-wasmcloud-oci-wolfi
               wash-aarch64-unknown-linux-musl-oci-debian
+              wash-aarch64-unknown-linux-musl-oci-wolfi
               wash-x86_64-unknown-linux-musl-oci-debian
+              wash-x86_64-unknown-linux-musl-oci-wolfi
               wasmcloud-aarch64-unknown-linux-gnu-fhs
               wasmcloud-aarch64-unknown-linux-musl-oci-debian
+              wasmcloud-aarch64-unknown-linux-musl-oci-wolfi
               wasmcloud-riscv64gc-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-gnu-fhs
               wasmcloud-x86_64-unknown-linux-musl-oci-debian
+              wasmcloud-x86_64-unknown-linux-musl-oci-wolfi
               ;
 
             rust = hostRustToolchain;
