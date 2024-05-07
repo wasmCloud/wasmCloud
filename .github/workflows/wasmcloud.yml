@@ -731,6 +731,7 @@ jobs:
         if: ${{ inputs.do-release }}
         env:
           GH_TOKEN: ${{ github.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_PUBLISH_TOKEN }}
         run: |
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
