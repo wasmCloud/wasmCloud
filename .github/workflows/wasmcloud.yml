@@ -18,7 +18,7 @@ on:
           - wascap
       do-release:
         type: boolean
-        description: check this box to push changes and create release directly, leave unchecked to create a pull request with changes for verification
+        description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
   push:
     branches:
       - main
@@ -712,4 +712,4 @@ jobs:
         run: |
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
-          cargo smart-release --update-crates-index --execute --no-changelog-preview ${{ inputs.crate }}
+          cargo smart-release --update-crates-index --execute --no-changelog-preview --no-changelog ${{ inputs.crate }}
