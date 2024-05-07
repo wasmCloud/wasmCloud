@@ -11,13 +11,14 @@ on:
         options:
           - wasmcloud
           - wasmcloud-core
+          - wasmcloud-test-util
           - wasmcloud-tracing
           - wash-cli
           - wash-lib
           - wascap
-      execute:
+      do-release:
         type: boolean
-        description: check this box to release, leave unchecked to compute changes and PR
+        description: check this box to push changes and create release directly, leave unchecked to create a pull request with changes for verification
   push:
     branches:
       - main
@@ -687,15 +688,17 @@ jobs:
       - name: install smart-release
         env:
           RUSTFLAGS: ''
+        # NOTE(brooksmtownsend): Installing from my fork as updating workspace dependencies is not yet supported in the mainline
+        # PR to follow: https://github.com/Byron/cargo-smart-release/pull/17
         run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
       - name: dry run release
-        if: ${{ !inputs.execute }}
+        if: ${{ !inputs.do-release }}
         run: |
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
           cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.crate }}
       - name: Create Pull Request
-        if: ${{ !inputs.execute }}
+        if: ${{ !inputs.do-release }}
         uses: peter-evans/create-pull-request@v6
         with:
           signoff: true
@@ -703,7 +706,7 @@ jobs:
           commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
 
       - name: release
-        if: ${{ inputs.execute }}
+        if: ${{ inputs.do-release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
