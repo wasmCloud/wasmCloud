@@ -3,6 +3,6 @@ version = "0.1.1"
 language = "rust"
 type = "component"
 
-[actor]
+[component]
 wit_world = "component"
 wasm_target = "wasm32-wasi-preview2"

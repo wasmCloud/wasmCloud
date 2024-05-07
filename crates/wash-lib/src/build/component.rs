@@ -58,7 +58,7 @@ pub fn build_actor(
                     component_config
                         .wit_world
                         .as_ref()
-                        .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
+                        .context("missing `wit_world` in wasmcloud.toml ([component] section) for creating preview1 or preview2 components")?,
                     &actor_wasm_path,
                     &actor_wasm_path,
                 )?;
@@ -277,7 +277,7 @@ fn build_tinygo_actor(
             &output_dir,
             common_config.path.join("wit"),
             component_config.wit_world.as_ref().context(
-                "missing `wit_world` in wasmcloud.toml ([actor] section) to run go bindgen generate",
+                "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
             )?,
         )
                 .context("generating golang bindgen code failed")?;

@@ -3,7 +3,7 @@ language = "python"
 type = "actor"
 version = "0.1.0"
 
-[actor]
+[component]
 # NOTE: The that the 'build' directory must be available, otherwise the build command will fail.
 build_command = "componentize-py -d ./wit -w hello componentize app -o build/http_hello_world.wasm"
 build_artifact = "build/http_hello_world.wasm"
