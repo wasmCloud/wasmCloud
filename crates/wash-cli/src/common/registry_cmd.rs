@@ -151,7 +151,7 @@ pub async fn registry_push(
 
     let annotations = input_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
 
-    push_oci_artifact(
+    let (maybe_tag, digest) = push_oci_artifact(
         artifact_url.clone(),
         cmd.artifact,
         OciPushOptions {
@@ -167,12 +167,17 @@ pub async fn registry_push(
 
     spinner.finish_and_clear();
 
-    let mut map = HashMap::new();
-    map.insert("url".to_string(), json!(artifact_url));
-    Ok(CommandOutput::new(
-        format!("{SHOWER_EMOJI} Successfully validated and pushed to {artifact_url}"),
-        map,
-    ))
+    let mut map = HashMap::from_iter([
+        ("url".to_string(), json!(artifact_url)),
+        ("digest".to_string(), json!(digest)),
+    ]);
+    let text = if let Some(tag) = maybe_tag {
+        map.insert("tag".to_string(), json!(tag));
+        format!("{SHOWER_EMOJI} Successfully pushed {artifact_url}\n{tag}: digest: {digest}")
+    } else {
+        format!("{SHOWER_EMOJI} Successfully pushed {artifact_url}\ndigest: {digest}")
+    };
+    Ok(CommandOutput::new(text, map))
 }
 
 fn resolve_artifact_ref(
