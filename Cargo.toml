@@ -224,7 +224,7 @@ opentelemetry-otlp = { version = "0.14", default-features = false }
 opentelemetry_sdk = { version = "0.21", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 path-clean = { version = "1", default-features = false }
-provider-archive = { version = "^0.10.1", path = "./crates/provider-archive", default-features = false }
+provider-archive = { version = "^0.10.2", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
 redis = { version = "0.25", default-features = false }

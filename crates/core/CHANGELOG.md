@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-6abbcac954a9834d871ea69b8a40bd79d258c0f1/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
 <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
 
 ### Chore
 
@@ -113,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-1829b27213e836cb347a542e9cdc771c74427892/> allow namespaces with slashes
  - <csr-id-7502bcb569420e2d402bf66d8a5eff2e6481a80b/> look for invocation responses from providers
  - <csr-id-a896f05a35824f5e2ba16fdb1c1f5217c52a5388/> enable `std` anyhow feature
+ - <csr-id-8fc13bfee8927e9002014ead06762c8a32ed4356/> compile with default features
 
 ### Other
 
@@ -183,8 +185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 48 commits contributed to the release over the course of 253 calendar days.
- - 47 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 50 commits contributed to the release over the course of 253 calendar days.
+ - 48 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -194,6 +196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Compile with default features ([`8fc13bf`](https://github.com/wasmCloud/wasmCloud/commit/8fc13bfee8927e9002014ead06762c8a32ed4356))
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
     - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))

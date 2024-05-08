@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.21.0 (2024-05-08)
 
+<csr-id-7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435/>
+<csr-id-468bad52bab3b907d0380cdf2c151298688b50d1/>
+<csr-id-d3a837c839d1a340daf72315833a3e2cbd1db0f3/>
+<csr-id-07a78ec397ec9bd3b742490f8f36ac4db854ca9f/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-c074106584ab5330a0ac346b5a51676bd966aa3c/>
+<csr-id-bfeabbefa64a969f48c05f02b336ef229d0f5b2c/>
+<csr-id-57446f39762be82821bd38b6c4bd16471a9c3095/>
+<csr-id-14fd9b1ad8fdbce8efd6cc9ddce52ea08ef264b7/>
+<csr-id-9fdc7e52c2cfbd10fab08d34d3a7e8047eaa5432/>
+
 ### Chore
 
  - <csr-id-7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435/> update [actor] to [component]
@@ -14,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-d3a837c839d1a340daf72315833a3e2cbd1db0f3/> rename actor->component build output
  - <csr-id-07a78ec397ec9bd3b742490f8f36ac4db854ca9f/> add link get alias
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### Other
+
+ - <csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/> release and update CHANGELOG
 
 ### New Features
 
@@ -90,9 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 27 commits contributed to the release over the course of 20 calendar days.
+ - 29 commits contributed to the release over the course of 20 calendar days.
  - 20 days passed between releases.
- - 27 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 28 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -102,6 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Adds digest and tag to output of `wash push` ([`cbac8fe`](https://github.com/wasmCloud/wasmCloud/commit/cbac8fef75bd8dda2554bd1665e75a60059ba4c3))
     - Change plugins to support arbitrary path access ([`c074106`](https://github.com/wasmCloud/wasmCloud/commit/c074106584ab5330a0ac346b5a51676bd966aa3c))
     - Update [actor] to [component] ([`7ca9a3e`](https://github.com/wasmCloud/wasmCloud/commit/7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435))
@@ -133,6 +150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.20.0 (2024-04-17)
 
+<csr-id-cbb7f0c96cc14af188e84f4e2b8aba412e4ce3b0/>
+
 ### Chore
 
  - <csr-id-cbb7f0c96cc14af188e84f4e2b8aba412e4ce3b0/> bump to v0.20.0
@@ -162,6 +181,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.20.0-alpha.2 (2024-04-13)
+
+<csr-id-9fb05a3d56aed3b0657d718a3cb63e173d27fbed/>
+<csr-id-3611242e0712d52e1d7371b9833757f63e625655/>
 
 ### Chore
 
@@ -221,6 +243,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.20.0-alpha.1 (2024-04-09)
+
+<csr-id-f6e5f0e804d4a7eced93778b739bf58c30ad75e7/>
+<csr-id-0e0acd728df340f4f4ae0ea31e47abaecb5b3907/>
+<csr-id-fe50175294867bc8c9d109d8d610b0453fd65a1c/>
+<csr-id-3a96d288714b14f1d8bab831ef4d0f9533204f56/>
+<csr-id-65ff33fe473425fffb320309921dfbdcb7c8f868/>
+<csr-id-ddf25d917dc241d6c5468796bca97a4c70b0d1d2/>
+<csr-id-2e93989bf14b223b689f77cb4139275094debae4/>
+<csr-id-c1cf682972ac9e6fa544ed79857c18d2b62ccfb8/>
+<csr-id-b6dd820c45f7ea0f62c8cb91adb7074c5e8c0113/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-9018c03b0bd517c4c2f7fe643c4d510a5823bfb8/>
+<csr-id-a5f9d1284d78e2dd1db1815ee2daa9d8861bd868/>
+<csr-id-005b7073e6896f68aa64348fef44ae69305acaf7/>
 
 ### Chore
 
@@ -322,6 +358,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.19.0 (2024-03-17)
 
+<csr-id-30651406b56838afc9620f5fe5019a40a8908a48/>
+<csr-id-888400046df8a1a636f42c9fb498d6d42331bcf2/>
+<csr-id-0eeb815d9363f2979a2128593b52b3c3fd3cb699/>
+<csr-id-37fbe7f3bf41ce6d290f0b28ecb7d75b7595f961/>
+
 ### Chore
 
  - <csr-id-30651406b56838afc9620f5fe5019a40a8908a48/> bump to 0.19
@@ -422,6 +463,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.18.1 (2024-02-14)
 
+<csr-id-2ce174ce1101c2267272ed24ada64e40104d40f7/>
+
 ### Other
 
  - <csr-id-2ce174ce1101c2267272ed24ada64e40104d40f7/> v0.18.1
@@ -445,6 +488,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.18.0 (2024-02-13)
+
+<csr-id-d0131409087f6a461072b83d22e4263653eca8ba/>
+<csr-id-7d263b9930a710b4d809372a8844a365a9bb2b73/>
+<csr-id-18dfd452d798513c7c4b56b26191a61cd913297e/>
 
 ### Chore
 
@@ -498,6 +545,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.17.0 (2024-01-26)
+
+<csr-id-1793dc9296b7e161a8efe42bd7e5717bd6687da8/>
+<csr-id-7f700611a60da3848afa9007bc0d2a1b4fcab946/>
+<csr-id-e0093e594fed3740bec38259c9b0c499eedf9e00/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
 
 ### Chore
 
@@ -594,6 +646,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.16.0 (2023-12-28)
+
+<csr-id-c12eff1597e444fcd926dbfb0abab547b2efc2b0/>
+<csr-id-b0fdf60a33d6866a92924b02e5e2ae8544e421a5/>
+<csr-id-fc10788b9443b374c973123ba71d5b06e6c62a12/>
+<csr-id-ff2e832af25c27a297435cc64d48768df5469a78/>
+<csr-id-25af017f69652a98b8969609e2854636e2bc7553/>
+<csr-id-7bc207bf24873e5d916edf7e8a4b56c7ed04b9a7/>
+<csr-id-547ed475038a7322aae12183bafc8a7e25aa8753/>
+<csr-id-9476b9100efc86c06be614bb6c263ff0ee2354d6/>
+<csr-id-e1c00a3cfa6a7f226f19f6ba082d71fe70f3f5cb/>
+<csr-id-087b5c326886465a3370affdbbcfcb9d5628aaf1/>
+<csr-id-75c0739a4db4264996a7fa87ce3ae39f56780759/>
+<csr-id-3e744b553abeff5beb7e71116ccec7c164801353/>
+<csr-id-189fdf8695e62a8ba842322ccd7ff30e45dbfb5f/>
+<csr-id-44509720d3eee62c05237d86d5f4baef55e35809/>
+<csr-id-cfc002bf206e2507848c1b277a7cce5231c324c9/>
+<csr-id-7de31820034c4b70ab6edc772713e64aafe294a9/>
+<csr-id-57d014fb7fe11542d2e64068ba86e42a19f64f98/>
+<csr-id-4e9bae34fe95ecaffbc81fd452bf29746b4e5856/>
+<csr-id-e58d3579b9e3cd2637d8dcbe37038172d3ca4c22/>
 
 ### Chore
 
@@ -711,6 +783,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.15.0 (2023-11-21)
 
+<csr-id-000299c4d3e8488bca3722ac40695d5e78bf92c8/>
+<csr-id-4adbf0647f1ef987e92fbf927db9d09e64d3ecd8/>
+<csr-id-267d24dcdc871bbc85c0adc0d102a632310bb9f0/>
+
 ### Documentation
 
  - <csr-id-20ffecb027c225fb62d60b584d6b518aff4ceb51/> update wash URLs
@@ -764,6 +840,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.14.0 (2023-11-14)
+
+<csr-id-7166f540aa4c75a379720da8120d91eb1c06be8f/>
+<csr-id-39a9e218418a0662de4edabbc9078268ba095842/>
+<csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/>
+<csr-id-9c8abf3dd1a942f01a70432abb2fb9cfc4d48914/>
+<csr-id-d43d300929465a640e03e4805eb2583262e4642d/>
+<csr-id-cbc9ed7008f8969312534e326cf119dbbdf89aaa/>
+<csr-id-21db64c7a2fd0f07341ac795795a1615d37eb521/>
+<csr-id-248e9d3ac60fdd2b380723e9bbaf1cc8023beb44/>
+<csr-id-cb4d311c6d666e59c22199f950757abc65167f53/>
+<csr-id-7d6155e62512e6909379bbed5e73abe219838e4b/>
+<csr-id-9bf9accbcefa3e852c3b62290c14ee5e71731530/>
+<csr-id-30b835d82555967b5abfc7bf3f9d000f87ed5043/>
+<csr-id-9da236f1e82ca086accd30bf32d4dd8a4829a1c9/>
+<csr-id-e2927c69e2f6269b14a2cb0cf6df5db4b9f5b25c/>
+<csr-id-42ccacee8bd3cddf4b4354e10aabd0a345b3c62f/>
 
 ### Chore
 
@@ -841,6 +933,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.13.0 (2023-11-01)
 
+<csr-id-ee51a176a00b3f8fe03e0d3212a9da6dbfd6044f/>
+<csr-id-a1c3b9d86db14f31ef7fbebeb30e8784f974df6f/>
+<csr-id-007660e96ad7472918bc25baf9d52d60e5230823/>
+<csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/>
+<csr-id-5ef2c4c924dbc2d93a75f99b5975b321e1bad75f/>
+<csr-id-9caf89a7d15a7d8ec80a490fe0f4106089c77728/>
+<csr-id-5ae8fd8bad3fadb5b97be28d5e163b621938a272/>
+<csr-id-70b20a12553e84697ffe9f8dbf32219162bdf946/>
+<csr-id-c44f657e3bdc1e4a6679b3cc687b7039fb729f34/>
+<csr-id-016c37812b8cf95615a6ad34ee49de669c66886b/>
+<csr-id-bb76aec405e437c249d385e3492cb67932960125/>
+<csr-id-bbf0b1a6074108a96d9534500c97c8ad5ed13dd6/>
+<csr-id-10ede9e84e537fecbad3cbbb09960506b6359ef4/>
+<csr-id-a1d77b0e12ebb7b4b946004b61a208482e599ce4/>
+<csr-id-2aa4b041af6195ff4dbd6bf7e04f6cba281585b9/>
+<csr-id-621e449a1e70f9216016b11a6ff50c7a1def10e1/>
+<csr-id-b3965d7bb04e70da967bc393b9455c4c1da6b20b/>
+<csr-id-4a4c148f2e1ddb3eba535b40575265f51968ffaa/>
+<csr-id-b9c23d959c5fb0a1854b8f90db6a0a0e4b1cdda9/>
+<csr-id-f582dc07ea768f9b52b13c7d5c618c36e4ff0a0c/>
+<csr-id-0f5add0f6e2a27d76ee63c1e387929474c93751e/>
+<csr-id-37978577b218cf178fa795fb9e5326df4bd52897/>
+<csr-id-e67ded670e80a19e08bcb8e6b2a25f696792ef66/>
+<csr-id-f4a9cd6d2f1c29b0cc7eb4c3509114ed81eb7983/>
+<csr-id-a4f67e5974c6bad70cd2d473fea7ab24371f922f/>
+<csr-id-ae65e85bf4b8bcbc215d48664fcf6941d25de165/>
+<csr-id-0ed956f457a94ad390b847a46df9911e5ebb35a9/>
+<csr-id-80b104011536c03ef3c1c58a1440992defae1351/>
+<csr-id-52ef5b6b1b6b01bc5e7a2c8fe3cbb2a08d4ad864/>
+<csr-id-5af1c68bf86b62b4e2f81cbf1cc9ca1d5542ac37/>
+<csr-id-372e81e2da3a60ee8cbf3f2525bf27284dc62332/>
+<csr-id-571a25ddb7d8f18b2bb1d3f6b22401503d31f719/>
+<csr-id-ee29478631ba0df2d67a00e3f1336b4c40099489/>
+<csr-id-ddd3b072e8ec4236936c2cb53af1521ab1abeded/>
+<csr-id-1495c8f3e6fdda67a90fc821a731072b72fc4062/>
+<csr-id-a1e8d3f09e039723d28d738d98b47bce54e4450d/>
+<csr-id-d53bf1b5e3be1cd8d076939cc80460305e30d8c5/>
+
 ### Chore
 
  - <csr-id-ee51a176a00b3f8fe03e0d3212a9da6dbfd6044f/> release wash-lib-v0.13.0
@@ -860,6 +990,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-2aa4b041af6195ff4dbd6bf7e04f6cba281585b9/> fix clippy warnings
 
 ### New Features
+
+<csr-id-4144f711ad2056e9334e085cbe08663065605b0c/>
+<csr-id-bb454cb3ae1ff05d8381ba2ea1f48b461d059474/>
+<csr-id-02b1f03e05c4ffc7b62d2438752344cd2c805d3f/>
+<csr-id-f9658287e6bdb77a6991e827454951a0711bce42/>
+<csr-id-e9fe020a0906cb377f6ea8bd3a9879e5bad877b7/>
+<csr-id-8c96789f1c793c5565715080b84fecfbe0653b43/>
+<csr-id-e58c6a60928a7157ffbbc95f9eabcc9cae3db2a7/>
+<csr-id-6923ce7efb721f8678c33f42647b87ea33a7653a/>
+<csr-id-4daf51be422d395bc0142d62b8d59060b89feafa/>
+<csr-id-128f7603c67443f23e76c3cb4bd1468ffd8f5462/>
+<csr-id-2a6c401834b4cb55ef420538e15503b98281eaf1/>
+<csr-id-24bba484009be9e87bfcbd926a731534e936c339/>
+<csr-id-12cae48ff806b26b6c4f583ae00337b21bc65d3c/>
+<csr-id-84b95392993cbbc65da36bc8b872241cce32a63e/>
+<csr-id-a62b07b8ff321c400c6debefdb6199e273445490/>
+<csr-id-d0659d346a6acadf81ce8dd952262f372c738e8d/>
+<csr-id-b1bf6b1ac7851dc09e6757d7c2bde4558ec48098/>
 
  - <csr-id-810e220173f1ee7bf96a9ade650d26c2cd4dcb6c/> apply tags in actor config during signing
    The signing process enabled by the wasmCloud ecosystem can
@@ -896,71 +1044,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-6405f6ce45d43850ca427c4d80ca50369ee10405/> add support for Android releases
  - <csr-id-78b99fde8606febf59e30f1d12ac558b29d425bf/> set default to Rust host
    - update paths to release binary
-   - allow-file-upload default bug
-   - mention dashboard ui cmd
- - <csr-id-4144f711ad2056e9334e085cbe08663065605b0c/> build wasi preview components from wash
- - <csr-id-bb454cb3ae1ff05d8381ba2ea1f48b461d059474/> add p2 target to wasmcloud.toml
- - <csr-id-02b1f03e05c4ffc7b62d2438752344cd2c805d3f/> first check that git command is installed
- - <csr-id-f9658287e6bdb77a6991e827454951a0711bce42/> return an explicit error when the build tools don't exist
- - <csr-id-e9fe020a0906cb377f6ea8bd3a9879e5bad877b7/> add wash dev command
- - <csr-id-8c96789f1c793c5565715080b84fecfbe0653b43/> Adds a new experimental `wash capture` command
-   This one is very experimental, so I didn't even add it to the top
-   level help text, but it is all manually tested and good to go
- - <csr-id-e58c6a60928a7157ffbbc95f9eabcc9cae3db2a7/> Adds `wash spy` command with experimental flag support
- - <csr-id-6923ce7efb721f8678c33f42647b87ea33a7653a/> flatten multiple commands into wash get
- - <csr-id-4daf51be422d395bc0142d62b8d59060b89feafa/> flatten wash reg push/pull into wash push/pull
- - <csr-id-128f7603c67443f23e76c3cb4bd1468ffd8f5462/> flatten `wash ctl stop` into `wash stop`
- - <csr-id-2a6c401834b4cb55ef420538e15503b98281eaf1/> flatten `wash ctl start` into `wash start`
- - <csr-id-24bba484009be9e87bfcbd926a731534e936c339/> flatten `wash ctl link` into `wash link`
- - <csr-id-12cae48ff806b26b6c4f583ae00337b21bc65d3c/> consume new wascap and hashing
-   This updates to a newer version of wasmparser
-   which should fix attempting to sign newer wasi modules.
-   
-   The integration test caught an issue introduced a long
-   time ago with wascap v0.5.0 and a very old module
-   signed with that version from way back when.
-   v0.9.2 of wascap fixes this issue in our integration
-   tests by correctly removing the old metadata.
-   
-   Bump wascap - looks small but NOTE:
-   
-   The hashes computed with v0.9.0 and later of wascap
-   are not compatible with the hashes signed by prior versions.
-   As a result, modules signed with older versions of wascap
-   will not have their module hashes validated
-   (they'll be ignored).
-   
-   Once the module has been signed with 0.9.0 or greater,
-   it will go back to having its module hash verified.
- - <csr-id-84b95392993cbbc65da36bc8b872241cce32a63e/> Moves claims and registry code into wash lib
-   Sorry for the big PR here, but due to a bunch of codependent code,
-   I had to move a bunch of stuff at once. There are two main threads
-   to this PR. First, I noticed that the claims code is all CLI specific,
-   but it is likely that anyone building a CLI will not want to rewrite that
-   again. If you are doing this purely in code, you can just use the
-   wascap library. To make this work, I started added the CLI specific stuff
-   to the `cli` module of wash lib. There will probably be other things we
-   add to it as we finish this refactor
-   
-   Second, this moves the reusable registry bits into its own module, which
-   is super handy even for those not doing a CLI as it avoids direct
-   interaction with the lower level OCI crates
- - <csr-id-a62b07b8ff321c400c6debefdb6199e273445490/> Adds new keys module to wash-lib
-   Please note that this introduces one small breaking change to output
-   that removes the `.nk` suffix from the list of keys. However, there is
-   backward compatibility for providing <key_name>.nk to `wash keys get`
-   so it will still function as it did previously. This change was
-   specifically made because the key name is more important than the suffix.
-   If desired, I can back out that change, but it seemed to make more sense
-   to make it less like a wash-specific `ls` of a directory
- - <csr-id-d0659d346a6acadf81ce8dd952262f372c738e8d/> Adds new context tests
- - <csr-id-b1bf6b1ac7851dc09e6757d7c2bde4558ec48098/> Adds drain command to wash lib
-   This also starts the process of creating a `config` module that I'll
-   continue to update as I push forward the other PRs. Please note that
-   this is the first of many PRs. I plan on doing each command as a separate
-   PR instead of a mega PR
+- allow-file-upload default bug
+- mention dashboard ui cmd
 
 ### Bug Fixes
+
+<csr-id-2e69e12d4b78f5ea7710ba12226345440e7541ef/>
+<csr-id-5cc6ebe2b8596b5fb1a56abb4d17e4e3f104b110/>
 
  - <csr-id-ef3e4e584fef4d597cab0215fdf3cfe864f701e9/> Configure signing keys directory for build cmd
    The keys directory can be specified via wasmcloud.toml, CLI arguments (`--keys-directory`), or environment variable (`WASH_KEYS`).
@@ -990,12 +1080,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    is published we should yank 0.17.0
  - <csr-id-656ea644696ea97bdafdbf8d5fd4a5e736593fc8/> use lib.name from cargo.toml for rust wasm binary name
    * fix(rust): read wasm binary name from cargo.toml explicitly
- - <csr-id-2e69e12d4b78f5ea7710ba12226345440e7541ef/> Makes sure that wash downloads different versions of wasmcloud
-   This now downloads different versions to different directories. Also did
-   a little bit of cleanup with some clippy warnings in the tests and bumping
-   NATS to a later version
- - <csr-id-5cc6ebe2b8596b5fb1a56abb4d17e4e3f104b110/> grant execute permission to `mac_listener` for hot-reloading
-   * fix(wash-up): grant execute permission to `mac_listener` for hot-reloading
+* fix(wash-up): grant execute permission to `mac_listener` for hot-reloading
 
 ### Other
 
@@ -1088,11 +1173,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features (BREAKING)
 
+<csr-id-acdcd957bfedb5a86a0420c052da1e65d32e6c23/>
+
  - <csr-id-7851a53ab31273b04df8372662198ac6dc70f78e/> add scale and update cmds
  - <csr-id-bb69ea644d95517bfdc38779c2060096f1cec30f/> update to start/stop/scale for concurrent instances
  - <csr-id-90f79447bc0b1dc7efbef2b13af9cf715e1ea1f0/> add par command support to wash-lib
    * Added par support to wash-lib
- - <csr-id-acdcd957bfedb5a86a0420c052da1e65d32e6c23/> allow get inventory to query the only host
 
 ### Commit Statistics
 
@@ -1328,4 +1414,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Merge pull request #317 from ricochet/chore/clap-v4 ([`c6ab554`](https://github.com/wasmCloud/wasmCloud/commit/c6ab554fc18de4525a6a90e8b94559f704e5c0b3))
     - Fix clippy warnings ([`2aa4b04`](https://github.com/wasmCloud/wasmCloud/commit/2aa4b041af6195ff4dbd6bf7e04f6cba281585b9))
 </details>
+
+<csr-unknown>
+ build wasi preview components from wash add p2 target to wasmcloud.toml first check that git command is installed return an explicit error when the build tools don’t exist add wash dev command Adds a new experimental wash capture commandThis one is very experimental, so I didn’t even add it to the toplevel help text, but it is all manually tested and good to go Adds wash spy command with experimental flag support flatten multiple commands into wash get flatten wash reg push/pull into wash push/pull flatten wash ctl stop into wash stop flatten wash ctl start into wash start flatten wash ctl link into wash link consume new wascap and hashingThis updates to a newer version of wasmparserwhich should fix attempting to sign newer wasi modules.The integration test caught an issue introduced a longtime ago with wascap v0.5.0 and a very old modulesigned with that version from way back when.v0.9.2 of wascap fixes this issue in our integrationtests by correctly removing the old metadata.Bump wascap - looks small but NOTE:The hashes computed with v0.9.0 and later of wascapare not compatible with the hashes signed by prior versions.As a result, modules signed with older versions of wascapwill not have their module hashes validated(they’ll be ignored).Once the module has been signed with 0.9.0 or greater,it will go back to having its module hash verified. Moves claims and registry code into wash libSorry for the big PR here, but due to a bunch of codependent code,I had to move a bunch of stuff at once. There are two main threadsto this PR. First, I noticed that the claims code is all CLI specific,but it is likely that anyone building a CLI will not want to rewrite thatagain. If you are doing this purely in code, you can just use thewascap library. To make this work, I started added the CLI specific stuffto the cli module of wash lib. There will probably be other things weadd to it as we finish this refactorSecond, this moves the reusable registry bits into its own module, whichis super handy even for those not doing a CLI as it avoids directinteraction with the lower level OCI crates Adds new keys module to wash-libPlease note that this introduces one small breaking change to outputthat removes the .nk suffix from the list of keys. However, there isbackward compatibility for providing <key_name>.nk to wash keys getso it will still function as it did previously. This change wasspecifically made because the key name is more important than the suffix.If desired, I can back out that change, but it seemed to make more senseto make it less like a wash-specific ls of a directory Adds new context tests Adds drain command to wash libThis also starts the process of creating a config module that I’llcontinue to update as I push forward the other PRs. Please note thatthis is the first of many PRs. I plan on doing each command as a separatePR instead of a mega PR Makes sure that wash downloads different versions of wasmcloudThis now downloads different versions to different directories. Also dida little bit of cleanup with some clippy warnings in the tests and bumpingNATS to a later version grant execute permission to mac_listener for hot-reloading allow get inventory to query the only host<csr-unknown/>
 

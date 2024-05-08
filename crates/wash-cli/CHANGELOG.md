@@ -7,11 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.28.0 (2024-05-08)
 
+<csr-id-4dc6c775d7780f6811435de0f2cd5401ce21d675/>
+<csr-id-d637a8619cac775b6df7f5570c9ba51c948ef36d/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-c074106584ab5330a0ac346b5a51676bd966aa3c/>
+<csr-id-09ddd71ba690dba7fa3a6151e98b5bd1396d15a3/>
+<csr-id-35ab5d3211ef71dcaf572a49c2003c8ef58a4d6b/>
+<csr-id-e49dc41d67b53e418919f538a13c687b0c74a256/>
+<csr-id-d703c6fcedd092fcbbb19f7ffd8f79e251fa164d/>
+<csr-id-25eeb94fe4cae339ea6a2a1eddb44c90d2cf84ae/>
+<csr-id-f2d58a462f909d3b1293c43b43a8cbeca154cf99/>
+<csr-id-b2e3158614f3cebf1896c3d5539a69ded97e03fe/>
+
 ### Chore
 
  - <csr-id-4dc6c775d7780f6811435de0f2cd5401ce21d675/> bump wasmcloud v1.0.2
  - <csr-id-d637a8619cac775b6df7f5570c9ba51c948ef36d/> bump wasmCloud and wadm bin versions
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### Other
+
+ - <csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/> release and update CHANGELOG
 
 ### New Features
 
@@ -95,9 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 25 commits contributed to the release over the course of 20 calendar days.
+ - 27 commits contributed to the release over the course of 20 calendar days.
  - 20 days passed between releases.
- - 25 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -107,6 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Reg test failure ([`305e9b6`](https://github.com/wasmCloud/wasmCloud/commit/305e9b6615d2a2473caccd3dbcbcacbdec02c3ac))
     - Bump wasmcloud v1.0.2 ([`4dc6c77`](https://github.com/wasmCloud/wasmCloud/commit/4dc6c775d7780f6811435de0f2cd5401ce21d675))
     - Add digest/tag to reg integration test ([`2b98f76`](https://github.com/wasmCloud/wasmCloud/commit/2b98f76f6eebdb63f570cae6d95cf3d024b98ca5))
@@ -135,6 +153,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.27.0 (2024-04-17)
+
+<csr-id-9341d622a3c7e14f764836fb88985a4d537ead02/>
+<csr-id-beba0f8153291760c82179dc26bbf557bff32ec4/>
+<csr-id-d1ac8442729d9b67e146674375349b22b43ba101/>
+<csr-id-fe3fcee1d1897e6942de9cbeedfcbe082275cbdc/>
 
 ### Chore
 
@@ -219,6 +242,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.27.0-alpha.2 (2024-04-09)
+
+<csr-id-f6e5f0e804d4a7eced93778b739bf58c30ad75e7/>
+<csr-id-5995865485b91d449d068464f5f926d762645c7e/>
+<csr-id-0e0acd728df340f4f4ae0ea31e47abaecb5b3907/>
+<csr-id-fe50175294867bc8c9d109d8d610b0453fd65a1c/>
+<csr-id-3a96d288714b14f1d8bab831ef4d0f9533204f56/>
+<csr-id-65ff33fe473425fffb320309921dfbdcb7c8f868/>
+<csr-id-251c443601dcfd67bfbd9a9e9f9351e3127c5584/>
+<csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/>
+<csr-id-2e93989bf14b223b689f77cb4139275094debae4/>
+<csr-id-4460225a145cfae39620498c159b5c106dd6ddaf/>
+<csr-id-b6dd820c45f7ea0f62c8cb91adb7074c5e8c0113/>
+<csr-id-fb724731281442672975612f24be39955d9535c6/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-9018c03b0bd517c4c2f7fe643c4d510a5823bfb8/>
 
 ### Chore
 
@@ -327,6 +365,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.27.0-alpha.1 (2024-03-18)
 
+<csr-id-e114b77f20463be5b028ee0d373a199fafc0893c/>
+<csr-id-873e1482c1aa0fb8f532c8ec3dfbb912bf227546/>
+<csr-id-888400046df8a1a636f42c9fb498d6d42331bcf2/>
+<csr-id-37fbe7f3bf41ce6d290f0b28ecb7d75b7595f961/>
+
 ### Chore
 
  - <csr-id-e114b77f20463be5b028ee0d373a199fafc0893c/> update wasmcloud to v1.0.0-alpha.2
@@ -411,6 +454,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.26.0 (2024-02-14)
+
+<csr-id-28f204ab08f471b62639d36b22bd7864f85a9450/>
+<csr-id-e14e498e207f7b97784b50a5dee8aebe8d3584f0/>
+<csr-id-8e8f6d29518ec6d986fad9426fbe8224171660ab/>
+<csr-id-7b85266232cccee176fd747ba4c7c96c3a336567/>
+<csr-id-529136a3a5983238eb45b07d9c3a8e0198cbf163/>
+<csr-id-1793dc9296b7e161a8efe42bd7e5717bd6687da8/>
+<csr-id-7f700611a60da3848afa9007bc0d2a1b4fcab946/>
+<csr-id-00570832d78d32757323bfa44527154b0ff5fe3e/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
 
 ### Chore
 
@@ -514,6 +567,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.25.0 (2023-12-28)
 
+<csr-id-c12eff1597e444fcd926dbfb0abab547b2efc2b0/>
+<csr-id-8b751e4e9bce78281f6bf6979bfb70c3f6b33634/>
+<csr-id-b0fdf60a33d6866a92924b02e5e2ae8544e421a5/>
+<csr-id-b7e54e7bbccd1fbcb4f1a9f77cb1a0289f8a239b/>
+<csr-id-046fd4c735c8c0ebb2f5a64ae4b5a762b0034591/>
+<csr-id-25af017f69652a98b8969609e2854636e2bc7553/>
+<csr-id-7bc207bf24873e5d916edf7e8a4b56c7ed04b9a7/>
+<csr-id-7de31820034c4b70ab6edc772713e64aafe294a9/>
+<csr-id-65d2e28d54929b8f4d0b39077ee82ddad2387c8e/>
+<csr-id-57d014fb7fe11542d2e64068ba86e42a19f64f98/>
+<csr-id-4e9bae34fe95ecaffbc81fd452bf29746b4e5856/>
+
 ### Chore
 
  - <csr-id-c12eff1597e444fcd926dbfb0abab547b2efc2b0/> update wasmcloud version to 0.81
@@ -597,6 +662,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.24.1 (2023-11-22)
 
+<csr-id-19f34054fddb6991a51ee8ab953cf36ef4c79399/>
+
 ### Other
 
  - <csr-id-19f34054fddb6991a51ee8ab953cf36ef4c79399/> bump to 0.24.1
@@ -620,6 +687,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.24.0 (2023-11-21)
+
+<csr-id-a972375413491a180dec6c7a3948eee597850340/>
+<csr-id-bfb51a2dc47d09af1aec0ec4cb23654f93903f25/>
+<csr-id-9f0fefeeaba9edc016b151e94c4dc0b57a44882e/>
+<csr-id-85193dd0a6f1892cd04c231b40b206720089fa3e/>
+<csr-id-dc003f8dd193648988927d312958c6c79c980aaf/>
+<csr-id-267d24dcdc871bbc85c0adc0d102a632310bb9f0/>
 
 ### Chore
 
@@ -696,6 +770,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.23.0 (2023-11-14)
+
+<csr-id-5301084bde0db0c65811aa30c48de2a63e091fcf/>
+<csr-id-39a9e218418a0662de4edabbc9078268ba095842/>
+<csr-id-bb4fbeaa780552fa90e310773f53b16e83569438/>
+<csr-id-d734e98529a5fe1c7f014b5b0c5aaf4c84af912a/>
+<csr-id-db99594fb6537d8f84a421edf153d9ca6bdbbeed/>
+<csr-id-694bf86d100c98d9b1c771972e96a15d70fef116/>
+<csr-id-cbc9ed7008f8969312534e326cf119dbbdf89aaa/>
+<csr-id-248e9d3ac60fdd2b380723e9bbaf1cc8023beb44/>
+<csr-id-cb4d311c6d666e59c22199f950757abc65167f53/>
+<csr-id-7d6155e62512e6909379bbed5e73abe219838e4b/>
+<csr-id-9bf9accbcefa3e852c3b62290c14ee5e71731530/>
 
 ### Chore
 
@@ -781,6 +867,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.22.0 (2023-11-04)
+
+<csr-id-3ebfdd25b43c09a8117158d1d1aaaf0e5431746e/>
+<csr-id-b936abf2812b191ece6a01a65a090081c69d2013/>
+<csr-id-a1c3b9d86db14f31ef7fbebeb30e8784f974df6f/>
+<csr-id-007660e96ad7472918bc25baf9d52d60e5230823/>
+<csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/>
+<csr-id-a8e085e4eb46a635c9efd02a864584079b0eca4e/>
+<csr-id-e28c1ac58a8cd6a1ec745f0de18d0776ec4e064e/>
+<csr-id-3f05d242dde36ce33e3ee87ba5b3c62c37c30d63/>
+<csr-id-18ed1810f8b8e0517b02ec7139a6c55742296d87/>
+<csr-id-82e8bc2e8c2cd6ddcd88232c503241c024dc1ec1/>
+<csr-id-c5845c0aed2d12174986f6cfa875f89704cb04d7/>
+<csr-id-6343ebfdf155cbfb3b70b1f2cbdcf38651946010/>
+<csr-id-413e395b60d3ee0c187ec398a2cb6429fd27d009/>
+<csr-id-3d47e91e7a836ff04fd7bc809a036fadc42c01a7/>
+<csr-id-abc075095e5df96e0b3c155bf1afb8dbeea4a6e5/>
+<csr-id-62f30c7bd3e591bb08d1583498aaba8b0483859d/>
+<csr-id-d1ee13ed7c1668b55f4644b1c1673f521ba9d9f8/>
+<csr-id-dadfacb6541eec6e6a440bad99ffa66ea17a94a5/>
+<csr-id-a1e8d3f09e039723d28d738d98b47bce54e4450d/>
 
 ### Chore
 
