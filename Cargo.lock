@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "async-compression",
  "data-encoding",

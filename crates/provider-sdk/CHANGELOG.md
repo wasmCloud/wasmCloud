@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
 <csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/>
 <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
 
 ### Chore
 
@@ -255,7 +256,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 77 commits contributed to the release over the course of 287 calendar days.
+ - 78 commits contributed to the release over the course of 287 calendar days.
  - 75 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -266,6 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Remove link_name, rename provider_key ([`e1e50d7`](https://github.com/wasmCloud/wasmCloud/commit/e1e50d7366716b61ddce52244e3dd66758ee0b82))
     - Support storing directional links ([`88aedb1`](https://github.com/wasmCloud/wasmCloud/commit/88aedb17e90011cb602f48845c3896a3d836c980))
