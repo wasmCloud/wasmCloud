@@ -229,7 +229,7 @@ fn integration_reg_push_comprehensive() {
 
     let output = get_json_output(push_all_options).unwrap();
 
-    let expected_json = json!({"url": logging_push_all_options, "success": true});
+    let expected_json = json!({"url": logging_push_all_options, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "alloptions"});
 
     assert_eq!(output, expected_json);
 
@@ -325,7 +325,7 @@ async fn integration_reg_config() -> Result<()> {
     // let output = output_to_string(cmd)?;
     // println!("{}", output);
     let output = get_json_output(cmd).unwrap();
-    let expected_json = json!({"url": push_url, "success": true});
+    let expected_json = json!({"url": push_url, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "0.1.0"});
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test cli args
