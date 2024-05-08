@@ -33,7 +33,7 @@ hyper-rustls = { workspace = true, features = [
 ], optional = true }
 hyper-util = { workspace = true, optional = true }
 nkeys = { workspace = true }
-oci-distribution = { workspace = true, optional = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"], optional = true }
 once_cell = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 rustls = { workspace = true, features = ["std"] }
