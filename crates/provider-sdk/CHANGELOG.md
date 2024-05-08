@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.5.0 (2024-05-08)
 
 <csr-id-5957fce86a928c7398370547d0f43c9498185441/>
 <csr-id-8c93b0edbf37f1d0b40e065acfafc89af936a425/>
@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
 <csr-id-5fd0557c7ff454211e3f590333ff4dda208a1f7a/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+<csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
 
 ### Chore
 
@@ -67,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
  - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
  - <csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/> fix format
+
+### Chore
+
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
 
 ### Refactor (BREAKING)
 
@@ -249,8 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 76 commits contributed to the release over the course of 279 calendar days.
- - 74 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 77 commits contributed to the release over the course of 286 calendar days.
+ - 75 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -260,6 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Remove link_name, rename provider_key ([`e1e50d7`](https://github.com/wasmCloud/wasmCloud/commit/e1e50d7366716b61ddce52244e3dd66758ee0b82))
     - Support storing directional links ([`88aedb1`](https://github.com/wasmCloud/wasmCloud/commit/88aedb17e90011cb602f48845c3896a3d836c980))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
@@ -337,7 +344,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Merge pull request #396 from rvolosatovs/feat/provider-sdk ([`6ed04f0`](https://github.com/wasmCloud/wasmCloud/commit/6ed04f00a335333196f6bafb96f2c40155537df3))
     - Add new provider SDK to repo ([`ada9067`](https://github.com/wasmCloud/wasmCloud/commit/ada90674df5130be6320788bcb08b7868f3b67a5))
 </details>
-
-<csr-unknown>
-Uncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single test<csr-unknown/>
 

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.6.0 (2024-05-08)
 
 <csr-id-5957fce86a928c7398370547d0f43c9498185441/>
 <csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-8e7d6c80b56e143bb09dc441e8b21104328d0ab0/>
 <csr-id-6abbcac954a9834d871ea69b8a40bd79d258c0f1/>
 <csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
 
 ### Chore
 
@@ -47,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
  - <csr-id-8e071dde1a98caa7339e92882bb63c433ae2a042/> remove direct `wasmbus_rpc` dependency
  - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
+
+### Chore
+
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
 
 ### Chore
 
@@ -178,8 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 47 commits contributed to the release over the course of 245 calendar days.
- - 46 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 48 commits contributed to the release over the course of 253 calendar days.
+ - 47 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -189,6 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
     - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))

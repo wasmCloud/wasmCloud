@@ -5,13 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.10.1 (2024-05-08)
 
 <csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-569f5636c924c855c1098f63cd9521e2f2e65fa2/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
 
 ### Chore
 
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### Chore
+
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
 
 ### Refactor
 
@@ -30,9 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 12 calendar days.
- - 12 days passed between releases.
- - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 5 commits contributed to the release over the course of 19 calendar days.
+ - 20 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -42,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
     - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - More informative file open error ([`569f563`](https://github.com/wasmCloud/wasmCloud/commit/569f5636c924c855c1098f63cd9521e2f2e65fa2))
