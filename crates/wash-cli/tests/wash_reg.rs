@@ -373,7 +373,7 @@ async fn integration_reg_config() -> Result<()> {
     assert!(cmd.status.success());
     let output = get_json_output(cmd).unwrap();
     let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
-    let expected_json = json!({"url": expected_url, "success": true});
+    let expected_json = json!({"digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "0.3.0", "url": expected_url});
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test file configuration
@@ -398,7 +398,7 @@ async fn integration_reg_config() -> Result<()> {
     assert!(cmd.status.success());
     let output = get_json_output(cmd).unwrap();
     let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
-    let expected_json = json!({"url": expected_url, "success": true});
+    let expected_json = json!({"url": expected_url, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "0.4.0"});
     assert_eq!(output, expected_json);
 
     Ok(())
