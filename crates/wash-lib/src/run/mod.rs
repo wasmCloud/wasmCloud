@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-use wasmtime::{Config, Engine};
-use wasmtime_wasi::{WasiCtx, WasiView};
+use crate::registry::get_oci_artifact;
+use crate::run::ctx::Ctx;
 use anyhow::{Context, Result};
 use wasmtime::component::Component;
-use crate::cli::cached_oci_file;
-use crate::registry::{get_oci_artifact, OciPullOptions};
-use crate::run::ctx::Ctx;
+use wasmtime::{Config, Engine};
+use wasmtime_wasi::{WasiCtx, WasiView};
 
 pub use crate::run::ctx::CtxBuilder;
 
@@ -33,33 +31,33 @@ impl LocalRuntime {
         config.async_support(true);
 
         let engine = Engine::new(&config)?;
-        anyhow::Ok(Self {
-            engine,
-        })
+        anyhow::Ok(Self { engine })
     }
 
-    pub async fn run(&self, reference: String, context: Ctx) -> Result<()> {
-        let artifact = get_oci_artifact(reference.clone(), Some(cached_oci_file(&reference)), context.oci_pull_options.clone())
-            .context("failed to pull the component")
-            .await?;
+    pub async fn run(&self, context: Ctx) -> Result<()> {
+        let artifact = get_oci_artifact(
+            context.reference.clone(),
+            context.oci_cache_file.clone(),
+            context.oci_pull_options.clone(),
+        )
+        .await
+        .context("failed to pull the component")?;
 
         let component = Component::new(&self.engine, &artifact)
             .context("failed to build the pulled component")?;
 
         //NB(raskyld): Not sure if the `data` stored needs to be owned by the Store itself.
         let mut store = wasmtime::Store::new(&self.engine, State::new(context));
-        let mut linker = wasmtime::Linker::new(&self.engine);
+        let mut linker = wasmtime::component::Linker::new(&self.engine);
 
-        wasmtime_wasi::bindings::Command::add_to_linker(
-            &mut linker,
-            |state: &mut State| state,
-        )?;
+        wasmtime_wasi::bindings::Command::add_to_linker(&mut linker, |state: &mut State| state)?;
 
         //TODO(raskyld): add http host funcs
 
-        let (instance, _) = wasmtime_wasi::bindings::Command::instantiate_async(&mut store, &component, &linker)
-            .await
-            .context("failed to instantiate the compiled component")?;
+        let (instance, _) =
+            wasmtime_wasi::bindings::Command::instantiate_async(&mut store, &component, &linker)
+                .await
+                .context("failed to instantiate the compiled component")?;
 
         instance
             .wasi_cli_run()
