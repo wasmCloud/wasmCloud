@@ -1,14 +1,25 @@
-// @ts-check
+const path = require('node:path');
 
-/** @type {import('eslint').Linter.Config} */
 const config = {
-  parser: '@typescript-eslint/parser',
+  extends: ['@wasmcloud/eslint-config'],
   parserOptions: {
-    ecmaVersion: 'latest',
     tsconfigRootDir: __dirname,
-    project: './tsconfig.json',
-    sourceType: 'module',
+    project: [
+      './tsconfig.eslint.json',
+      './tsconfig.json',
+    ],
   },
+  settings: {
+  'import/resolver': {
+    typescript: {
+      alwaysTryTypes: true,
+      project: [
+        path.resolve(__dirname, './tsconfig.json'),
+        path.resolve(__dirname, './tsconfig.eslint.json'),
+      ],
+    },
+  },
+}
 };
 
 module.exports = config;

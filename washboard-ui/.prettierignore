@@ -6,4 +6,3 @@ dist
 .pnp.loader.mjs
 .idea
 **/tmp/**
-packages

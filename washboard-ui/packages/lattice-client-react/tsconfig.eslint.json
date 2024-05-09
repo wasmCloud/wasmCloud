@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true
+  },
+  "extends": "./tsconfig.json",
+  "include": [
+    "./**/*.config.js",
+    "./**/*.config.ts",
+    "./**/*.config.cjs",
+    ".eslintrc.cjs",
+    "tsup.config.js",
+    "vite.config.ts",
+    "turbo"
+  ]
+}
