@@ -51,9 +51,7 @@
     "type-fest": "^4.18.2"
   },
   "dependencies": {
-    "immer": "^10.1.1",
     "nats.ws": "^1.25.0",
-    "rxjs": "^7.8.1",
     "tsup": "^8.0.2"
   }
 }

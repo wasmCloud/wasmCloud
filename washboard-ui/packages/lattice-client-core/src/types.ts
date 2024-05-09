@@ -1,72 +1,266 @@
-export type CloudEvent<T = unknown> = {
-  data: T;
-  datacontenttype: string;
+import {type RequireOneOrNone, type LiteralUnion} from 'type-fest';
+
+export type WadmApiResponse<Result = string, Data = never> = [Data] extends [never]
+  ? {
+      result: Result;
+      message: string;
+    }
+  : {
+      result: Result;
+      message: string;
+    } & Data;
+
+export type ControlResponse<ResponseType = never> = [ResponseType] extends [never]
+  ? {
+      success: boolean;
+      message: string;
+    }
+  : {
+      success: boolean;
+      message: string;
+      response: ResponseType;
+    };
+
+export type WasmCloudComponent = {
   id: string;
-  source: string;
-  specversion: string;
-  time: string;
-  type: string;
+  name?: string;
+  image_ref: string;
+  instances: string[];
+  annotations: Record<string, string>;
+  max_instances: number;
+  revision: number;
 };
 
-export type TopicResponse<ResponseType = any> = {
-  success: boolean;
-  message: string;
-  response: ResponseType;
-};
-
-export type LinkResponse = TopicResponse<WadmLink[]>
-
-export type WadmComponent = {
+export type WasmCloudProvider = {
   id: string;
-  name: string;
-  issuer: string;
-  reference: string;
-  instances: Record<
-    string,
-    {
-      count: number;
-      annotations: Record<string, string>;
-    }[]
-  >;
+  name?: string;
+  image_ref?: string;
+  annotations: Record<string, string>;
+  hosts: string[];
 };
 
-export type WadmProvider = {
-  id: string;
-  name: string;
-  issuer: string;
-  reference: string;
-  hosts: Record<string, string>;
-};
-
-export type WadmLink = {
+export type WasmCloudLink = {
+  /** Source identifier for the link */
   source_id: string;
+  /** Target for the link, which can be a unique identifier */
   target: string;
+  /** Name of the link. Not providing this is equivalent to specifying "default" */
   name: string;
+  /** WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get` */
   wit_namespace: string;
+  /** WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get` */
   wit_package: string;
+  /** WIT Interfaces to be used for the link, e.g. `readwrite`, `atomic`, etc. */
   interfaces: string[];
+  /** List of named configurations to provide to the source upon request */
   source_config: string[];
+  /** List of named configurations to provide to the target upon request */
   target_config: string[];
 };
 
-export type WadmConfig = {
-  name: string;
+export type WasmCloudConfig = {
+  key: string;
   entries: Record<string, string>;
-}
+};
 
-export type WadmHost = {
-  friendly_name: string;
+type ComponentDescription = {
+  /** The component's unique identifier */
   id: string;
+  /** The image reference for this component */
+  image_ref: string;
+  /** The name of the component, if one exists */
+  name?: string;
+  /** The annotations that were used in the start request that produced this component instance */
+  annotations?: Record<string, string>;
+  /** The revision number for this component instance */
+  revision: number;
+  /** The maximum number of concurrent requests this instance can handle */
+  max_instances: number;
+};
+
+type ProviderDescription = {
+  /** Provider's unique identifier */
+  id: string;
+  /** Image reference for this provider, if applicable */
+  image_ref?: string;
+  /** Name of the provider, if one exists */
+  name?: string;
+  /** The revision of the provider */
+  revision: number;
+  /** The annotations that were used in the start request that produced  this provider instance */
+  annotations?: Record<string, string>;
+};
+
+export type WasmCloudHost = {
+  /** components running on this host */
+  components: ComponentDescription[];
+  /** Providers running on this host */
+  providers: ProviderDescription[];
+  /** The host's unique ID */
+  host_id: string;
+  /** The host's human-readable friendly name */
+  friendly_name: string;
+  /** The host's labels */
   labels: Record<string, string>;
-  annotations: Record<string, string>;
-  last_seen: string;
-  components: Record<string, number>;
-  providers: {
-    contract_id: 'wasmcloud:httpserver';
-    link_name: 'default';
-    public_key: 'VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M';
-    annotations: Record<string, string>;
-  }[];
+  /** The host's version */
+  version: string;
+  /** The host's uptime in human-readable format */
+  uptime_human: string;
+  /** The host's uptime in seconds */
   uptime_seconds: number;
+};
+
+export type WasmCloudHostRef = {
+  /** The host's human-readable friendly name */
+  friendly_name: string;
+  /** The host's unique ID */
+  id: string;
+  /** providers */
+  providers: Record<string, number>;
+  /** components */
+  components: Record<string, number>;
+  /** The host's labels */
+  labels: Record<
+    LiteralUnion<'hostcore.arch' | 'hostcore.os' | 'hostcore.osfamily', string>,
+    string
+  >;
+  /** The ID of the lattice that the host is connected to */
+  lattice: string;
+  /** The host's uptime in seconds */
+  uptime_seconds: number;
+  /** The host's version */
   version: string;
 };
+
+export type WadmApplication = {
+  name: string;
+  version: string;
+  description: string;
+  deployed_version: string;
+  status: DeploymentStatus;
+  status_message: string;
+  manifest?: ApplicationManifest;
+  history?: ApplicationHistory;
+};
+
+type StatusType = {
+  type: DeploymentStatus;
+  message?: string;
+};
+
+export type ApplicationStatus = {
+  version: string;
+  status: StatusType;
+  components: Array<{
+    name: string;
+    type: string;
+    status: StatusType;
+    traits: Array<{
+      type: string;
+      status: StatusType;
+    }>;
+  }>;
+};
+
+export type ApplicationStoreValue = {
+  manifests: Record<string, ApplicationManifest>;
+  deployed_version: string;
+};
+
+export type ApplicationManifest = {
+  apiVersion: string;
+  kind: string;
+  metadata: {
+    name: string;
+    annotations: Record<LiteralUnion<'version' | 'description', string>, string>;
+  };
+  spec: {
+    components: ApplicationComponent[];
+  };
+};
+
+export type ApplicationHistory = Array<{
+  version: string;
+  deployed: boolean;
+}>;
+
+export type ApplicationComponent = {
+  name: string;
+  type: 'component' | 'capability';
+  properties: {
+    image: string;
+    id?: string;
+    config?: Array<{
+      name: string;
+      properties: Record<string, string>;
+    }>;
+  };
+  traits?: ApplicationTrait[];
+};
+
+export type ApplicationTrait =
+  | ApplicationTraitSpreadScaler
+  | ApplicationTraitDaemonScaler
+  | ApplicationTraitLink;
+
+export type ApplicationTraitSpreadScaler = {
+  type: 'spreadscaler';
+  properties: {
+    instances: number;
+    spread?: Array<{
+      name: string;
+      weight: number;
+      requirements: Record<string, string>;
+    }>;
+  };
+};
+
+export type ApplicationTraitDaemonScaler = {
+  type: 'daemonscaler';
+  properties: {
+    replicas: number;
+    spread?: Array<{
+      name: string;
+      requirements: Record<string, string>;
+    }>;
+  };
+};
+
+export type ApplicationTraitLink = {
+  type: 'link';
+  properties: RequireOneOrNone<
+    {
+      target: string;
+      namespace: string;
+      package: string;
+      interfaces: string[];
+      target_config?: Array<{
+        name: string;
+        properties: Record<string, string>;
+      }>;
+      source_config?: Array<{
+        name: string;
+        properties: Record<string, string>;
+      }>;
+    },
+    'source_config' | 'target_config'
+  >;
+};
+
+export type ApplicationModelSummary = {
+  name: string;
+  version: string;
+  description: string;
+  deployed_version: string;
+  status: DeploymentStatus;
+  status_message: string;
+};
+
+/** Application deployment status */
+export enum DeploymentStatus {
+  Undeployed = 'undeployed',
+  Reconciling = 'reconciling',
+  Deployed = 'deployed',
+  Failed = 'failed',
+  Unknown = 'unknown',
+}
