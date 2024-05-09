@@ -87,6 +87,7 @@ notify = { workspace = true, features = ["macos_fsevent"] }
 [dev-dependencies]
 assert-json-diff = { workspace = true }
 rand = { workspace = true }
+reqwest = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
 

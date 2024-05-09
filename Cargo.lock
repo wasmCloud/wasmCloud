@@ -5827,6 +5827,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "term-table",
  "test-case",

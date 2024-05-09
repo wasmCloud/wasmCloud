@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context, Result};
+use oci_distribution::Reference;
 use rand::{distributions::Alphanumeric, Rng};
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
@@ -49,6 +50,54 @@ pub fn wash() -> std::process::Command {
 #[allow(unused)]
 pub fn output_to_string(output: std::process::Output) -> Result<String> {
     String::from_utf8(output.stdout).with_context(|| "Failed to convert output bytes to String")
+}
+
+#[allow(unused)]
+pub async fn fetch_artifact_digest(url: &str) -> Result<String> {
+    let image: Reference = url.to_lowercase().parse()?;
+
+    let mut protocol = "http";
+    if url.starts_with("https://") {
+        protocol = "https"
+    }
+
+    let reference = image
+        .tag()
+        .or(image.digest())
+        .context("Could not find a valid tag or digest in the provided artifact URL")?;
+
+    let manifest_url = format!(
+        "{}://{}/v2/{}/manifests/{}",
+        protocol,
+        image.registry(),
+        image.repository(),
+        reference
+    );
+
+    let accept_manifest_media_types = [
+        oci_distribution::manifest::IMAGE_MANIFEST_MEDIA_TYPE,
+        oci_distribution::manifest::OCI_IMAGE_MEDIA_TYPE,
+    ]
+    .join(",");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(manifest_url)
+        .header(reqwest::header::ACCEPT, accept_manifest_media_types)
+        .send()
+        .await
+        .context("Unable to query the provided artifact URL")?;
+
+    let header = resp
+        .headers()
+        .get("Docker-Content-Digest")
+        .context("Could not find Docker-Content-Digest header for provided artifact URL")?;
+
+    let digest = header
+        .to_str()
+        .context("Unable to convert Docker-Content-Digest header to value")?;
+
+    Ok(digest.to_owned())
 }
 
 #[allow(unused)]
