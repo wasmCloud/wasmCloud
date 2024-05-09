@@ -1,6 +1,6 @@
 import {type LatticeClient} from '@wasmcloud/lattice-client-core';
 import * as React from 'react';
-import {LatticeClientContext} from './lattice-client-context';
+import {LatticeClientContext} from '@/context/lattice-client-context';
 
 export type LatticeClientProviderProps = {
   readonly client: LatticeClient;

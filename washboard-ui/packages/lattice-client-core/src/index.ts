@@ -1,17 +1,20 @@
 export {LatticeClient, type LatticeClientOptions} from './lattice-client';
 export {canConnect, getManifestFrom, getCombinedInventoryFromHosts} from './helpers';
 export type {
-  ApplicationComponent,
+  ApplicationSummary,
+  ApplicationDetail,
   ApplicationManifest,
-  WadmApplication,
+  ApplicationHistory,
+  ApplicationStatus,
   WasmCloudComponent,
   WasmCloudConfig,
   WasmCloudHost,
+  WasmCloudHostRef,
   WasmCloudLink,
   WasmCloudProvider,
-} from './types';
-export {DeploymentStatus} from './types';
-export {LatticeEventType} from './cloud-events';
+} from '@/types';
+export {DeploymentStatus} from '@/types';
+export {LatticeEventType} from '@/cloud-events';
 export type {
   CloudEvent,
   ComponentScaledEvent,
@@ -31,4 +34,4 @@ export type {
   HostStartedEvent,
   HostStoppedEvent,
   LatticeEvent,
-} from './cloud-events';
+} from '@/cloud-events';

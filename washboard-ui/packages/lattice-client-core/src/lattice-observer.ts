@@ -1,5 +1,5 @@
-import {type LatticeEvent} from './cloud-events';
-import {type LatticeClient} from './lattice-client';
+import {type LatticeEvent} from '@/cloud-events';
+import {type LatticeClient} from '@/lattice-client';
 
 type LatticeObserverOptions = {
   client: LatticeClient;

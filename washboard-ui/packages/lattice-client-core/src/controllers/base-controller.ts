@@ -1,4 +1,4 @@
-import {type LatticeClient} from '../lattice-client';
+import {type LatticeClient} from '@/lattice-client';
 
 abstract class BaseController {
   #client: LatticeClient;

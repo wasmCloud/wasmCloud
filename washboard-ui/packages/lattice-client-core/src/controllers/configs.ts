@@ -1,5 +1,5 @@
-import {WasmCloudConfig, type ControlResponse} from '../types';
-import {BaseController} from './base-controller';
+import {BaseController} from '@/controllers/base-controller';
+import {WasmCloudConfig, type ControlResponse} from '@/types';
 
 type ConfigListRequest = {
   expand?: boolean;
@@ -15,11 +15,9 @@ class ConfigsController extends BaseController {
    * @param options.expand whether to expand the config details. Note that this can be a slow operation
    * @returns the current lattice configuration
    */
-  async list(): Promise<ControlResponse<string[]>>;
-  async list(options: ConfigListRequest & {expand: false}): Promise<ControlResponse<string[]>>;
-  async list(
-    options: ConfigListRequest & {expand: true},
-  ): Promise<ControlResponse<WasmCloudConfig[]>>;
+  async list<Expand extends boolean>(
+    options: ConfigListRequest & {expand?: Expand},
+  ): Promise<Expand extends false ? ControlResponse<string[]> : ControlResponse<WasmCloudConfig[]>>;
   async list(
     options: ConfigListRequest = {},
   ): Promise<ControlResponse<string[] | WasmCloudConfig[]>> {
@@ -40,7 +38,7 @@ class ConfigsController extends BaseController {
           const result = await this.get(key);
           if (!result.response) throw new Error(result.message);
           return {
-            key,
+            name: key,
             entries: result.response,
           };
         }),

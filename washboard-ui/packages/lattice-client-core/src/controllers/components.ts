@@ -1,5 +1,5 @@
-import {type ControlResponse} from '../types';
-import {BaseController} from './base-controller';
+import {BaseController} from '@/controllers/base-controller';
+import {type ControlResponse} from '@/types';
 
 type ComponentScaleRequest = {
   /** the ID of the host to which the scale command should be sent */

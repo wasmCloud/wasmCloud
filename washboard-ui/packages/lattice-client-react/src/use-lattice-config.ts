@@ -1,6 +1,6 @@
 import {type LatticeClient, type LatticeClientOptions} from '@wasmcloud/lattice-client-core';
 import * as React from 'react';
-import {useLatticeClient} from './context/use-lattice-client';
+import {useLatticeClient} from '@/context/use-lattice-client';
 
 type LatticeClientConfigOutput = typeof LatticeClient.prototype.instance.config;
 type LatticeClientConfigInput = Partial<LatticeClientOptions['config']>;

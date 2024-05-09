@@ -1,7 +1,7 @@
 import {connect, type KvEntry, type NatsConnection} from 'nats.ws';
 import {type JsonValue} from 'type-fest';
-import {toPromise} from '../helpers';
-import {type LatticeConnection} from './lattice-connection';
+import {type LatticeConnection} from '@/connection/lattice-connection';
+import {toPromise} from '@/helpers';
 
 type NatsWsLatticeConnectionOptions = {
   retryCount: number;
