@@ -2641,9 +2641,7 @@ __metadata:
     "@types/eslint": "npm:~8.56.10"
     "@wasmcloud/eslint-config": "workspace:^"
     "@wasmcloud/tsconfig": "workspace:^"
-    immer: "npm:^10.1.1"
     nats.ws: "npm:^1.25.0"
-    rxjs: "npm:^7.8.1"
     tsup: "npm:^8.0.2"
     type-fest: "npm:^4.18.2"
   peerDependencies:
@@ -2748,7 +2746,6 @@ __metadata:
     eslint-plugin-unicorn: "npm:^52.0.0"
     execa: "npm:^8.0.1"
     get-port: "npm:^7.1.0"
-    immer: "npm:^10.1.1"
     lucide-react: "npm:^0.378.0"
     nats.ws: "npm:^1.25.0"
     pino: "npm:^9.0.0"
@@ -2758,7 +2755,6 @@ __metadata:
     react-dom: "npm:^18.3.1"
     react-hook-form: "npm:^7.51.4"
     react-router-dom: "npm:^6.23.0"
-    rxjs: "npm:^7.8.1"
     tailwind-merge: "npm:^2.3.0"
     tailwindcss: "npm:^3.4.3"
     tailwindcss-animate: "npm:^1.0.7"
@@ -5306,13 +5302,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"immer@npm:^10.1.1":
-  version: 10.1.1
-  resolution: "immer@npm:10.1.1"
-  checksum: 9dacf1e8c201d69191ccd88dc5d733bafe166cd45a5a360c5d7c88f1de0dff974a94114d72b35f3106adfe587fcfb131c545856184a2247d89d735ad25589863
-  languageName: node
-  linkType: hard
-
 "import-fresh@npm:^3.2.1, import-fresh@npm:^3.3.0":
   version: 3.3.0
   resolution: "import-fresh@npm:3.3.0"
@@ -7483,15 +7472,6 @@ __metadata:
   dependencies:
     queue-microtask: "npm:^1.2.2"
   checksum: cb4f97ad25a75ebc11a8ef4e33bb962f8af8516bb2001082ceabd8902e15b98f4b84b4f8a9b222e5d57fc3bd1379c483886ed4619367a7680dad65316993021d
-  languageName: node
-  linkType: hard
-
-"rxjs@npm:^7.8.1":
-  version: 7.8.1
-  resolution: "rxjs@npm:7.8.1"
-  dependencies:
-    tslib: "npm:^2.1.0"
-  checksum: b10cac1a5258f885e9dd1b70d23c34daeb21b61222ee735d2ec40a8685bdca40429000703a44f0e638c27a684ac139e1c37e835d2a0dc16f6fc061a138ae3abb
   languageName: node
   linkType: hard
 

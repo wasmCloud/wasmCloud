@@ -1,211 +1,210 @@
-import {produce} from 'immer';
-import {NatsConnection, connect} from 'nats.ws';
-import {BehaviorSubject, Observable, map, merge, tap} from 'rxjs';
-import {CloudEvent, LinkResponse, WadmComponent, WadmConfig, WadmHost, WadmLink, WadmProvider} from './types';
+import {type LatticeEvent} from '@/cloud-events';
+import {type LatticeConnection} from '@/connection/lattice-connection';
+import {NatsWsLatticeConnection} from '@/connection/nats-ws-lattice-connection';
+import {ApplicationsController} from '@/controllers/applications';
+import {ComponentController} from '@/controllers/components';
+import {ConfigsController} from '@/controllers/configs';
+import {HostsController} from '@/controllers/hosts';
+import {LinksController} from '@/controllers/links';
+import {ProvidersController} from '@/controllers/providers';
 
-export type LatticeCache = {
-  hosts: Record<string, WadmHost>;
-  components: Record<string, WadmComponent>;
-  providers: Record<string, WadmProvider>;
-  links: WadmLink[];
-  configs: Record<string, WadmConfig>;
-};
-
-export type LatticeClientConfig = {
+type LatticeClientConfig = {
   latticeUrl: string;
-  retryCount: number;
-  latticeId: string;
-  ctlTopicPrefix: string;
+  retryCount?: number;
+  latticeId?: string;
+  ctlTopicPrefix?: string;
+  wadmTopicPrefix?: string;
 };
 
 export type LatticeClientOptions = {
-  config: Partial<LatticeClientConfig> & Required<Pick<LatticeClientConfig, 'latticeUrl'>>;
+  config: LatticeClientConfig;
+  connection?: LatticeConnection;
 };
 
-export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl'>> = {
+export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'connection'>> = {
   retryCount: 10,
   latticeId: 'default',
   ctlTopicPrefix: 'wasmbus',
+  wadmTopicPrefix: 'wadm',
 };
 
 export class LatticeClient {
-  config$: BehaviorSubject<LatticeClientConfig>;
-
-  #connection?: NatsConnection;
-  #linkState$: BehaviorSubject<Pick<LatticeCache, 'links'>>;
-  #wadmState$: BehaviorSubject<Partial<Pick<LatticeCache, 'components' | 'providers' | 'hosts'>>>;
-  #configState$: BehaviorSubject<Pick<LatticeCache, 'configs'>>;
-
-  constructor({config}: LatticeClientOptions) {
-    this.#linkState$ = new BehaviorSubject<Pick<LatticeCache, 'links'>>({links: []});
-    this.#configState$ = new BehaviorSubject<Pick<LatticeCache, 'configs'>>({configs: {}});
-    this.#wadmState$ = new BehaviorSubject<Partial<Pick<LatticeCache, 'components' | 'providers' | 'hosts'>>>({ components: {}, providers: {}, hosts: {}});
-    this.config$ = new BehaviorSubject({
-      ...defaultConfig,
-      ...config,
-    });
-  }
-
-  get config(): Required<LatticeClientConfig> {
-    return this.config$.value;
-  }
-
-  setPartialConfig(newConfig: Partial<LatticeClientConfig>) {
-    const oldConfig = this.config$.value;
-    this.config$.next({
-      ...oldConfig,
-      ...newConfig,
-    });
-    this.reconnect();
-  }
+  readonly #connection: LatticeConnection;
+  #config: Omit<Required<LatticeClientConfig>, 'connection'>;
 
   get #latticeId(): string {
-    return this.config.latticeId;
+    return this.#config.latticeId;
   }
 
   get #ctlTopicPrefix(): string {
-    return this.config.ctlTopicPrefix;
+    return this.#config.ctlTopicPrefix;
   }
 
   get #ctlTopic(): string {
     return `${this.#ctlTopicPrefix}.ctl.v1.${this.#latticeId}`;
   }
 
-  connect = async (): Promise<void> => {
-    this.#connection = await connect({
-      servers: this.config.latticeUrl,
-    });
-    this.#connection.closed().then((error) => {
-      if (error) {
-        console.error(`closed with an error: ${error.message}`);
-      }
-    });
-    this.#subscribeToWadmState();
-    this.#subscribeToLinks();
-    this.#subscribeToConfigs();
-  };
-
-  disconnect = async (): Promise<void> => {
-    await this.#connection?.drain().catch(() => null);
-  };
-
-  reconnect = async (): Promise<void> => {
-    await this.disconnect();
-    await this.connect();
-  };
-
-  getLatticeCache$ = (): Observable<LatticeCache> => {
-    const subject = new BehaviorSubject<LatticeCache>({
-      hosts: {},
-      components: {},
-      providers: {},
-      links: [],
-      configs: {},
-    });
-
-    // join wadmState and #linkState into a single observable
-    merge(this.#wadmState$, this.#linkState$, this.#configState$)
-      .pipe(
-        // merge the new event into the existing state
-        map((event) =>
-          produce(subject.getValue(), (draft) => ({
-            ...draft,
-            ...event,
-          })),
-        ),
-        // update the subject with the new state
-        tap((state) => subject.next(state)),
-      )
-      .subscribe();
-
-    return subject;
-  };
-
-  #subscribeToLinks = (): void => {
-    (async (): Promise<void> => {
-      const LINK_TOPIC = `${this.#ctlTopic}.link.get`;
-      const connection = await this.#waitForConnection();
-      const json = await (await connection.request(LINK_TOPIC)).json<LinkResponse>()
-      if (json.success) {
-        this.#linkState$.next({links: json.response});
-      } else {
-        throw new Error(json.message);
-      }
-
-      // TODO: ideally we'll want to subscribe to the individual event topics but for now, that'll do 🐷
-      const watch = await connection.subscribe(`wasmbus.evt.${this.#latticeId}.*`);
-      for await (const event of watch) {
-        const parsedEvent = event.json<CloudEvent>();
-        switch (parsedEvent.type) {
-          case 'com.wasmcloud.lattice.linkdef_set':
-          case 'com.wasmcloud.lattice.linkdef_deleted': {
-            // Just refresh the whole list instead of trying to figure out which one changed
-            const message = await connection.request(LINK_TOPIC);
-            this.#linkState$.next(message.json<{links: WadmLink[]}>());
-          }
-        }
-      }
-      this.#linkState$.complete();
-    })();
-  };
-
-  #subscribeToConfigs = (): void => {
-    (async (): Promise<void> => {
-      const connection = await this.#waitForConnection();
-      const configs = await connection.jetstream().views.kv('CONFIGDATA_default');
-      const watch = await configs.watch();
-      for await (const event of watch) {
-        const existingConfigs = this.#configState$.getValue().configs
-        const newConfigs = { [event.key]: { name: event.key, entries: event.json<{[key: string]: string}>() }};
-        this.#configState$.next({configs: {...existingConfigs, ...newConfigs}});
-      }
-      this.#configState$.complete();
-    })();
+  get #wadmTopic(): string {
+    return `${this.#config.wadmTopicPrefix}.api.${this.#latticeId}`;
   }
 
-  #subscribeToWadmState = (): void => {
-    (async (): Promise<void> => {
-      const connection = await this.#waitForConnection();
-      const wadm = await connection.jetstream().views.kv('wadm_state');
-      const watch = await wadm.watch();
-      for await (const event of watch) {
-        switch (event.key) {
-          case 'host_default': {
-            this.#wadmState$.next({hosts: event.json() as Record<string, WadmHost>});
-            break;
-          }
-          case 'component_default': {
-            this.#wadmState$.next({components: event.json() as Record<string, WadmComponent>});
-            break;
-          }
-          case 'provider_default': {
-            this.#wadmState$.next({providers: event.json() as Record<string, WadmProvider>});
-            break;
-          }
-        }
-      }
-      this.#wadmState$.complete();
-    })();
+  get connection() {
+    return this.#connection;
+  }
+
+  /**
+   * Methods and properties to interact with this LatticeClient instance
+   */
+  get instance() {
+    return {
+      /** The configuration for the client */
+      config: {
+        ...this.#config,
+        ctlTopic: this.#ctlTopic,
+        wadmTopic: this.#wadmTopic,
+      },
+      /** Send a request on the connected lattice */
+      request: this.#request.bind(this),
+      /** subscribe to a specific topic on the connected lattice */
+      subscribe: this.#subscribe.bind(this),
+      /** Connect to the lattice */
+      connect: this.#connect.bind(this),
+      /** Disconnect from the lattice */
+      disconnect: this.#disconnect.bind(this),
+      /** Disconnect and reconnect to the lattice */
+      reconnect: this.#reconnect.bind(this),
+      /** Update the client with a partial configuration */
+      setPartialConfig: this.#setPartialConfig.bind(this),
+    };
+  }
+
+  /**
+   * Methods and properties to interact with the lattice hosts
+   */
+  get hosts() {
+    return new HostsController(this);
+  }
+
+  /**
+   * Methods to interact with components
+   */
+  get components() {
+    return new ComponentController(this);
+  }
+
+  /**
+   * Methods to interact with providers
+   */
+  get providers() {
+    return new ProvidersController(this);
+  }
+
+  /**
+   * Methods to interact with links
+   */
+  get links() {
+    return new LinksController(this);
+  }
+
+  /**
+   * Methods to interact with configs
+   */
+  get configs() {
+    return new ConfigsController(this);
+  }
+
+  /**
+   * Methods to interact with Wadm Applications
+   */
+  get applications() {
+    return new ApplicationsController(this);
+  }
+
+  /**
+   * Create a new LatticeClient
+   * @param options.config the configuration for the client. This will be merged with the default
+   * configuration and can be changed later with `client.instance.setPartialConfig`
+   * @param options.connection (optional) the connection to use for the client. If not provided, a
+   * new connection will be created with the latticeUrl from the config
+   */
+  constructor({config, connection}: LatticeClientOptions) {
+    this.#config = {
+      ...defaultConfig,
+      ...config,
+    };
+
+    this.#connection = connection ?? new NatsWsLatticeConnection(this.#config);
+
+    void this.#connect();
+  }
+
+  /**
+   * Update the client with a partial configuration. Existing keys that are not provided will remain the same.
+   * @param newConfig partial configuration to update the client with
+   */
+  #setPartialConfig(newConfig: Partial<LatticeClientConfig>) {
+    this.#config = {
+      ...this.#config,
+      ...newConfig,
+    };
+
+    if (newConfig.latticeUrl) {
+      this.#connection.setLatticeUrl(newConfig.latticeUrl);
+    }
+
+    if (newConfig.retryCount) {
+      this.#connection.setRetryCount(newConfig.retryCount);
+    }
+
+    void this.#reconnect();
+  }
+
+  /**
+   * Send a request to the lattice
+   * @param subject the nats subject to send the request to
+   * @param data (optional) the data to send with the request
+   * @returns the response from the lattice without any processing
+   */
+  async #request<Response = unknown>(subject: string, data?: Uint8Array | string) {
+    if (this.#connection === undefined) {
+      throw new Error('Connection not initialized');
+    }
+
+    return this.#connection.request<Response>(subject, data);
+  }
+
+  /**
+   * subscribe to a latticeTopic
+   * @param subject latticeTopic to subscribe to
+   * @param callback callback to invoke when an event is received
+   */
+  #subscribe<Event extends LatticeEvent>(subject: string, callback: (event: Event) => void) {
+    if (this.#connection === undefined) {
+      throw new Error('Connection not initialized');
+    }
+
+    return this.#connection.subscribe(subject, callback);
+  }
+
+  /**
+   * Connect to the lattice
+   */
+  readonly #connect = async (): Promise<void> => {
+    await this.#connection?.connect();
   };
 
-  #waitForConnection = (count = 0): Promise<NatsConnection> => {
-    return new Promise((resolve, reject) => {
-      if (count >= this.config$.value.retryCount) {
-        reject(new Error('Could not connect to lattice'));
-        return;
-      }
+  /**
+   * Disconnect from the lattice
+   */
+  readonly #disconnect = async (): Promise<void> => {
+    await this.#connection?.disconnect();
+  };
 
-      try {
-        if (this.#connection) {
-          resolve(this.#connection);
-        } else {
-          setTimeout(() => {
-            resolve(this.#waitForConnection(count + 1));
-          }, 100);
-        }
-      } catch (error) {
-        reject(error);
-      }
-    });
+  /**
+   * Convenience method to disconnect and reconnect to the lattice
+   */
+  readonly #reconnect = async (): Promise<void> => {
+    await this.#disconnect();
+    await this.#connect();
   };
 }
