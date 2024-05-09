@@ -1,10 +1,10 @@
 import {ColumnDef, createColumnHelper} from '@tanstack/react-table';
-import {useLatticeData, WadmLink} from '@wasmcloud/lattice-client-react';
+import {useLatticeData, WasmCloudLink} from '@wasmcloud/lattice-client-react';
 import * as React from 'react';
 import {DataTable} from '@/components/data-table';
 import {ShortCopy} from '@/components/short-copy';
 
-const columnHelper = createColumnHelper<WadmLink>();
+const columnHelper = createColumnHelper<WasmCloudLink>();
 
 const columns = [
   columnHelper.display({
@@ -42,7 +42,7 @@ export function LinksTable(): React.ReactElement {
 
   return (
     <div>
-      <DataTable columns={columns as ColumnDef<WadmLink>[]} data={data} />
+      <DataTable columns={columns as ColumnDef<WasmCloudLink>[]} data={data} />
     </div>
   );
 }
