@@ -14,7 +14,7 @@ export function Dashboard(): ReactElement {
   const hostsCount = Object.keys(hosts).length.toString();
   const componentsCount = Object.keys(components).length.toString();
   const providersCount = Object.keys(providers).length.toString();
-  const linksCount = links.length.toString();
+  const linksCount = Object.keys(links).length.toString();
 
   return (
     <div className="flex flex-col gap-2 md:gap-4">

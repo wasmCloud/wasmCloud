@@ -1,5 +1,5 @@
 import {useLatticeData} from '@wasmcloud/lattice-client-react';
-import {formatDistanceToNow, formatDuration, intervalToDuration} from 'date-fns';
+import {formatDuration, intervalToDuration} from 'date-fns';
 import {ReactElement} from 'react';
 import {Accordion, AccordionContent, AccordionItem, AccordionTrigger} from '@/components/accordion';
 import {Badge} from '@/components/badge';
@@ -9,7 +9,7 @@ import {Table, TableBody, TableCell, TableHead, TableRow} from '@/components/tab
 export function HostsSummary(): ReactElement {
   const {hosts} = useLatticeData();
 
-  const hostsArray = Object.values(hosts).sort((a, b) => (a.id > b.id ? 1 : -1));
+  const hostsArray = Object.values(hosts).sort((a, b) => (a.host_id > b.host_id ? 1 : -1));
 
   return (
     <div>
@@ -17,7 +17,7 @@ export function HostsSummary(): ReactElement {
       <div className="grid grid-cols-1 grid-rows-1 gap-2">
         <Accordion type="single" collapsible className="w-full">
           {hostsArray.map((host) => (
-            <AccordionItem value={host.id} key={host.id}>
+            <AccordionItem value={host.host_id} key={host.host_id}>
               <AccordionTrigger>
                 <div className="me-2 flex w-full gap-2">
                   <Badge>{host.version}</Badge>
@@ -36,16 +36,10 @@ export function HostsSummary(): ReactElement {
                       </TableCell>
                     </TableRow>
                     <TableRow>
-                      <TableHead className="p-2 align-baseline">Last Seen</TableHead>
-                      <TableCell>
-                        {formatDistanceToNow(new Date(host.last_seen), {addSuffix: true})}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
                       <TableHead className="p-2 align-baseline">Host ID</TableHead>
                       <TableCell>
                         <ShortCopy
-                          text={host.id}
+                          text={host.host_id}
                           className="md:w-64 lg:w-auto lg:[mask-image:none]"
                         />
                       </TableCell>

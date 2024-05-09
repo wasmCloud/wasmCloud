@@ -8,7 +8,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
-import {useLatticeData, WadmProvider} from '@wasmcloud/lattice-client-react';
+import {useLatticeData, WasmCloudProvider} from '@wasmcloud/lattice-client-react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useMemo, useState} from 'react';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/collapsible';
@@ -16,7 +16,7 @@ import {ShortCopy} from '@/components/short-copy';
 import {StatusIndicator} from '@/components/status-indicator';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/table';
 
-const columnHelper = createColumnHelper<WadmProvider>();
+const columnHelper = createColumnHelper<WasmCloudProvider>();
 
 const columns = [
   columnHelper.display({
@@ -54,7 +54,6 @@ const columns = [
   columnHelper.accessor('hosts', {
     header: 'Hosts',
     id: 'hosts-expanded',
-    cell: (info) => Object.keys(info.getValue()).length.toString(),
     meta: {
       baseRow: 'hidden',
       expandedRow: 'visible',
@@ -179,11 +178,11 @@ export function ProvidersTable(): ReactElement {
                       </TableRow>
                       <CollapsibleContent asChild>
                         <Fragment>
-                          {Object.keys(row.getValue('hosts')).length > 0 &&
-                            Object.entries(row.getValue('hosts') as Record<string, string[]>)
+                          {(row.getValue('hosts') as string[]).length > 0 &&
+                            (row.getValue('hosts') as string[])
                               .sort((a, b) => (a > b ? 1 : -1))
-                              .map(([host, instances]) => (
-                                <TableRow key={row.id + '-' + host} data-expanded="true">
+                              .map((hostId) => (
+                                <TableRow key={row.id + '-' + hostId} data-expanded="true">
                                   {row
                                     .getVisibleCells()
                                     .map((cell) =>
@@ -194,8 +193,8 @@ export function ProvidersTable(): ReactElement {
                                             ? null
                                             : flexRender(
                                                 cell.column.columnDef.meta?.expandedCell?.(
-                                                  host,
-                                                  instances,
+                                                  hostId,
+                                                  hostId,
                                                 ) ?? cell.column.columnDef.cell,
                                                 cell.getContext(),
                                               )}

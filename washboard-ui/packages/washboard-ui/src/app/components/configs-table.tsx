@@ -8,13 +8,13 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
-import {WadmConfig, useLatticeData} from '@wasmcloud/lattice-client-react';
+import {WasmCloudConfig, useLatticeData} from '@wasmcloud/lattice-client-react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useState, useMemo} from 'react';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/collapsible';
 import {Table, TableHeader, TableRow, TableHead, TableBody, TableCell} from '@/components/table';
 
-const columnHelper = createColumnHelper<WadmConfig>();
+const columnHelper = createColumnHelper<WasmCloudConfig>();
 
 const columns = [
   columnHelper.display({
@@ -33,8 +33,9 @@ const columns = [
       expandedRow: 'empty',
     },
   }),
-  columnHelper.accessor('name', {
+  columnHelper.accessor('key', {
     header: 'Name',
+    id: 'name',
     meta: {
       baseRow: 'visible',
       expandedRow: 'empty',
@@ -68,7 +69,7 @@ export function ConfigsTable(): ReactElement {
   const {configs} = useLatticeData();
 
   const data = useMemo(
-    () => Object.values(configs).sort((a, b) => (a.name > b.name ? 1 : -1)),
+    () => Object.values(configs).sort((a, b) => (a.key > b.key ? 1 : -1)),
     [configs],
   );
 
@@ -129,7 +130,7 @@ export function ConfigsTable(): ReactElement {
                       <CollapsibleContent asChild>
                         <Fragment>
                           {Object.keys(row.getValue('key')).length > 0 &&
-                            Object.entries(row.getValue('key') as WadmConfig['entries'])
+                            Object.entries(row.getValue('key') as WasmCloudConfig['entries'])
                               .sort((a, b) => (a[0] > b[0] ? 1 : -1))
                               .map(([key, entries]) => (
                                 <TableRow key={row.id + '-' + key} data-expanded="true">

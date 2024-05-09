@@ -8,7 +8,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
-import {WadmComponent, useLatticeData} from '@wasmcloud/lattice-client-react';
+import {WasmCloudComponent, useLatticeData} from '@wasmcloud/lattice-client-react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useMemo, useState} from 'react';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/collapsible';
@@ -16,7 +16,7 @@ import {ShortCopy} from '@/components/short-copy';
 import {Table, TableHeader, TableRow, TableHead, TableBody, TableCell} from '@/components/table';
 import {countInstances} from '../helpers/count-instances';
 
-const columnHelper = createColumnHelper<WadmComponent>();
+const columnHelper = createColumnHelper<WasmCloudComponent>();
 
 const columns = [
   columnHelper.display({
