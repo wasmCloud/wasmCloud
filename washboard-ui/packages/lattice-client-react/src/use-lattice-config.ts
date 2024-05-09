@@ -1,27 +1,29 @@
-import {LatticeClientConfig} from '@wasmcloud/lattice-client-core';
+import {type LatticeClient, type LatticeClientOptions} from '@wasmcloud/lattice-client-core';
 import * as React from 'react';
-import {useLatticeClient} from './lattice-client-provider';
+import {useLatticeClient} from './context/use-lattice-client';
 
-type SetConfigFunction = (value: Partial<LatticeClientConfig>) => void;
+type LatticeClientConfigOutput = typeof LatticeClient.prototype.instance.config;
+type LatticeClientConfigInput = Partial<LatticeClientOptions['config']>;
 
-type UseLatticeConfigResult = [LatticeClientConfig, SetConfigFunction];
+type SetConfigFunction = (value: LatticeClientConfigInput) => void;
+
+type UseLatticeConfigResult = [LatticeClientConfigOutput, SetConfigFunction];
 
 /**
  * get the current lattice config and a function to update it
  */
 function useLatticeConfig(): UseLatticeConfigResult {
   const client = useLatticeClient();
-  const [config, setConfigState] = React.useState<LatticeClientConfig>(client.config$.value);
+  const [config, setConfigState] = React.useState<LatticeClientConfigOutput>(
+    client.instance.config,
+  );
   const setConfig = React.useCallback<SetConfigFunction>(
-    (value) => client.setPartialConfig(value),
+    (newConfig) => {
+      client.instance.setPartialConfig(newConfig);
+      setConfigState(() => client.instance.config);
+    },
     [client],
   );
-
-  React.useEffect(() => {
-    const subscription = client.config$.subscribe((newConfig) => setConfigState(newConfig));
-
-    return () => subscription.unsubscribe();
-  }, [client]);
 
   return [config, setConfig];
 }
