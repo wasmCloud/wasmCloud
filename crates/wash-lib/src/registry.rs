@@ -14,6 +14,7 @@ use oci_distribution::{
 };
 use provider_archive::ProviderArchive;
 use regex::RegexBuilder;
+use sha2::Digest;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use wasmcloud_core::tls;
@@ -66,6 +67,14 @@ pub enum SupportedArtifacts {
     Par,
     /// WebAssembly modules
     Wasm,
+}
+
+// Based on https://github.com/krustlet/oci-distribution/blob/v0.9.4/src/lib.rs#L25-L28
+// We use this to calculate the sha256 digest for a given manifest so that we can return it
+// back when pushing an artifact to a registry without making a network request for it.
+/// Computes the SHA256 digest of a byte vector
+fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", sha2::Sha256::digest(bytes))
 }
 
 // NOTE(thomastaylor312): In later refactors, we might want to consider making some sort of puller
@@ -231,7 +240,18 @@ pub async fn push_oci_artifact(
     };
 
     let manifest = OciImageManifest::build(&layer, &config, options.annotations);
-    let digest = manifest.config.digest.clone();
+    // We calculate the sha256 digest from serde_json::Value instead of the OciImageManifest struct, because
+    // when you serialize a struct directly into json, serde_json preserves the ordering of the keys.
+    //
+    // However, the registry implementations that were tested against (mostly based on distribution[1] registry),
+    // all sort their manifests alphabetically (since they are based on Go), which means that when you calculate
+    // the sha256-based digest, the ordering matters, and thus preserving the struct field ordering in the json
+    // output causes the digests to differ.
+    //
+    // This attempts to approximate the ordering as provided by the Go-based registry implementations, which
+    // is/are the prevailing implementation.
+    let digest =
+        serde_json::to_value(&manifest).map(|value| sha256_digest(value.to_string().as_bytes()))?;
 
     client
         .push(&image, &layer, config, &auth, Some(manifest))

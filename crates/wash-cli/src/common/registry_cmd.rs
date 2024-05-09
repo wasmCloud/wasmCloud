@@ -149,7 +149,10 @@ pub async fn registry_push(
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
-    let annotations = input_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
+    let annotations = match cmd.annotations {
+        Some(annotations) => input_vec_to_hashmap(annotations).ok(),
+        None => None,
+    };
 
     let (maybe_tag, digest) = push_oci_artifact(
         artifact_url.clone(),
@@ -160,7 +163,7 @@ pub async fn registry_push(
             user: credentials.username,
             password: credentials.password,
             insecure: cmd.opts.insecure,
-            annotations: Some(annotations),
+            annotations,
         },
     )
     .await?;

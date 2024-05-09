@@ -1,6 +1,9 @@
 mod common;
 
-use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use common::{
+    fetch_artifact_digest, get_json_output, output_to_string, test_dir_file,
+    test_dir_with_subfolder, wash,
+};
 use tokio::process::Command;
 
 use std::{
@@ -170,12 +173,12 @@ fn integration_reg_push_basic() {
 }
 
 // NOTE: This test will fail without a local docker registry running
-#[test]
+#[tokio::test]
 #[cfg_attr(
     not(can_reach_wasmcloud_azurecr_io),
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
-fn integration_reg_push_comprehensive() {
+async fn integration_reg_push_comprehensive() -> Result<()> {
     const SUBFOLDER: &str = "push_comprehensive";
     let push_dir = test_dir_with_subfolder(SUBFOLDER);
 
@@ -206,11 +209,11 @@ fn integration_reg_push_comprehensive() {
     let mut config = File::create(config_json.clone()).unwrap();
     config.write_all(b"{}").unwrap();
 
-    let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
+    let logging_push_all_options = format!("{LOCAL_REGISTRY}/logging:alloptions");
     let push_all_options = wash()
         .args([
             "push",
-            logging_push_all_options,
+            &logging_push_all_options,
             pull_logging_par.to_str().unwrap(),
             "--allow-latest",
             "--insecure",
@@ -229,11 +232,14 @@ fn integration_reg_push_comprehensive() {
 
     let output = get_json_output(push_all_options).unwrap();
 
-    let expected_json = json!({"url": logging_push_all_options, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "alloptions"});
+    let expected_digest = fetch_artifact_digest(&logging_push_all_options).await?;
+    let expected_json = json!({"url": logging_push_all_options, "digest": expected_digest, "success": true, "tag": "alloptions"});
 
     assert_eq!(output, expected_json);
 
     remove_dir_all(push_dir).unwrap();
+
+    Ok(())
 }
 
 // NOTE: This test will fail without a local docker registry running
@@ -325,7 +331,9 @@ async fn integration_reg_config() -> Result<()> {
     // let output = output_to_string(cmd)?;
     // println!("{}", output);
     let output = get_json_output(cmd).unwrap();
-    let expected_json = json!({"url": push_url, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "0.1.0"});
+    let expected_digest = fetch_artifact_digest(&push_url).await?;
+    let expected_json =
+        json!({"url": push_url, "digest": expected_digest, "success": true, "tag": "0.1.0"});
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test cli args
@@ -352,7 +360,8 @@ async fn integration_reg_config() -> Result<()> {
     assert!(cmd.status.success());
     let output = get_json_output(cmd).unwrap();
     let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
-    let expected_json = json!({"url": expected_url, "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "success": true, "tag": "0.2.0", "url": "localhost:5001/hello:0.2.0"});
+    let expected_digest = fetch_artifact_digest(&expected_url).await?;
+    let expected_json = json!({"url": expected_url, "digest": expected_digest, "success": true, "tag": "0.2.0", "url": "localhost:5001/hello:0.2.0"});
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test env vars
@@ -373,7 +382,8 @@ async fn integration_reg_config() -> Result<()> {
     assert!(cmd.status.success());
     let output = get_json_output(cmd).unwrap();
     let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
-    let expected_json = json!({"url": expected_url, "success": true});
+    let expected_digest = fetch_artifact_digest(&expected_url).await?;
+    let expected_json = json!({"url": expected_url, "digest": expected_digest, "success": true, "tag": "0.3.0", "url": "localhost:5001/hello:0.3.0"});
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test file configuration
@@ -398,7 +408,8 @@ async fn integration_reg_config() -> Result<()> {
     assert!(cmd.status.success());
     let output = get_json_output(cmd).unwrap();
     let expected_url = format!("{LOCAL_REGISTRY}/{push_url}");
-    let expected_json = json!({"url": expected_url, "success": true});
+    let expected_digest = fetch_artifact_digest(&expected_url).await?;
+    let expected_json = json!({"url": expected_url, "digest": expected_digest, "success": true, "tag": "0.4.0", "url": "localhost:5001/hello:0.4.0"});
     assert_eq!(output, expected_json);
 
     Ok(())
