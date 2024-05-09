@@ -41,10 +41,13 @@
     "build": "tsup"
   },
   "devDependencies": {
-    "@types/eslint": "~8.56.5",
+    "@types/eslint": "~8.56.10",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
-    "@wasmcloud/tsconfig": "workspace:^"
+    "@wasmcloud/eslint-config": "workspace:^",
+    "@wasmcloud/tsconfig": "workspace:^",
+    "eslint": "^8.57.0",
+    "tailwindcss": "^3.4.3"
   },
   "dependencies": {
     "@wasmcloud/lattice-client-core": "workspace:^",

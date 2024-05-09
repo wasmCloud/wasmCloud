@@ -40,9 +40,15 @@
     "dev": "tsup --watch",
     "build": "tsup"
   },
+  "peerDependencies": {
+    "eslint": "^8.57.0",
+    "tailwindcss": "^3.4.3"
+  },
   "devDependencies": {
-    "@types/eslint": "~8.56.5",
-    "@wasmcloud/tsconfig": "workspace:^"
+    "@types/eslint": "~8.56.10",
+    "@wasmcloud/eslint-config": "workspace:^",
+    "@wasmcloud/tsconfig": "workspace:^",
+    "type-fest": "^4.18.2"
   },
   "dependencies": {
     "immer": "^10.1.1",

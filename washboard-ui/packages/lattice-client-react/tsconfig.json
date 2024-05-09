@@ -2,6 +2,10 @@
   "extends": "@wasmcloud/tsconfig/configs/base.json",
   "compilerOptions": {
     "jsx": "react",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", ".eslintrc.cjs", "tsup.config.js", "vite.config.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
