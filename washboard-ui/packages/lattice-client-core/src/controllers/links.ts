@@ -1,5 +1,5 @@
-import {WasmCloudLink, type ControlResponse} from '../types';
-import {BaseController} from './base-controller';
+import {BaseController} from '@/controllers/base-controller';
+import {WasmCloudLink, type ControlResponse} from '@/types';
 
 type PutLinkRequest = {
   /** Source identifier for the link */

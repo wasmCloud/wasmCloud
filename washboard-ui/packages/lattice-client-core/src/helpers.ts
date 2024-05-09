@@ -5,7 +5,7 @@ import {
   type WasmCloudHost,
   type WasmCloudProvider,
   type ApplicationStoreValue,
-} from './types';
+} from '@/types';
 
 export function getManifestFrom(application: ApplicationStoreValue, version?: string) {
   const manifest = application.manifests[version ?? application.deployed_version];

@@ -59,7 +59,7 @@ export type WasmCloudLink = {
 };
 
 export type WasmCloudConfig = {
-  key: string;
+  name: string;
   entries: Record<string, string>;
 };
 
@@ -132,17 +132,6 @@ export type WasmCloudHostRef = {
   version: string;
 };
 
-export type WadmApplication = {
-  name: string;
-  version: string;
-  description: string;
-  deployed_version: string;
-  status: DeploymentStatus;
-  status_message: string;
-  manifest?: ApplicationManifest;
-  history?: ApplicationHistory;
-};
-
 type StatusType = {
   type: DeploymentStatus;
   message?: string;
@@ -160,6 +149,12 @@ export type ApplicationStatus = {
       status: StatusType;
     }>;
   }>;
+};
+
+export type ApplicationDetail = {
+  status: ApplicationStatus;
+  versions: ApplicationHistory;
+  manifest: ApplicationManifest;
 };
 
 export type ApplicationStoreValue = {
@@ -247,7 +242,7 @@ export type ApplicationTraitLink = {
   >;
 };
 
-export type ApplicationModelSummary = {
+export type ApplicationSummary = {
   name: string;
   version: string;
   description: string;

@@ -33,7 +33,7 @@ const columns = [
       expandedRow: 'empty',
     },
   }),
-  columnHelper.accessor('key', {
+  columnHelper.accessor('name', {
     header: 'Name',
     id: 'name',
     meta: {
@@ -69,7 +69,7 @@ export function ConfigsTable(): ReactElement {
   const {configs} = useLatticeData();
 
   const data = useMemo(
-    () => Object.values(configs).sort((a, b) => (a.key > b.key ? 1 : -1)),
+    () => Object.values(configs).sort((a, b) => (a.name > b.name ? 1 : -1)),
     [configs],
   );
 

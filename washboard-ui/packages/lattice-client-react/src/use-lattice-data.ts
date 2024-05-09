@@ -1,6 +1,6 @@
 import {type LatticeClient, getCombinedInventoryFromHosts} from '@wasmcloud/lattice-client-core';
 import * as React from 'react';
-import {useLatticeClient} from './context/use-lattice-client';
+import {useLatticeClient} from '@/context/use-lattice-client';
 
 function useLatticeData() {
   const client = useLatticeClient();
@@ -39,7 +39,7 @@ async function fetchLinks(client: LatticeClient) {
 
 async function fetchConfigs(client: LatticeClient) {
   const result = await client.configs.list({expand: true});
-  const configs = Object.fromEntries(result.response.map((config) => [config.key, config]));
+  const configs = Object.fromEntries(result.response.map((config) => [config.name, config]));
   return configs;
 }
 

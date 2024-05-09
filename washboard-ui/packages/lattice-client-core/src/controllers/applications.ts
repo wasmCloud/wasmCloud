@@ -1,17 +1,18 @@
+import {BaseController} from '@/controllers/base-controller';
 import {
   type ApplicationStatus,
   type ApplicationHistory,
   type ApplicationManifest,
-  type ApplicationModelSummary,
+  type ApplicationSummary,
   type WadmApiResponse,
-} from '../types';
-import {BaseController} from './base-controller';
+  ApplicationDetail,
+} from '@/types';
 
 type ApplicationListResponse =
   | {
       result: 'success';
       message: string;
-      models: ApplicationModelSummary[];
+      models: ApplicationSummary[];
     }
   | {
       result: 'error';
@@ -60,13 +61,13 @@ class ApplicationsController extends BaseController {
    * @returns all of the applications in the lattice
    */
   async list() {
-    const response = await this.connection.request<
-      ApplicationListResponse | ApplicationModelSummary[]
-    >(`${this.config.wadmTopic}.model.list`);
+    const response = await this.connection.request<ApplicationListResponse | ApplicationSummary[]>(
+      `${this.config.wadmTopic}.model.list`,
+    );
 
     // TODO: See https://github.com/wasmCloud/wadm/issues/278
     // once the `list` topic correctly returns the response type, we can remove this array check
-    // and the `ApplicationModelSummary[]` type from the union above
+    // and the `ApplicationSummary[]` type from the union above
     if (Array.isArray(response)) {
       return {
         result: 'success',
@@ -86,21 +87,25 @@ class ApplicationsController extends BaseController {
    * @returns combined details for the application
    */
   async detail(applicationName: string) {
-    const [statusResponse, versionsResponse, manifestResponse] = await Promise.all([
-      this.status(applicationName),
-      this.versions(applicationName),
-      this.manifest(applicationName),
-    ]);
+    try {
+      const [statusResponse, versionsResponse, manifestResponse] = await Promise.all([
+        this.status(applicationName),
+        this.versions(applicationName),
+        this.manifest(applicationName),
+      ]);
 
-    return {
-      status: 'ok' as const,
-      message: 'Successfully fetched application details',
-      detail: {
-        status: statusResponse.status,
-        versions: versionsResponse.versions,
-        manifest: manifestResponse.manifest,
-      },
-    };
+      return {
+        status: 'ok' as const,
+        message: 'Successfully fetched application details',
+        detail: {
+          status: statusResponse.status,
+          versions: versionsResponse.versions,
+          manifest: manifestResponse.manifest,
+        } satisfies ApplicationDetail,
+      };
+    } catch {
+      throw new Error('Failed to fetch application details');
+    }
   }
 
   /**
@@ -215,14 +220,13 @@ class ApplicationsController extends BaseController {
   /**
    * Undeploy a application, instructing wadm to no longer manage the given application
    * @param applicationName the application name to undeploy
-   * @param non_destructive Undeploy deletes managed resources by default, this can be overridden by setting this to `true`
+   * @param nonDestructive Undeploy deletes managed resources by default, this can be overridden by setting this to `true`
    * @returns The response from wadm
    */
-  async undeploy(applicationName: string, non_destructive?: boolean) {
+  async undeploy(applicationName: string, nonDestructive?: boolean) {
     const response = await this.connection.request<ApplicationDeployResponse>(
       `${this.config.wadmTopic}.model.undeploy.${applicationName}`,
-
-      JSON.stringify({non_destructive}),
+      JSON.stringify({non_destructive: nonDestructive ?? false}),
     );
 
     if (response.result === 'error') {
