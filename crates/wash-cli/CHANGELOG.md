@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.29.0 (2024-05-10)
+
+### Bug Fixes
+
+ - <csr-id-1b4faabea11ba6b77b75e34f6892f979be0adde5/> Make wash push returned digest based on the pushed manifest
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 1 commit contributed to the release.
+ - 1 day passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Make wash push returned digest based on the pushed manifest ([`1b4faab`](https://github.com/wasmCloud/wasmCloud/commit/1b4faabea11ba6b77b75e34f6892f979be0adde5))
+</details>
+
 ## v0.28.0 (2024-05-08)
 
 <csr-id-4dc6c775d7780f6811435de0f2cd5401ce21d675/>
@@ -18,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-25eeb94fe4cae339ea6a2a1eddb44c90d2cf84ae/>
 <csr-id-f2d58a462f909d3b1293c43b43a8cbeca154cf99/>
 <csr-id-b2e3158614f3cebf1896c3d5539a69ded97e03fe/>
+<csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/>
 
 ### Chore
 
@@ -111,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 27 commits contributed to the release over the course of 20 calendar days.
+ - 28 commits contributed to the release over the course of 20 calendar days.
  - 20 days passed between releases.
  - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -123,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
     - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
     - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Reg test failure ([`305e9b6`](https://github.com/wasmCloud/wasmCloud/commit/305e9b6615d2a2473caccd3dbcbcacbdec02c3ac))

@@ -5,6 +5,138 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.22.0 (2024-05-10)
+
+### Chore
+
+ - <csr-id-7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435/> update [actor] to [component]
+ - <csr-id-468bad52bab3b907d0380cdf2c151298688b50d1/> replace references to 'actor' with 'component'
+ - <csr-id-d3a837c839d1a340daf72315833a3e2cbd1db0f3/> rename actor->component build output
+ - <csr-id-07a78ec397ec9bd3b742490f8f36ac4db854ca9f/> add link get alias
+ - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+
+### New Features
+
+ - <csr-id-cbac8fef75bd8dda2554bd1665e75a60059ba4c3/> Adds digest and tag to output of `wash push`
+   This follows a similar (but not exact) format from `docker push` and
+   includes the digest and tag in JSON output.
+ - <csr-id-012bfb6e6bc0e43af8a0223ddc853bd864e93816/> allow relative paths when starting providers
+ - <csr-id-58ff0cba00d67f1a8d19034193002ed84aeda699/> Ensure that plugins cannot access sockets
+ - <csr-id-6e64ae27517e79bd9e16fd014cf37c2757bf8caa/> Ensure that plugins cannot access sockets
+ - <csr-id-d9f1982faeb6ad7365fab39a96019f95e02156e8/> Adds example for wash plugin
+   This also adds a pipeline for packaging up the wash plugin wit for
+   consumption. In the future we can add a bare component version as well
+   for use with tools like `cargo component`
+ - <csr-id-6cb20f900e1ec7dca4b1420c59b3d216014cd93f/> Adds `plugin` subcommand
+   Wash now has a plugin subcommand that helps manage your plugins and can
+   install from HTTP, OCI, and local files. Once we have a bit more
+   scaffolding and example plugins around, we can probably build those and
+   use those in an e2e test for this command. For now, I did manually
+   validate all of the new commands
+ - <csr-id-26d78e3b50beaa8e23d17002f4139210ef287d30/> Add env var filtering for plugins
+ - <csr-id-026ecdc473e64c18105fd6f79dc2bad58814e0bf/> Adds support for a scratch space directory
+   All plugins get their own directory keyed by ID and can create files
+   in that space. Also updates the test to make sure it works
+ - <csr-id-dd8a48c6b40f76b5e18d37bd49b9ec1b41e58431/> Adds caching to wasmtime to speed up plugin load
+ - <csr-id-0c1dd15e84e9ca86a563168c5e86f32dbd8f2831/> Integrates plugins into the CLI
+   This integrates plugins into the CLI and they now function properly. Next
+   step is caching component compilation
+ - <csr-id-3afe0aaa83989c133cfb65de5af2fb6ffeacf138/> Adds plugin functionality to wash-lib
+   This only adds it to wash-lib, next commit will be adding this into the
+   actual CLI
+ - <csr-id-5e81571a5f0dfd08dd8aab4710b731c6f0c685e8/> re-add wash call tests
+   This commit re-adds the missing `wash call` tests to the codebase,
+   enhancing `wash call` to be able to invoke incoming HTTP handlers
+   along the way.
+
+### Bug Fixes
+
+ - <csr-id-1b4faabea11ba6b77b75e34f6892f979be0adde5/> Make wash push returned digest based on the pushed manifest
+ - <csr-id-42d60d20aeb80c7130b5f5f852ce0bc063cfb399/> already updated must succeed to shell
+ - <csr-id-6cf9672d69ba96cb8139a2184f3eea9a0e32dc42/> fixed one of the failing tests
+ - <csr-id-1cbca5904b65689ac96d88e8e7df94492a8dad79/> re-adding the changes to make sure tests pass sucessfully
+ - <csr-id-8b00bd35d752e939e3d7725406dc7fdfc1d30d33/> update wash README
+
+### Other
+
+ - <csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/> release and update CHANGELOG
+ - <csr-id-c074106584ab5330a0ac346b5a51676bd966aa3c/> Change plugins to support arbitrary path access
+   This allows plugins to mark arguments as paths so that they can be
+   preopened and allowed in the component. This tries to walk a path between
+   security and flexibility. If an argument is marked as a path, wash will
+   allow full access to it if it is a directory and then limited access to
+   a directory and full access to the file if it is a path. It isn't
+   perfect due to the limited nature of preopens, but it does mean that the
+   plugin will not get access to anything outside of its scratch dir
+   without the user explicitly passing the path.
+   
+   Once this is merged there will be two follow ups: one is a PR to this
+   repo updating the example code and the other will be to the docs repo
+   to update documentation on the security around paths
+ - <csr-id-bfeabbefa64a969f48c05f02b336ef229d0f5b2c/> prevent component update with same image reference
+
+### Refactor
+
+ - <csr-id-57446f39762be82821bd38b6c4bd16471a9c3095/> ensure file open errors are more informative
+ - <csr-id-14fd9b1ad8fdbce8efd6cc9ddce52ea08ef264b7/> change command output messages for update component
+
+### Chore (BREAKING)
+
+ - <csr-id-9fdc7e52c2cfbd10fab08d34d3a7e8047eaa5432/> remove interface generation
+
+### New Features (BREAKING)
+
+ - <csr-id-eb82203163249bd7d3252657e04b8d00cd397a14/> make link del interface consistent
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 31 commits contributed to the release over the course of 22 calendar days.
+ - 22 days passed between releases.
+ - 29 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Make wash push returned digest based on the pushed manifest ([`1b4faab`](https://github.com/wasmCloud/wasmCloud/commit/1b4faabea11ba6b77b75e34f6892f979be0adde5))
+    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
+    - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
+    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
+    - Adds digest and tag to output of `wash push` ([`cbac8fe`](https://github.com/wasmCloud/wasmCloud/commit/cbac8fef75bd8dda2554bd1665e75a60059ba4c3))
+    - Change plugins to support arbitrary path access ([`c074106`](https://github.com/wasmCloud/wasmCloud/commit/c074106584ab5330a0ac346b5a51676bd966aa3c))
+    - Update [actor] to [component] ([`7ca9a3e`](https://github.com/wasmCloud/wasmCloud/commit/7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435))
+    - Allow relative paths when starting providers ([`012bfb6`](https://github.com/wasmCloud/wasmCloud/commit/012bfb6e6bc0e43af8a0223ddc853bd864e93816))
+    - Ensure file open errors are more informative ([`57446f3`](https://github.com/wasmCloud/wasmCloud/commit/57446f39762be82821bd38b6c4bd16471a9c3095))
+    - Ensure that plugins cannot access sockets ([`58ff0cb`](https://github.com/wasmCloud/wasmCloud/commit/58ff0cba00d67f1a8d19034193002ed84aeda699))
+    - Ensure that plugins cannot access sockets ([`6e64ae2`](https://github.com/wasmCloud/wasmCloud/commit/6e64ae27517e79bd9e16fd014cf37c2757bf8caa))
+    - Adds example for wash plugin ([`d9f1982`](https://github.com/wasmCloud/wasmCloud/commit/d9f1982faeb6ad7365fab39a96019f95e02156e8))
+    - Adds `plugin` subcommand ([`6cb20f9`](https://github.com/wasmCloud/wasmCloud/commit/6cb20f900e1ec7dca4b1420c59b3d216014cd93f))
+    - Add env var filtering for plugins ([`26d78e3`](https://github.com/wasmCloud/wasmCloud/commit/26d78e3b50beaa8e23d17002f4139210ef287d30))
+    - Adds support for a scratch space directory ([`026ecdc`](https://github.com/wasmCloud/wasmCloud/commit/026ecdc473e64c18105fd6f79dc2bad58814e0bf))
+    - Adds caching to wasmtime to speed up plugin load ([`dd8a48c`](https://github.com/wasmCloud/wasmCloud/commit/dd8a48c6b40f76b5e18d37bd49b9ec1b41e58431))
+    - Integrates plugins into the CLI ([`0c1dd15`](https://github.com/wasmCloud/wasmCloud/commit/0c1dd15e84e9ca86a563168c5e86f32dbd8f2831))
+    - Adds plugin functionality to wash-lib ([`3afe0aa`](https://github.com/wasmCloud/wasmCloud/commit/3afe0aaa83989c133cfb65de5af2fb6ffeacf138))
+    - Already updated must succeed to shell ([`42d60d2`](https://github.com/wasmCloud/wasmCloud/commit/42d60d20aeb80c7130b5f5f852ce0bc063cfb399))
+    - Change command output messages for update component ([`14fd9b1`](https://github.com/wasmCloud/wasmCloud/commit/14fd9b1ad8fdbce8efd6cc9ddce52ea08ef264b7))
+    - Prevent component update with same image reference ([`bfeabbe`](https://github.com/wasmCloud/wasmCloud/commit/bfeabbefa64a969f48c05f02b336ef229d0f5b2c))
+    - Replace references to 'actor' with 'component' ([`468bad5`](https://github.com/wasmCloud/wasmCloud/commit/468bad52bab3b907d0380cdf2c151298688b50d1))
+    - Fixed one of the failing tests ([`6cf9672`](https://github.com/wasmCloud/wasmCloud/commit/6cf9672d69ba96cb8139a2184f3eea9a0e32dc42))
+    - Re-adding the changes to make sure tests pass sucessfully ([`1cbca59`](https://github.com/wasmCloud/wasmCloud/commit/1cbca5904b65689ac96d88e8e7df94492a8dad79))
+    - Remove interface generation ([`9fdc7e5`](https://github.com/wasmCloud/wasmCloud/commit/9fdc7e52c2cfbd10fab08d34d3a7e8047eaa5432))
+    - Update wash README ([`8b00bd3`](https://github.com/wasmCloud/wasmCloud/commit/8b00bd35d752e939e3d7725406dc7fdfc1d30d33))
+    - Rename actor->component build output ([`d3a837c`](https://github.com/wasmCloud/wasmCloud/commit/d3a837c839d1a340daf72315833a3e2cbd1db0f3))
+    - Add link get alias ([`07a78ec`](https://github.com/wasmCloud/wasmCloud/commit/07a78ec397ec9bd3b742490f8f36ac4db854ca9f))
+    - Make link del interface consistent ([`eb82203`](https://github.com/wasmCloud/wasmCloud/commit/eb82203163249bd7d3252657e04b8d00cd397a14))
+    - Re-add wash call tests ([`5e81571`](https://github.com/wasmCloud/wasmCloud/commit/5e81571a5f0dfd08dd8aab4710b731c6f0c685e8))
+    - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
+</details>
+
 ## v0.21.0 (2024-05-08)
 
 <csr-id-7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435/>
@@ -17,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-57446f39762be82821bd38b6c4bd16471a9c3095/>
 <csr-id-14fd9b1ad8fdbce8efd6cc9ddce52ea08ef264b7/>
 <csr-id-9fdc7e52c2cfbd10fab08d34d3a7e8047eaa5432/>
+<csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/>
 
 ### Chore
 
@@ -100,53 +233,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New Features (BREAKING)
 
  - <csr-id-eb82203163249bd7d3252657e04b8d00cd397a14/> make link del interface consistent
-
-### Commit Statistics
-
-<csr-read-only-do-not-edit/>
-
- - 29 commits contributed to the release over the course of 20 calendar days.
- - 20 days passed between releases.
- - 28 commits were understood as [conventional](https://www.conventionalcommits.org).
- - 0 issues like '(#ID)' were seen in commit messages
-
-### Commit Details
-
-<csr-read-only-do-not-edit/>
-
-<details><summary>view details</summary>
-
- * **Uncategorized**
-    - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
-    - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
-    - Adds digest and tag to output of `wash push` ([`cbac8fe`](https://github.com/wasmCloud/wasmCloud/commit/cbac8fef75bd8dda2554bd1665e75a60059ba4c3))
-    - Change plugins to support arbitrary path access ([`c074106`](https://github.com/wasmCloud/wasmCloud/commit/c074106584ab5330a0ac346b5a51676bd966aa3c))
-    - Update [actor] to [component] ([`7ca9a3e`](https://github.com/wasmCloud/wasmCloud/commit/7ca9a3ec37a4f031ffdfbee08a110ead0cbbc435))
-    - Allow relative paths when starting providers ([`012bfb6`](https://github.com/wasmCloud/wasmCloud/commit/012bfb6e6bc0e43af8a0223ddc853bd864e93816))
-    - Ensure file open errors are more informative ([`57446f3`](https://github.com/wasmCloud/wasmCloud/commit/57446f39762be82821bd38b6c4bd16471a9c3095))
-    - Ensure that plugins cannot access sockets ([`58ff0cb`](https://github.com/wasmCloud/wasmCloud/commit/58ff0cba00d67f1a8d19034193002ed84aeda699))
-    - Ensure that plugins cannot access sockets ([`6e64ae2`](https://github.com/wasmCloud/wasmCloud/commit/6e64ae27517e79bd9e16fd014cf37c2757bf8caa))
-    - Adds example for wash plugin ([`d9f1982`](https://github.com/wasmCloud/wasmCloud/commit/d9f1982faeb6ad7365fab39a96019f95e02156e8))
-    - Adds `plugin` subcommand ([`6cb20f9`](https://github.com/wasmCloud/wasmCloud/commit/6cb20f900e1ec7dca4b1420c59b3d216014cd93f))
-    - Add env var filtering for plugins ([`26d78e3`](https://github.com/wasmCloud/wasmCloud/commit/26d78e3b50beaa8e23d17002f4139210ef287d30))
-    - Adds support for a scratch space directory ([`026ecdc`](https://github.com/wasmCloud/wasmCloud/commit/026ecdc473e64c18105fd6f79dc2bad58814e0bf))
-    - Adds caching to wasmtime to speed up plugin load ([`dd8a48c`](https://github.com/wasmCloud/wasmCloud/commit/dd8a48c6b40f76b5e18d37bd49b9ec1b41e58431))
-    - Integrates plugins into the CLI ([`0c1dd15`](https://github.com/wasmCloud/wasmCloud/commit/0c1dd15e84e9ca86a563168c5e86f32dbd8f2831))
-    - Adds plugin functionality to wash-lib ([`3afe0aa`](https://github.com/wasmCloud/wasmCloud/commit/3afe0aaa83989c133cfb65de5af2fb6ffeacf138))
-    - Already updated must succeed to shell ([`42d60d2`](https://github.com/wasmCloud/wasmCloud/commit/42d60d20aeb80c7130b5f5f852ce0bc063cfb399))
-    - Change command output messages for update component ([`14fd9b1`](https://github.com/wasmCloud/wasmCloud/commit/14fd9b1ad8fdbce8efd6cc9ddce52ea08ef264b7))
-    - Prevent component update with same image reference ([`bfeabbe`](https://github.com/wasmCloud/wasmCloud/commit/bfeabbefa64a969f48c05f02b336ef229d0f5b2c))
-    - Replace references to 'actor' with 'component' ([`468bad5`](https://github.com/wasmCloud/wasmCloud/commit/468bad52bab3b907d0380cdf2c151298688b50d1))
-    - Fixed one of the failing tests ([`6cf9672`](https://github.com/wasmCloud/wasmCloud/commit/6cf9672d69ba96cb8139a2184f3eea9a0e32dc42))
-    - Re-adding the changes to make sure tests pass sucessfully ([`1cbca59`](https://github.com/wasmCloud/wasmCloud/commit/1cbca5904b65689ac96d88e8e7df94492a8dad79))
-    - Remove interface generation ([`9fdc7e5`](https://github.com/wasmCloud/wasmCloud/commit/9fdc7e52c2cfbd10fab08d34d3a7e8047eaa5432))
-    - Update wash README ([`8b00bd3`](https://github.com/wasmCloud/wasmCloud/commit/8b00bd35d752e939e3d7725406dc7fdfc1d30d33))
-    - Rename actor->component build output ([`d3a837c`](https://github.com/wasmCloud/wasmCloud/commit/d3a837c839d1a340daf72315833a3e2cbd1db0f3))
-    - Add link get alias ([`07a78ec`](https://github.com/wasmCloud/wasmCloud/commit/07a78ec397ec9bd3b742490f8f36ac4db854ca9f))
-    - Make link del interface consistent ([`eb82203`](https://github.com/wasmCloud/wasmCloud/commit/eb82203163249bd7d3252657e04b8d00cd397a14))
-    - Re-add wash call tests ([`5e81571`](https://github.com/wasmCloud/wasmCloud/commit/5e81571a5f0dfd08dd8aab4710b731c6f0c685e8))
-    - Address clippy warnings ([`5957fce`](https://github.com/wasmCloud/wasmCloud/commit/5957fce86a928c7398370547d0f43c9498185441))
-</details>
 
 ## v0.20.0 (2024-04-17)
 
@@ -1044,8 +1130,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-6405f6ce45d43850ca427c4d80ca50369ee10405/> add support for Android releases
  - <csr-id-78b99fde8606febf59e30f1d12ac558b29d425bf/> set default to Rust host
    - update paths to release binary
-- allow-file-upload default bug
-- mention dashboard ui cmd
 
 ### Bug Fixes
 
@@ -1416,5 +1500,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
- build wasi preview components from wash add p2 target to wasmcloud.toml first check that git command is installed return an explicit error when the build tools don’t exist add wash dev command Adds a new experimental wash capture commandThis one is very experimental, so I didn’t even add it to the toplevel help text, but it is all manually tested and good to go Adds wash spy command with experimental flag support flatten multiple commands into wash get flatten wash reg push/pull into wash push/pull flatten wash ctl stop into wash stop flatten wash ctl start into wash start flatten wash ctl link into wash link consume new wascap and hashingThis updates to a newer version of wasmparserwhich should fix attempting to sign newer wasi modules.The integration test caught an issue introduced a longtime ago with wascap v0.5.0 and a very old modulesigned with that version from way back when.v0.9.2 of wascap fixes this issue in our integrationtests by correctly removing the old metadata.Bump wascap - looks small but NOTE:The hashes computed with v0.9.0 and later of wascapare not compatible with the hashes signed by prior versions.As a result, modules signed with older versions of wascapwill not have their module hashes validated(they’ll be ignored).Once the module has been signed with 0.9.0 or greater,it will go back to having its module hash verified. Moves claims and registry code into wash libSorry for the big PR here, but due to a bunch of codependent code,I had to move a bunch of stuff at once. There are two main threadsto this PR. First, I noticed that the claims code is all CLI specific,but it is likely that anyone building a CLI will not want to rewrite thatagain. If you are doing this purely in code, you can just use thewascap library. To make this work, I started added the CLI specific stuffto the cli module of wash lib. There will probably be other things weadd to it as we finish this refactorSecond, this moves the reusable registry bits into its own module, whichis super handy even for those not doing a CLI as it avoids directinteraction with the lower level OCI crates Adds new keys module to wash-libPlease note that this introduces one small breaking change to outputthat removes the .nk suffix from the list of keys. However, there isbackward compatibility for providing <key_name>.nk to wash keys getso it will still function as it did previously. This change wasspecifically made because the key name is more important than the suffix.If desired, I can back out that change, but it seemed to make more senseto make it less like a wash-specific ls of a directory Adds new context tests Adds drain command to wash libThis also starts the process of creating a config module that I’llcontinue to update as I push forward the other PRs. Please note thatthis is the first of many PRs. I plan on doing each command as a separatePR instead of a mega PR Makes sure that wash downloads different versions of wasmcloudThis now downloads different versions to different directories. Also dida little bit of cleanup with some clippy warnings in the tests and bumpingNATS to a later version grant execute permission to mac_listener for hot-reloading allow get inventory to query the only host<csr-unknown/>
+allow-file-upload default bugmention dashboard ui cmd<csr-unknown/>
 

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-test-util"
-version = "0.2.0"
+version = "0.3.0"
 rust-version = "1.75"
 description = """
 Utilities for testing wasmCloud hosts, providers, and components.

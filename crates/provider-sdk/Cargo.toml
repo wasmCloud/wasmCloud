@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-sdk"
-version = "0.5.0"
+version = "0.6.0"
 description = "wasmCloud provider SDK"
 
 authors.workspace = true
