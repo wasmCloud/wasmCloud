@@ -1,0 +1,6 @@
+package demo:composition;
+
+let pong = new ping:pong { ... };
+let hello = new hello:there { "example:pong/pingpong": pong.pingpong, ... };
+
+export hello...;

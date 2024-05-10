@@ -1,0 +1,11 @@
+[package]
+name = "pong"
+edition = "2021"
+description = ""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.24", features = ["default"] }
