@@ -9,11 +9,11 @@ metadata:
 spec:
   components:
     - name: http-blobstore
-      type: actor
+      type: component
       properties:
         image: file://./build/http_blobstore_s.wasm
       traits:
-        # Govern the spread/scheduling of the actor
+        # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
             replicas: 1

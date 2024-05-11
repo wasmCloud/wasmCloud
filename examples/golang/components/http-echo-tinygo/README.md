@@ -22,7 +22,7 @@ Before starting, ensure that you have the following installed:
 - The [TinyGo toolchain][tinygo-toolchain]
 - [`wash`, the WebAssembly SHell][wash] installed.
 
-## Build the WASI actor
+## Build the WASI component
 
 Once you have these two things, build the project locally:
 
@@ -69,7 +69,7 @@ First, edit `wadm.yaml` to include the absolute path to the signed WebAssembly m
 # ....
   components:
     - name: http-echo-tinygo
-      type: actor
+      type: component
       properties:
 -        # TODO: you must replace the path below to match your genreated code in build
 -       image: file:///absolute/path/to/this/repo/build/http-echo-tinygo_s.wasm

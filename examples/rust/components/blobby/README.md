@@ -3,7 +3,7 @@
 This component (we like to call it "Little Blobby Tables") is a simple file server showing the basic
 CRUD operations of the `wasi:blobstore` contract.
 
-Not only is this actor an example, it is also a fully-functional, HTTP-based fileserver that can be
+Not only is this component an example, it is also a fully-functional, HTTP-based fileserver that can be
 fronted with any HTTP server implementation and any blobstore implementation (i.e. you could store
 the uploaded files on a filesystem or in an s3 compatible store).
 
@@ -33,7 +33,7 @@ curl http://localhost:8080
 
 1. `wasi:http` to receive http requests
 2. `wasi:blobstore` to save the image to a blob
-3. `wasi:logging` so the actor can log
+3. `wasi:logging` so the component can log
 
 Once everything is up and running, you can run through all of the operations by following the
 annotated commands below:

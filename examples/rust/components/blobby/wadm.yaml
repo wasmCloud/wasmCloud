@@ -14,7 +14,7 @@ metadata:
 spec:
   components:
     - name: blobby
-      type: actor
+      type: component
       properties:
         image: wasmcloud.azurecr.io/blobby:0.1.0
       traits:

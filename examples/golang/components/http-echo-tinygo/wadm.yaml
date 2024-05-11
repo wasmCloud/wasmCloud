@@ -1,4 +1,4 @@
-# This is a full example of how to run the kvcounter actor exposed with an HTTP server.
+# This is a full example of how to run the kvcounter component exposed with an HTTP server.
 #
 # Using this example requires you to have a Redis server running locally
 #  (though the linkdef can be modified to use a Redis server you have running elsewhere).
@@ -19,11 +19,11 @@ metadata:
 spec:
   components:
     - name: http-echo-tinygo
-      type: actor
+      type: component
       properties:
         image: file://./build/http-echo-tinygo-component_s.wasm
       traits:
-        # Govern the spread/scheduling of the actor
+        # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
             replicas: 1
