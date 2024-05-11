@@ -23,7 +23,7 @@ import (
 type WadmTemplate struct {
 	AppName           string
 	AppVersion        string
-	ActorImage        string
+	ComponentImage    string
 	HttpServerPort    int
 	HttpServerHost string
 }
@@ -94,8 +94,8 @@ func TestBuild(t *testing.T) {
 	// Wait for wasmCloud to start up
 	time.Sleep(5 * time.Second)
 
-	// Derive the path to the built actor with the file scheme
-	actorImage := fmt.Sprintf("file://%s", path.Join(workingDirAbs, "build", "http-echo-tinygo-component_s.wasm"))
+	// Derive the path to the built component with the file scheme
+	componentImage := fmt.Sprintf("file://%s", path.Join(workingDirAbs, "build", "http-echo-tinygo-component_s.wasm"))
 
 	// Create a temp file to hold wadm configuration for this test
 	tempWadmYaml, err := ioutil.TempFile("", "http-echo-tinygo-test-wadm-*.yaml")
@@ -116,7 +116,7 @@ func TestBuild(t *testing.T) {
 	templateArgs := WadmTemplate{
 		AppName:           "test-http-echo-tinygo-component",
 		AppVersion:        "v0.0.1",
-		ActorImage:        actorImage,
+		ComponentImage:    componentImage,
 		HttpServerPort:    8081,
 		HttpServerHost: "127.0.0.1",
 	}
@@ -150,11 +150,11 @@ func TestBuild(t *testing.T) {
 		t.Fatalf("failed to deploy with wadm: %v", err)
 	}
 
-	// Wait until we can reach the echo actor
-	echoActorUrl := fmt.Sprintf("http://%s:%v", templateArgs.HttpServerHost, templateArgs.HttpServerPort)
+	// Wait until we can reach the echo component
+	echoComponentUrl := fmt.Sprintf("http://%s:%v", templateArgs.HttpServerHost, templateArgs.HttpServerPort)
 	// This can take a while because providers must be downloaded
-	waitForTimeout(t, fmt.Sprintf("reached echo actor via HTTP @ %v", echoActorUrl), 3*time.Minute, func() bool {
-		resp, err := http.Get(echoActorUrl)
+	waitForTimeout(t, fmt.Sprintf("reached echo component via HTTP @ %v", echoComponentUrl), 3*time.Minute, func() bool {
+		resp, err := http.Get(echoComponentUrl)
 		if err != nil {
 			return false
 		}
@@ -162,10 +162,10 @@ func TestBuild(t *testing.T) {
 		return true
 	})
 
-	// Perform a request against the echo actor, now that we know it's up
-	resp, err := http.Get(echoActorUrl)
+	// Perform a request against the echo component, now that we know it's up
+	resp, err := http.Get(echoComponentUrl)
 	if err != nil {
-		t.Fatalf("http request failed against echo actor @ [%s]: %v", echoActorUrl, err)
+		t.Fatalf("http request failed against echo component @ [%s]: %v", echoComponentUrl, err)
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("response failed w/ status [%v]", resp.StatusCode)

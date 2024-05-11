@@ -48,10 +48,10 @@ wash inspect ./build/http_blobstore_s.wasm
 
 ```bash
 ➜ wash inspect ./build/http_blobstore_s.wasm
-                           http-blobstore - Actor
+                           http-blobstore - Component
   Account         ACDYADNIGBP3CHAXB2BITGZY74QPPJIWA2XHXMGXNKRSBPTC2FQPX422
   # The 56 character key starting with `M` is your component ID
-  Actor           MC6I62ZMZGOSLG4WONRNAKUYXN6GOCCVBWOPL5QNIXG5JP4Y6ADM6NK5
+  Component           MC6I62ZMZGOSLG4WONRNAKUYXN6GOCCVBWOPL5QNIXG5JP4Y6ADM6NK5
   Expires                                                            never
   ...
 ```

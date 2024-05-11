@@ -1,6 +1,6 @@
 name = "http-hello-world"
 language = "tinygo"
-type = "actor"
+type = "component"
 version = "0.1.0"
 
 [component]

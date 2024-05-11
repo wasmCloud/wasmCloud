@@ -39,7 +39,7 @@ nats req "wasmbus.ctl.default.component.scale.$HOST_ID" '{"component_id": "hello
 You'll get a success message from the control interface telling you the request was received, but in the host logs you'll see:
 
 ```bash
-2024-03-01T19:13:40.669666Z ERROR wasmcloud_host::wasmbus: failed to scale actor actor_ref=ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0 actor_id=hello_world err=Policy denied request to scale actor `a5e1deda-deb5-4b06-bc64-aa7bdcb9b3d7`: `None`
+2024-03-01T19:13:40.669666Z ERROR wasmcloud_host::wasmbus: failed to scale component component_ref=ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0 component_id=hello_world err=Policy denied request to scale component `a5e1deda-deb5-4b06-bc64-aa7bdcb9b3d7`: `None`
 ```
 
 Now, try starting a provider that was signed by wasmCloud:
@@ -62,9 +62,9 @@ Voila, the provider was allowed! For both components and providers, you are able
 ➜ wash inspect ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0
 
 
-                          http-hello-world - Actor
+                          http-hello-world - Component
   Account         ACX4CGGHE3EGOI5HHJBNWXOVB3LVDDZL6YZOJTM4B42NGTBDXOH3DMTE
-  Actor           MCCTSLNY5XCODQGV4EL2BJR56J7VDQADX5KYWZ3K2DCH7YHZRAEAQ763
+  Component       MCCTSLNY5XCODQGV4EL2BJR56J7VDQADX5KYWZ3K2DCH7YHZRAEAQ763
   Expires                                                            never
   Can Be Used                                                  immediately
   Version                                                        0.1.0 (0)

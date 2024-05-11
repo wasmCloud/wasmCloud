@@ -1,3 +1,5 @@
+// NOTE(nitame): replace wasmcloud-actor by wasmcloud-component once the wasmcloud-actor has been
+// renamed
 // This is adapted from `wasmcloud-actor` but instead is impl'd directly on the type. This is
 // something we should probably make part of wit-bindgen or something else since this will be a
 // common thing people will need in Rust

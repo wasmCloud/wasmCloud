@@ -1,6 +1,6 @@
 name = "typescript-http-hello-world"
 language = "typescript" 
-type = "actor"
+type = "component"
 version = "0.1.0"
 
 [component]

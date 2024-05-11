@@ -52,7 +52,7 @@ This command won't return (as it's the running host process), but you can view t
 
 ## Build the component
 
-To build the [component][wasmcloud-actor-component], we can use `wash`:
+To build the [component][wasmcloud-component], we can use `wash`:
 
 ```console
 wash build
@@ -63,8 +63,8 @@ This will build and sign the component and place a signed [WebAssembly component
 `build` performs many substeps (see `package.json` for details):
 
 - (`build:tsc`) transpiles Typescript code into Javascript code
-- (`build:component`) builds a [WebAssembly component][wasm-component] using the [`jco` toolchain][jco]
-- (`build:actor`) sign an actor for this component using `wash`
+- (`build:js`) builds a javascript module runnable in NodeJS from a [WebAssembly component][wasm-component] using the [`jco` toolchain][jco]
+- (`build:component`) build and sign a WebAssembly component for this component using `wash`
 
 [wasmcloud-component]: https://wasmcloud.com/docs/concepts/webassembly-components
 [wasm-component]: https://component-model.bytecodealliance.org/

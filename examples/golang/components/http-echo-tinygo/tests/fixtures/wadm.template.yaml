@@ -9,9 +9,9 @@ metadata:
 spec:
   components:
     - name: test-http-echo-tinygo
-      type: actor
+      type: component
       properties:
-        image: {{.ActorImage}}
+        image: {{.ComponentImage}}
       traits:
         - type: spreadscaler
           properties:

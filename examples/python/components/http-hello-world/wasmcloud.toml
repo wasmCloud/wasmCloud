@@ -1,6 +1,6 @@
 name = "python-http-hello-world"
 language = "python" 
-type = "actor"
+type = "component"
 version = "0.1.0"
 
 [component]

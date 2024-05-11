@@ -1,8 +1,8 @@
 #
-# This project is an actor component example written in TinyGo,
+# This project is a component example written in TinyGo,
 # which returns details for all HTTP requests sent to it.
 # 
-# This actor leverages the WebAssembly Component Model[0], along with
+# This component leverages the WebAssembly Component Model[0], along with
 # WebAssembly Interface Types[1] ("WIT") bindings to generate the 
 # higher level interface definitions that the WebAssembly uses.
 #
@@ -21,7 +21,7 @@
 #
 name = "http-echo-tinygo-component"
 language = "tinygo"
-type = "actor"
+type = "component"
 version = "0.1.0"
 
 [component]

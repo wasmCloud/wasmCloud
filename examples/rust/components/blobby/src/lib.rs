@@ -249,13 +249,13 @@ impl Guest for Blobby {
                     }
                 };
 
-                // Only read up to the exact amount of bytes we need. This is to prevent a bad actor
+                // Only read up to the exact amount of bytes we need. This is to prevent a bad component
                 // from sending infinite data
                 let mut buf = vec![
                     0u8;
                     content_length
                         .try_into()
-                        .expect("Too much data to read into actor")
+                        .expect("Too much data to read into component")
                 ];
                 if let Err(e) = stream.read_exact(&mut buf) {
                     log(
