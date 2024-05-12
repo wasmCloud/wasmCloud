@@ -5207,21 +5207,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test-actors"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "nkeys",
- "serde",
- "serde_json",
- "tokio",
- "wascap 0.14.0",
- "wasmcloud-component-adapters",
- "wit-component 0.202.0",
-]
-
-[[package]]
 name = "test-case"
 version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5252,6 +5237,21 @@ dependencies = [
  "quote",
  "syn 2.0.58",
  "test-case-core",
+]
+
+[[package]]
+name = "test-components"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "nkeys",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wascap 0.14.0",
+ "wasmcloud-component-adapters",
+ "wit-component 0.202.0",
 ]
 
 [[package]]
@@ -6321,7 +6321,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "tempfile",
- "test-actors",
+ "test-components",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -6353,7 +6353,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-actor"
+name = "wasmcloud-component"
 version = "0.1.0"
 dependencies = [
  "futures",
@@ -6787,13 +6787,13 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
- "test-actors",
+ "test-components",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
  "wascap 0.14.0",
- "wasmcloud-actor",
+ "wasmcloud-component",
  "wasmcloud-component-adapters",
  "wasmcloud-core 0.6.0",
  "wasmparser 0.202.0",

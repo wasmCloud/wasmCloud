@@ -5,12 +5,12 @@ use clap::Parser;
 use serde_json::json;
 
 use wash_lib::{
-    build::{build_project, sign_actor_wasm, SignConfig},
+    build::{build_project, sign_component_wasm, SignConfig},
     cli::CommandOutput,
     parser::{get_config, TypeConfig},
 };
 
-/// Build (and sign) a wasmCloud actor, provider, or interface
+/// Build (and sign) a wasmCloud component, provider, or interface
 #[derive(Debug, Parser, Clone)]
 #[clap(name = "build")]
 pub struct BuildCommand {
@@ -57,7 +57,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
     let config = get_config(command.config_path, Some(true))?;
 
     match config.project_type {
-        TypeConfig::Component(ref actor_config) => {
+        TypeConfig::Component(ref component_config) => {
             let sign_config = if command.build_only {
                 None
             } else {
@@ -65,7 +65,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     keys_directory: command
                         .keys_directory
                         .clone()
-                        .or(Some(actor_config.key_directory.to_path_buf())),
+                        .or(Some(component_config.key_directory.to_path_buf())),
                     issuer: command.issuer,
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,
@@ -74,17 +74,18 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
 
             let component_path = if command.sign_only {
                 std::env::set_current_dir(&config.common.path)?;
-                let actor_wasm_path = if let Some(path) = actor_config.build_artifact.clone() {
-                    path
-                } else {
-                    PathBuf::from(format!("build/{}.wasm", config.common.wasm_bin_name()))
-                };
-                let signed_path = sign_actor_wasm(
+                let component_wasm_path =
+                    if let Some(path) = component_config.build_artifact.clone() {
+                        path
+                    } else {
+                        PathBuf::from(format!("build/{}.wasm", config.common.wasm_bin_name()))
+                    };
+                let signed_path = sign_component_wasm(
                     &config.common,
-                    actor_config,
+                    component_config,
                     // We prevent supplying both fields in the CLI parser, so this `context` is just a safety fallback
                     &sign_config.context("cannot supply --build-only and --sign-only")?,
-                    actor_wasm_path,
+                    component_wasm_path,
                 )?;
                 config.common.path.join(signed_path)
             } else {

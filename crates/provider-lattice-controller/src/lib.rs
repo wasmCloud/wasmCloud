@@ -148,7 +148,7 @@
 // impl WasmcloudLatticeControlLatticeController for LatticeControllerProvider {
 //     /// Sets lattice credentials and stores them in the cache to be used to create a
 //     /// connection in the next operation that requires one
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?arg.lattice_id))]
 //     async fn set_lattice_credentials(
 //         &self,
 //         _ctx: Context,
@@ -208,7 +208,7 @@
 //     }
 
 //     /// Sets registry credentials, storing them in the cache
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?arg.lattice_id))]
 //     async fn set_registry_credentials(
 //         &self,
 //         _ctx: Context,
@@ -248,7 +248,7 @@
 //     }
 
 //     /// Auction a provider on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?arg.lattice_id))]
 //     async fn auction_provider(
 //         &self,
 //         _ctx: Context,
@@ -285,8 +285,8 @@
 //             })
 //     }
 
-//     /// Auction an actor on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
+//     /// Auction an component on the lattice
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?arg.lattice_id))]
 //     async fn auction_actor(&self, _ctx: Context, arg: ActorAuctionRequest) -> Vec<ActorAuctionAck> {
 //         let client = match self
 //             .get_connections()
@@ -313,13 +313,13 @@
 //                     .collect::<Vec<_>>()
 //             })
 //             .unwrap_or_else(|e| {
-//                 error!("failed to auction actor: {e}");
+//                 error!("failed to auction component: {e}");
 //                 Vec::new()
 //             })
 //     }
 
 //     /// Retrieve all hosts on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = %lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = %lattice_id))]
 //     async fn get_hosts(&self, _ctx: Context, lattice_id: String) -> Vec<Host> {
 //         let client = match self.get_connections().await.get_client(&lattice_id).await {
 //             Ok(client) => client,
@@ -359,7 +359,7 @@
 //     }
 
 //     /// Retrieve inventory for a given host on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, host = ?arg.host_id, lattice_id = ?arg.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, host = ?arg.host_id, lattice_id = ?arg.lattice_id))]
 //     async fn get_host_inventory(
 //         &self,
 //         _ctx: Context,
@@ -432,7 +432,7 @@
 //     }
 
 //     /// Retrieve claims for a given client
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id))]
 //     async fn get_claims(&self, _ctx: Context, lattice_id: String) -> GetClaimsResponse {
 //         let client = match self.get_connections().await.get_client(&lattice_id).await {
 //             Ok(client) => client,
@@ -452,8 +452,8 @@
 //             })
 //     }
 
-//     /// Start an actor on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
+//     /// Start an component on the lattice
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?cmd.lattice_id))]
 //     async fn start_actor(&self, _ctx: Context, cmd: StartActorCommand) -> CtlOperationAck {
 //         let count = if cmd.count == 0 {
 //             1_u32
@@ -490,16 +490,16 @@
 //                 error: ack.error,
 //             })
 //             .unwrap_or_else(|e| {
-//                 error!("failed to start actor: {e}");
+//                 error!("failed to start component: {e}");
 //                 CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to start actor".into(),
+//                     error: "failed to start component".into(),
 //                 }
 //             })
 //     }
 
-//     /// Scale an actor on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
+//     /// Scale an component on the lattice
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?cmd.lattice_id))]
 //     async fn scale_actor(&self, _ctx: Context, cmd: ScaleActorCommand) -> CtlOperationAck {
 //         let client = match self
 //             .get_connections()
@@ -530,16 +530,16 @@
 //                 error: a.error,
 //             })
 //             .unwrap_or_else(|e| {
-//                 error!("failed to scale actor: {e}");
+//                 error!("failed to scale component: {e}");
 //                 CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to scale actor".into(),
+//                     error: "failed to scale component".into(),
 //                 }
 //             })
 //     }
 
 //     /// Advertise a link on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?req.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?req.lattice_id))]
 //     async fn advertise_link(&self, _ctx: Context, req: AdvertiseLinkRequest) -> CtlOperationAck {
 //         let client = match self
 //             .get_connections()
@@ -580,7 +580,7 @@
 //     }
 
 //     /// Remove a link on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?req.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?req.lattice_id))]
 //     async fn remove_link(
 //         &self,
 //         _ctx: Context,
@@ -597,7 +597,7 @@
 //                 error!("failed to get client for connection: {e}");
 //                 return CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to start actor".into(),
+//                     error: "failed to start component".into(),
 //                 };
 //             }
 //         };
@@ -619,7 +619,7 @@
 //     }
 
 //     /// Retrieve links on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id))]
 //     async fn get_links(&self, _ctx: Context, lattice_id: String) -> Vec<LinkDefinition> {
 //         let client = match self.get_connections().await.get_client(&lattice_id).await {
 //             Ok(client) => client,
@@ -650,8 +650,8 @@
 //             })
 //     }
 
-//     /// Update an actor running on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
+//     /// Update an component running on the lattice
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?cmd.lattice_id))]
 //     async fn update_actor(&self, _ctx: Context, cmd: UpdateActorCommand) -> CtlOperationAck {
 //         let client = match self
 //             .get_connections()
@@ -682,10 +682,10 @@
 //                 error: a.error,
 //             })
 //             .unwrap_or_else(|e| {
-//                 error!("failed to update actor: {e}");
+//                 error!("failed to update component: {e}");
 //                 CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to update actor".into(),
+//                     error: "failed to update component".into(),
 //                 }
 //             })
 //     }
@@ -695,7 +695,7 @@
 //         level = "debug",
 //         skip_all,
 //         fields(
-//             actor_id = ?_ctx.actor,
+//             actor_id = ?_ctx.component,
 //             host_id = %cmd.host_id,
 //             provider_ref = %cmd.provider_ref,
 //             link_name = %cmd.link_name,
@@ -714,7 +714,7 @@
 //                 error!("failed to get client for connection: {e}");
 //                 return CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to start actor".into(),
+//                     error: "failed to start component".into(),
 //                 };
 //             }
 //         };
@@ -742,7 +742,7 @@
 //     }
 
 //     /// Stop a provider on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?cmd.lattice_id))]
 //     async fn stop_provider(&self, _ctx: Context, cmd: StopProviderCommand) -> CtlOperationAck {
 //         let client = match self
 //             .get_connections()
@@ -783,7 +783,7 @@
 //     }
 
 //     /// Stop a host on the lattice
-//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.actor, lattice_id = ?cmd.lattice_id))]
+//     #[instrument(level = "debug", skip_all, fields(actor_id = ?_ctx.component, lattice_id = ?cmd.lattice_id))]
 //     async fn stop_host(&self, _ctx: Context, cmd: StopHostCommand) -> CtlOperationAck {
 //         let client = match self
 //             .get_connections()
@@ -796,7 +796,7 @@
 //                 error!("failed to get client for connection: {e}");
 //                 return CtlOperationAck {
 //                     accepted: false,
-//                     error: "failed to start actor".into(),
+//                     error: "failed to start component".into(),
 //                 };
 //             }
 //         };

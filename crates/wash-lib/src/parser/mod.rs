@@ -27,7 +27,7 @@ pub enum LanguageConfig {
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeConfig {
-    #[serde(alias = "actor")]
+    #[serde(alias = "component")]
     Component(ComponentConfig),
     Provider(ProviderConfig),
 }
@@ -37,7 +37,7 @@ pub enum TypeConfig {
 pub struct ProjectConfig {
     /// The language of the project, e.g. rust, tinygo. Contains specific configuration for that language.
     pub language: LanguageConfig,
-    /// The type of project, e.g. actor, provider, interface. Contains the specific configuration for that type.
+    /// The type of project, e.g. component, provider, interface. Contains the specific configuration for that type.
     /// This is renamed to "type" but is named project_type here to avoid clashing with the type keyword in Rust.
     #[serde(rename = "type")]
     pub project_type: TypeConfig,
@@ -47,13 +47,13 @@ pub struct ProjectConfig {
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ComponentConfig {
-    /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
+    /// The list of provider claims that this component requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Vec<String>,
     /// Whether to push to the registry insecurely. Defaults to false.
     pub push_insecure: bool,
     /// The directory to store the private signing keys in.
     pub key_directory: PathBuf,
-    /// The call alias of the actor.
+    /// The call alias of the component.
     pub call_alias: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown" (a WASM core module).
     pub wasm_target: WasmTarget,
@@ -61,7 +61,7 @@ pub struct ComponentConfig {
     pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
-    /// Tags that should be applied during the actor signing process
+    /// Tags that should be applied during the component signing process
     pub tags: Option<HashSet<String>>,
     /// File path `wash` can use to find the built artifact. Defaults to `./build/[name].wasm`
     pub build_artifact: Option<PathBuf>,
@@ -69,7 +69,7 @@ pub struct ComponentConfig {
     /// toolchain to build. Keep in mind that `wash` expects for the built artifact to be located
     /// under the `build` directory of the project root unless overridden by `build_artifact`.
     pub build_command: Option<String>,
-    /// File path the built and signed actor should be written to. Defaults to `./build/[name]_s.wasm`
+    /// File path the built and signed component should be written to. Defaults to `./build/[name]_s.wasm`
     pub destination: Option<PathBuf>,
 }
 
@@ -87,7 +87,7 @@ impl RustConfig {
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct RawComponentConfig {
-    /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
+    /// The list of provider claims that this component requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Option<Vec<String>>,
     /// Whether to push to the registry insecurely. Defaults to false.
     pub push_insecure: Option<bool>,
@@ -97,11 +97,11 @@ struct RawComponentConfig {
     pub wasm_target: Option<String>,
     /// Path to a wasm adapter that can be used for preview2
     pub wasi_preview2_adapter_path: Option<PathBuf>,
-    /// The call alias of the actor. Defaults to no alias.
+    /// The call alias of the component. Defaults to no alias.
     pub call_alias: Option<String>,
     /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
-    /// Tags that should be applied during the actor signing process
+    /// Tags that should be applied during the component signing process
     pub tags: Option<HashSet<String>>,
     /// File path `wash` can use to find the built artifact. Defaults to `./build/[name].wasm`
     pub build_artifact: Option<PathBuf>,
@@ -109,7 +109,7 @@ struct RawComponentConfig {
     /// toolchain to build. Keep in mind that `wash` expects for the built artifact to be located
     /// under the `build` directory of the project root unless overridden by `build_artifact`.
     pub build_command: Option<String>,
-    /// File path the built and signed actor should be written to. Defaults to `./build/[name]_s.wasm`
+    /// File path the built and signed component should be written to. Defaults to `./build/[name]_s.wasm`
     pub destination: Option<PathBuf>,
 }
 
@@ -340,7 +340,7 @@ struct RawProjectConfig {
     #[serde(default)]
     pub revision: i32,
 
-    #[serde(alias = "actor")]
+    #[serde(alias = "component")]
     pub component: Option<RawComponentConfig>,
     pub provider: Option<RawProviderConfig>,
 
@@ -381,7 +381,7 @@ impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
     }
 }
 
-/// Gets the wasmCloud project (actor, provider, or interface) config.
+/// Gets the wasmCloud project (component, provider, or interface) config.
 ///
 /// The config can come from multiple sources: a specific toml file path, a folder with a `wasmcloud.toml` file inside it, or by default it looks for a `wasmcloud.toml` file in the current directory.
 ///
@@ -498,7 +498,7 @@ impl RawProjectConfig {
 
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
-            "actor" | "component" => {
+            "component" => {
                 let actor_config = self.component.context("missing component config")?;
                 TypeConfig::Component(actor_config.try_into()?)
             }

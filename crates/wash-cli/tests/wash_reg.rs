@@ -249,7 +249,7 @@ async fn integration_reg_push_comprehensive() -> Result<()> {
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
 async fn integration_reg_config() -> Result<()> {
-    //===== Inital project setup and build actor artifact
+    //===== Inital project setup and build component artifact
     let test_setup = init(
         /* actor_name= */ "hello",
         /* template_name= */ "hello-world-rust",
@@ -280,9 +280,9 @@ async fn integration_reg_config() -> Result<()> {
         r#"
         name = "Hello World"
         language = "rust"
-        type = "actor"
+        type = "component"
         
-        [actor]
+        [component]
         claims = ["wasmcloud:httpserver"]
 
         [registry]

@@ -25,7 +25,7 @@ use crate::{
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ClaimsCliCommand {
-    /// Examine the signing claims information or WIT world from a signed actor component
+    /// Examine the signing claims information or WIT world from a signed component component
     #[clap(name = "inspect")]
     Inspect(InspectCommand),
     /// Sign a WebAssembly component, specifying capabilities and other claims
@@ -104,8 +104,8 @@ pub struct SignCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TokenCommand {
-    /// Generate a signed JWT for an actor module
-    #[clap(name = "actor")]
+    /// Generate a signed JWT for an component module
+    #[clap(name = "component")]
     Actor(ActorMetadata),
     /// Generate a signed JWT for an operator
     #[clap(name = "operator")]
@@ -268,7 +268,7 @@ pub struct ActorMetadata {
     /// Human-readable version string
     #[clap(short = 'v', long = "ver")]
     pub ver: Option<String>,
-    /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
+    /// Developer or human friendly unique alias used for invoking an component, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
     #[clap(short = 'a', long = "call-alias")]
     pub call_alias: Option<String>,
 
@@ -444,15 +444,15 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
     )?;
 
     let claims = Claims::<Component>::with_dates(
-        actor.name.context("actor name is required")?,
+        actor.name.context("component name is required")?,
         issuer.public_key(),
         subject.public_key(),
         Some(actor.tags.clone()),
         days_from_now_to_jwt_time(actor.common.not_before_days),
         days_from_now_to_jwt_time(actor.common.expires_in_days),
         false,
-        Some(actor.rev.context("actor revision number is required")?),
-        Some(actor.ver.context("actor version is required")?),
+        Some(actor.rev.context("component revision number is required")?),
+        Some(actor.ver.context("component version is required")?),
         sanitize_alias(actor.call_alias)?,
     );
 
@@ -609,7 +609,7 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     )?;
 
     let signed = sign_buffer_with_claims(
-        cmd.metadata.name.context("actor name is required")?,
+        cmd.metadata.name.context("component name is required")?,
         &buf,
         &subject,
         &issuer,
@@ -620,9 +620,9 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         Some(
             cmd.metadata
                 .rev
-                .context("actor revision number is required")?,
+                .context("component revision number is required")?,
         ),
-        Some(cmd.metadata.ver.context("actor version is required")?),
+        Some(cmd.metadata.ver.context("component version is required")?),
         sanitize_alias(cmd.metadata.call_alias)?,
     )?;
 
@@ -1034,7 +1034,7 @@ mod test {
         let actor_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
-            "actor",
+            "component",
             "--name",
             "TokenName",
             "--directory",
@@ -1190,10 +1190,10 @@ mod test {
     }
 
     #[test]
-    fn rust_actor_metadata_with_project_config_overrides() -> anyhow::Result<()> {
+    fn rust_component_metadata_with_project_config_overrides() -> anyhow::Result<()> {
         let result = get_config(
             Some(PathBuf::from(
-                "./tests/parser/files/rust_actor_claims_metadata.toml",
+                "./tests/parser/files/rust_component_claims_metadata.toml",
             )),
             None,
         );
@@ -1217,8 +1217,8 @@ mod test {
                     "lexcorp:quantum-simulator".to_string()
                 ],
                 key_directory: PathBuf::from("./keys"),
-                destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-                call_alias: Some("test-actor".to_string()),
+                destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
+                call_alias: Some("test-component".to_string()),
                 tags: Some(HashSet::from([
                     "wasmcloud.com/experimental".into(),
                     "test".into(),
@@ -1230,7 +1230,7 @@ mod test {
         assert_eq!(
             project_config.common,
             CommonConfig {
-                name: "testactor".to_string(),
+                name: "testcomponent".to_string(),
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
                 path: PathBuf::from("./tests/parser/files/")
@@ -1246,10 +1246,10 @@ mod test {
         assert_eq!(
             actor_metadata,
             ActorMetadata {
-                name: Some("testactor".to_string()),
+                name: Some("testcomponent".to_string()),
                 ver: Some(Version::parse("0.1.0")?.to_string()),
                 rev: Some(666),
-                call_alias: Some("test-actor".to_string()),
+                call_alias: Some("test-component".to_string()),
                 tags: vec!["test".to_string(), "wasmcloud.com/experimental".to_string()],
                 common: GenerateCommon {
                     directory: Some(PathBuf::from("./keys")),
@@ -1260,15 +1260,15 @@ mod test {
         );
 
         //=== check project config overrides when some cli args are specified...
-        const LOCAL_WASM: &str = "./myactor.wasm";
+        const LOCAL_WASM: &str = "./mycomponent.wasm";
         let cmd: Cmd = Parser::try_parse_from([
             "claims",
             "sign",
             LOCAL_WASM,
             "--name",
-            "MyActor",
+            "MyComponent",
             "--destination",
-            "./myactor_s.wasm",
+            "./mycomponent_s.wasm",
             "--directory",
             "./dir",
             "--rev",
@@ -1300,12 +1300,12 @@ mod test {
                 };
 
                 assert_eq!(cmd.source, LOCAL_WASM);
-                assert_eq!(cmd.destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(cmd.destination.unwrap(), "./mycomponent_s.wasm");
                 assert_eq!(
                     cmd.metadata.common.directory.unwrap(),
                     PathBuf::from("./dir")
                 );
-                assert_eq!(cmd.metadata.name.unwrap(), "MyActor");
+                assert_eq!(cmd.metadata.name.unwrap(), "MyComponent");
                 assert_eq!(cmd.metadata.tags.len(), 3);
                 assert!(cmd.metadata.tags.contains(&"test-tag".to_string()));
                 assert!(cmd.metadata.tags.contains(&"test".to_string())); // from project_config
@@ -1315,7 +1315,7 @@ mod test {
                     .contains(&"wasmcloud.com/experimental".to_string())); // from project_config
                 assert_eq!(cmd.metadata.rev.unwrap(), 777);
                 assert_eq!(cmd.metadata.ver.unwrap(), "0.2.0");
-                assert_eq!(cmd.metadata.call_alias.unwrap(), "test-actor"); // from project_config
+                assert_eq!(cmd.metadata.call_alias.unwrap(), "test-component"); // from project_config
             }
 
             _ => unreachable!("claims constructed incorrect command"),

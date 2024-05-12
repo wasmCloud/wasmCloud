@@ -1,0 +1,14 @@
+[package]
+name = "builtins-component-reactor"
+edition = "2021"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["serde"] }
+wasmcloud-component = { workspace = true, features = ["rand", "uuid"] }
+wit-bindgen = { workspace = true, features = ["default"] }

@@ -280,13 +280,13 @@ pub async fn handle_command(
         artifact_path.display()
     );
 
-    // Since we're using the actor from file on disk, the ref should be the file path (canonicalized) on disk as URI
+    // Since we're using the component from file on disk, the ref should be the file path (canonicalized) on disk as URI
     let actor_ref = format!("file://{}", artifact_path.display());
     // Since the only restriction on actor_id is that it must be unique, we can just use the artifact path as the actor_id
     // to ensure uniqueness
     let actor_id = sanitize_component_id(&artifact_path.display().to_string());
 
-    // Scale the actor to one max replica
+    // Scale the component to one max replica
     scale_component(ScaleComponentArgs {
         client: &ctl_client,
         host_id: &host.id,

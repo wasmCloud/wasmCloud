@@ -1,5 +1,0 @@
-package test-wrpc:ponger;
-
-world actor {
-  export test-actors:testing/pingpong;
-}

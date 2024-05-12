@@ -3,9 +3,9 @@
 ##
 # KVCounter wasmcloud example
 #
-# This example starts our `KVCounter` actor, `httpserver` provider and `redis` provider.
+# This example starts our `KVCounter` component, `httpserver` provider and `redis` provider.
 #
-# The actor simply accepts HTTP requests and increments the value at a key matching the HTTP path.
+# The component simply accepts HTTP requests and increments the value at a key matching the HTTP path.
 # e.g., running `curl localhost:8080/mycounter` will add 1 to the redis key `:mycounter`
 #
 # Please ensure you either run `redis-server` and `nats-server` or use the included
@@ -46,7 +46,7 @@ then
 	# The following commands can be run as-is if you have a running wasmcloud host.
 	# If you don't, you can omit the `wash` part of the command, and run the `ctl` commands in the REPL.
 	HOST=$(echo $HOSTS | jq ".hosts[0].id" | tr -d "\"")
-	wash ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0 -h $HOST
+	wash ctl start component wasmcloud.azurecr.io/kvcounter:0.2.0 -h $HOST
 	wash ctl start provider wasmcloud.azurecr.io/redis:0.10.0 -h $HOST
 	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAZVC4RX54J2NVCMCW7BPCAHGGG5XZXDBXFUMDUXGESTMQEJLC3YVZWB wasmcloud:keyvalue URL=redis://localhost:6379
 	wash ctl start provider wasmcloud.azurecr.io/httpserver:0.10.0 -h $HOST

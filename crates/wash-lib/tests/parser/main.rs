@@ -8,9 +8,9 @@ use wash_lib::parser::{
 };
 
 #[test]
-fn rust_actor() {
+fn rust_component() {
     let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/rust_actor.toml")),
+        Some(PathBuf::from("./tests/parser/files/rust_component.toml")),
         None,
     );
 
@@ -31,8 +31,8 @@ fn rust_actor() {
 
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
-            destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-            call_alias: Some("testactor".to_string()),
+            destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
+            call_alias: Some("testcomponent".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -42,7 +42,7 @@ fn rust_actor() {
     assert_eq!(
         config.common,
         CommonConfig {
-            name: "testactor".to_string(),
+            name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
@@ -56,10 +56,10 @@ fn rust_actor() {
 
 #[test]
 /// When given a specific toml file's path, it should parse the file and return a `ProjectConfig`.
-fn rust_actor_with_revision() {
+fn rust_component_with_revision() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/rust_actor_with_revision.toml",
+            "./tests/parser/files/rust_component_with_revision.toml",
         )),
         None,
     );
@@ -81,8 +81,8 @@ fn rust_actor_with_revision() {
 
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
-            destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-            call_alias: Some("testactor".to_string()),
+            destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
+            call_alias: Some("testcomponent".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
@@ -93,7 +93,7 @@ fn rust_actor_with_revision() {
     assert_eq!(
         config.common,
         CommonConfig {
-            name: "testactor".to_string(),
+            name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 666,
             path: PathBuf::from("./tests/parser/files/")
@@ -106,10 +106,10 @@ fn rust_actor_with_revision() {
 }
 
 #[test]
-fn tinygo_actor_module() {
+fn tinygo_component_module() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/tinygo_actor_module.toml",
+            "./tests/parser/files/tinygo_component_module.toml",
         )),
         None,
     );
@@ -130,8 +130,8 @@ fn tinygo_actor_module() {
 
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
-            destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-            call_alias: Some("testactor".to_string()),
+            destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
+            call_alias: Some("testcomponent".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -141,7 +141,7 @@ fn tinygo_actor_module() {
     assert_eq!(
         config.common,
         CommonConfig {
-            name: "testactor".to_string(),
+            name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
@@ -154,11 +154,9 @@ fn tinygo_actor_module() {
 }
 
 #[test]
-fn tinygo_actor_component() {
+fn tinygo_component() {
     let result = get_config(
-        Some(PathBuf::from(
-            "./tests/parser/files/tinygo_actor_component.toml",
-        )),
+        Some(PathBuf::from("./tests/parser/files/tinygo_component.toml")),
         None,
     );
 
@@ -171,8 +169,8 @@ fn tinygo_actor_component() {
 
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
-            destination: Some(PathBuf::from("./build/testactor.wasm".to_string())),
-            call_alias: Some("testactor".to_string()),
+            destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
+            call_alias: Some("testcomponent".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::WasiPreview2,
             ..ComponentConfig::default()
@@ -205,9 +203,9 @@ fn get_full_path(path: &str) -> String {
 }
 
 #[test]
-fn no_actor_config() {
+fn no_component_config() {
     let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_actor.toml")),
+        Some(PathBuf::from("./tests/parser/files/no_component.toml")),
         None,
     );
 
@@ -216,7 +214,7 @@ fn no_actor_config() {
     assert_eq!(
         format!(
             "missing component config in {}",
-            get_full_path("./tests/parser/files/no_actor.toml")
+            get_full_path("./tests/parser/files/no_component.toml")
         ),
         err.to_string().as_str()
     );
@@ -318,10 +316,10 @@ fn nonexistent_folder() {
 }
 
 #[test]
-fn minimal_rust_actor() {
+fn minimal_rust_component() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_actor.toml",
+            "./tests/parser/files/minimal_rust_component.toml",
         )),
         None,
     );
@@ -358,7 +356,7 @@ fn minimal_rust_actor() {
     assert_eq!(
         config.common,
         CommonConfig {
-            name: "testactor".to_string(),
+            name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
@@ -371,10 +369,10 @@ fn minimal_rust_actor() {
 }
 
 #[test]
-fn cargo_toml_actor() {
+fn cargo_toml_component() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/withcargotoml/minimal_rust_actor_with_cargo.toml",
+            "./tests/parser/files/withcargotoml/minimal_rust_component_with_cargo.toml",
         )),
         None,
     );
@@ -426,10 +424,10 @@ fn cargo_toml_actor() {
 /// wasm_target=wasm32-wasi-preview2 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
-fn minimal_rust_actor_preview2() {
+fn minimal_rust_component_preview2() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_actor_preview2.toml",
+            "./tests/parser/files/minimal_rust_component_preview2.toml",
         )),
         None,
     );
@@ -455,10 +453,10 @@ fn minimal_rust_actor_preview2() {
 /// wasm_target=wasm32-wasi-preview1 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
-fn minimal_rust_actor_preview1() {
+fn minimal_rust_component_preview1() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_actor_preview1.toml",
+            "./tests/parser/files/minimal_rust_component_preview1.toml",
         )),
         None,
     );
@@ -476,10 +474,10 @@ fn minimal_rust_actor_preview1() {
 /// wasm_target=wasm32-unknown-unknown is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
-fn minimal_rust_actor_core_module() {
+fn minimal_rust_component_core_module() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_actor_core_module.toml",
+            "./tests/parser/files/minimal_rust_component_core_module.toml",
         )),
         None,
     );

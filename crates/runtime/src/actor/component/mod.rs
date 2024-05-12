@@ -256,7 +256,7 @@ impl Debug for Ctx {
     }
 }
 
-/// Pre-compiled actor [Component], which is cheapily-[Cloneable](Clone)
+/// Pre-compiled component [Component], which is cheapily-[Cloneable](Clone)
 #[derive(Clone)]
 pub struct Component {
     engine: wasmtime::Engine,
@@ -709,7 +709,7 @@ impl Instance {
         ctx.stderr.take().await;
     }
 
-    /// Set actor stderr stream. If another stderr was set, it is replaced and the old one is flushed and shut down.
+    /// Set component stderr stream. If another stderr was set, it is replaced and the old one is flushed and shut down.
     ///
     /// # Errors
     ///

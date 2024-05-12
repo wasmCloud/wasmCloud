@@ -54,15 +54,15 @@ impl Debug for Match {
     }
 }
 
-/// Given a string, attempts to resolve an actor ID. Returning the actor ID and an optional friendly
+/// Given a string, attempts to resolve an component ID. Returning the component ID and an optional friendly
 /// name
 ///
-/// If the string is a valid actor ID, it will be returned unchanged. If it is not an ID, it will
+/// If the string is a valid component ID, it will be returned unchanged. If it is not an ID, it will
 /// attempt to resolve an ID in the following order:
 ///
-/// 1. The value matches the prefix of the ID of an actor
-/// 2. The value is contained in the call alias of an actor
-/// 3. The value is contained in the name field of an actor
+/// 1. The value matches the prefix of the ID of an component
+/// 2. The value is contained in the call alias of an component
+/// 3. The value is contained in the name field of an component
 ///
 /// If more than one matches, then an error will be returned indicating the options to choose from
 pub async fn find_actor_id(

@@ -59,7 +59,7 @@ fn integration_par_inspect() {
         .expect("failed to push echo.wasm to local registry");
     assert!(push_echo.status.success());
 
-    // Inspect local, local registry, and remote registry actor wasm
+    // Inspect local, local registry, and remote registry component wasm
     // `String.contains` is used here to ensure we aren't relying on relative json field position.
     // This also allows tests to pass if information is _added_ but not if information is _omitted_
     // from the command output

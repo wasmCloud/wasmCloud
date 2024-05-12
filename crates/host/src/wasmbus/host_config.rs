@@ -22,7 +22,7 @@ pub struct Host {
     pub ctl_tls: bool,
     /// The topic prefix to use for control interface subscriptions, defaults to `wasmbus.ctl`
     pub ctl_topic_prefix: String,
-    /// NATS URL to connect to for actor RPC
+    /// NATS URL to connect to for component RPC
     pub rpc_nats_url: Url,
     /// Timeout period for all RPC calls
     pub rpc_timeout: Duration,
@@ -44,7 +44,7 @@ pub struct Host {
     pub provider_shutdown_delay: Option<Duration>,
     /// Configuration for downloading artifacts from OCI registries
     pub oci_opts: OciConfig,
-    /// Whether to allow loading actor or provider components from the filesystem
+    /// Whether to allow loading component or provider components from the filesystem
     pub allow_file_load: bool,
     /// Whether or not structured logging is enabled
     pub enable_structured_logging: bool,

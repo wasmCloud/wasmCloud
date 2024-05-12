@@ -47,7 +47,7 @@ wrpc-types = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-test-actors = { workspace = true }
+test-components = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
-wasmcloud-actor = { workspace = true, features = ["uuid"] }
+wasmcloud-component = { workspace = true, features = ["uuid"] }

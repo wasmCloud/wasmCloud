@@ -61,7 +61,7 @@ pub async fn scale_component(
         timeout_ms,
     }: ScaleComponentArgs<'_>,
 ) -> Result<ComponentScaledInfo> {
-    // If timeout isn't supplied, override with a longer timeout for starting actor
+    // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_START_ACTOR_TIMEOUT_MS);
 
     // Create a receiver to use with the client

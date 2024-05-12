@@ -23,14 +23,14 @@ use crate::{
     parser::{CommonConfig, ComponentConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
 };
 
-/// Builds a wasmCloud actor using the installed language toolchain, then signs the actor with
+/// Builds a wasmCloud component using the installed language toolchain, then signs the component with
 /// keys, capability claims, and additional friendly information like name, version, revision, etc.
 ///
 /// # Arguments
-/// * `component_config`: [`ComponentConfig`] for required information to find, build, and sign an actor
-/// * `language_config`: [`LanguageConfig`] specifying which language the actor is written in
+/// * `component_config`: [`ComponentConfig`] for required information to find, build, and sign an component
+/// * `language_config`: [`LanguageConfig`] specifying which language the component is written in
 /// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and [`CommonConfig::version`]
-/// * `signing`: Optional [`SignConfig`] with information for signing the actor. If omitted, the actor will only be built
+/// * `signing`: Optional [`SignConfig`] with information for signing the component. If omitted, the component will only be built
 pub fn build_actor(
     component_config: &ComponentConfig,
     language_config: &LanguageConfig,
@@ -40,7 +40,7 @@ pub fn build_actor(
     let actor_wasm_path = if let Some(raw_command) = component_config.build_command.as_ref() {
         build_custom_actor(common_config, component_config, raw_command)?
     } else {
-        // Build actor based on language toolchain
+        // Build component based on language toolchain
         let actor_wasm_path = match language_config {
             LanguageConfig::Rust(rust_config) => {
                 build_rust_actor(common_config, rust_config, component_config)?
@@ -78,7 +78,7 @@ pub fn build_actor(
             }
         };
 
-        // If the actor has been configured as WASI Preview2, adapt it from preview1
+        // If the component has been configured as WASI Preview2, adapt it from preview1
         if component_config.wasm_target == WasmTarget::WasiPreview2 {
             let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
             // Adapt the component, using the adapter that is available locally
@@ -103,18 +103,18 @@ pub fn build_actor(
 
     // Sign the wasm file (if configured)
     if let Some(cfg) = signing_config {
-        sign_actor_wasm(common_config, component_config, cfg, actor_wasm_path)
+        sign_component_wasm(common_config, component_config, cfg, actor_wasm_path)
     } else {
         Ok(actor_wasm_path)
     }
 }
 
-/// Sign the component at `actor_wasm_path` using the provided configuration
-pub fn sign_actor_wasm(
+/// Sign the component at `component_wasm_path` using the provided configuration
+pub fn sign_component_wasm(
     common_config: &CommonConfig,
     component_config: &ComponentConfig,
     signing_config: &SignConfig,
-    actor_wasm_path: impl AsRef<Path>,
+    component_wasm_path: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     // If we're building for WASI preview1 or preview2, we're targeting components-first
     // functionality, and the signed module should be marked as experimental
@@ -123,7 +123,7 @@ pub fn sign_actor_wasm(
         tags.insert(WASMCLOUD_WASM_TAG_EXPERIMENTAL.into());
     };
 
-    let source = actor_wasm_path
+    let source = component_wasm_path
         .as_ref()
         .to_str()
         .ok_or_else(|| anyhow!("Could not convert file path to string"))?
@@ -163,7 +163,7 @@ pub fn sign_actor_wasm(
     })
 }
 
-/// Builds a rust actor and returns the path to the file.
+/// Builds a rust component and returns the path to the file.
 fn build_rust_actor(
     common_config: &CommonConfig,
     rust_config: &RustConfig,
@@ -190,7 +190,7 @@ fn build_rust_actor(
         })?;
 
     if !result.success() {
-        bail!("Compiling actor failed: {}", result.to_string())
+        bail!("Compiling component failed: {}", result.to_string())
     }
 
     // Determine the wasm binary name
@@ -234,7 +234,7 @@ fn build_rust_actor(
     Ok(common_config.path.join(&copied_wasm_file))
 }
 
-/// Builds a tinygo actor and returns the path to the file.
+/// Builds a tinygo component and returns the path to the file.
 fn build_tinygo_actor(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
@@ -305,7 +305,7 @@ fn build_tinygo_actor(
         })?;
 
     if !result.success() {
-        bail!("Compiling actor failed: {}", result.to_string())
+        bail!("Compiling component failed: {}", result.to_string())
     }
 
     let wasm_file = PathBuf::from(filename);
@@ -320,7 +320,7 @@ fn build_tinygo_actor(
     Ok(common_config.path.join(wasm_file))
 }
 
-/// Builds a wasmCloud actor using a custom override command, then returns the path to the file.
+/// Builds a wasmCloud component using a custom override command, then returns the path to the file.
 fn build_custom_actor(
     common_config: &CommonConfig,
     component_config: &ComponentConfig,
@@ -345,7 +345,7 @@ fn build_custom_actor(
     })?;
     if !output.status.success() {
         bail!(
-            "failed to build actor with custom command: {:?}",
+            "failed to build component with custom command: {:?}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -379,7 +379,7 @@ fn build_custom_actor(
 /// from the top level golang project directory
 const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
 
-/// Generate the bindgen code that `TinyGo` actors need
+/// Generate the bindgen code that `TinyGo` components need
 fn generate_tinygo_bindgen(
     bindgen_dir: impl AsRef<Path>,
     wit_dir: impl AsRef<Path>,
@@ -588,7 +588,7 @@ mod tests {
     };
 
     use super::{
-        embed_wasm_component_metadata, generate_tinygo_bindgen, sign_actor_wasm, SignConfig,
+        embed_wasm_component_metadata, generate_tinygo_bindgen, sign_component_wasm, SignConfig,
     };
 
     const MODULE_WAT: &str = "(module)";
@@ -680,7 +680,7 @@ world downstream {
     /// Ensure that components which get signed contain any tags specified
     /// *and* experimental tag in claims when preview1 or preview2 targets are signed
     #[test]
-    fn sign_actor_component_includes_experimental() -> Result<()> {
+    fn sign_component_includes_experimental() -> Result<()> {
         // Build project path, including WIT dir
         let project_dir = tempfile::tempdir()?;
         let wasm_path = setup_build_component(&project_dir)?;
@@ -691,7 +691,7 @@ world downstream {
             WasmTarget::WasiPreview1,
             WasmTarget::WasiPreview2,
         ] {
-            let updated_wasm_path = sign_actor_wasm(
+            let updated_wasm_path = sign_component_wasm(
                 &CommonConfig {
                     name: "test".into(),
                     version: Version::parse("0.1.0")?,

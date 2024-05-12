@@ -12,7 +12,7 @@ use redis::AsyncCommands as _;
 use serde::Deserialize;
 use serde_json::json;
 use tempfile::tempdir;
-use test_actors::{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2, RUST_INTERFACES_REACTOR};
+use test_components::{RUST_INTERFACES_HANDLER_REACTOR_PREVIEW2, RUST_INTERFACES_REACTOR};
 use tokio::time::sleep;
 use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
@@ -276,7 +276,7 @@ async fn interfaces() -> anyhow::Result<()> {
                         Vec::new(),
                     )
                     .await
-                    .context("failed to scale `interface_reactor` actor")
+                    .context("failed to scale `interface_reactor` component")
                 },
                 async {
                     // Scale ponger
@@ -290,10 +290,10 @@ async fn interfaces() -> anyhow::Result<()> {
                         Vec::new(),
                     )
                     .await
-                    .context("failed to scale `interface_handler_reactor` actor")
+                    .context("failed to scale `interface_handler_reactor` component")
                 },
             )
-            .context("failed to scale actors")
+            .context("failed to scale components")
         }
     )?;
 
@@ -316,7 +316,7 @@ async fn interfaces() -> anyhow::Result<()> {
         INTERFACES_REACTOR_ID,
         INTERFACES_HANDLER_REACTOR_ID,
         "default",
-        "test-actors",
+        "test-components",
         "testing",
         vec!["pingpong".to_string(), "busybox".to_string()],
         vec![],

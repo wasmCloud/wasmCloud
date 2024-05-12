@@ -167,15 +167,15 @@ impl Handler {
 }
 
 #[derive(Clone, Debug)]
-/// Actor identifier
-pub enum ActorIdentifier {
-    /// Actor call alias identifier
+/// Component identifier
+pub enum ComponentIdentifier {
+    /// Component call alias identifier
     Alias(String),
-    /// Actor public key identifier
+    /// Component public key identifier
     Key(Arc<KeyPair>),
 }
 
-impl From<&str> for ActorIdentifier {
+impl From<&str> for ComponentIdentifier {
     fn from(s: &str) -> Self {
         if let Ok(key) = KeyPair::from_public_key(s) {
             if key.key_pair_type() == KeyPairType::Module {
@@ -186,7 +186,7 @@ impl From<&str> for ActorIdentifier {
     }
 }
 
-impl FromStr for ActorIdentifier {
+impl FromStr for ComponentIdentifier {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -194,7 +194,7 @@ impl FromStr for ActorIdentifier {
     }
 }
 
-impl PartialEq for ActorIdentifier {
+impl PartialEq for ComponentIdentifier {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Alias(l), Self::Alias(r)) => l == r,
@@ -204,7 +204,7 @@ impl PartialEq for ActorIdentifier {
     }
 }
 
-impl Eq for ActorIdentifier {}
+impl Eq for ComponentIdentifier {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Interface target to be invoked over the lattice using `wRPC`

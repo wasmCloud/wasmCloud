@@ -1,5 +1,0 @@
-language = "rust"
-type = "actor"
-
-[actor]
-claims = ["wasmcloud:httpserver"]

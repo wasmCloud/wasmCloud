@@ -61,14 +61,14 @@ mod test {
     const HOST_TIMEOUT_MS: u64 = 3001;
 
     #[test]
-    /// Enumerates multiple options of the `stop actor` subcommand to ensure API doesn't
+    /// Enumerates multiple options of the `stop component` subcommand to ensure API doesn't
     /// change between versions. This test will fail if the subcommand
     /// changes syntax, ordering of required elements, or flags.
     fn test_stop_actor_cmd_comprehensive() -> Result<()> {
         let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
-            "actor",
+            "component",
             "--host-id",
             HOST_ID,
             ACTOR_ID,
@@ -107,14 +107,14 @@ mod test {
                 assert_eq!(host_id.unwrap(), HOST_ID);
                 assert_eq!(actor_id.to_string(), ACTOR_ID);
             }
-            cmd => panic!("stop actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("stop component constructed incorrect command {cmd:?}"),
         }
 
         Ok(())
     }
 
     #[test]
-    /// Enumerates multiple options of the `stop actor` subcommand to ensure API doesn't
+    /// Enumerates multiple options of the `stop component` subcommand to ensure API doesn't
     /// change between versions. This test will fail if the subcommand
     /// changes syntax, ordering of required elements, or flags.
     fn test_stop_provider_cmd_comprehensive() -> Result<()> {

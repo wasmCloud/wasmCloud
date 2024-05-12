@@ -2,8 +2,8 @@
 //!
 //! This implementation is multi-threaded and operations between different actors
 //! use different connections and can run in parallel.
-//! A single connection is shared by all instances of the same actor id (public key),
-//! so there may be some brief lock contention if several instances of the same actor
+//! A single connection is shared by all instances of the same component id (public key),
+//! so there may be some brief lock contention if several instances of the same component
 //! are simultaneously attempting to communicate with redis. See documentation
 //! on the [exec](#exec) function for more information.
 
@@ -108,7 +108,7 @@ impl KvRedisProvider {
             let sources = self.sources.read().await;
             let Some(conn) = sources.get(source_id) else {
                 error!(source_id, "no Redis connection found for component");
-                bail!("No Redis connection found for actor [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
+                bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
             };
             Ok(conn.clone())
         } else {
@@ -292,7 +292,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
+    /// including setting up per-component resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, config))]
     async fn receive_link_config_as_target(
@@ -358,7 +358,7 @@ impl Provider for KvRedisProvider {
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.sources.write().await;
-        // empty the actor link data and stop all servers
+        // empty the component link data and stop all servers
         for (_, conn) in aw.drain() {
             drop(conn);
         }

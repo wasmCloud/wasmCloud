@@ -13,7 +13,7 @@ use super::validate_component_id;
 #[derive(Debug, Clone, Parser)]
 pub enum ScaleCommand {
     /// Scale a component running in a host to a certain level of concurrency
-    #[clap(name = "component", alias = "actor")]
+    #[clap(name = "component")]
     Component(ScaleComponentCommand),
 }
 
@@ -79,7 +79,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
     Ok(CommandOutput::from_key_and_text(
         "result",
         format!(
-            "Request to scale actor {} to {scale_msg} has been accepted",
+            "Request to scale component {} to {scale_msg} has been accepted",
             cmd.component_ref
         ),
     ))

@@ -35,7 +35,7 @@ impl Drop for AbortHandles {
     }
 }
 
-/// A merged bundle of configuration for use with actors that watches for updates to all named
+/// A merged bundle of configuration for use with components that watches for updates to all named
 /// configs specified.
 ///
 /// There are two main ways to get config from this struct:

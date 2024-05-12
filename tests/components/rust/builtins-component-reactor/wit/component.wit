@@ -1,0 +1,16 @@
+package test-components:reactor;
+
+world component {
+    import wasi:config/runtime@0.2.0-draft;
+    import wasi:http/outgoing-handler@0.2.0;
+    import wasi:io/poll@0.2.0;
+    import wasi:sockets/instance-network@0.2.0;
+    import wasi:sockets/tcp-create-socket@0.2.0;
+    import wasi:sockets/tcp@0.2.0;
+    import wasi:sockets/udp-create-socket@0.2.0;
+    import wasi:sockets/udp@0.2.0;
+
+    import test-components:foobar/foobar;
+
+    export wasi:http/incoming-handler@0.2.0;
+}

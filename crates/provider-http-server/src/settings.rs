@@ -1,5 +1,5 @@
 //! Configuration settings for [`HttpServerProvider`](crate::HttpServerProvider).
-//! The "values" map in the actor link definition may contain
+//! The "values" map in the component link definition may contain
 //! one or more of the following keys,
 //! which determine how the configuration is parsed.
 //!
@@ -71,7 +71,7 @@ pub struct ServiceSettings {
     #[serde(default)]
     pub log: Log,
 
-    /// Rpc timeout - how long (milliseconds) to wait for actor's response
+    /// Rpc timeout - how long (milliseconds) to wait for component's response
     /// before returning a status 503 to the http client
     /// If not set, uses the system-wide rpc timeout
     #[serde(default)]

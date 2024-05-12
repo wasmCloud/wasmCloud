@@ -1,9 +1,9 @@
 language = "rust"
-type = "actor"
+type = "component"
 name = "testactor"
 version = "0.1.0"
 
-[actor]
+[component]
 claims = ["wasmcloud:httpserver"]
 registry = "localhost:8080"
 push_insecure = false

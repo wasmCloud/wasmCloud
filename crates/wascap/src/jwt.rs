@@ -46,7 +46,7 @@ pub trait WascapEntity: Clone {
 /// The metadata that corresponds to a component
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Component {
-    /// A descriptive name for this actor, should not include version information or public key
+    /// A descriptive name for this component, should not include version information or public key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
@@ -103,7 +103,7 @@ pub struct Account {
     /// A descriptive name for this account
     pub name: Option<String>,
     /// A list of valid public keys that may appear as an `issuer` on
-    /// actors signed by one of this account's multiple seed keys
+    /// components signed by one of this account's multiple seed keys
     pub valid_signers: Option<Vec<String>>,
 }
 
@@ -472,7 +472,7 @@ impl Claims<Cluster> {
 }
 
 impl Claims<Component> {
-    /// Creates a new non-expiring Claims wrapper for metadata representing an actor
+    /// Creates a new non-expiring Claims wrapper for metadata representing an component
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
@@ -490,7 +490,7 @@ impl Claims<Component> {
         )
     }
 
-    /// Creates a new Claims wrapper for metadata representing an actor, with optional valid before and expiration dates
+    /// Creates a new Claims wrapper for metadata representing an component, with optional valid before and expiration dates
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn with_dates(
@@ -991,7 +991,7 @@ mod test {
     }
 
     #[test]
-    fn decode_actor_as_operator() {
+    fn decode_component_as_operator() {
         let kp = KeyPair::new_account();
         let claims = Claims {
             metadata: Some(Component::new(

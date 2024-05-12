@@ -24,7 +24,7 @@
 //! let claims = ClaimsBuilder::<Component>::new()
 //!     .issuer(&issuer.public_key())
 //!     .subject(&module.public_key())
-//!     .with_metadata(Actor{
+//!     .with_metadata(Component{
 //!         name: Some("test".to_string()),
 //!         .. Default::default()
 //!      })
@@ -38,7 +38,7 @@
 //! let extracted = wasm::extract_claims(&embedded)?.unwrap();
 //!
 //! // Validate dates, signature, JWT structure, etc.
-//! let v = validate_token::<Actor>(&extracted.jwt)?;
+//! let v = validate_token::<Component>(&extracted.jwt)?;
 //!
 //! assert_eq!(v.expired, false);
 //! assert_eq!(v.cannot_use_yet, false);

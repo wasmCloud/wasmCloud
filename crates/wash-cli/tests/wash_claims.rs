@@ -169,7 +169,7 @@ fn integration_claims_inspect() {
         .expect("failed to push echo.wasm to local registry");
     assert!(push_echo.status.success());
 
-    // Inspect local, local registry, and remote registry actor wasm
+    // Inspect local, local registry, and remote registry component wasm
     let local_inspect = wash()
         .args([
             "claims",

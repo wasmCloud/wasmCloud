@@ -106,7 +106,7 @@ async fn find_event<T>(
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
-/// If the applicable actor start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
+/// If the applicable component start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
@@ -301,7 +301,7 @@ pub async fn wait_for_provider_stop_event(
     Ok(event)
 }
 
-/// Information related to an actor stop
+/// Information related to an component stop
 pub struct ActorStoppedInfo {
     pub host_id: String,
     pub actor_id: String,
@@ -309,7 +309,7 @@ pub struct ActorStoppedInfo {
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
-/// If the applicable stop actor response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
+/// If the applicable stop component response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.

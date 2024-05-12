@@ -17,7 +17,7 @@ pub struct LabelHostCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// ID of host to update the actor on. If a non-ID is provided, the host will be selected based
+    /// ID of host to update the component on. If a non-ID is provided, the host will be selected based
     /// on matching the prefix of the ID or the friendly name and will return an error if more than
     /// one host matches.
     #[clap(name = "host-id")]

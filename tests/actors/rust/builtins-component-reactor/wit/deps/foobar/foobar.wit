@@ -1,5 +1,0 @@
-package test-actors:foobar;
-
-interface foobar {
-    foobar: func(arg: string) -> string;
-}

@@ -1,6 +1,4 @@
-// NOTE(nitame): replace wasmcloud-actor by wasmcloud-component once the wasmcloud-actor has been
-// renamed
-// This is adapted from `wasmcloud-actor` but instead is impl'd directly on the type. This is
+// This is adapted from `wasmcloud-component` but instead is impl'd directly on the type. This is
 // something we should probably make part of wit-bindgen or something else since this will be a
 // common thing people will need in Rust
 
@@ -37,7 +35,7 @@ impl Read for crate::wasi::io::streams::InputStream {
 
 // NOTE(thomastaylor312): This is soooo weird. So for some reason if I make sure to explicitly call
 // write (crate::wasi::io::streams::OutputStream::write), it never writes the bytes successfully,
-// but if we use the wrapper below (copied directly from `wasmcloud-actor`), it works. To make it
+// but if we use the wrapper below (copied directly from `wasmcloud-component`), it works. To make it
 // even worse, when we were using it to write to the http response, it worked, but not for the
 // blobstore. There is probably some sort of simple thing that could fix this but I don't know what.
 
