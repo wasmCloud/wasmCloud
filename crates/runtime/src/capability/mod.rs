@@ -4,7 +4,7 @@ pub(crate) mod builtin;
 pub mod provider;
 
 pub use builtin::{
-    ActorIdentifier, Blobstore, Bus, Config, IncomingHttp, KeyValueAtomics, KeyValueStore,
+    Blobstore, Bus, ComponentIdentifier, Config, IncomingHttp, KeyValueAtomics, KeyValueStore,
     LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
     OutgoingHttpRequest, TargetEntity,
 };

@@ -73,7 +73,7 @@ jobs:
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
 
-  # Regression E2E tests to ensure that `wash new actor` works consistently,
+  # Regression E2E tests to ensure that `wash new component` works consistently,
   # including older (released) versions of `wash`
   e2e_tests_wash_new_actor:
     name: E2E Tests (`wash new`)
@@ -101,4 +101,4 @@ jobs:
         if: ${{ matrix.wash-version == 'current' }}
         run: cargo install --path ./crates/wash-cli
       - name: Ensure `wash new` works
-        run: wash new actor ${{ matrix.template }}  --template-name ${{ matrix.template }}
+        run: wash new component ${{ matrix.template }}  --template-name ${{ matrix.template }}

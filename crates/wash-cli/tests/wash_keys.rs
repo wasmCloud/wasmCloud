@@ -23,7 +23,15 @@ fn integration_keys_gen_basic() {
 #[test]
 fn integration_keys_gen_comprehensive() {
     let key_gen_types = [
-        "account", "user", "module", "actor", "service", "provider", "server", "host", "operator",
+        "account",
+        "user",
+        "module",
+        "component",
+        "service",
+        "provider",
+        "server",
+        "host",
+        "operator",
         "cluster",
     ];
 

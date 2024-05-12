@@ -1,0 +1,22 @@
+[package]
+name = "test-components"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+docs = ["wasmcloud-component-adapters/docs"]
+
+[package.metadata.docs.rs]
+features = ["docs"]
+
+[build-dependencies]
+anyhow = { workspace = true, features = ["std"] }
+futures = { workspace = true, features = ["alloc", "async-await"] }
+nkeys = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread"] }
+wascap = { workspace = true }
+wasmcloud-component-adapters = { workspace = true }
+wit-component = { workspace = true }

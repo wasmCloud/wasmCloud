@@ -26,8 +26,8 @@ on:
     branches:
       - main
     tags:
-      - 'actor-v[0-9].[0-9]+.[0-9]+'
-      - 'actor-v[0-9].[0-9]+.[0-9]+-*'
+      - 'component-v[0-9].[0-9]+.[0-9]+'
+      - 'component-v[0-9].[0-9]+.[0-9]+-*'
       - 'control-interface-v[0-9].[0-9]+.[0-9]+'
       - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
       - 'core-v[0-9].[0-9]+.[0-9]+'
@@ -659,7 +659,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - crate: actor
+          - crate: component
             workspace-dependencies: true
 
           - crate: control-interface

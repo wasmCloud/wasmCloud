@@ -10,7 +10,7 @@ pub mod common;
 use common::nats::start_nats;
 use common::providers;
 
-use test_actors::RUST_INTERFACES_REACTOR;
+use test_components::RUST_INTERFACES_REACTOR;
 
 const LATTICE: &str = "default";
 
@@ -18,7 +18,7 @@ const LATTICE: &str = "default";
 /// successfully stops:
 ///
 /// - starting providers
-/// - starting actors
+/// - starting components
 #[tokio::test]
 async fn policy_always_deny() -> anyhow::Result<()> {
     // Start NATS for communication
@@ -72,7 +72,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
             &ctl_client,
             &host.host_key(),
             format!("file://{RUST_INTERFACES_REACTOR}"),
-            "test-actor",
+            "test-component",
             None,
             5,
             Vec::new(),

@@ -16,7 +16,7 @@ use tokio::fs;
 use tokio::io::stderr;
 use tokio::sync::oneshot;
 use tracing_subscriber::prelude::*;
-use wasmcloud_actor::Uuid;
+use wasmcloud_component::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
@@ -64,7 +64,7 @@ impl capability::Bus for Handler {
                 package,
                 interface: interface_name,
                 ..
-            } if namespace == "test-actors"
+            } if namespace == "test-components"
                 && package == "foobar"
                 && interface_name == "foobar" =>
             {
@@ -89,7 +89,7 @@ impl capability::Bus for Handler {
             ("keyvalue", [cti]) if cti.namespace == "wasi" && cti.package == "keyvalue" && cti.interface == "store" => {},
             ("blobstore", [cti]) if cti.namespace == "wasi" && cti.package == "blobstore" && cti.interface == "blobstore" => {},
             ("httpclient", [cti]) if cti.namespace == "wasi" && cti.package == "http" && cti.interface == "outgoing-handler" => {},
-            ("unknown/alias" | "foobar-component-command-preview2", [cti]) if cti.namespace == "test-actors" && cti.package == "foobar" && cti.interface ==
+            ("unknown/alias" | "foobar-component-command-preview2", [cti]) if cti.namespace == "test-components" && cti.package == "foobar" && cti.interface ==
  "foobar" => {},
             (link_name, interfaces) => panic!("`set_link_name` with link name `{link_name:?}` and interfaces `{interfaces:?}` should not have been called")
         }
@@ -104,7 +104,7 @@ impl capability::Bus for Handler {
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         match (target, instance, name) {
-            (capability::TargetEntity::Lattice(LatticeInterfaceTarget { id: target_id, .. }), "test-actors:foobar/foobar", "foobar") if target_id == "foobar-component-command-preview2" => {
+            (capability::TargetEntity::Lattice(LatticeInterfaceTarget { id: target_id, .. }), "test-components:foobar/foobar", "foobar") if target_id == "foobar-component-command-preview2" => {
                 let mut params = params.into_iter();
                 match (params.next(), params.next()) {
                     (Some(wrpc_transport::Value::String(s)), None) => {
@@ -273,10 +273,10 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             Arc::clone(&sent),
             config.clone(),
         );
-        let actor = Component::new(&rt, wasm).expect("failed to construct actor");
-        actor.claims().expect("claims missing");
-        let mut actor = actor.instantiate().context("failed to instantiate")?;
-        actor
+        let component = Component::new(&rt, wasm).expect("failed to construct component");
+        component.claims().expect("claims missing");
+        let mut component_instance = component.instantiate().context("failed to instantiate")?;
+        component_instance
             .stderr(stderr())
             .await
             .context("failed to set stderr")?;
@@ -293,7 +293,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<RunResult> {
             .body(body)
             .expect("failed to construct request");
         let (tx, rx) = oneshot::channel();
-        actor
+        component_instance
             .into_incoming_http()
             .await
             .context("failed to instantiate `wasi:http/incoming-handler`")?
@@ -449,7 +449,7 @@ async fn builtins() -> anyhow::Result<()> {
         logs,
         config_value,
         all_config,
-    } = run(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED).await?;
+    } = run(test_components::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED).await?;
     assert_eq!(
         logs,
         vec![

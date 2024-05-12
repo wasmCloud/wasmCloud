@@ -7,7 +7,7 @@ use anyhow::{anyhow, ensure, Context, Result};
 use async_nats::jetstream;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
-use test_actors::{
+use test_components::{
     RUST_PINGER_CONFIG_COMPONENT_PREVIEW2_SIGNED, RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED,
 };
 use tokio::net::TcpListener;
@@ -148,7 +148,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         .await
         .context("failed to start test host")?;
 
-    // Put configs for first actor
+    // Put configs for first component
     assert_config_put(
         &ctl_client,
         "pinger",
@@ -175,9 +175,9 @@ async fn config_e2e() -> anyhow::Result<()> {
         vec!["pinger".to_string(), "pinger_override".to_string()],
     )
     .await
-    .expect("should've scaled pinger actor");
+    .expect("should've scaled pinger component");
 
-    // Put configs for second actor
+    // Put configs for second component
     assert_config_put(
         &ctl_client,
         "ponger",
@@ -195,7 +195,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         vec!["ponger".to_string()],
     )
     .await
-    .expect("should've scaled actor");
+    .expect("should've scaled component");
 
     // Link pinger --wrpc:testing/pingpong--> ponger
     assert_advertise_link(
@@ -203,7 +203,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         PINGER_COMPONENT_ID,
         PONGER_COMPONENT_ID,
         "default",
-        "test-actors",
+        "test-components",
         "testing",
         vec!["pingpong".to_string()],
         vec![],

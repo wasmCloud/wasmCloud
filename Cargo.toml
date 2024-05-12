@@ -137,7 +137,7 @@ serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-test-actors = { workspace = true }
+test-components = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true }
 tracing-subscriber = { workspace = true, features = [
@@ -257,7 +257,7 @@ termcolor = { version = "1", default-features = false }
 # TODO(joonas): point testcontainers to a real version once 0.16.8 is released
 # so that https://github.com/testcontainers/testcontainers-rs/pull/633 is included.
 testcontainers = { git = "https://github.com/testcontainers/testcontainers-rs.git", rev = "cb65ec251ba1fadca33d5dfc810c34bef3b5528b", default-features = false }
-test-actors = { version = "0", path = "./tests/actors", default-features = false }
+test-components = { version = "0", path = "./tests/components", default-features = false }
 test-case = { version = "3", default-features = false }
 thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
@@ -284,7 +284,7 @@ wash-cli = { version = "0", path = "./crates/wash-cli", default-features = false
 wash-lib = { version = "^0.21.0", path = "./crates/wash-lib", default-features = false }
 wasm-encoder = { version = "0.208", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
-wasmcloud-actor = { version = "0", path = "./crates/actor", default-features = false }
+wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-component-adapters = { version = "0.9", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "^0.6.0", path = "./crates/core", default-features = false }

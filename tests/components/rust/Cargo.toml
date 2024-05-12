@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "builtins-component-reactor",
+    "interfaces-handler-reactor",
+    "interfaces-reactor",
+    "pinger-config-component",
+    "ponger-config-component",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow = { version = "1", default-features = false }
+async-trait = { version = "0.1", default-features = false }
+base64 = { version = "0.22", default-features = false }
+bytes = { version = "1", default-features = false }
+futures = { version = "0.3", default-features = true }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
+tokio = { version = "1", default-features = false }
+uuid = { version = "1", default-features = false }
+wasmcloud-component = { path = "../../../crates/component", default-features = false }
+wit-bindgen = { version = "0.22", default-features = false }

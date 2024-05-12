@@ -2,8 +2,8 @@
 //!
 //! This implementation is multi-threaded and operations between different actors
 //! use different connections and can run in parallel.
-//! A single connection is shared by all instances of the same actor id (public key),
-//! so there may be some brief lock contention if several instances of the same actor
+//! A single connection is shared by all instances of the same component id (public key),
+//! so there may be some brief lock contention if several instances of the same component
 //! are simultaneously attempting to communicate with redis. See documentation
 //! on the [exec](#exec) function for more information.
 

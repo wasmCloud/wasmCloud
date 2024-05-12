@@ -10,7 +10,7 @@ use wash_lib::cli::output::{GetHostInventoriesCommandOutput, ScaleCommandOutput}
 #[tokio::test]
 #[serial]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-async fn integration_scale_actor_serial() -> Result<()> {
+async fn integration_scale_component_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -19,7 +19,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
             "component",
             wash_instance.host_id.as_str(),
             HELLO_OCI_REF,
-            "hello_actor_id",
+            "hello_component_id",
             "--max",
             "10",
             "--output",
@@ -32,7 +32,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
         .kill_on_drop(true)
         .output()
         .await
-        .context("failed to scale actor")?;
+        .context("failed to scale component")?;
 
     assert!(output.status.success(), "executed scale");
 
@@ -40,7 +40,7 @@ async fn integration_scale_actor_serial() -> Result<()> {
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned accepted");
 
-    // Give the host a couple of seconds to download the actor bytes and start the actor
+    // Give the host a couple of seconds to download the component bytes and start the component
     for retries in 0..5 {
         // get host inventory
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -63,20 +63,20 @@ async fn integration_scale_actor_serial() -> Result<()> {
         let cmd_output: GetHostInventoriesCommandOutput =
             serde_json::from_slice(&output.stdout).context("failed to parse output")?;
 
-        let actors = cmd_output
+        let components = cmd_output
             .inventories
             .into_iter()
             .next()
             .map(|i| i.components)
             .unwrap_or_default();
-        if actors.is_empty() && retries > 4 {
-            panic!("Should have started the actor")
+        if components.is_empty() && retries > 4 {
+            panic!("Should have started the component")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
-            assert_eq!(actors.len(), 1);
-            let max = actors[0].max_instances;
+            assert_eq!(components.len(), 1);
+            let max = components[0].max_instances;
             assert_eq!(max, 10);
             break;
         }

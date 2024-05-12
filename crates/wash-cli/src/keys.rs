@@ -15,7 +15,7 @@ const NKEYS_EXTENSION: &str = ".nk";
 pub enum KeysCliCommand {
     #[clap(name = "gen", about = "Generates a keypair")]
     GenCommand {
-        /// The type of keypair to generate. May be Account, User, Module (or Actor), Service (or Provider), Server (or Host), Operator, Cluster
+        /// The type of keypair to generate. May be Account, User, Module (or Component), Service (or Provider), Server (or Host), Operator, Cluster
         keytype: String,
     },
     #[clap(name = "get", about = "Retrieves a keypair and prints the contents")]
@@ -59,7 +59,7 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
     match keytype.to_lowercase().as_str() {
         "account" => Ok(KeyPairType::Account),
         "user" => Ok(KeyPairType::User),
-        "module" | "actor" | "component" => Ok(KeyPairType::Module),
+        "module" | "component" => Ok(KeyPairType::Module),
         "service" | "provider" => Ok(KeyPairType::Service),
         "server" | "host" => Ok(KeyPairType::Server),
         "operator" => Ok(KeyPairType::Operator),
@@ -268,8 +268,16 @@ mod tests {
     /// changes syntax, ordering of required elements, or flags.
     fn test_gen_comprehensive() {
         let key_gen_types = [
-            "acCount", "usEr", "module", "ACTOR", "SERVICE", "provider", "server", "HOST",
-            "operator", "CLUSTER",
+            "acCount",
+            "usEr",
+            "module",
+            "COMPONENT",
+            "SERVICE",
+            "provider",
+            "server",
+            "HOST",
+            "operator",
+            "CLUSTER",
         ];
 
         key_gen_types
@@ -284,7 +292,7 @@ mod tests {
                         match parsed_keytype {
                             Account => assert_eq!(&cmd, "account"),
                             User => assert_eq!(&cmd, "user"),
-                            Module => assert!(cmd.eq("module") || cmd.eq("actor")),
+                            Module => assert!(cmd.eq("module") || cmd.eq("component")),
                             Service => assert!(cmd.eq("service") || cmd.eq("provider")),
                             Server => assert!(cmd.eq("server") || cmd.eq("host")),
                             Operator => assert_eq!(&cmd, "operator"),

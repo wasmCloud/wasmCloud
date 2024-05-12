@@ -1211,7 +1211,7 @@ impl Host {
         .await
     }
 
-    /// Instantiate an actor
+    /// Instantiate an component
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
     #[instrument(level = "debug", skip_all)]
     async fn instantiate_component(
@@ -1333,7 +1333,7 @@ impl Host {
         let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
         let max_execution_time = self.max_execution_time;
         component.set_max_execution_time(max_execution_time);
-        let actor = Arc::new(Component {
+        let component = Arc::new(Component {
             component,
             id,
             calls: calls_abort,
@@ -1345,11 +1345,11 @@ impl Host {
             policy_manager: Arc::clone(&self.policy_manager),
         });
         spawn({
-            let actor = Arc::clone(&actor);
+            let component = Arc::clone(&component);
             Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
                 max_instances.get(),
                 move |invocation| {
-                    let actor = Arc::clone(&actor);
+                    let component = Arc::clone(&component);
                     async move {
                         let AcceptedInvocation {
                             context,
@@ -1369,7 +1369,7 @@ impl Host {
                             tokio::spawn({
                                 let transmitter = transmitter.clone();
                                 async move {
-                                    actor
+                                    component
                                         .handle_invocation(
                                             context,
                                             params,
@@ -1426,12 +1426,12 @@ impl Host {
                 },
             )
         });
-        Ok(actor)
+        Ok(component)
     }
 
     #[allow(clippy::too_many_arguments)]
     #[instrument(level = "debug", skip_all)]
-    async fn start_actor<'a>(
+    async fn start_component<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Component>>,
         component: wasmcloud_runtime::Component,
@@ -1470,7 +1470,7 @@ impl Host {
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
 
-        let actor = self
+        let component = self
             .instantiate_component(
                 &annotations,
                 component_ref.clone(),
@@ -1496,7 +1496,7 @@ impl Host {
         )
         .await?;
 
-        Ok(entry.insert(actor))
+        Ok(entry.insert(component))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1533,7 +1533,7 @@ impl Host {
             .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
         let component_id_running = self.components.read().await.contains_key(&component_id);
 
-        // This host can run the actor if all constraints are satisfied and the actor is not already running
+        // This host can run the component if all constraints are satisfied and the component is not already running
         if constraints_satisfied && !component_id_running {
             Ok(Some(CtlResponse::ok(ComponentAuctionAck {
                 component_ref,
@@ -1694,7 +1694,7 @@ impl Host {
 
     #[instrument(level = "debug", skip_all)]
     /// Handles scaling an component to a supplied number of `max` concurrently executing instances.
-    /// Supplying `0` will result in stopping that actor instance.
+    /// Supplying `0` will result in stopping that component instance.
     async fn handle_scale_component_task(
         &self,
         component_ref: &str,
@@ -1734,9 +1734,9 @@ impl Host {
                 .entry(component_id.to_string()),
             NonZeroUsize::new(max_instances as usize),
         ) {
-            // No actor is running and we requested to scale to zero, noop
+            // No component is running and we requested to scale to zero, noop
             (hash_map::Entry::Vacant(_), None) => {}
-            // No actor is running and we requested to scale to some amount, start with specified max
+            // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
                 let config = self
                     .config_generator
@@ -1744,7 +1744,7 @@ impl Host {
                     .await
                     .context("Unable to fetch requested config")?;
                 if let Err(e) = self
-                    .start_actor(
+                    .start_component(
                         entry,
                         component.clone(),
                         component_ref.clone(),
@@ -1771,7 +1771,7 @@ impl Host {
                     return Err(e);
                 }
             }
-            // Component is running and we requested to scale to zero instances, stop actor
+            // Component is running and we requested to scale to zero instances, stop component
             (hash_map::Entry::Occupied(entry), None) => {
                 let component = entry.remove();
                 if let Err(err) = self

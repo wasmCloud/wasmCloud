@@ -1,0 +1,14 @@
+[package]
+name = "ponger-config-component"
+edition = "2021"
+description = """
+A wit-based actor that returns data values in response to wRPC invocations.
+"""
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmcloud-component = { workspace = true }
+wit-bindgen = { workspace = true, features = ["default"] }

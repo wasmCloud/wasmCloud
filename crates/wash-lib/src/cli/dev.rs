@@ -37,7 +37,7 @@ pub async fn run_dev_loop(
                 "{} {}",
                 emoji::RECYCLE,
                 style(format!(
-                    "restarting actor @ [{}]...",
+                    "restarting component @ [{}]...",
                     built_artifact_path.display()
                 ))
                 .bold(),

@@ -1,7 +1,0 @@
-package test-wrpc:pinger;
-
-world actor {
-  import test-actors:testing/pingpong;
-
-  export wasi:http/incoming-handler@0.2.0;
-}

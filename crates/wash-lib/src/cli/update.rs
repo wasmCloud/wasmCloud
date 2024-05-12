@@ -12,7 +12,7 @@ use super::{validate_component_id, CliConnectionOpts, CommandOutput};
 #[derive(Debug, Clone, Parser)]
 pub enum UpdateCommand {
     /// Update a component running in a host to a newer version
-    #[clap(name = "component", alias = "actor")]
+    #[clap(name = "component")]
     Component(UpdateComponentCommand),
 }
 

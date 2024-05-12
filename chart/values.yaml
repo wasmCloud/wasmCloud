@@ -61,7 +61,7 @@ wasmcloud:
   # option enables service account creation
   enableApplierSupport: false
   # Extra labels to attach to the pod template for each host. Meant for use with things like the
-  # Service Applier actor, which requires specific labels in order to route to those pods
+  # Service Applier component, which requires specific labels in order to route to those pods
   customLabels: {}
   image:
     repository: wasmcloud/wasmcloud

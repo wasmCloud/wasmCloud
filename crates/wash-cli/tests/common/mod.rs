@@ -458,17 +458,17 @@ impl TestWashInstance {
             .context("failed to parse output of `wash call` output")
     }
 
-    /// Trigger the equivalent of `wash stop actor` on a [`TestWashInstance`]
-    pub(crate) async fn stop_actor(
+    /// Trigger the equivalent of `wash stop component` on a [`TestWashInstance`]
+    pub(crate) async fn stop_component(
         &self,
-        actor_id: impl AsRef<str>,
+        component_id: impl AsRef<str>,
         host_id: Option<String>,
     ) -> Result<StopCommandOutput> {
-        // Build dynamic arg list to feed to `wash stop actor`
+        // Build dynamic arg list to feed to `wash stop component`
         let mut args: Vec<String> = [
             "stop",
-            "actor",
-            actor_id.as_ref(),
+            "component",
+            component_id.as_ref(),
             "--output",
             "json",
             "--timeout-ms",
@@ -490,9 +490,9 @@ impl TestWashInstance {
             .kill_on_drop(true)
             .output()
             .await
-            .context("failed to stop actor")?;
+            .context("failed to stop component")?;
         serde_json::from_slice(&output.stdout)
-            .context("failed to parse output of `wash stop actor`")
+            .context("failed to parse output of `wash stop component`")
     }
 
     /// Trigger the equivalent of `wash stop provider` on a [`TestWashInstance`]
@@ -563,7 +563,7 @@ pub struct TestSetup {
     /// Added here so that the directory is not deleted until the end of the test.
     #[allow(dead_code)]
     pub test_dir: TempDir,
-    /// The path to the created actor's directory.
+    /// The path to the created component's directory.
     #[allow(dead_code)]
     pub project_dir: PathBuf,
 }
@@ -574,18 +574,18 @@ pub struct WorkspaceTestSetup {
     /// Added here so that the directory is not deleted until the end of the test.
     #[allow(dead_code)]
     pub test_dir: TempDir,
-    /// The path to the created actor's directory.
+    /// The path to the created component's directory.
     #[allow(dead_code)]
     pub project_dirs: Vec<PathBuf>,
 }
 
-/// Inits an actor build test by setting up a test directory and creating an actor from a template.
-/// Returns the paths of the test directory and actor directory.
+/// Inits an component build test by setting up a test directory and creating an component from a template.
+/// Returns the paths of the test directory and component directory.
 #[allow(dead_code)]
-pub async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
+pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
     std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_actor_from_template(actor_name, template_name).await?;
+    let project_dir = init_actor_from_template(component_name, template_name).await?;
     std::env::set_current_dir(&project_dir)?;
     Ok(TestSetup {
         test_dir,
@@ -593,13 +593,13 @@ pub async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
     })
 }
 
-/// Initializes a new actor from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created actor's directory.
+/// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created component's directory.
 #[allow(dead_code)]
 pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "new",
-            "actor",
+            "component",
             actor_name,
             "--template-name",
             template_name,
@@ -701,8 +701,8 @@ pub async fn wait_for_single_host(
     .context("failed to wait for single host to exist")?
 }
 
-/// Inits an actor build test by setting up a test directory and creating an actor from a template.
-/// Returns the paths of the test directory and actor directory.
+/// Inits an component build test by setting up a test directory and creating an component from a template.
+/// Returns the paths of the test directory and component directory.
 #[allow(dead_code)]
 pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
     let test_dir = TempDir::new()?;

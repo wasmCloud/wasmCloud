@@ -1,6 +1,0 @@
-name = "interfaces-reactor"
-language = "rust"
-type = "actor"
-
-[actor]
-wasm_target = "wasm32-wasi-preview2"

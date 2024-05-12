@@ -236,7 +236,7 @@ async fn dispatch_msg(
         subject = msg.subject,
         reply_to = ?msg.reply_to,
         component_id = component_id,
-        "sending message to actor",
+        "sending message to component",
     );
     if let Err(e) = wasmcloud::messaging::handler::handle_message(
         &get_connection().get_wrpc_client(component_id),
@@ -252,10 +252,10 @@ async fn dispatch_msg(
 }
 
 /// Handle provider control commands
-/// `put_link` (new actor link command), `del_link` (remove link command), and shutdown
+/// `put_link` (new component link command), `del_link` (remove link command), and shutdown
 impl Provider for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
+    /// including setting up per-component resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
@@ -416,14 +416,14 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
                 let nats_bundle = match actors.get(source_id) {
                     Some(nats_bundle) => nats_bundle,
                     None => {
-                        error!("actor not linked: {source_id}");
-                        bail!("actor not linked: {source_id}")
+                        error!("component not linked: {source_id}");
+                        bail!("component not linked: {source_id}")
                     }
                 };
                 nats_bundle.client.clone()
             } else {
-                error!("no actor in request");
-                bail!("no actor in request")
+                error!("no component in request");
+                bail!("no component in request")
             };
 
         let headers = NatsHeaderInjector::default_with_span().into();
@@ -468,14 +468,14 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
                 let nats_bundle = match actors.get(source_id) {
                     Some(nats_bundle) => nats_bundle,
                     None => {
-                        error!("actor not linked: {source_id}");
-                        bail!("actor not linked: {source_id}")
+                        error!("component not linked: {source_id}");
+                        bail!("component not linked: {source_id}")
                     }
                 };
                 nats_bundle.client.clone()
             } else {
-                error!("no actor in request");
-                bail!("no actor in request")
+                error!("no component in request");
+                bail!("no component in request")
             };
 
         // Inject OTEL headers

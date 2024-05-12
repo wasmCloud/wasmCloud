@@ -11,12 +11,12 @@ use common::{
     wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
 
-const RGX_ACTOR_START_MSG: &str = r"Component \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
+const RGX_COMPONENT_START_MSG: &str = r"Component \[(?P<component_id>[^]]+)\] \(ref: \[(?P<component_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
 #[tokio::test]
 #[serial]
 #[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
-async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
+async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
@@ -65,9 +65,9 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
-            "actor",
+            "component",
             HELLO_OCI_REF,
-            "hello_actor_id",
+            "hello_component_id",
             "--ctl-port",
             nats_port.to_string().as_ref(),
             "--timeout-ms",
@@ -81,11 +81,11 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         ))?;
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
-    let actor_start_output_rgx =
-        Regex::new(RGX_ACTOR_START_MSG).expect("failed to create regular expression");
+    let component_start_output_rgx =
+        Regex::new(RGX_COMPONENT_START_MSG).expect("failed to create regular expression");
     assert!(
-        actor_start_output_rgx.is_match(&stdout),
-        "Did not find the correct output when starting actor.\n stdout: {stdout}\nstderr: {}",
+        component_start_output_rgx.is_match(&stdout),
+        "Did not find the correct output when starting component.\n stdout: {stdout}\nstderr: {}",
         String::from_utf8_lossy(&start_echo.stderr)
     );
 
@@ -256,7 +256,10 @@ async fn integration_up_works_with_labels() -> Result<()> {
         TestWashInstance::create_with_extra_args(vec!["--label", "is-label-test=yes"]).await?;
 
     // Get host data, ensure we find the host with the right label
-    let cmd_output = instance.get_hosts().await.context("failed to call actor")?;
+    let cmd_output = instance
+        .get_hosts()
+        .await
+        .context("failed to call component")?;
     assert!(cmd_output.success, "call command succeeded");
     assert!(
         cmd_output

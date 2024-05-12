@@ -21,7 +21,7 @@ use super::validate_component_id;
 #[derive(Debug, Clone, Parser)]
 pub enum StartCommand {
     /// Launch a component in a host
-    #[clap(name = "component", alias = "actor")]
+    #[clap(name = "component")]
     Component(StartComponentCommand),
 
     /// Launch a provider in a host
@@ -34,7 +34,7 @@ pub struct StartComponentCommand {
     #[clap(flatten)]
     pub opts: CliConnectionOpts,
 
-    /// Id of host or a string to match on the friendly name of a host. if omitted the actor will be
+    /// Id of host or a string to match on the friendly name of a host. if omitted the component will be
     /// auctioned in the lattice to find a suitable host. If a string is supplied to match against,
     /// then the matching host ID will be used. If more than one host matches, then an error will be
     /// returned
@@ -109,12 +109,12 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 .map_err(boxed_err_to_anyhow)
                 .with_context(|| {
                     format!(
-                        "Failed to auction actor {} to hosts in lattice",
+                        "Failed to auction component {} to hosts in lattice",
                         &component_ref
                     )
                 })?;
             if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for actor {}", component_ref);
+                bail!("No suitable hosts found for component {}", component_ref);
             } else {
                 let acks = suitable_hosts
                     .into_iter()

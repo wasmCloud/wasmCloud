@@ -13,7 +13,7 @@ use wascap::wasm::extract_claims;
 /// Component instance configuration
 #[derive(Clone, Debug, Default)]
 pub struct Config {
-    /// Whether actors are required to be signed to be executed
+    /// Whether components are required to be signed to be executed
     pub require_signature: bool,
 }
 

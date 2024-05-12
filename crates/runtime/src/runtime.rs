@@ -28,7 +28,7 @@ pub struct RuntimeBuilder {
     max_component_size: u64,
     max_execution_time: Duration,
     handler: builtin::HandlerBuilder,
-    actor_config: ComponentConfig,
+    component_config: ComponentConfig,
     force_pooling_allocator: bool,
 }
 
@@ -50,21 +50,21 @@ impl RuntimeBuilder {
             max_component_size: 50 * MB,
             max_execution_time: Duration::from_secs(10 * 60),
             handler: builtin::HandlerBuilder::default(),
-            actor_config: ComponentConfig::default(),
+            component_config: ComponentConfig::default(),
             force_pooling_allocator: false,
         }
     }
 
-    /// Set a custom [`ComponentConfig`] to use for all actor instances
+    /// Set a custom [`ComponentConfig`] to use for all component instances
     #[must_use]
-    pub fn actor_config(self, actor_config: ComponentConfig) -> Self {
+    pub fn component_config(self, component_config: ComponentConfig) -> Self {
         Self {
-            actor_config,
+            component_config,
             ..self
         }
     }
 
-    /// Set a [`Blobstore`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`Blobstore`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn blobstore(self, blobstore: Arc<impl Blobstore + Sync + Send + 'static>) -> Self {
         Self {
@@ -73,7 +73,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`Bus`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`Bus`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
         Self {
@@ -82,7 +82,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`Config`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`Config`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn config(self, config: Arc<impl Config + Sync + Send + 'static>) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`IncomingHttp`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`IncomingHttp`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn incoming_http(
         self,
@@ -103,7 +103,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`KeyValueAtomics`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`KeyValueAtomics`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn keyvalue_atomics(
         self,
@@ -115,7 +115,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`KeyValueStore`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`KeyValueStore`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn keyvalue_store(
         self,
@@ -127,7 +127,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`Logging`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`Logging`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn logging(self, logging: Arc<impl Logging + Sync + Send + 'static>) -> Self {
         Self {
@@ -136,7 +136,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`Messaging`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`Messaging`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn messaging(self, messaging: Arc<impl Messaging + Sync + Send + 'static>) -> Self {
         Self {
@@ -145,7 +145,7 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`OutgoingHttp`] handler to use for all actor instances unless overriden for the instance
+    /// Set a [`OutgoingHttp`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn outgoing_http(
         self,
@@ -270,7 +270,7 @@ impl RuntimeBuilder {
             Runtime {
                 engine,
                 handler: self.handler,
-                actor_config: self.actor_config,
+                component_config: self.component_config,
                 max_execution_time: self.max_execution_time,
             },
             epoch,
@@ -298,7 +298,7 @@ impl TryFrom<RuntimeBuilder>
 pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
     pub(crate) handler: builtin::HandlerBuilder,
-    pub(crate) actor_config: ComponentConfig,
+    pub(crate) component_config: ComponentConfig,
     pub(crate) max_execution_time: Duration,
 }
 
@@ -306,7 +306,7 @@ impl Debug for Runtime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Runtime")
             .field("handler", &self.handler)
-            .field("actor_config", &self.actor_config)
+            .field("component_config", &self.component_config)
             .field("runtime", &"wasmtime")
             .finish_non_exhaustive()
     }

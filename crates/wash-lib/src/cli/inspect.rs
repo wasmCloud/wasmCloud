@@ -169,7 +169,7 @@ async fn get_caps(
     Ok(wascap::wasm::extract_claims(artifact_bytes)?)
 }
 
-/// Renders actor claims into provided output format
+/// Renders component claims into provided output format
 #[must_use]
 pub fn render_component_claims(
     claims: Claims<Component>,

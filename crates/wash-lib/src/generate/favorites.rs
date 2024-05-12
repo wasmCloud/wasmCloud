@@ -7,13 +7,13 @@
 //! with the '--template-name' option. In silent mode, if no template-name
 //! is provided, the first entry of the applicable kind is selected.
 //!
-//! The favorites file should include settings for at least one actor,
+//! The favorites file should include settings for at least one component,
 //! interface, and provider. 'name' and 'description' are required,
 //! and a location of either 'path' or 'git' must be specified, but not both.
 //!
 //!
 //! ```toml
-//! [[actor]]
+//! [[component]]
 //! name = "template name - required"
 //! description = "something about this template - required"
 //! path = "optional path to folder of template files on disk"
@@ -21,8 +21,8 @@
 //! subfolder = "optional, subdirectory. Only applicable with git"
 //! branch = "optional git branch. Only applicable with git"
 //!
-//! [[actor]]
-//! # settings for another actor template, same fields as above
+//! [[component]]
+//! # settings for another component template, same fields as above
 //!
 //! [[interface]]
 //! # settings for interface template

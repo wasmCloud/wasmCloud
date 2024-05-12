@@ -5,10 +5,10 @@ pub struct HealthCheckRequest {}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HealthCheckResponse {
-    /// A flag that indicates the the actor is healthy
+    /// A flag that indicates the component is healthy
     #[serde(default)]
     pub healthy: bool,
-    /// A message containing additional information about the actors health
+    /// A message containing additional information about the components health
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

@@ -137,11 +137,11 @@ wasmCloud provides an [SDK](./crates/provider-sdk) for building capability provi
 
 [`provider-archive`](./crates/provider-archive) is a crate used to create Provider Archive (PAR) files. PARs are used to store, retrieve, and sign capability providers. Today, capability providers are distributed as binary files and run as system processes. In the future, wasmCloud aims to build capability providers as WebAssembly Components, which will remove the need for Provider Archives.
 
-### `wasmcloud_actor` (`Experimental`)
+### `wasmcloud_component` (`Experimental`)
 
-[`wasmcloud_actor`](./crates/actor) is a wasmCloud actor library written in Rust which facilitates building of wasmCloud components.
+[`wasmcloud_component`](./crates/component) is a wasmCloud component library written in Rust which facilitates building of wasmCloud components.
 
-The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
+The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_component` (and back) with minimal or no code changes.
 
 ### wascap
 

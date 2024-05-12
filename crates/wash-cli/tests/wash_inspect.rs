@@ -11,7 +11,7 @@ use assert_json_diff::assert_json_include;
 use serde_json::json;
 
 #[test]
-fn integration_inspect_actor() {
+fn integration_inspect_component() {
     const SUBFOLDER: &str = "inspect";
     const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
     const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
@@ -32,7 +32,7 @@ fn integration_inspect_actor() {
         .expect("failed to push echo.wasm to local registry");
     assert!(push_echo.status.success());
 
-    // Inspect local, local registry, and remote registry actor wasm
+    // Inspect local, local registry, and remote registry component wasm
     let local_inspect = wash()
         .args(["inspect", echo.to_str().unwrap(), "--output", "json"])
         .output()
@@ -121,7 +121,7 @@ fn integration_inspect_provider() {
         .expect("failed to push echo.wasm to local registry");
     assert!(push_http_client.status.success());
 
-    // Inspect local, local registry, and remote registry actor wasm
+    // Inspect local, local registry, and remote registry component wasm
     // `String.contains` is used here to ensure we aren't relying on relative json field position.
     // This also allows tests to pass if information is _added_ but not if information is _omitted_
     // from the command output

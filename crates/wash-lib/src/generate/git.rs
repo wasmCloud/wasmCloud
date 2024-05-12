@@ -10,7 +10,7 @@ pub struct CloneTemplate {
     /// ssh urls may be used if ssh-config is setup appropriately.
     /// If a private repository is used, user will be prompted for credentials.
     pub repo_url: String,
-    /// sub-folder of project template within the repo, e.g. "actor/hello"
+    /// sub-folder of project template within the repo, e.g. "component/hello"
     pub sub_folder: Option<String>,
     /// repo branch, e.g., main
     pub repo_branch: String,

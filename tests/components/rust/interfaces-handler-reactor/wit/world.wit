@@ -1,0 +1,8 @@
+package test-wrpc:ponger;
+
+world component {
+  export test-components:testing/pingpong;
+  export test-components:testing/busybox;
+
+  export wasmcloud:messaging/handler@0.2.0;
+}

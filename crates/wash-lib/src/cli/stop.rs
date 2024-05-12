@@ -20,7 +20,7 @@ use super::validate_component_id;
 #[derive(Debug, Clone, Parser)]
 pub enum StopCommand {
     /// Stop a component running in a host
-    #[clap(name = "component", alias = "actor")]
+    #[clap(name = "component")]
     Component(StopComponentCommand),
 
     /// Stop a provider running in a host

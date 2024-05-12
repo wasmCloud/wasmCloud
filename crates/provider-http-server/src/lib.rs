@@ -12,7 +12,7 @@
 //!   `allowed_headers`.) Cors has sensible defaults so it should
 //!   work as-is for development purposes, and may need refinement
 //!   for production if a more secure configuration is required.
-//! - All settings can be specified at runtime, using per-actor link settings:
+//! - All settings can be specified at runtime, using per-component link settings:
 //!   - bind interface/port
 //!   - logging level
 //!   - TLS
@@ -25,7 +25,7 @@
 //!
 //! ## More tech info:
 //!
-//! Each actor that links to this provider gets
+//! Each component that links to this provider gets
 //! its own bind address (interface ip and port) and a lightweight
 //! tokio thread (lighter weight than an OS thread, more like "green threads").
 //! Tokio can manage a thread pool (of OS threads) to be shared
@@ -59,36 +59,36 @@ use crate::settings::Tls;
 /// `wrpc:http/incoming-handler` provider implementation.
 #[derive(Clone, Default)]
 pub struct HttpServerProvider {
-    // map to store http server (and its link parameters) for each linked actor
+    // map to store http server (and its link parameters) for each linked component
     actors: Arc<dashmap::DashMap<String, HttpServerCore>>,
 }
 
 impl Provider for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
+    /// including setting up per-component resources, and checking authorization.
     async fn receive_link_config_as_source(
         &self,
         link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         let settings = match load_settings(link_config.config)
-            .context("httpserver failed to load settings for actor")
+            .context("httpserver failed to load settings for component")
         {
             Ok(settings) => settings,
             Err(e) => {
                 error!(
                     config = ?link_config.config,
-                    "httpserver failed to load settings for actor: {}", e.to_string()
+                    "httpserver failed to load settings for component: {}", e.to_string()
                 );
                 return Err(e);
             }
         };
 
-        // Start a server instance that calls the given actor
+        // Start a server instance that calls the given component
         let http_server = HttpServerCore::new(Arc::new(settings), link_config.target_id)
             .await
-            .context("httpserver failed to start listener for actor")?;
+            .context("httpserver failed to start listener for component")?;
 
-        // Save the actor and server instance locally
+        // Save the component and server instance locally
         self.actors
             .insert(link_config.target_id.to_string(), http_server);
 
@@ -98,7 +98,7 @@ impl Provider for HttpServerProvider {
     /// Handle notification that a link is dropped - stop the http listener
     async fn delete_link(&self, actor_id: &str) -> anyhow::Result<()> {
         if let Some((_, server)) = self.actors.remove(actor_id) {
-            info!(%actor_id, "httpserver stopping listener for actor");
+            info!(%actor_id, "httpserver stopping listener for component");
             server.handle.shutdown();
         }
         Ok(())
@@ -106,7 +106,7 @@ impl Provider for HttpServerProvider {
 
     /// Handle shutdown request by shutting down all the http server threads
     async fn shutdown(&self) -> anyhow::Result<()> {
-        // empty the actor link data and stop all servers
+        // empty the component link data and stop all servers
         self.actors.clear();
         Ok(())
     }

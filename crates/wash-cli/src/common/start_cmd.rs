@@ -73,7 +73,7 @@ mod test {
             "arch=x86_64",
             "--host-id",
             HOST_ID,
-            "wasmcloud.azurecr.io/actor:v1",
+            "wasmcloud.azurecr.io/component:v1",
             "myactor",
         ])?;
         match start_component_all.command {
@@ -91,7 +91,10 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
-                assert_eq!(component_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
+                assert_eq!(
+                    component_ref,
+                    "wasmcloud.azurecr.io/component:v1".to_string()
+                );
                 assert_eq!(component_id, "myactor".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
             }

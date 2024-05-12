@@ -25,7 +25,7 @@ pub use wit::*;
 pub const CTL_API_VERSION_1: &str = "v1";
 
 /// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
-/// - actor public key
+/// - component public key
 /// - provider public key
 /// - opaque string
 pub type LatticeTarget = String;

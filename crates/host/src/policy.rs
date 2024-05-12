@@ -36,7 +36,7 @@ pub struct PolicyClaims {
     /// The time the claims expire, if any
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<u64>,
-    /// Whether the claims have expired already. This is included in case the policy server is fulfilled by an actor, which cannot access the system clock
+    /// Whether the claims have expired already. This is included in case the policy server is fulfilled by an component, which cannot access the system clock
     pub expired: bool,
 }
 
@@ -84,7 +84,7 @@ pub struct PerformInvocationRequest {
     pub target: ComponentInformation,
 }
 
-/// Relevant information about the host that is receiving the invocation, or starting the actor or provider
+/// Relevant information about the host that is receiving the invocation, or starting the component or provider
 #[derive(Clone, Debug, Serialize)]
 pub struct HostInfo {
     /// The public key ID of the host

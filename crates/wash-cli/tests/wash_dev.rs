@@ -14,18 +14,18 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 #[tokio::test]
 #[serial_test::serial]
 #[cfg(target_family = "unix")]
-async fn integration_dev_hello_actor_serial() -> Result<()> {
+async fn integration_dev_hello_component_serial() -> Result<()> {
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
     let test_setup = init(
-        /* actor_name= */ "hello",
+        /* component_name= */ "hello",
         /* template_name= */ "hello-world-rust",
     )
     .await?;
     let project_dir = test_setup.project_dir;
 
-    let dir = test_dir_with_subfolder("dev_hello_actor");
+    let dir = test_dir_with_subfolder("dev_hello_component");
 
     wait_for_no_hosts()
         .await
@@ -76,7 +76,7 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
     )
     .await
     .context("timed out while waiting for file path to get created")?;
-    assert!(signed_file_path.exists(), "signed actor file was built",);
+    assert!(signed_file_path.exists(), "signed component file was built",);
 
     let process_pid = dev_cmd
         .write()

@@ -12,7 +12,7 @@ use wash_lib::{
 #[derive(Debug, Clone, Subcommand)]
 pub enum NewCliCommand {
     /// Generate a wasmCloud component project
-    #[clap(name = "component", alias = "actor")]
+    #[clap(name = "component")]
     Component(NewProjectArgs),
 
     /// Generate a new capability provider project

@@ -28,7 +28,7 @@ pub use types::registry::*;
 pub use types::rpc::*;
 
 /// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
-/// - actor public key
+/// - component public key
 /// - provider public key
 /// - opaque string
 pub type LatticeTarget = String;

@@ -1,0 +1,5 @@
+package test-wrpc:ponger;
+
+world component {
+  export test-components:testing/pingpong;
+}

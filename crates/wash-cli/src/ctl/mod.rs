@@ -18,19 +18,19 @@ pub enum CtlCliCommand {
     #[clap(name = "get", subcommand)]
     Get(CtlGetCommand),
 
-    /// Link an actor and a provider
+    /// Link an component and a provider
     #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
 
-    /// Start an actor or a provider
+    /// Start an component or a provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
 
-    /// Stop an actor, provider, or host
+    /// Stop an component, provider, or host
     #[clap(name = "stop", subcommand)]
     Stop(StopCommand),
 
-    /// Update an actor running in a host to a new actor
+    /// Update an component running in a host to a new component
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
 
@@ -89,7 +89,7 @@ mod test {
         let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
-            "actor",
+            "component",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -117,9 +117,10 @@ mod test {
                 assert_eq!(actor_id, ACTOR_ID);
                 assert!(!skip_wait);
             }
-            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
-        let stop_actor_minimal: Cmd = Parser::try_parse_from(["ctl", "stop", "actor", "foobar"])?;
+        let stop_actor_minimal: Cmd =
+            Parser::try_parse_from(["ctl", "stop", "component", "foobar"])?;
         match stop_actor_minimal.command {
             CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 host_id,
@@ -129,7 +130,7 @@ mod test {
                 assert_eq!(host_id, None);
                 assert_eq!(actor_id, "foobar");
             }
-            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
         let stop_provider_all: Cmd = Parser::try_parse_from([
             "ctl",
@@ -162,7 +163,7 @@ mod test {
                 assert_eq!(provider_id, PROVIDER_ID);
                 assert!(!skip_wait);
             }
-            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
         let stop_provider_minimal: Cmd =
             Parser::try_parse_from(["ctl", "stop", "provider", "foobar"])?;
@@ -175,7 +176,7 @@ mod test {
                 assert_eq!(host_id, None);
                 assert_eq!(provider_id, "foobar");
             }
-            cmd => panic!("ctl stop actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
         let get_hosts_all: Cmd = Parser::try_parse_from([
             "ctl",
@@ -303,7 +304,7 @@ mod test {
         let update_all: Cmd = Parser::try_parse_from([
             "ctl",
             "update",
-            "actor",
+            "component",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -315,7 +316,7 @@ mod test {
             "--host-id",
             HOST_ID,
             ACTOR_ID,
-            "wasmcloud.azurecr.io/actor:v2",
+            "wasmcloud.azurecr.io/component:v2",
         ])?;
         match update_all.command {
             CtlCliCommand::Update(UpdateCommand::Component(UpdateComponentCommand {
@@ -332,7 +333,7 @@ mod test {
                 assert_eq!(component_id, ACTOR_ID);
                 assert_eq!(
                     new_component_ref,
-                    "wasmcloud.azurecr.io/actor:v2".to_string()
+                    "wasmcloud.azurecr.io/component:v2".to_string()
                 );
             }
             cmd => panic!("ctl get claims constructed incorrect command {cmd:?}"),
@@ -341,7 +342,7 @@ mod test {
         let scale_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "scale",
-            "actor",
+            "component",
             "--lattice",
             DEFAULT_LATTICE,
             "--ctl-host",
@@ -351,7 +352,7 @@ mod test {
             "--timeout-ms",
             "2001",
             HOST_ID,
-            "wasmcloud.azurecr.io/actor:v2",
+            "wasmcloud.azurecr.io/component:v2",
             "myactorv2",
             "--count",
             "1",
@@ -378,13 +379,13 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
-                assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
+                assert_eq!(actor_ref, "wasmcloud.azurecr.io/component:v2".to_string());
                 assert_eq!(actor_id, "myactorv2".to_string());
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
                 assert_eq!(config, vec!["default-port", "lang"]);
             }
-            cmd => panic!("ctl scale actor constructed incorrect command {cmd:?}"),
+            cmd => panic!("ctl scale component constructed incorrect command {cmd:?}"),
         }
 
         Ok(())

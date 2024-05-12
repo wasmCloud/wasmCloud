@@ -9,7 +9,7 @@ use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
 
-/// A link definition between a source and target component (actor or provider) on a given
+/// A link definition between a source and target component (component or provider) on a given
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.

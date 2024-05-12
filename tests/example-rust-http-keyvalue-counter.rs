@@ -6,7 +6,7 @@ use core::time::Duration;
 use std::net::Ipv4Addr;
 
 use anyhow::Context as _;
-use test_actors::RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER;
+use test_components::RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER;
 use tokio::time::sleep;
 use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
@@ -136,7 +136,7 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
                 Vec::new(),
             )
             .await
-            .context("failed to scale `rust-http-keyvalue-counter` actor")
+            .context("failed to scale `rust-http-keyvalue-counter` component")
         }
     )?;
 

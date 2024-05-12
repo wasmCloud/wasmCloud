@@ -123,7 +123,7 @@
           with pkgs.lib; let
             cargoLock.root = readTOML ./Cargo.lock;
 
-            cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
+            cargoLock.actors-rust = readTOML ./tests/components/rust/Cargo.lock;
 
             lockPackages =
               cargoLock.root.package

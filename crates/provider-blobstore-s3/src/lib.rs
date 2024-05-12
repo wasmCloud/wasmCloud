@@ -239,7 +239,7 @@ impl StorageClient {
 
     /// perform alias lookup on bucket name
     /// This can be used either for giving shortcuts to actors in the linkdefs, for example:
-    /// - actor could use bucket names `alias_today`, `alias_images`, etc. and the linkdef aliases
+    /// - component could use bucket names `alias_today`, `alias_images`, etc. and the linkdef aliases
     ///   will remap them to the real bucket name
     /// The `'alias_'` prefix is not required, so this also works as a general redirect capability
     pub fn unalias<'n, 's: 'n>(&'s self, bucket_or_alias: &'n str) -> &'n str {
@@ -494,12 +494,12 @@ impl StorageClient {
 /// for the blobstore provider WIT contract
 #[derive(Default, Clone)]
 pub struct BlobstoreS3Provider {
-    /// Per-actor storage for NATS connection clients
+    /// Per-component storage for NATS connection clients
     actors: Arc<RwLock<HashMap<String, StorageClient>>>,
 }
 
 impl BlobstoreS3Provider {
-    /// Retrieve the per-actor [`StorageClient`] for a given link context
+    /// Retrieve the per-component [`StorageClient`] for a given link context
     async fn client(&self, context: Option<Context>) -> Result<StorageClient> {
         if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
             self.actors
@@ -1001,10 +1001,10 @@ impl Blobstore for BlobstoreS3Provider {
 }
 
 /// Handle provider control commands
-/// `put_link` (new actor link command), `del_link` (remove link command), and shutdown
+/// `put_link` (new component link command), `del_link` (remove link command), and shutdown
 impl Provider for BlobstoreS3Provider {
     /// Provider should perform any operations needed for a new link,
-    /// including setting up per-actor resources, and checking authorization.
+    /// including setting up per-component resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     async fn receive_link_config_as_target(
         &self,
@@ -1037,7 +1037,7 @@ impl Provider for BlobstoreS3Provider {
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
         let mut aw = self.actors.write().await;
-        // empty the actor link data and stop all servers
+        // empty the component link data and stop all servers
         aw.drain();
         Ok(())
     }
