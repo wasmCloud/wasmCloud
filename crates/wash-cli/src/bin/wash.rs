@@ -19,6 +19,8 @@ use wash_cli::generate::{self, NewCliCommand};
 use wash_cli::keys::{self, KeysCliCommand};
 use wash_cli::par::{self, ParCliCommand};
 use wash_cli::plugin::{self, PluginCommand};
+use wash_cli::run;
+use wash_cli::run::RunCommand;
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::up::{self, UpCommand};
 use wash_cli::util::ensure_plugin_dir;
@@ -65,6 +67,7 @@ Run:
   app          Manage declarative applications and deployments (wadm)
   spy          Spy on all invocations a component sends and receives
   ui           Serve a web UI for wasmCloud
+  run          Run a component on your workstation
 
 Iterate:
   get          Get information about different running wasmCloud resources
@@ -187,6 +190,9 @@ enum CliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
+    /// Run a component on your workstation
+    #[clap(name = "run")]
+    Run(RunCommand),
     /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]
     Spy(SpyCommand),
@@ -398,6 +404,7 @@ async fn main() {
         CliCommand::RegPull(reg_pull_cli) => {
             common::registry_cmd::registry_pull(reg_pull_cli, output_kind).await
         }
+        CliCommand::Run(run_cli) => run::handle_command(run_cli, output_kind).await,
         CliCommand::Spy(spy_cli) => {
             if !cli.experimental {
                 experimental_error_message("spy")
