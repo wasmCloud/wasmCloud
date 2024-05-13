@@ -2,7 +2,7 @@
   "name": "@wasmcloud/lattice-client-core",
   "packageManager": "yarn@4.2.2",
   "license": "Apache-2.0",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Framework-agnostic core package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
@@ -36,7 +36,9 @@
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
     "dev": "tsup --watch",
-    "build": "tsup"
+    "build": "tsup",
+    "prepublish": "yarn build",
+    "publish": "yarn npm publish --access public"
   },
   "peerDependencies": {
     "eslint": "^8.57.0",
