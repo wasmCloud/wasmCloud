@@ -26,6 +26,6 @@
     "eslint-config-turbo": "^1.13.3",
     "prettier": "^3.2.5",
     "turbo": "^1.13.3",
-    "typescript": "^5.4.5"
+    "typescript": "^5.5.0-dev.20240513"
   }
 }

@@ -2418,13 +2418,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^18.3.1":
-  version: 18.3.1
-  resolution: "@types/react@npm:18.3.1"
+"@types/react@npm:^18.3.2":
+  version: 18.3.2
+  resolution: "@types/react@npm:18.3.2"
   dependencies:
     "@types/prop-types": "npm:*"
     csstype: "npm:^3.0.2"
-  checksum: baa6b8a75c471c89ebf3477b4feab57102ced25f0c1e553dd04ef6a1f0def28d5e0172fa626a631f22e223f840b5aaa2403b2d4bb671c83c5a9d6c7ae39c7a05
+  checksum: a85eed82c1009dc9d979281d9ea1f5322255003de3378390f35d897b4bdaf1d34ea748636c03e9e9b4b7cc97c2f4582993d2d60e40846226ad497d97c7d8565a
   languageName: node
   linkType: hard
 
@@ -2627,7 +2627,7 @@ __metadata:
     eslint-plugin-react-refresh: "npm:^0.4.7"
     eslint-plugin-tailwindcss: "npm:3.15.2-beta.1"
     eslint-plugin-unicorn: "npm:^52.0.0"
-    typescript: "npm:5.5.0-dev.20240430"
+    typescript: "npm:5.5.0-dev.20240513"
   peerDependencies:
     eslint: ^8.57.0
     tailwindcss: ^3.4.3
@@ -2655,7 +2655,7 @@ __metadata:
   resolution: "@wasmcloud/lattice-client-react@workspace:packages/lattice-client-react"
   dependencies:
     "@types/eslint": "npm:~8.56.10"
-    "@types/react": "npm:^18.3.1"
+    "@types/react": "npm:^18.3.2"
     "@types/react-dom": "npm:^18.3.0"
     "@wasmcloud/eslint-config": "workspace:^"
     "@wasmcloud/lattice-client-core": "workspace:^"
@@ -2678,7 +2678,7 @@ __metadata:
     eslint-config-turbo: "npm:^1.13.3"
     prettier: "npm:^3.2.5"
     turbo: "npm:^1.13.3"
-    typescript: "npm:^5.4.5"
+    typescript: "npm:^5.5.0-dev.20240513"
   languageName: unknown
   linkType: soft
 
@@ -2719,7 +2719,7 @@ __metadata:
     "@radix-ui/react-tooltip": "npm:^1.0.7"
     "@tanstack/react-table": "npm:^8.17.0"
     "@types/node": "npm:^20.12.11"
-    "@types/react": "npm:^18.3.1"
+    "@types/react": "npm:^18.3.2"
     "@types/react-dom": "npm:^18.3.0"
     "@types/uuid": "npm:^9.0.8"
     "@typescript-eslint/eslint-plugin": "npm:^7.8.0"
@@ -2748,7 +2748,7 @@ __metadata:
     get-port: "npm:^7.1.0"
     lucide-react: "npm:^0.378.0"
     nats.ws: "npm:^1.26.0"
-    pino: "npm:^9.0.0"
+    pino: "npm:^9.1.0"
     postcss: "npm:^8.4.38"
     prettier: "npm:^3.2.5"
     react: "npm:^18.3.1"
@@ -2759,7 +2759,7 @@ __metadata:
     tailwindcss: "npm:^3.4.3"
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
-    typescript: "npm:^5.4.5"
+    typescript: "npm:^5.5.0-dev.20240513"
     usehooks-ts: "npm:^3.1.0"
     uuid: "npm:^9.0.1"
     vite: "npm:^5.2.11"
@@ -6734,31 +6734,31 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pino-std-serializers@npm:^6.0.0":
-  version: 6.2.2
-  resolution: "pino-std-serializers@npm:6.2.2"
-  checksum: a00cdff4e1fbc206da9bed047e6dc400b065f43e8b4cef1635b0192feab0e8f932cdeb0faaa38a5d93d2e777ba4cda939c2ed4c1a70f6839ff25f9aef97c27ff
+"pino-std-serializers@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "pino-std-serializers@npm:7.0.0"
+  checksum: 884e08f65aa5463d820521ead3779d4472c78fc434d8582afb66f9dcb8d8c7119c69524b68106cb8caf92c0487be7794cf50e5b9c0383ae65b24bf2a03480951
   languageName: node
   linkType: hard
 
-"pino@npm:^9.0.0":
-  version: 9.0.0
-  resolution: "pino@npm:9.0.0"
+"pino@npm:^9.1.0":
+  version: 9.1.0
+  resolution: "pino@npm:9.1.0"
   dependencies:
     atomic-sleep: "npm:^1.0.0"
     fast-redact: "npm:^3.1.1"
     on-exit-leak-free: "npm:^2.1.0"
     pino-abstract-transport: "npm:^1.2.0"
-    pino-std-serializers: "npm:^6.0.0"
+    pino-std-serializers: "npm:^7.0.0"
     process-warning: "npm:^3.0.0"
     quick-format-unescaped: "npm:^4.0.3"
     real-require: "npm:^0.2.0"
     safe-stable-stringify: "npm:^2.3.1"
-    sonic-boom: "npm:^3.7.0"
-    thread-stream: "npm:^2.6.0"
+    sonic-boom: "npm:^4.0.1"
+    thread-stream: "npm:^3.0.0"
   bin:
     pino: bin.js
-  checksum: 04875e64e1ee32c5a759d2e9d4276c5f9745414850303fae6c04d2c126f167381c06fc52360ca1f04b51001baefe33e2feace5787935c7df2d93fb641431f4b0
+  checksum: b7b0bdfdc2d9db017fa690e85f2e8ad2ddda09b1cbccb9868bc55d9a218ab3e9e4d75e6beb9d44fef10c4982d8719db4cf2325ea1f866d2fb37b7dff7f7297b1
   languageName: node
   linkType: hard
 
@@ -7691,12 +7691,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"sonic-boom@npm:^3.7.0":
-  version: 3.8.1
-  resolution: "sonic-boom@npm:3.8.1"
+"sonic-boom@npm:^4.0.1":
+  version: 4.0.1
+  resolution: "sonic-boom@npm:4.0.1"
   dependencies:
     atomic-sleep: "npm:^1.0.0"
-  checksum: e03c9611e43fa81132cd2ce0fe4eb7fbcf19db267e9dec20dc6c586f82465c9c906e91a02f72150c740463ad9335536ea2131850307aaa6686d1fb5d4cc4be3e
+  checksum: 449bdc39f4333a321bb754319e9452c3e94409654b2ddf8e40307a1a413b953bed3b3b092a4992ab3fb7cd1a7c95bdde5a046ac4e0405d7c92c60802452c060c
   languageName: node
   linkType: hard
 
@@ -8056,12 +8056,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"thread-stream@npm:^2.6.0":
-  version: 2.7.0
-  resolution: "thread-stream@npm:2.7.0"
+"thread-stream@npm:^3.0.0":
+  version: 3.0.0
+  resolution: "thread-stream@npm:3.0.0"
   dependencies:
     real-require: "npm:^0.2.0"
-  checksum: 03e743a2ccb2af5fa695d2e4369113336ee9b9f09c4453d50a222cbb4ae3af321bff658e0e5bf8bfbce9d7f5a7bf6262d12a2a365e160f4e76380ec624d32e7b
+  checksum: f7a8b8539a75194a5c53c2506da4110ced4b3b7096f4ac7fa1bf07a96a7d0dccbe46d8b87cf1427e09804fcdbd6a51ddf5d1da01c58f7ccb7e4b3baf513bf02e
   languageName: node
   linkType: hard
 
@@ -8439,43 +8439,23 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typescript@npm:5.5.0-dev.20240430":
-  version: 5.5.0-dev.20240430
-  resolution: "typescript@npm:5.5.0-dev.20240430"
+"typescript@npm:5.5.0-dev.20240513, typescript@npm:^5.5.0-dev.20240513":
+  version: 5.5.0-dev.20240513
+  resolution: "typescript@npm:5.5.0-dev.20240513"
   bin:
     tsc: bin/tsc
     tsserver: bin/tsserver
-  checksum: 7fef7057aa0a2fb5312c25ebabae5c8e55f5cb7a429a977d93dc699479aa40e558f198b5b442fe6d805bbaa94f40bb81eb41d5f629065e36d8c891d1152222ad
+  checksum: 418c8ce4126e7cd4eadd21e19b9b27be3735d5bab25104a5cbf72dbec6dadbfbec80482b6a9bef308536dfb4a263c52e791e02ab6df91264759acd96b848e545
   languageName: node
   linkType: hard
 
-"typescript@npm:^5.4.5":
-  version: 5.4.5
-  resolution: "typescript@npm:5.4.5"
+"typescript@patch:typescript@npm%3A5.5.0-dev.20240513#optional!builtin<compat/typescript>, typescript@patch:typescript@npm%3A^5.5.0-dev.20240513#optional!builtin<compat/typescript>":
+  version: 5.5.0-dev.20240513
+  resolution: "typescript@patch:typescript@npm%3A5.5.0-dev.20240513#optional!builtin<compat/typescript>::version=5.5.0-dev.20240513&hash=e012d7"
   bin:
     tsc: bin/tsc
     tsserver: bin/tsserver
-  checksum: d04a9e27e6d83861f2126665aa8d84847e8ebabcea9125b9ebc30370b98cb38b5dff2508d74e2326a744938191a83a69aa9fddab41f193ffa43eabfdf3f190a5
-  languageName: node
-  linkType: hard
-
-"typescript@patch:typescript@npm%3A5.5.0-dev.20240430#optional!builtin<compat/typescript>":
-  version: 5.5.0-dev.20240430
-  resolution: "typescript@patch:typescript@npm%3A5.5.0-dev.20240430#optional!builtin<compat/typescript>::version=5.5.0-dev.20240430&hash=e012d7"
-  bin:
-    tsc: bin/tsc
-    tsserver: bin/tsserver
-  checksum: bdac09a4e5d8724e3fd82d1ab891095338f0b30af35b659b16ae70182b2abb7aa75c52cfd529fbd1c40b213aab207505742decec4300e8722734bca394731266
-  languageName: node
-  linkType: hard
-
-"typescript@patch:typescript@npm%3A^5.4.5#optional!builtin<compat/typescript>":
-  version: 5.4.5
-  resolution: "typescript@patch:typescript@npm%3A5.4.5#optional!builtin<compat/typescript>::version=5.4.5&hash=e012d7"
-  bin:
-    tsc: bin/tsc
-    tsserver: bin/tsserver
-  checksum: 584be8bac7112ad49a9eb9992f71d542b1ff2fafb5bb315e1c196145e8feab589f1d7223cfb2d5df6770789582e6918f8287d1f2f89911b38eb80e29c560ad00
+  checksum: 37e799c0bb251148bb531aff8d35fa7081eb075cd187342b763c469ebdae1b42517be2a793a4752feec13eb13df5ede24d2ea27fb86dcf082c7be6e123e39321
   languageName: node
   linkType: hard
 
