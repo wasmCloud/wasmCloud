@@ -1,1 +1,1 @@
-# @wasmcloud/lattice-client-core
+# @wasmcloud/lattice-client-react

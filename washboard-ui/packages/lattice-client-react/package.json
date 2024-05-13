@@ -1,14 +1,14 @@
 {
   "name": "@wasmcloud/lattice-client-react",
-  "packageManager": "yarn@4.0.2",
-  "private": true,
-  "version": "0.2.0",
+  "packageManager": "yarn@4.2.2",
+  "license": "Apache-2.0",
+  "version": "0.2.3",
   "description": "React specific package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
     "type": "git",
     "url": "https://github.com/wasmcloud/wasmcloud.git",
-    "directory": "washboard-ui/packages/lattice-client-core"
+    "directory": "washboard-ui/packages/lattice-client-react"
   },
   "type": "module",
   "types": "./build/index.d.ts",
@@ -16,12 +16,10 @@
     ".": {
       "import": {
         "types": "./build/index.d.ts",
-        "development": "./src/index.ts",
         "default": "./build/index.js"
       },
       "require": {
         "types": "./build/index.d.ts",
-        "development": "./src/index.ts",
         "default": "./build/index.cjs"
       }
     },
@@ -29,7 +27,7 @@
   },
   "files": [
     "build",
-    "src"
+    "README.md"
   ],
   "scripts": {
     "lint": "yarn lint:eslint",
@@ -47,11 +45,11 @@
     "@wasmcloud/eslint-config": "workspace:^",
     "@wasmcloud/tsconfig": "workspace:^",
     "eslint": "^8.57.0",
-    "tailwindcss": "^3.4.3"
+    "tailwindcss": "^3.4.3",
+    "tsup": "^8.0.2"
   },
   "dependencies": {
-    "@wasmcloud/lattice-client-core": "workspace:^",
-    "tsup": "^8.0.2"
+    "@wasmcloud/lattice-client-core": "workspace:^"
   },
   "peerDependencies": {
     "react": "^18.0.0"
