@@ -8,7 +8,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.11",
-    "typescript": "5.5.0-dev.20240430"
+    "typescript": "^5.4.5"
   },
   "peerDependencies": {
     "eslint": "^8.57.0",
