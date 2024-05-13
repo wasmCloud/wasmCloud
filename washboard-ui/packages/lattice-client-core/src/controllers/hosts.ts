@@ -28,7 +28,7 @@ class HostsController extends BaseController {
    * @returns hosts as a list of host refs, or a list of host details if expand is true
    */
   async list<Expand extends boolean>(
-    options: HostListRequest & {expand?: Expand},
+    options?: HostListRequest & {expand?: Expand},
   ): Promise<
     Expand extends false ? ControlResponse<WasmCloudHostRef[]> : ControlResponse<WasmCloudHost[]>
   >;
