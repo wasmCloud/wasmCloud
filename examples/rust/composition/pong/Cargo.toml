@@ -1,8 +1,9 @@
 [package]
 name = "pong"
 edition = "2021"
-description = ""
 version = "0.1.0"
+
+[workspace]
 
 [lib]
 crate-type = ["cdylib"]
