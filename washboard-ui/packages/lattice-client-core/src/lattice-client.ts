@@ -19,6 +19,7 @@ type LatticeClientConfig = {
 export type LatticeClientOptions = {
   config: LatticeClientConfig;
   connection?: LatticeConnection;
+  autoConnect?: boolean;
 };
 
 export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'connection'>> = {
@@ -127,7 +128,7 @@ export class LatticeClient {
    * @param options.connection (optional) the connection to use for the client. If not provided, a
    * new connection will be created with the latticeUrl from the config
    */
-  constructor({config, connection}: LatticeClientOptions) {
+  constructor({config, connection, autoConnect = true}: LatticeClientOptions) {
     this.#config = {
       ...defaultConfig,
       ...config,
@@ -135,7 +136,13 @@ export class LatticeClient {
 
     this.#connection = connection ?? new NatsWsLatticeConnection(this.#config);
 
-    void this.#connect();
+    if (autoConnect !== false) {
+      // try and connect, but don't throw an error if it fails. The connection will be in an error state accessible
+      // through the `client.connection.status` property
+      this.#connect().catch(() => {
+        console.info('Failed to connect to lattice on creation');
+      });
+    }
   }
 
   /**
@@ -156,7 +163,10 @@ export class LatticeClient {
       this.#connection.setRetryCount(newConfig.retryCount);
     }
 
-    void this.#reconnect();
+    // try and reconnect with the new configuration
+    if (this.#connection.status === 'connected') {
+      this.#reconnect().catch(() => null);
+    }
   }
 
   /**
