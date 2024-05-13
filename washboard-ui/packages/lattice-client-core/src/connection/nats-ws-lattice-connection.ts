@@ -19,7 +19,6 @@ class NatsWsLatticeConnection implements LatticeConnection {
 
   constructor(options: NatsWsLatticeConnectionOptions) {
     this.#options = options;
-    void this.connect();
   }
 
   setLatticeUrl(url: string): void {
