@@ -33,21 +33,32 @@ class NatsWsLatticeConnection implements LatticeConnection {
   }
 
   async connect(): Promise<void> {
-    if (this.#connection) return;
+    try {
+      if (this.#connection) return;
 
-    this.#status = 'pending';
+      this.#status = 'pending';
 
-    this.#connection = await connect({
-      servers: this.#options.latticeUrl,
-    });
-    void this.#connection.closed().then((error) => {
-      if (error) {
-        this.#status = 'error';
-        console.error(`closed with an error: ${error.message}`);
-      }
+      const connection = await connect({
+        servers: this.#options.latticeUrl,
+      });
 
-      this.#status = 'disconnected';
-    });
+      void connection.closed().then((error) => {
+        if (error) {
+          this.#status = 'error';
+          console.error(`Closed with an error: ${error.message}`);
+        }
+
+        this.#status = 'disconnected';
+      });
+
+      this.#connection = connection;
+      this.#status = 'connected';
+    } catch (error) {
+      this.#status = 'error';
+      throw new Error(
+        `Failed to connect to lattice: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   }
 
   async disconnect(): Promise<void> {
