@@ -75,11 +75,16 @@ class NatsWsLatticeConnection implements LatticeConnection {
   }
 
   subscribe<Event = unknown>(subject: string, listenerFunction: (event: Event) => void) {
+    const unsubscribe = new AbortController();
     let unsubscribeCalledBeforeConnection = false;
 
+    unsubscribe.signal.addEventListener('abort', () => {
+      unsubscribeCalledBeforeConnection = true;
+    });
+
     const result = {
-      unsubscribe() {
-        unsubscribeCalledBeforeConnection = true;
+      unsubscribe: () => {
+        unsubscribe.abort();
       },
     };
 
@@ -97,9 +102,9 @@ class NatsWsLatticeConnection implements LatticeConnection {
         return;
       }
 
-      result.unsubscribe = () => {
+      unsubscribe.signal.addEventListener('abort', () => {
         watch.unsubscribe();
-      };
+      });
     });
 
     return result;
