@@ -6,8 +6,9 @@ This is an example of **composing WebAssembly components**: combining multiple c
 * `/http-hello2`: A directory containing a modified Rust-based HTTP "Hello World" component using a custom interface
 * `/pong`: A directory containing a Rust-based component exporting on a custom `pingpong` interface
 * `compose.wac`: A file defining how components should be combined ("composed")
+* `wadm.yaml`: A deployment manifest used with the final composed component
 
-In this demo, we'll perform multiple compositions, using tools like **WAC** and **WASI Virt** to compose Wasm binaries that run in wasmCloud and Wasmtime, and ultimately arriving at a single composed component. 
+In this demo, we'll perform multiple compositions, using tools like **WAC** and **WASI Virt** to compose Wasm binaries that run in wasmCloud and Wasmtime, and ultimately arriving at a single composed component. We will also see how linking components at runtime can achieve the same effect as build-time composition in distributed environments.
 
 # Installation
 
@@ -15,7 +16,6 @@ This demo is designed to demonstrate multiple ecosystem tools, including:
 
 * **wasmCloud Shell (`wash`)**: The wasmCloud command-line interface (CLI) tool.
 * **Wasmtime**: The standalone WebAssembly runtime.
-* **`wasm-tools`**: A CLI tool for interacting with components, 
 * **WebAssembly Compositions (WAC)**: A CLI tool for declaratively composing components. 
 * **WASI Virt**: A CLI tool for virtualizing components within a composition. 
 
@@ -39,14 +39,6 @@ On Linux or macOS, you can install Wasmtime locally with an install script:
 
 ```shell
 curl https://wasmtime.dev/install.sh -sSf | bash
-```
-
-## `wasm-tools`
-
-Compiled release artifacts for Linux, macOS, and Windows are available in the [`wasm-tools` GitHub repository](https://github.com/bytecodealliance/wasm-tools/releases), or you can install with cargo:
-
-```shell
-cargo install wasm-tools
 ```
 
 ## WebAssembly Compositions (WAC)
@@ -73,20 +65,28 @@ cargo +nightly install --git https://github.com/bytecodealliance/wasi-virt
 
 ## This example
 
-Download the contents of this repository.
+These example files are included in the wasmCloud [monorepo](https://en.wikipedia.org/wiki/Monorepo). You can perform a "sparse" checkout to download only the relevant example directory (and associated documentation and metadata):
+
+```bash
+git clone --depth 1 --no-checkout https://github.com/wasmCloud/wasmCloud.git
+cd wasmcloud
+git sparse-checkout set ./examples/rust/composition
+git checkout
+cd examples/rust/composition
+```
 
 # Step 0: Run a component in wasmCloud and Wasmtime
 
-First, we'll build our standard HTTP "Hello world" example to set a baseline. From the project directory: 
+First, we'll build our standard HTTP "hello world" example to set a baseline. From the project directory: 
 
 ```shell
 cd http-hello
 wash build
 ```
-We can use `wasm-tools` to examine the WIT for this component:
+We can use `wash inspect` to examine the WIT for this component:
 
 ```shell
-wasm-tools component wit build/http_hello_world_s.wasm
+wash inspect --wit build/http_hello_world_s.wasm
 ```
 ```wit
 package root:component;
@@ -134,9 +134,9 @@ Now we'll move over to the `pong` directory. Here we have a component with a cus
 cd ../pong
 wash build
 ```
-We can use `wasm-tools` to take a look at the WIT for this component:
+We can use `wash inspect` to take a look at the WIT for this component:
 ```shell
-wasm-tools component wit ./build/pong_s.wasm
+wash inspect --wit ./build/pong_s.wasm
 ```
 ```wit
 package root:component;
@@ -166,7 +166,7 @@ wasi-virt build/pong_s.wasm --allow-random -e PONG=demo -o virt.wasm
 Now let's view the WIT for our virtualized component:
 
 ```shell
-wasm-tools component wit virt.wasm 
+wash inspect --wit virt.wasm 
 ```
 ```wit
 package root:component;
@@ -179,7 +179,7 @@ world root {
 ```
 The virtualized component still exports `pingpong` but no longer requires `wasi:cli/environment`&mdash;that import (and all of the others except the new `wasi:random/random`, which we added via a WASI Virt argument) is satisfied by the encapsulating component. If we run this component on wasmCloud or with Wasmtime, the host will be able to satisfy the `random` import. But we still need another component to invoke this one via the exposed `pingpong` interface. 
 
-# Step 2: Linking at runtime or at build
+# Step 2: Linking at runtime
 
 In the `http-hello2` directory, we have a modified `http-hello-world` component that imports the `pingpong` interface and calls for a string from `pong` to append to the hello world message. Let's navigate over to that directory and build the component.
 
@@ -221,12 +221,52 @@ Caused by:
     0: instance export `ping` has the wrong type
     1: function implementation is missing
 ```
-As we might expect, it doesn't work&mdash;the Hello World component doesn't have anything linked to fulfill the `pong` import. If we compose it with the `pong` component, however, we essentially wire those corresponding imports and exports together within the encapsulating component. Head back to the root of the project directory with `cd ..` and then we'll use WAC to perform the composition:
+As we might expect, it doesn't work&mdash;the hello world component doesn't have anything linked to fulfill the `pong` import. If we compose it with the `pong` component, however, we essentially wire those corresponding imports and exports together within the encapsulating component. Head back to the root of the project directory with `cd ..` and then we'll use WAC to perform the composition.
+
+WAC works by encoding a composed component based on the instructions defined in a .wac file. The .wac file uses a superset of WIT also called WAC. Here are the contents of `compose.wac`:
+
+```wit
+package demo:composition;
+
+let pong = new ping:pong { ... };
+let hello = new hello:there { "example:pong/pingpong": pong.pingpong, ... };
+
+export hello...;
+```
+This is a pretty simple composition, but the the design of WAC facilitates much more complex compositions of many components. You can learn more about WAC usage in the tool's [readme](https://github.com/bytecodealliance/wac/blob/main/README.md) and [language guide](https://github.com/bytecodealliance/wac/blob/main/LANGUAGE.md). 
+
+For this demo's purposes, we simply need to run `wac encode` while indicating the components we wish to compose with the `--dep` argument, naming our output file with `-o`, and specifying our `.wac` instructions:
 
 ```shell
 wac encode --dep ping:pong=./pong/virt.wasm --dep hello:there=./http-hello2/build/http_hello_world_s.wasm -o output.wasm compose.wac
 ```
-Now we have a new file: `output.wasm`. Let's try running it with Wasmtime:
+Now we have a new file: `output.wasm`. Taking a look at our composed component, we can see that we've ended up with a combination of both components:
+
+```bash
+wash inspect --wit output.wasm
+```
+```wit
+package root:component;
+
+world root {
+  import wasi:random/random@0.2.0;
+  import wasi:io/error@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:http/types@0.2.0;
+  import wasi:cli/environment@0.2.0;
+  import wasi:cli/exit@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:filesystem/types@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+
+  export wasi:http/incoming-handler@0.2.0;
+}
+```
+
+Let's try running it with Wasmtime:
 
 ```shell
 wasmtime serve -S cli=y output.wasm
@@ -235,4 +275,10 @@ wasmtime serve -S cli=y output.wasm
 curl localhost:8080
 Hello World! I got pong demo
 ```
+We can run the composed component in wasmCloud as well:
+
+```shell
+wash app deploy wadm.yaml
+```
+Congratulations! You've composed a component that runs anywhere supporting WASI P2. 
 For more information on linking components at runtime or at build via composition, including when you might want to use each approach, see [Linking Components](https://wasmcloud.com/docs/concepts/linking-components/) in the wasmCloud documentation. 
