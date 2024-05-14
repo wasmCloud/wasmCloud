@@ -10,13 +10,13 @@ impl Guest for HttpServer {
         let response = OutgoingResponse::new(Fields::new());
         response.set_status_code(200).unwrap();
         let response_body = response.body().unwrap();
+        ResponseOutparam::set(response_out, Ok(response));
         response_body
             .write()
             .unwrap()
             .blocking_write_and_flush(b"Hello from Rust!\n")
             .unwrap();
         OutgoingBody::finish(response_body, None).expect("failed to finish response body");
-        ResponseOutparam::set(response_out, Ok(response));
     }
 }
 

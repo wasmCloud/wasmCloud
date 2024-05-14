@@ -81,7 +81,8 @@ impl RunGuest for HelloPlugin {
         req.set_authority(Some("dog.ceo"))?;
         req.set_path_with_query(Some("/api/breeds/image/random"))?;
         match wasi::http::outgoing_handler::handle(req, None) {
-            Ok(resp) if wasi::io::poll::poll(&[&resp.subscribe()]) == [0] => {
+            Ok(resp) => {
+                resp.subscribe().block();
                 let response = resp
                     .get()
                     .expect("HTTP request response missing")
@@ -119,9 +120,6 @@ impl RunGuest for HelloPlugin {
                 } else {
                     eprintln!("HTTP request failed with status code {}", response.status());
                 }
-            }
-            Ok(_) => {
-                eprintln!("Got response, but it wasn't ready");
             }
             Err(e) => {
                 eprintln!("Got error when trying to fetch dog: {}", e);
