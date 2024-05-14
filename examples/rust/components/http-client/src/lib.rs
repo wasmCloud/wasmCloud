@@ -21,7 +21,8 @@ impl Guest for HttpServer {
         req.set_path_with_query(Some("/api/breeds/image/random"))
             .unwrap();
         let dog_picture_url = match wasi::http::outgoing_handler::handle(req, None) {
-            Ok(resp) if wasi::io::poll::poll(&[&resp.subscribe()]) == [0] => {
+            Ok(resp) => {
+                resp.subscribe().block();
                 let response = resp
                     .get()
                     .expect("HTTP request response missing")
@@ -45,26 +46,24 @@ impl Guest for HttpServer {
                     let dog_response: DogResponse = serde_json::from_slice(&body).unwrap();
                     dog_response.message
                 } else {
-                    panic!("HTTP request failed with status code {}", response.status());
+                    format!("HTTP request failed with status code {}", response.status())
                 }
             }
-            Ok(_) => {
-                panic!("Got response, but it wasn't ready");
-            }
             Err(e) => {
-                panic!("Got error when trying to fetch dog: {}", e);
+                format!("Got error when trying to fetch dog: {}", e)
             }
         };
         let response = OutgoingResponse::new(Fields::new());
         response.set_status_code(200).unwrap();
         let response_body = response.body().unwrap();
-        response_body
-            .write()
-            .unwrap()
+        let write_stream = response_body.write().unwrap();
+
+        // Write the headers and then write the body
+        ResponseOutparam::set(response_out, Ok(response));
+        write_stream
             .blocking_write_and_flush(dog_picture_url.as_bytes())
             .unwrap();
         OutgoingBody::finish(response_body, None).expect("failed to finish response body");
-        ResponseOutparam::set(response_out, Ok(response));
     }
 }
 

@@ -38,7 +38,7 @@ subfolder = "examples/python/components/http-hello-world"
 
 [[component]]
 name = "rust-http-client"
-description = "a hello-world component (in Rust) that responds over an HTTP connection with some data fetched from an upstream API"
+description = "A simple component (in Rust) illustrating the use of an HTTP client that responds over an HTTP connection with some data fetched from an upstream API"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/components/http-client"
 
