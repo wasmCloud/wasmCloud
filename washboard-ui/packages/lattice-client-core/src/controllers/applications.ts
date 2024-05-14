@@ -162,7 +162,10 @@ class ApplicationsController extends BaseController {
   async delete(applicationName: string, options: {version?: string; delete_all?: boolean}) {
     const response = await this.connection.request<ApplicationDeleteResponse>(
       `${this.config.wadmTopic}.model.del.${applicationName}`,
-      JSON.stringify(options),
+      JSON.stringify({
+        ...(options.version ? {version: options.version} : {}),
+        delete_all: options.delete_all ?? false,
+      }),
     );
 
     if (response.result === 'error') {
