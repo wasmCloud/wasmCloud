@@ -2,7 +2,7 @@
   "name": "@wasmcloud/lattice-client-core",
   "packageManager": "yarn@4.2.2",
   "license": "Apache-2.0",
-  "version": "0.2.7",
+  "version": "0.3.1",
   "description": "Framework-agnostic core package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
