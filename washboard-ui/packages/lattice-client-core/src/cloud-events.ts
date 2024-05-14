@@ -20,72 +20,58 @@ export type CloudEvent<EventType extends LatticeEventType, DataType = unknown> =
     };
 
 export enum LatticeEventType {
-  ComponentScaled = 'component_scaled',
-  ComponentScaleFailed = 'component_scale_failed',
-  LinkDefinitionSet = 'linkdef_set',
-  LinkDefinitionDeleted = 'linkdef_deleted',
-  ProviderStarted = 'provider_started',
-  ProviderStartFailed = 'provider_start_failed',
-  ProviderStopped = 'provider_stopped',
-  HealthCheckPassed = 'health_check_passed',
-  HealthCheckFailed = 'health_check_failed',
-  HealthCheckStatus = 'health_check_status',
-  ConfigSet = 'config_set',
-  ConfigDeleted = 'config_deleted',
-  LabelsChanged = 'labels_changed',
-  HostHeartbeat = 'host_heartbeat',
-  HostStarted = 'host_started',
-  HostStopped = 'host_stopped',
+  ComponentScaled = 'com.wasmcloud.lattice.component_scaled',
+  ComponentScaleFailed = 'com.wasmcloud.lattice.component_scale_failed',
+  LinkDefinitionSet = 'com.wasmcloud.lattice.linkdef_set',
+  LinkDefinitionDeleted = 'com.wasmcloud.lattice.linkdef_deleted',
+  ProviderStarted = 'com.wasmcloud.lattice.provider_started',
+  ProviderStartFailed = 'com.wasmcloud.lattice.provider_start_failed',
+  ProviderStopped = 'com.wasmcloud.lattice.provider_stopped',
+  HealthCheckPassed = 'com.wasmcloud.lattice.health_check_passed',
+  HealthCheckFailed = 'com.wasmcloud.lattice.health_check_failed',
+  HealthCheckStatus = 'com.wasmcloud.lattice.health_check_status',
+  ConfigSet = 'com.wasmcloud.lattice.config_set',
+  ConfigDeleted = 'com.wasmcloud.lattice.config_deleted',
+  LabelsChanged = 'com.wasmcloud.lattice.labels_changed',
+  HostHeartbeat = 'com.wasmcloud.lattice.host_heartbeat',
+  HostStarted = 'com.wasmcloud.lattice.host_started',
+  HostStopped = 'com.wasmcloud.lattice.host_stopped',
 }
 
-export type ComponentScaledEvent =
-  | CloudEvent<
-      LatticeEventType.ComponentScaled,
-      {
-        annotations: Record<string, string>;
-        host_id: string;
-        image_ref: string;
-        max_instances: number;
-        component_id: string;
-      }
-    >
-  | CloudEvent<
-      LatticeEventType.ComponentScaled,
-      {
-        public_key: string;
-        claims: string;
-        annotations: Record<string, string>;
-        host_id: string;
-        image_ref: string;
-        max_instances: number;
-        component_id: string;
-      }
-    >;
+export type ComponentScaledEvent = CloudEvent<
+  LatticeEventType.ComponentScaled,
+  {
+    annotations: Record<string, string>;
+    host_id: string;
+    image_ref: string;
+    max_instances: number;
+    component_id: string;
+    public_key?: string;
+    claims?: {
+      call_alias: string;
+      issuer: string;
+      tags?: string[];
+      name?: string;
+      version?: string;
+      revision?: string;
+      not_before_human: string;
+      expires_human: string;
+    };
+  }
+>;
 
-export type ComponentScaleFailedEvent =
-  | CloudEvent<
-      LatticeEventType.ComponentScaleFailed,
-      {
-        annotations: Record<string, string>;
-        host_id: string;
-        image_ref: string;
-        component_id: string;
-        max_instances: number;
-        error: string;
-      }
-    >
-  | CloudEvent<
-      LatticeEventType.ComponentScaleFailed,
-      {
-        annotations: Record<string, string>;
-        host_id: string;
-        image_ref: string;
-        component_id: string;
-        max_instances: number;
-        error: string;
-        public_key: string;
-      }
-    >;
+export type ComponentScaleFailedEvent = CloudEvent<
+  LatticeEventType.ComponentScaleFailed,
+  {
+    annotations: Record<string, string>;
+    host_id: string;
+    image_ref: string;
+    component_id: string;
+    max_instances: number;
+    error: string;
+    public_key?: string;
+  }
+>;
 
 export type LinkDefinitionSetEvent = CloudEvent<
   LatticeEventType.LinkDefinitionSet,
@@ -111,33 +97,23 @@ export type LinkDefinitionDeletedEvent = CloudEvent<
   }
 >;
 
-export type ProviderStartedEvent =
-  | CloudEvent<
-      LatticeEventType.ProviderStarted,
-      {
-        host_id: string;
-        image_ref: string;
-        provider_id: string;
-        annotations: Record<string, string>;
-      }
-    >
-  | CloudEvent<
-      LatticeEventType.ProviderStarted,
-      {
-        host_id: string;
-        image_ref: string;
-        provider_id: string;
-        annotations: Record<string, string>;
-        claims: {
-          issuer: string;
-          tags: string[];
-          name: string;
-          version: string;
-          not_before_human: string;
-          expires_human: string;
-        };
-      }
-    >;
+export type ProviderStartedEvent = CloudEvent<
+  LatticeEventType.ProviderStarted,
+  {
+    host_id: string;
+    image_ref: string;
+    provider_id: string;
+    annotations: Record<string, string>;
+    claims?: {
+      issuer: string;
+      tags: null;
+      name: string;
+      version: string;
+      not_before_human: string;
+      expires_human: string;
+    };
+  }
+>;
 
 export type ProviderStartFailedEvent = CloudEvent<
   LatticeEventType.ProviderStartFailed,
