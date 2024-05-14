@@ -11,9 +11,9 @@ struct DogResponse {
     message: String,
 }
 
-struct HttpServer;
+struct DogFetcher;
 
-impl Guest for HttpServer {
+impl Guest for DogFetcher {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
         let req = wasi::http::outgoing_handler::OutgoingRequest::new(Fields::new());
         req.set_scheme(Some(&Scheme::Https)).unwrap();
@@ -60,6 +60,8 @@ impl Guest for HttpServer {
 
         // Write the headers and then write the body
         ResponseOutparam::set(response_out, Ok(response));
+        // For simplicity, we're just writing this string out. However, when the body gets long
+        // enough (generally >4096 bytes), you'll need to loop and write chunks of the body.
         write_stream
             .blocking_write_and_flush(dog_picture_url.as_bytes())
             .unwrap();
@@ -106,4 +108,4 @@ impl std::io::Read for InputStreamReader<'_> {
     }
 }
 
-export!(HttpServer);
+export!(DogFetcher);
