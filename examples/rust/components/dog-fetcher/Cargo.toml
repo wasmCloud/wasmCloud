@@ -1,5 +1,5 @@
 [package]
-name = "http-rust-client"
+name = "dog-fetcher"
 edition = "2021"
 version = "0.1.0"
 

@@ -1,4 +1,4 @@
-# HTTP Client example
+# Dog Fetcher example
 
 This is a simple Rust Wasm example that fetches a URL to a random dog picture and returns the
 response. Its purpose is to show how you can use `wasi:http/outgoing-handler` in a component. 
@@ -20,7 +20,7 @@ wash build
 You must have wasmtime >=19.0.0 for this to work. Make sure to follow the build step above first.
 
 ```bash
-wasmtime serve -Scommon ./build/http_rust_client_s.wasm
+wasmtime serve -Scommon ./build/dog_fetcher_s.wasm
 ```
 
 ## Running with wasmCloud

@@ -37,10 +37,10 @@ git = "wasmCloud/wasmCloud"
 subfolder = "examples/python/components/http-hello-world"
 
 [[component]]
-name = "rust-http-client"
-description = "A simple component (in Rust) illustrating the use of an HTTP client that responds over an HTTP connection with some data fetched from an upstream API"
+name = "rust-dog-fetcher"
+description = "A component that is a good boi and illustrates how to use an HTTP client to fetch a dog picture from an API"
 git = "wasmCloud/wasmCloud"
-subfolder = "examples/rust/components/http-client"
+subfolder = "examples/rust/components/dog-fetcher"
 
 [[component]]
 name = "echo-messaging"

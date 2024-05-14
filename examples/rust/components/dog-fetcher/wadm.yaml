@@ -1,7 +1,7 @@
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
-  name: rust-http-client
+  name: dog-fetcher
   annotations:
     version: v0.0.1
     description: "HTTP hello world demo in Rust, showing use of the server and client providers"
@@ -10,7 +10,7 @@ spec:
     - name: http-component
       type: component
       properties:
-        image: file://./build/http_rust_client_s.wasm
+        image: file://./build/dog_fetcher_s.wasm
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
