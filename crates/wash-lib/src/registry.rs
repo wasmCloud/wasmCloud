@@ -231,6 +231,7 @@ pub async fn push_oci_artifact(
         } else {
             ClientProtocol::Https
         },
+        extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         ..Default::default()
     });
 
