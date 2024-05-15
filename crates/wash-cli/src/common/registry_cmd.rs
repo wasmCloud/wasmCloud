@@ -1,11 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use oci_distribution::{
-    client::{Client, ClientConfig, ClientProtocol},
-    secrets::RegistryAuth,
-    Reference,
-};
+use oci_distribution::Reference;
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -17,7 +13,7 @@ use wash_lib::registry::{
 use wash_lib::{
     cli::{
         input_vec_to_hashmap,
-        registry::{RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
+        registry::{RegistryPullCommand, RegistryPushCommand},
         CommandOutput, OutputKind,
     },
     parser::get_config,
@@ -69,34 +65,6 @@ pub async fn registry_pull(
         format!("\n{SHOWER_EMOJI} Successfully pulled and validated {outfile}"),
         map,
     ))
-}
-
-pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
-    let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default(), None)?;
-    let mut client = Client::new(ClientConfig {
-        protocol: if cmd.opts.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        ..Default::default()
-    });
-
-    let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryCredential {
-            username: Some(user),
-            password: Some(password),
-            ..Default::default()
-        }),
-        _ => resolve_registry_credentials(image.registry()).await,
-    }?;
-
-    let Ok(credentials) = RegistryAuth::try_from(&credentials) else {
-        bail!("failed to resolve registry credentials")
-    };
-
-    let (_, _) = client.pull_manifest(&image, &credentials).await?;
-    Ok(CommandOutput::from("Pong!"))
 }
 
 pub async fn write_artifact(
