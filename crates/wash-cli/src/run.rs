@@ -1,6 +1,10 @@
-use anyhow::Result;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
+use tracing::warn;
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::run::{CtxBuilder, LocalRuntime};
 
 #[derive(Parser, Debug, Clone)]
 pub struct RunCommand {
@@ -144,6 +148,76 @@ pub struct NetworkOptions {
     pub allow_bind_udp: Vec<String>,
 }
 
-pub async fn handle_command(_cmd: RunCommand, _output_kind: OutputKind) -> Result<CommandOutput> {
-    Ok(CommandOutput::from("This command is not implemented yet."))
+struct ParsedDir {
+    path: PathBuf,
+    file_perms: Option<FilePerms>,
+    guest_dir: Option<String>,
+}
+
+enum FilePerms {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl FromStr for FilePerms {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "ro" => Ok(Self::ReadOnly),
+            "rw" => Ok(Self::ReadWrite),
+            _ => bail!("file permission is incorrect, 'ro' or 'rw' expected"),
+        }
+    }
+}
+
+fn parse_dir(raw: impl AsRef<str>) -> Result<ParsedDir> {
+    let mut parts = raw.as_ref().split(':');
+
+    let raw_path = parts
+        .next()
+        .ok_or(
+            anyhow!("dir flags require at least a path")
+        )?;
+
+    let mut file_perms: Option<FilePerms> = None;
+    if let Some(raw_file_perms) = parts.next() {
+        file_perms = Some(FilePerms::from_str(raw_file_perms)?);
+    }
+
+    Ok(ParsedDir {
+        path: PathBuf::from(raw_path),
+        file_perms,
+        guest_dir: parts.next().map(|t| t.to_owned()),
+    })
+}
+
+pub async fn handle_command(cmd: RunCommand, _output_kind: OutputKind) -> Result<CommandOutput> {
+    let runtime = LocalRuntime::new()?;
+    let mut ctx_builder = CtxBuilder::new();
+
+    ctx_builder.set_reference(cmd.reference.clone());
+    ctx_builder.wasi_ctx().args(&cmd.args);
+
+    handle_env(&mut ctx_builder, &cmd.env);
+
+    return anyhow::Ok(CommandOutput::from("Command in progress"));
+}
+
+fn handle_env(ctx_build: &mut CtxBuilder, env_opts: &EnvironmentOptions) {
+    if env_opts.allow_all {
+        ctx_build.wasi_ctx().inherit_env();
+    } else {
+        for env_name in &env_opts.allow {
+            if let Ok(value) = std::env::var(env_name.as_ref()) {
+                ctx_build.wasi_ctx().env(env_name, value);
+            } else {
+                warn!(env_name, "allowed environment is not set");
+            }
+        }
+
+        for env_prefix in &env_opts.allow_prefix {
+            ctx_build.env_with_prefix(env_prefix);
+        }
+    }
 }
