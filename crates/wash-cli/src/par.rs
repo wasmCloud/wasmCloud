@@ -139,6 +139,10 @@ pub struct InspectCommand {
     #[clap(long = "insecure")]
     insecure: bool,
 
+    /// Skip checking OCI registry's certificate for validity
+    #[clap(long = "insecure-skip-tls-verify")]
+    pub insecure_skip_tls_verify: bool,
+
     /// skip the local OCI cache
     #[clap(long = "no-cache")]
     no_cache: bool,
@@ -201,6 +205,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
             user: cmd.user,
             password: cmd.password,
             insecure: cmd.insecure,
+            insecure_skip_tls_verify: cmd.insecure_skip_tls_verify,
             no_cache: cmd.no_cache,
         }
     }
@@ -592,12 +597,14 @@ mod test {
                 user,
                 password,
                 insecure,
+                insecure_skip_tls_verify,
                 no_cache,
             }) => {
                 assert_eq!(archive, LOCAL);
                 assert_eq!(digest.unwrap(), "sha256:blah");
                 assert!(!allow_latest);
                 assert!(!insecure);
+                assert!(!insecure_skip_tls_verify);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
                 assert!(no_cache);
@@ -627,12 +634,14 @@ mod test {
                 user,
                 password,
                 insecure,
+                insecure_skip_tls_verify,
                 no_cache,
             }) => {
                 assert_eq!(archive, REMOTE);
                 assert_eq!(digest.unwrap(), "sha256:blah");
                 assert!(allow_latest);
                 assert!(insecure);
+                assert!(!insecure_skip_tls_verify);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
                 assert!(no_cache);

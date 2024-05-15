@@ -80,6 +80,10 @@ pub struct InspectCommand {
     #[clap(long = "insecure")]
     pub(crate) insecure: bool,
 
+    /// Skip checking OCI registry's certificate for validity
+    #[clap(long = "insecure-skip-tls-verify")]
+    pub insecure_skip_tls_verify: bool,
+
     /// skip the local OCI cache
     #[clap(long = "no-cache")]
     pub(crate) no_cache: bool,
@@ -333,6 +337,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
             user: cmd.user,
             password: cmd.password,
             insecure: cmd.insecure,
+            insecure_skip_tls_verify: cmd.insecure_skip_tls_verify,
             no_cache: cmd.no_cache,
         }
     }
@@ -789,6 +794,7 @@ mod test {
                 user,
                 password,
                 insecure,
+                insecure_skip_tls_verify,
                 no_cache,
                 wit,
             }) => {
@@ -801,6 +807,7 @@ mod test {
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);
                 assert!(insecure);
+                assert!(!insecure_skip_tls_verify);
                 assert!(jwt_only);
                 assert!(no_cache);
                 assert!(!wit);
@@ -820,6 +827,7 @@ mod test {
             "opensesame",
             "--allow-latest",
             "--insecure",
+            "--insecure-skip-tls-verify",
             "--jwt-only",
             "--no-cache",
         ])
@@ -834,6 +842,7 @@ mod test {
                 user,
                 password,
                 insecure,
+                insecure_skip_tls_verify,
                 no_cache,
                 wit,
             }) => {
@@ -846,6 +855,7 @@ mod test {
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);
                 assert!(insecure);
+                assert!(insecure_skip_tls_verify);
                 assert!(jwt_only);
                 assert!(no_cache);
                 assert!(!wit);

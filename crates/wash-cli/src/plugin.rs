@@ -172,6 +172,7 @@ pub async fn handle_install(
                     user: cmd.oci_auth.user,
                     password: cmd.oci_auth.password,
                     insecure: cmd.oci_auth.insecure,
+                    insecure_skip_tls_verify: cmd.oci_auth.insecure_skip_tls_verify,
                 },
             )
             .await
