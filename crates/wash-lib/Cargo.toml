@@ -57,6 +57,7 @@ indicatif = { workspace = true, optional = true }
 nkeys = { workspace = true }
 normpath = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
+oci-wasm = { workspace = true, features = ["rustls-tls"] }
 path-absolutize = { workspace = true, features = [
     "once_cell_cache",
 ], optional = true }
