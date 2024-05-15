@@ -12,8 +12,8 @@ use oci_distribution::{
     secrets::RegistryAuth,
     Reference,
 };
+use oci_wasm::{ToConfig, WasmConfig, WASM_LAYER_MEDIA_TYPE, WASM_MANIFEST_MEDIA_TYPE};
 use provider_archive::ProviderArchive;
-use regex::RegexBuilder;
 use sha2::Digest;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -23,11 +23,7 @@ const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.ar
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
     "application/vnd.wasmcloud.provider.archive.config";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
-const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasmcloud.actor.archive.config";
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
-
-// straight up stolen from oci_distribution::Reference
-pub const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
 /// Additional options for pulling an OCI artifact
 #[derive(Default)]
@@ -68,9 +64,9 @@ pub struct OciPushOptions {
 /// The types of artifacts that wash supports
 pub enum SupportedArtifacts {
     /// A par.gz (i.e. parcheezy) file containing capability providers
-    Par,
-    /// WebAssembly modules
-    Wasm,
+    Par(Config, ImageLayer),
+    /// WebAssembly components and its configuration
+    Wasm(Config, ImageLayer),
 }
 
 // Based on https://github.com/krustlet/oci-distribution/blob/v0.9.4/src/lib.rs#L25-L28
@@ -104,32 +100,25 @@ pub async fn get_oci_artifact(
             return Ok(buf);
         }
     }
-    pull_oci_artifact(url_or_file, options).await
+    pull_oci_artifact(
+        &url_or_file
+            .try_into()
+            .context("Unable to parse URL as a reference")?,
+        options,
+    )
+    .await
 }
 
 /// Pull down the artifact from the given url and additional options
-pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<Vec<u8>> {
-    let image: Reference = url.to_lowercase().parse()?;
-
-    // NOTE(ceejimus): the FromStr implementation for the oci_distribution "Reference"
-    // struct defaults the tag to "latest" if unspecified. Ideally, they would expose
-    // some method to check if our valid input string has a tag or not, but, alas ...
-    // earwax.
-    // They don't even make the regex string public, so I stole it. These lines shouldn't fail
-    // if the parsing for "image" doesn't. Unless of course the change it... what a pickle.
-    let re = RegexBuilder::new(REFERENCE_REGEXP)
-        .size_limit(10 * (1 << 21))
-        .build()?;
-    let input_tag = match re.captures(&url) {
-        Some(caps) => caps.get(2).map(|m| m.as_str().to_owned()),
-        None => bail!("Invalid OCI reference URL."),
-    }
-    .unwrap_or_default();
+pub async fn pull_oci_artifact(image_ref: &Reference, options: OciPullOptions) -> Result<Vec<u8>> {
+    let input_tag = image_ref.tag();
 
     if !options.allow_latest {
-        if input_tag == "latest" {
-            bail!("Pulling artifacts with tag 'latest' is prohibited. This can be overriden with the flag '--allow-latest'.");
-        } else if input_tag.is_empty() {
+        if let Some(tag) = input_tag {
+            if tag == "latest" {
+                bail!("Pulling artifacts with tag 'latest' is prohibited. This can be overriden with the flag '--allow-latest'.");
+            }
+        } else {
             bail!("Registry URLs must have explicit tag. To default missing tags to 'latest', use the flag '--allow-latest'.");
         }
     }
@@ -152,9 +141,14 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
 
     let image_data = client
         .pull(
-            &image,
+            image_ref,
             &auth,
-            vec![PROVIDER_ARCHIVE_MEDIA_TYPE, WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
+            vec![
+                PROVIDER_ARCHIVE_MEDIA_TYPE,
+                WASM_MEDIA_TYPE,
+                OCI_MEDIA_TYPE,
+                WASM_LAYER_MEDIA_TYPE,
+            ],
         )
         .await?;
 
@@ -187,7 +181,7 @@ pub async fn push_oci_artifact(
 ) -> Result<(Option<String>, String)> {
     let image: Reference = url.to_lowercase().parse()?;
 
-    if image.tag().unwrap() == "latest" && !options.allow_latest {
+    if image.tag().unwrap_or_default() == "latest" && !options.allow_latest {
         bail!("Pushing artifacts with tag 'latest' is prohibited");
     };
 
@@ -197,38 +191,28 @@ pub async fn push_oci_artifact(
         .with_context(|| format!("failed to open artifact [{}]", artifact.as_ref().display()))?;
     f.read_to_end(&mut artifact_buf).await?;
 
-    let (artifact_media_type, config_media_type) = match validate_artifact(&artifact_buf).await? {
-        SupportedArtifacts::Wasm => (WASM_MEDIA_TYPE, WASM_CONFIG_MEDIA_TYPE),
-        SupportedArtifacts::Par => (
-            PROVIDER_ARCHIVE_MEDIA_TYPE,
-            PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE,
-        ),
+    let (config, layer, is_wasm) = match parse_and_validate_artifact(artifact_buf).await? {
+        SupportedArtifacts::Wasm(conf, layer) => (conf, layer, true),
+        SupportedArtifacts::Par(mut conf, layer) => {
+            let mut config_buf = vec![];
+            match options.config {
+                Some(config_file) => {
+                    let mut f = File::open(&config_file).await.with_context(|| {
+                        format!("failed to open config file [{}]", config_file.display())
+                    })?;
+                    f.read_to_end(&mut config_buf).await?;
+                }
+                None => {
+                    // If no config provided, send blank config
+                    config_buf = b"{}".to_vec();
+                }
+            };
+            conf.data = config_buf;
+            (conf, layer, false)
+        }
     };
 
-    let mut config_buf = vec![];
-    match options.config {
-        Some(config_file) => {
-            let mut f = File::open(&config_file).await.with_context(|| {
-                format!("failed to open config file [{}]", config_file.display())
-            })?;
-            f.read_to_end(&mut config_buf).await?;
-        }
-        None => {
-            // If no config provided, send blank config
-            config_buf = b"{}".to_vec();
-        }
-    };
-    let config = Config {
-        data: config_buf,
-        media_type: config_media_type.to_string(),
-        annotations: None,
-    };
-
-    let layer = vec![ImageLayer {
-        data: artifact_buf,
-        media_type: artifact_media_type.to_string(),
-        annotations: None,
-    }];
+    let layers = vec![layer];
 
     let client = Client::new(ClientConfig {
         protocol: if options.insecure {
@@ -246,7 +230,10 @@ pub async fn push_oci_artifact(
         _ => RegistryAuth::Anonymous,
     };
 
-    let manifest = OciImageManifest::build(&layer, &config, options.annotations);
+    let mut manifest = OciImageManifest::build(&layers, &config, options.annotations);
+    if is_wasm {
+        manifest.media_type = Some(WASM_MANIFEST_MEDIA_TYPE.to_string());
+    }
     // We calculate the sha256 digest from serde_json::Value instead of the OciImageManifest struct, because
     // when you serialize a struct directly into json, serde_json preserves the ordering of the keys.
     //
@@ -261,38 +248,49 @@ pub async fn push_oci_artifact(
         serde_json::to_value(&manifest).map(|value| sha256_digest(value.to_string().as_bytes()))?;
 
     client
-        .push(&image, &layer, config, &auth, Some(manifest))
+        .push(&image, &layers, config, &auth, Some(manifest))
         .await?;
     Ok((image.tag().map(ToString::to_string), digest))
 }
 
-/// Helper function to determine artifact type and validate that it is
-/// a supported artifact type
-pub async fn validate_artifact(artifact: &[u8]) -> Result<SupportedArtifacts> {
-    match validate_actor_module(artifact) {
-        Ok(()) => Ok(SupportedArtifacts::Wasm),
-        Err(_) => match validate_provider_archive(artifact).await {
-            Ok(()) => Ok(SupportedArtifacts::Par),
+/// Helper function to determine artifact type and parse it into a config and layer ready for use in
+/// pushing to OCI
+pub async fn parse_and_validate_artifact(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
+    // NOTE(thomastaylor312): I don't like having to clone here, but we need to either clone here or
+    // later when calling parse_component/parse_provider_archive. If this gets to be a
+    // problem, we can always change this, but it is a CLI, so _shrug_
+    match parse_component(artifact.clone()) {
+        Ok(art) => Ok(art),
+        Err(_) => match parse_provider_archive(artifact).await {
+            Ok(art) => Ok(art),
             Err(_) => bail!("Unsupported artifact type"),
         },
     }
 }
 
-/// Attempts to inspect the claims of an actor module
-/// Will fail without actor claims, or if the artifact is invalid
-fn validate_actor_module(artifact: &[u8]) -> Result<()> {
-    match wascap::wasm::extract_claims(artifact) {
-        Ok(Some(_token)) => Ok(()),
-        Ok(None) => bail!("No capabilities discovered in actor module"),
-        Err(e) => bail!("{}", e),
-    }
+/// Attempts to parse the wit from a component. Fails if it isn't a component
+fn parse_component(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
+    // TODO(thomastaylor312): We should probably also support binary wit packages, but we don't
+    // really build or consume those for now, so this should be fine
+    let (conf, layer) = WasmConfig::from_raw_component(artifact, None, None)?;
+    Ok(SupportedArtifacts::Wasm(conf.to_config()?, layer))
 }
 
-/// Attempts to unpack a provider archive
-/// Will fail without claims or if the archive is invalid
-async fn validate_provider_archive(artifact: &[u8]) -> Result<()> {
-    match ProviderArchive::try_load(artifact).await {
-        Ok(_par) => Ok(()),
+/// Attempts to unpack a provider archive. Will fail without claims or if the archive is invalid
+async fn parse_provider_archive(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
+    match ProviderArchive::try_load(&artifact).await {
+        Ok(_par) => Ok(SupportedArtifacts::Par(
+            Config {
+                data: Vec::default(),
+                media_type: PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE.to_string(),
+                annotations: None,
+            },
+            ImageLayer {
+                data: artifact,
+                media_type: PROVIDER_ARCHIVE_MEDIA_TYPE.to_string(),
+                annotations: None,
+            },
+        )),
         Err(e) => bail!("Invalid provider archive: {}", e),
     }
 }

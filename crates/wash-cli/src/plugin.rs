@@ -165,7 +165,7 @@ pub async fn handle_install(
 
             // TODO: Add support for pulling via stream to wash_lib
             let image_data = pull_oci_artifact(
-                image.whole(),
+                &image,
                 OciPullOptions {
                     digest: cmd.digest.clone(),
                     allow_latest: cmd.allow_latest,
