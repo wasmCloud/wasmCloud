@@ -35,9 +35,6 @@ pub enum RegistryCommand {
     /// Push an artifact to an OCI compliant registry
     #[clap(name = "push")]
     Push(RegistryPushCommand),
-    /// Ping (test url) to see if the OCI url has an artifact
-    #[clap(name = "ping")]
-    Ping(RegistryPingCommand),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -91,20 +88,6 @@ pub struct RegistryPushCommand {
     /// Optional set of annotations to apply to the OCI artifact manifest
     #[clap(short = 'a', long = "annotation", name = "annotations")]
     pub annotations: Option<Vec<String>>,
-
-    #[clap(flatten)]
-    pub opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub struct RegistryPingCommand {
-    /// URL of artifact
-    #[clap(name = "url")]
-    pub url: String,
-
-    /// Registry of artifact. This is only needed if the URL is not a full (OCI) artifact URL (ie, missing the registry fragment)
-    #[clap(short = 'r', long = "registry", env = "WASH_REG_URL")]
-    pub registry: Option<String>,
 
     #[clap(flatten)]
     pub opts: AuthOpts,
