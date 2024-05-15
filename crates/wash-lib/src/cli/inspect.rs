@@ -62,6 +62,10 @@ pub struct InspectCliCommand {
     #[clap(long = "insecure")]
     pub insecure: bool,
 
+    /// Skip checking OCI registry's certificate for validity
+    #[clap(long = "insecure-skip-tls-verify")]
+    pub insecure_skip_tls_verify: bool,
+
     /// skip the local OCI cache and pull the artifact from the registry to inspect
     #[clap(long = "no-cache")]
     pub no_cache: bool,
@@ -93,6 +97,7 @@ pub async fn handle_command(
                 user: command.user.clone(),
                 password: command.password.clone(),
                 insecure: command.insecure,
+                insecure_skip_tls_verify: command.insecure_skip_tls_verify,
             },
         )
         .await?;
@@ -417,6 +422,7 @@ mod test {
             user,
             password,
             insecure,
+            insecure_skip_tls_verify,
             no_cache,
             wit,
         } = inspect_long.command;
@@ -424,6 +430,7 @@ mod test {
         assert_eq!(digest.unwrap(), "sha256:blah");
         assert!(!allow_latest);
         assert!(!insecure);
+        assert!(!insecure_skip_tls_verify);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "secret");
         assert!(jwt_only);
@@ -453,6 +460,7 @@ mod test {
             user,
             password,
             insecure,
+            insecure_skip_tls_verify,
             no_cache,
             wit,
         } = inspect_short.command;
@@ -460,6 +468,7 @@ mod test {
         assert_eq!(digest.unwrap(), "sha256:blah");
         assert!(allow_latest);
         assert!(insecure);
+        assert!(!insecure_skip_tls_verify);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "secret");
         assert!(jwt_only);
@@ -490,6 +499,7 @@ mod test {
             user,
             password,
             insecure,
+            insecure_skip_tls_verify,
             no_cache,
             wit,
         } = cmd.command;
@@ -502,6 +512,7 @@ mod test {
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);
         assert!(insecure);
+        assert!(!insecure_skip_tls_verify);
         assert!(jwt_only);
         assert!(no_cache);
         assert!(!wit);
@@ -517,6 +528,7 @@ mod test {
             "opensesame",
             "--allow-latest",
             "--insecure",
+            "--insecure-skip-tls-verify",
             "--wit",
             "--no-cache",
         ])
@@ -530,6 +542,7 @@ mod test {
             user,
             password,
             insecure,
+            insecure_skip_tls_verify,
             no_cache,
             wit,
         } = short_cmd.command;
@@ -542,6 +555,7 @@ mod test {
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);
         assert!(insecure);
+        assert!(insecure_skip_tls_verify);
         assert!(!jwt_only);
         assert!(no_cache);
         assert!(wit);

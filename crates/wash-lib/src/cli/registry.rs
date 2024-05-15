@@ -25,6 +25,10 @@ pub struct AuthOpts {
     /// Allow insecure (HTTP) registry connections
     #[clap(long = "insecure")]
     pub insecure: bool,
+
+    /// Skip checking server's certificate for validity
+    #[clap(long = "insecure-skip-tls-verify")]
+    pub insecure_skip_tls_verify: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
