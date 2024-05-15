@@ -221,7 +221,8 @@ export class WasmCloudInstance {
     }
     const abort = new AbortController();
     const child = execa(binPath, args, {
-      signal: abort.signal,
+      forceKillAfterDelay: FORCE_KILL_WAIT_MS,
+      cancelSignal: abort.signal,
       stdout: this.opts.debug ? process.stdout : 'pipe',
       stderr: this.opts.debug ? process.stderr : 'pipe',
     });
@@ -245,7 +246,9 @@ export class WasmCloudInstance {
     // the extra `wash down` step is unnecessary (signal is properly handled with no orphaned host process)
     // so this step can be removed later (but probably should not be removed now).
     try {
-      await execa(this.getWashBinaryPath(), ['down', '--lattice', this.uuid()]);
+      await execa(this.getWashBinaryPath(), ['down', '--lattice', this.uuid()], {
+        forceKillAfterDelay: FORCE_KILL_WAIT_MS,
+      });
     } catch (error) {
       logger.warn({err: error.toString()}, 'failed to stop existing lattice with `wash down`');
     }
@@ -288,9 +291,7 @@ export class WasmCloudInstance {
       throw new Error('unexpectedly missing process');
     }
     // Send kill
-    await existing.process.kill('SIGTERM', {
-      forceKillAfterTimeout: FORCE_KILL_WAIT_MS,
-    });
+    await existing.process.kill('SIGTERM');
     existing.stopped = true;
   }
 }
