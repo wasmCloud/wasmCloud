@@ -178,7 +178,7 @@ impl Fetcher {
         } else {
             ClientProtocol::Https
         };
-        let mut c = Client::new(ClientConfig {
+        let c = Client::new(ClientConfig {
             protocol,
             extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
             ..Default::default()

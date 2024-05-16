@@ -3349,6 +3349,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "oci-distribution"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b95a2c51531af0cb93761f66094044ca6ea879320bccd35ab747ff3fcab3f422"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-util",
+ "http 1.1.0",
+ "http-auth",
+ "jwt",
+ "lazy_static",
+ "olpc-cjson",
+ "regex",
+ "reqwest 0.12.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "unicase",
+]
+
+[[package]]
 name = "olpc-cjson"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5746,7 +5771,7 @@ dependencies = [
  "nix",
  "nkeys",
  "notify",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "once_cell",
  "provider-archive",
  "rand 0.8.5",
@@ -5814,7 +5839,7 @@ dependencies = [
  "indicatif",
  "nkeys",
  "normpath",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "path-absolutize",
  "provider-archive",
  "regex",
@@ -6101,7 +6126,7 @@ dependencies = [
  "bytes",
  "cloudevents-sdk",
  "futures",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "opentelemetry",
  "opentelemetry_sdk",
  "serde",
@@ -6124,7 +6149,7 @@ dependencies = [
  "bytes",
  "cloudevents-sdk",
  "futures",
- "oci-distribution",
+ "oci-distribution 0.9.4",
  "opentelemetry",
  "opentelemetry_sdk",
  "serde",
@@ -6176,7 +6201,7 @@ dependencies = [
  "hyper-rustls 0.27.0",
  "hyper-util",
  "nkeys",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "once_cell",
  "reqwest 0.12.4",
  "rustls 0.23.4",
@@ -6212,7 +6237,7 @@ dependencies = [
  "humantime",
  "names",
  "nkeys",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "opentelemetry-nats",
  "provider-archive",
  "rmp-serde",
