@@ -121,7 +121,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
         }
     }
 
-    let mut client = Client::new(ClientConfig {
+    let client = Client::new(ClientConfig {
         protocol: if options.insecure {
             ClientProtocol::Http
         } else {
@@ -216,7 +216,7 @@ pub async fn push_oci_artifact(
         annotations: None,
     }];
 
-    let mut client = Client::new(ClientConfig {
+    let client = Client::new(ClientConfig {
         protocol: if options.insecure {
             ClientProtocol::Http
         } else {

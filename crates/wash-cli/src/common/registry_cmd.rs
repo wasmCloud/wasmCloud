@@ -73,7 +73,7 @@ pub async fn registry_pull(
 
 pub async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
     let image: Reference = resolve_artifact_ref(&cmd.url, &cmd.registry.unwrap_or_default(), None)?;
-    let mut client = Client::new(ClientConfig {
+    let client = Client::new(ClientConfig {
         protocol: if cmd.opts.insecure {
             ClientProtocol::Http
         } else {

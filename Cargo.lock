@@ -3349,6 +3349,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "oci-distribution"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b95a2c51531af0cb93761f66094044ca6ea879320bccd35ab747ff3fcab3f422"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-util",
+ "http 1.1.0",
+ "http-auth",
+ "jwt",
+ "lazy_static",
+ "olpc-cjson",
+ "regex",
+ "reqwest 0.12.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "unicase",
+]
+
+[[package]]
+name = "oci-wasm"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9616e709ad2bebc019a369791e3933e5d302314c30912ddc79e73d6c8ed82bb7"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "oci-distribution 0.11.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "wit-component 0.207.0",
+ "wit-parser 0.207.0",
+]
+
+[[package]]
 name = "olpc-cjson"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4977,7 +5019,7 @@ dependencies = [
  "tokio",
  "wascap 0.14.0",
  "wasmcloud-component-adapters",
- "wit-component",
+ "wit-component 0.202.0",
 ]
 
 [[package]]
@@ -5746,7 +5788,7 @@ dependencies = [
  "nix",
  "nkeys",
  "notify",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "once_cell",
  "provider-archive",
  "rand 0.8.5",
@@ -5814,7 +5856,7 @@ dependencies = [
  "indicatif",
  "nkeys",
  "normpath",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "path-absolutize",
  "provider-archive",
  "regex",
@@ -5854,8 +5896,8 @@ dependencies = [
  "weld-codegen",
  "wit-bindgen-core",
  "wit-bindgen-go",
- "wit-component",
- "wit-parser",
+ "wit-component 0.202.0",
+ "wit-parser 0.202.0",
 ]
 
 [[package]]
@@ -5999,6 +6041,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-metadata"
+version = "0.207.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2c44e62d325ce9253f88c01f0f67be121356767d12f2f13e701fdcd99e1f5b0"
+dependencies = [
+ "anyhow",
+ "indexmap 2.2.6",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "spdx",
+ "wasm-encoder 0.207.0",
+ "wasmparser 0.207.0",
+]
+
+[[package]]
 name = "wasm-streams"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6109,7 +6167,7 @@ dependencies = [
  "bytes",
  "cloudevents-sdk",
  "futures",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "opentelemetry",
  "opentelemetry_sdk",
  "serde",
@@ -6132,7 +6190,7 @@ dependencies = [
  "bytes",
  "cloudevents-sdk",
  "futures",
- "oci-distribution",
+ "oci-distribution 0.9.4",
  "opentelemetry",
  "opentelemetry_sdk",
  "serde",
@@ -6156,7 +6214,7 @@ dependencies = [
  "hyper-rustls 0.27.0",
  "hyper-util",
  "nkeys",
- "oci-distribution",
+ "oci-distribution 0.11.0",
  "once_cell",
  "reqwest 0.12.4",
  "rustls 0.23.4",
@@ -6220,7 +6278,8 @@ dependencies = [
  "humantime",
  "names",
  "nkeys",
- "oci-distribution",
+ "oci-distribution 0.11.0",
+ "oci-wasm",
  "opentelemetry-nats",
  "provider-archive",
  "rmp-serde",
@@ -6513,8 +6572,8 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
- "wit-component",
- "wit-parser",
+ "wit-component 0.202.0",
+ "wit-parser 0.202.0",
  "wrpc-runtime-wasmtime",
  "wrpc-transport",
  "wrpc-types",
@@ -6579,6 +6638,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6998515d3cf3f8b980ef7c11b29a9b1017d4cf86b99ae93b546992df9931413"
 dependencies = [
  "bitflags 2.5.0",
+ "indexmap 2.2.6",
+ "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.207.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e19bb9f8ab07616da582ef8adb24c54f1424c7ec876720b7da9db8ec0626c92c"
+dependencies = [
+ "ahash",
+ "bitflags 2.5.0",
+ "hashbrown 0.14.3",
  "indexmap 2.2.6",
  "semver",
 ]
@@ -6676,7 +6748,7 @@ dependencies = [
  "syn 2.0.58",
  "wasmtime-component-util",
  "wasmtime-wit-bindgen",
- "wit-parser",
+ "wit-parser 0.202.0",
 ]
 
 [[package]]
@@ -6897,7 +6969,7 @@ dependencies = [
  "anyhow",
  "heck 0.4.1",
  "indexmap 2.2.6",
- "wit-parser",
+ "wit-parser 0.202.0",
 ]
 
 [[package]]
@@ -7265,9 +7337,9 @@ dependencies = [
  "anyhow",
  "heck 0.4.1",
  "wasm-encoder 0.202.0",
- "wasm-metadata",
+ "wasm-metadata 0.202.0",
  "wit-bindgen-core",
- "wit-component",
+ "wit-component 0.202.0",
 ]
 
 [[package]]
@@ -7277,7 +7349,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b67e11c950041849a10828c7600ea62a4077c01e8af72e8593253575428f91b"
 dependencies = [
  "anyhow",
- "wit-parser",
+ "wit-parser 0.202.0",
 ]
 
 [[package]]
@@ -7310,9 +7382,9 @@ dependencies = [
  "anyhow",
  "heck 0.4.1",
  "indexmap 2.2.6",
- "wasm-metadata",
+ "wasm-metadata 0.202.0",
  "wit-bindgen-core",
- "wit-component",
+ "wit-component 0.202.0",
 ]
 
 [[package]]
@@ -7385,9 +7457,28 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "wasm-encoder 0.202.0",
- "wasm-metadata",
+ "wasm-metadata 0.202.0",
  "wasmparser 0.202.0",
- "wit-parser",
+ "wit-parser 0.202.0",
+]
+
+[[package]]
+name = "wit-component"
+version = "0.207.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a411ff9c471737091b2c1a738a25031029fc4d0b8f1a60bef0e68906e9f6534b"
+dependencies = [
+ "anyhow",
+ "bitflags 2.5.0",
+ "indexmap 2.2.6",
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "wasm-encoder 0.207.0",
+ "wasm-metadata 0.207.0",
+ "wasmparser 0.207.0",
+ "wit-parser 0.207.0",
 ]
 
 [[package]]
@@ -7406,6 +7497,24 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.202.0",
+]
+
+[[package]]
+name = "wit-parser"
+version = "0.207.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78c83dab33a9618d86cfe3563cc864deffd08c17efc5db31a3b7cd1edeffe6e1"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.2.6",
+ "log",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "unicode-xid",
+ "wasmparser 0.207.0",
 ]
 
 [[package]]
@@ -7502,7 +7611,7 @@ checksum = "0b5304f4c3000b643bb56d405c5e29efd940f529b898288c65cd3861e24cca71"
 dependencies = [
  "anyhow",
  "tracing",
- "wit-parser",
+ "wit-parser 0.202.0",
 ]
 
 [[package]]
