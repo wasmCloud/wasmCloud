@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use tracing::warn;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::run::{CtxBuilder, LocalRuntime};
+use wash_lib::run;
+use wash_lib::run::{CtxBuilder, DirPerms, LocalRuntime};
 
 #[derive(Parser, Debug, Clone)]
 pub struct RunCommand {
@@ -166,7 +167,16 @@ impl FromStr for FilePerms {
         match s {
             "ro" => Ok(Self::ReadOnly),
             "rw" => Ok(Self::ReadWrite),
-            _ => bail!("file permission is incorrect, 'ro' or 'rw' expected"),
+            _ => Err(anyhow!("file permission is incorrect, 'ro' or 'rw' expected")),
+        }
+    }
+}
+
+impl Into<run::FilePerms> for FilePerms {
+    fn into(self) -> run::FilePerms {
+        match self {
+            FilePerms::ReadOnly => run::FilePerms::READ,
+            FilePerms::ReadWrite => run::FilePerms::WRITE,
         }
     }
 }
@@ -180,15 +190,10 @@ fn parse_dir(raw: impl AsRef<str>) -> Result<ParsedDir> {
             anyhow!("dir flags require at least a path")
         )?;
 
-    let mut file_perms: Option<FilePerms> = None;
-    if let Some(raw_file_perms) = parts.next() {
-        file_perms = Some(FilePerms::from_str(raw_file_perms)?);
-    }
-
     Ok(ParsedDir {
         path: PathBuf::from(raw_path),
-        file_perms,
-        guest_dir: parts.next().map(|t| t.to_owned()),
+        file_perms: parts.next().map(|raw| FilePerms::from_str(raw)).transpose()?,
+        guest_dir: parts.next().map(|raw| raw.to_owned()),
     })
 }
 
@@ -200,6 +205,9 @@ pub async fn handle_command(cmd: RunCommand, _output_kind: OutputKind) -> Result
     ctx_builder.wasi_ctx().args(&cmd.args);
 
     handle_env(&mut ctx_builder, &cmd.env);
+    handle_dir(&mut ctx_builder, &cmd.dir)?;
+
+    runtime.run(ctx_builder.build()?).await?;
 
     return anyhow::Ok(CommandOutput::from("Command in progress"));
 }
@@ -220,4 +228,28 @@ fn handle_env(ctx_build: &mut CtxBuilder, env_opts: &EnvironmentOptions) {
             ctx_build.env_with_prefix(env_prefix);
         }
     }
+}
+
+fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> anyhow::Result<()> {
+    for dir in &dir_opts.immutable {
+        let parsed_dir = parse_dir(dir).context("failed to parse a dir flag")?;
+        ctx_build.wasi_ctx().preopened_dir(
+            parsed_dir.path,
+            parsed_dir.guest_dir.map(String::as_str).unwrap_or("."),
+            DirPerms::READ,
+            parsed_dir.file_perms.unwrap_or(FilePerms::ReadOnly).into(),
+        ).context("failed pre-opening a dir")?;
+    }
+
+    for dir in &dir_opts.mutable {
+        let parsed_dir = parse_dir(dir).context("failed to parse a dir flag")?;
+        ctx_build.wasi_ctx().preopened_dir(
+            parsed_dir.path,
+            parsed_dir.guest_dir.map(String::as_str).unwrap_or("."),
+            DirPerms::MUTATE,
+            parsed_dir.file_perms.unwrap_or(FilePerms::ReadOnly).into(),
+        ).context("failed pre-opening a dir")?;
+    }
+
+    return Ok(());
 }

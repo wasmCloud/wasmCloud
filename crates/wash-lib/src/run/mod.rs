@@ -7,6 +7,8 @@ use wasmtime_wasi::{WasiCtx, WasiView};
 
 pub use crate::run::ctx::CtxBuilder;
 
+pub use wasmtime_wasi::{DirPerms, FilePerms};
+
 pub mod ctx;
 
 /// Runs workloads capable of leveraging the local host it runs on.
