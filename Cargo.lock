@@ -3375,9 +3375,9 @@ dependencies = [
 
 [[package]]
 name = "oci-wasm"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae01dd353e18899d28ab88855ea12531897f356f606fb8f4a95fc5f9cff1197"
+checksum = "9616e709ad2bebc019a369791e3933e5d302314c30912ddc79e73d6c8ed82bb7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6273,6 +6273,7 @@ dependencies = [
  "names",
  "nkeys",
  "oci-distribution 0.11.0",
+ "oci-wasm",
  "opentelemetry-nats",
  "provider-archive",
  "rmp-serde",

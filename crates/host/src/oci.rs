@@ -12,6 +12,7 @@ use anyhow::{bail, Context as _};
 use oci_distribution::client::{ClientConfig, ClientProtocol, ImageData};
 use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::{Client, Reference};
+use oci_wasm::{WASM_LAYER_MEDIA_TYPE, WASM_MANIFEST_MEDIA_TYPE};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -201,6 +202,19 @@ impl Fetcher {
             .pull(&img, &self.auth, accepted_media_types)
             .await
             .context("failed to fetch OCI bytes")?;
+        // As a client, we should reject invalid OCI artifacts
+        if imgdata
+            .manifest
+            .as_ref()
+            .map(|m| m.media_type.as_deref().unwrap_or_default() == WASM_MANIFEST_MEDIA_TYPE)
+            .unwrap_or(false)
+            && imgdata.layers.len() > 1
+        {
+            bail!(
+                "Found invalid OCI wasm artifact, expected single layer, found {} layers",
+                imgdata.layers.len()
+            )
+        }
         cache_oci_image(imgdata, &cache_file, digest_file)
             .await
             .context("failed to cache OCI bytes")?;
@@ -214,7 +228,10 @@ impl Fetcher {
     /// Returns an error if either fetching fails or reading the fetched OCI path fails
     pub async fn fetch_component(&self, oci_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
         let path = self
-            .fetch_path(oci_ref, vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE])
+            .fetch_path(
+                oci_ref,
+                vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE, WASM_LAYER_MEDIA_TYPE],
+            )
             .await
             .context("failed to fetch OCI path")?;
         fs::read(&path)
