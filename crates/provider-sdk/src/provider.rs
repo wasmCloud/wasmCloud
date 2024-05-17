@@ -452,6 +452,7 @@ where
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.source_config,
+                wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
     } else if ld.target == connection.provider_id {
@@ -461,6 +462,7 @@ where
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.target_config,
+                wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
     } else {

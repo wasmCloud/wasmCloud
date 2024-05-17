@@ -120,6 +120,9 @@ pub struct LinkConfig<'a> {
 
     /// Configuration provided to the provider (either as the target or the source)
     pub config: &'a HashMap<String, String>,
+
+    /// WIT metadata for the link
+    pub wit_metadata: (&'a WitNamespace, &'a WitPackage, &'a Vec<WitInterface>),
 }
 
 /// Configuration object is made available when a provider is started, to assist in init
