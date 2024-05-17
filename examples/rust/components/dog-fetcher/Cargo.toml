@@ -9,6 +9,8 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
+futures = "0.3.30"
+reqwest = { version = "0.12.4", git = "https://github.com/brooksmtownsend/reqwest", branch = "feat/wasi-p2-component-support", features = [ "wasm-component" ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wit-bindgen = { version = "0.24", features = ["default"] }
