@@ -71,6 +71,7 @@ wash-lib = { workspace = true, features = [
     "nats",
     "start",
     "plugin",
+    "run",
 ] }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
