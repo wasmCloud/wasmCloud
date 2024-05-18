@@ -27,7 +27,7 @@ hyper-rustls = { version = "0.25", features = [
     "ring",
     "webpki-tokio",
 ], default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
-rustls = { version = "0.22", default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
+rustls = { version = "0.23", default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
 serde = { workspace = true }
 serde_json = { workspace = true }
 simple_env_load = { workspace = true }
