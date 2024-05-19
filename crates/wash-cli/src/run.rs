@@ -177,7 +177,7 @@ impl Into<WasmtimeFilePerms> for FilePerms {
     fn into(self) -> WasmtimeFilePerms {
         match self {
             FilePerms::ReadOnly => WasmtimeFilePerms::READ,
-            FilePerms::ReadWrite => WasmtimeFilePerms::WRITE,
+            FilePerms::ReadWrite => WasmtimeFilePerms::WRITE | WasmtimeFilePerms::READ,
         }
     }
 }
@@ -256,7 +256,7 @@ fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> anyhow::Resu
             .preopened_dir(
                 parsed_dir.path,
                 parsed_dir.guest_dir.unwrap_or(String::from(".")),
-                DirPerms::MUTATE,
+                DirPerms::READ | DirPerms::MUTATE,
                 parsed_dir.file_perms.unwrap_or(FilePerms::ReadOnly).into(),
             )
             .context("failed pre-opening a dir")?;
