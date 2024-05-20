@@ -2639,7 +2639,7 @@ __metadata:
     eslint-plugin-react: "npm:^7.34.1"
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.7"
-    eslint-plugin-tailwindcss: "npm:3.15.2-beta.1"
+    eslint-plugin-tailwindcss: "npm:3.15.2"
     eslint-plugin-unicorn: "npm:^52.0.0"
     typescript: "npm:^5.4.5"
   peerDependencies:
@@ -2756,7 +2756,7 @@ __metadata:
     eslint-plugin-react: "npm:^7.34.1"
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.7"
-    eslint-plugin-tailwindcss: "npm:^3.15.2-beta.1"
+    eslint-plugin-tailwindcss: "npm:^3.15.2"
     eslint-plugin-unicorn: "npm:^52.0.0"
     execa: "npm:^9.1.0"
     get-port: "npm:^7.1.0"
@@ -4452,15 +4452,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-tailwindcss@npm:3.15.2-beta.1, eslint-plugin-tailwindcss@npm:^3.15.2-beta.1":
-  version: 3.15.2-beta.1
-  resolution: "eslint-plugin-tailwindcss@npm:3.15.2-beta.1"
+"eslint-plugin-tailwindcss@npm:3.15.2, eslint-plugin-tailwindcss@npm:^3.15.2":
+  version: 3.15.2
+  resolution: "eslint-plugin-tailwindcss@npm:3.15.2"
   dependencies:
     fast-glob: "npm:^3.2.5"
     postcss: "npm:^8.4.4"
   peerDependencies:
     tailwindcss: ^3.4.0
-  checksum: 10/075e3bf92ee964a7c461c259e9b0b9ab6b98c1bf8bd8edc5621d268284c28b110166d4e0f5f3d71e92f5e12f379aee89c872e9d67bdf79a6715cefe51a61cd36
+  checksum: 10/aae15cf2cfb055da00713b72d511b656963641c00a85538f6a3bd35bc598975af39f8bfa99a17670754793ca9990632c0a062ed178b67cbe9b38d51583e4da0d
   languageName: node
   linkType: hard
 
