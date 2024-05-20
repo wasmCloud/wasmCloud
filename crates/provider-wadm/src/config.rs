@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
@@ -16,8 +16,6 @@ const CONFIG_CUSTOM_INBOX_PREFIX: &str = "custom_inbox_prefix";
 const CONFIG_LATTICE: &str = "lattice";
 const CONFIG_APP_NAME: &str = "app_name";
 
-pub const WADM_STATUS_API_PREFIX: &str = "wadm.status";
-
 fn default_lattice() -> String {
     DEFAULT_LATTICE.to_string()
 }
@@ -30,6 +28,7 @@ pub struct WadmConfig {
     pub lattice: String,
 
     /// Application name to subscribe to updates for
+    #[serde(default)]
     pub app_name: String,
 
     /// Cluster(s) to make a subscription on and connect to
@@ -77,6 +76,48 @@ impl Default for WadmConfig {
     }
 }
 
+impl TryFrom<HashMap<String, String>> for WadmConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(values: HashMap<String, String>) -> Result<Self> {
+        let mut config = WadmConfig::default();
+
+        if let Some(cluster_uris) = values.get(CONFIG_NATS_URI) {
+            config.cluster_uris = cluster_uris.split(',').map(String::from).collect();
+        }
+        if let Some(auth_jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
+            config.auth_jwt = Some(auth_jwt.clone());
+        }
+        if let Some(auth_seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
+            config.auth_seed = Some(auth_seed.clone());
+        }
+        if let Some(tls_ca) = values.get(CONFIG_NATS_TLS_CA) {
+            config.tls_ca = Some(tls_ca.clone());
+        }
+        if let Some(tls_ca_file) = values.get(CONFIG_NATS_TLS_CA_FILE) {
+            config.tls_ca_file = Some(tls_ca_file.clone());
+        }
+        if let Some(ping_interval_sec) = values.get(CONFIG_NATS_PING_INTERVAL_SEC) {
+            config.ping_interval_sec = Some(
+                ping_interval_sec
+                    .parse()
+                    .map_err(|_| anyhow!("Unable to parse ping_interval_sec"))?,
+            );
+        }
+        if let Some(custom_inbox_prefix) = values.get(CONFIG_CUSTOM_INBOX_PREFIX) {
+            config.custom_inbox_prefix = Some(custom_inbox_prefix.clone());
+        }
+        if let Some(lattice) = values.get(CONFIG_LATTICE) {
+            config.lattice = lattice.clone();
+        }
+        if let Some(app_name) = values.get(CONFIG_APP_NAME) {
+            config.app_name = app_name.clone();
+        }
+
+        Ok(config)
+    }
+}
+
 impl WadmConfig {
     /// Merge a given [`WadmConfig`] with another, coalescing fields and overriding
     /// where necessary
@@ -112,40 +153,5 @@ impl WadmConfig {
         }
 
         out
-    }
-
-    /// Construct configuration Struct from the passed hostdata config
-    pub fn from_map(values: &HashMap<String, String>) -> Result<WadmConfig> {
-        let mut config = WadmConfig::default();
-
-        if let Some(cluster_uris) = values.get(CONFIG_NATS_URI) {
-            config.cluster_uris = cluster_uris.split(',').map(String::from).collect();
-        }
-        if let Some(auth_jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
-            config.auth_jwt = Some(auth_jwt.clone());
-        }
-        if let Some(auth_seed) = values.get(CONFIG_NATS_CLIENT_SEED) {
-            config.auth_seed = Some(auth_seed.clone());
-        }
-        if let Some(tls_ca) = values.get(CONFIG_NATS_TLS_CA) {
-            config.tls_ca = Some(tls_ca.clone());
-        }
-        if let Some(tls_ca_file) = values.get(CONFIG_NATS_TLS_CA_FILE) {
-            config.tls_ca_file = Some(tls_ca_file.clone());
-        }
-        if let Some(ping_interval_sec) = values.get(CONFIG_NATS_PING_INTERVAL_SEC) {
-            config.ping_interval_sec = Some(ping_interval_sec.parse().unwrap());
-        }
-        if let Some(custom_inbox_prefix) = values.get(CONFIG_CUSTOM_INBOX_PREFIX) {
-            config.custom_inbox_prefix = Some(custom_inbox_prefix.clone());
-        }
-        if let Some(lattice) = values.get(CONFIG_LATTICE) {
-            config.lattice = lattice.clone();
-        }
-        if let Some(app_name) = values.get(CONFIG_APP_NAME) {
-            config.app_name = app_name.clone();
-        }
-
-        Ok(config)
     }
 }
