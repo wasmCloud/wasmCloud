@@ -3,6 +3,7 @@ wit_bindgen::generate!();
 use std::collections::HashMap;
 use exports::wasi::cli::run::Guest;
 use crate::fs::PreopenedDir;
+use crate::wasi::cli::environment::get_environment;
 use crate::wasi::filesystem::preopens::get_directories;
 
 mod fs;
@@ -13,6 +14,7 @@ struct WasiIfaceTester;
 struct IfaceResponse {
     args: Vec<String>,
     dirs: HashMap<String, PreopenedDir>,
+    envs: HashMap<String, String>,
 }
 
 impl Guest for WasiIfaceTester {
@@ -31,10 +33,16 @@ impl Guest for WasiIfaceTester {
             
             dirs.insert(path, preopened_dir);
         }
+        
+        let mut envs = HashMap::new();
+        for (env_name, env_value) in get_environment() {
+            envs.insert(env_name, env_value);
+        }
 
         let response = IfaceResponse {
             args,
             dirs,
+            envs,
         };
 
         println!("{}", serde_json::to_string(&response).expect("failed to serialize response"));

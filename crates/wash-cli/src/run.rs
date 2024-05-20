@@ -173,9 +173,9 @@ impl FromStr for FilePerms {
     }
 }
 
-impl Into<WasmtimeFilePerms> for FilePerms {
-    fn into(self) -> WasmtimeFilePerms {
-        match self {
+impl From<FilePerms> for WasmtimeFilePerms {
+    fn from(value: FilePerms) -> Self {
+        match value {
             FilePerms::ReadOnly => WasmtimeFilePerms::READ,
             FilePerms::ReadWrite => WasmtimeFilePerms::WRITE | WasmtimeFilePerms::READ,
         }
@@ -193,7 +193,7 @@ fn parse_dir(raw: impl AsRef<str>) -> Result<ParsedDir> {
         path: PathBuf::from(raw_path),
         file_perms: parts
             .next()
-            .map(|raw| FilePerms::from_str(raw))
+            .map(FilePerms::from_str)
             .transpose()?,
         guest_dir: parts.next().map(|raw| raw.to_owned()),
     })
@@ -214,7 +214,7 @@ pub async fn handle_command(cmd: RunCommand, _output_kind: OutputKind) -> Result
     runtime.run(ctx_builder.build()?).await?;
 
     // Q(raskyld): Is there a way to avoid producing outputs and let the run component handle stdout, err, in?
-    return anyhow::Ok(CommandOutput::from(""));
+    anyhow::Ok(CommandOutput::from(""))
 }
 
 fn handle_env(ctx_build: &mut CtxBuilder, env_opts: &EnvironmentOptions) {
@@ -262,5 +262,5 @@ fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> anyhow::Resu
             .context("failed pre-opening a dir")?;
     }
 
-    return Ok(());
+    Ok(())
 }
