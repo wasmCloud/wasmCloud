@@ -223,23 +223,14 @@ Caused by:
 ```
 As we might expect, it doesn't work&mdash;the hello world component doesn't have anything linked to fulfill the `pong` import. If we compose it with the `pong` component, however, we essentially wire those corresponding imports and exports together within the encapsulating component. Head back to the root of the project directory with `cd ..` and then we'll use WAC to perform the composition.
 
-WAC works by encoding a composed component based on the instructions defined in a .wac file. The .wac file uses a superset of WIT also called WAC. Here are the contents of `compose.wac`:
-
-```wit
-package demo:composition;
-
-let pong = new ping:pong { ... };
-let hello = new hello:there { "example:pong/pingpong": pong.pingpong, ... };
-
-export hello...;
-```
-This is a pretty simple composition, but the the design of WAC facilitates much more complex compositions of many components. You can learn more about WAC usage in the tool's [readme](https://github.com/bytecodealliance/wac/blob/main/README.md) and [language guide](https://github.com/bytecodealliance/wac/blob/main/LANGUAGE.md). 
-
-For this demo's purposes, we simply need to run `wac encode` while indicating the components we wish to compose with the `--dep` argument, naming our output file with `-o`, and specifying our `.wac` instructions:
+WAC is a tool for composing components at build-time. It has the ability to do complex compositions using the `.wac` file format (an example of which can be found below as an optional step). But for purposes of our example, we're going to use the `wac plug` command to perform the composition:
 
 ```shell
-wac encode --dep ping:pong=./pong/virt.wasm --dep hello:there=./http-hello2/build/http_hello_world_s.wasm -o output.wasm compose.wac
+wac plug --plug pong/virt.wasm ./http-hello2/build/http_hello_world.wasm -o output.wasm
 ```
+
+The "plug" in this example is the component exporting what the other component needs. So in our case, it is exporting `example:pong/pingpong`.
+
 Now we have a new file: `output.wasm`. Taking a look at our composed component, we can see that we've ended up with a combination of both components:
 
 ```bash
@@ -281,4 +272,27 @@ We can run the composed component in wasmCloud as well:
 wash app deploy wadm.yaml
 ```
 Congratulations! You've composed a component that runs anywhere supporting WASI P2. 
-For more information on linking components at runtime or at build via composition, including when you might want to use each approach, see [Linking Components](https://wasmcloud.com/docs/concepts/linking-components/) in the wasmCloud documentation. 
+For more information on linking components at runtime or at build via composition, including when you might want to use each approach, see [Linking Components](https://wasmcloud.com/docs/concepts/linking-components/) in the wasmCloud documentation.
+
+## Advanced WAC
+
+WAC can also work by encoding a composed component based on the instructions defined in a .wac file. The .wac file uses a superset of WIT also called WAC. This section contains an example that does the exact same thing as the `plug` command above, but explicitly defining it with a WAC file. In this example we have a `compose.wac` file. Here are the contents of that file:
+
+```wit
+package demo:composition;
+
+let pong = new ping:pong { ... };
+let hello = new hello:there { "example:pong/pingpong": pong.pingpong, ... };
+
+export hello...;
+```
+
+This is a pretty simple composition, but the the design of WAC facilitates much more complex compositions of many components. You can learn more about WAC usage in the tool's [readme](https://github.com/bytecodealliance/wac/blob/main/README.md) and [language guide](https://github.com/bytecodealliance/wac/blob/main/LANGUAGE.md). 
+
+For this demo's purposes, we simply need to run `wac encode` while indicating the components we wish to compose with the `--dep` argument, naming our output file with `-o`, and specifying our `.wac` instructions:
+
+```shell
+wac encode --dep ping:pong=./pong/virt.wasm --dep hello:there=./http-hello2/build/http_hello_world_s.wasm -o output.wasm compose.wac
+```
+
+You can then run the `output.wasm` in the same way as above!
