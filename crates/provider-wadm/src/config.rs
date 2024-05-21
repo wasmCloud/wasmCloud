@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
+const DEFAULT_LATTICE: &str = "default";
 
 const CONFIG_NATS_URI: &str = "cluster_uris";
 const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
@@ -11,17 +12,25 @@ const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
 const CONFIG_NATS_TLS_CA: &str = "tls_ca";
 const CONFIG_NATS_TLS_CA_FILE: &str = "tls_ca_file";
 const CONFIG_NATS_PING_INTERVAL_SEC: &str = "ping_interval_sec";
+const CONFIG_CUSTOM_INBOX_PREFIX: &str = "custom_inbox_prefix";
+const CONFIG_LATTICE: &str = "lattice";
+const CONFIG_APP_NAME: &str = "app_name";
 
-/// The NATS prefix wadm's API is listening on
-pub const WADM_API_PREFIX: &str = "wadm.api";
+pub const WADM_STATUS_API_PREFIX: &str = "wadm.status";
 
-/// Configuration for connecting a NATS client.
-/// More options are available if you use the JSON than variables in the values string map.
+fn default_lattice() -> String {
+    DEFAULT_LATTICE.to_string()
+}
+
+/// Configuration for interacting with WADM over NATS.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WadmProviderConfig {
-    /// List of topics to subscribe to
-    #[serde(default)]
-    pub subscriptions: Vec<String>,
+pub struct WadmConfig {
+    /// Lattice to subscribe to
+    #[serde(default = "default_lattice")]
+    pub lattice: String,
+
+    /// Application name to subscribe to updates for
+    pub app_name: String,
 
     /// Cluster(s) to make a subscription on and connect to
     #[serde(default)]
@@ -52,10 +61,11 @@ pub struct WadmProviderConfig {
     pub custom_inbox_prefix: Option<String>,
 }
 
-impl Default for WadmProviderConfig {
+impl Default for WadmConfig {
     fn default() -> Self {
-        WadmProviderConfig {
-            subscriptions: Vec::new(),
+        WadmConfig {
+            lattice: default_lattice(),
+            app_name: String::new(),
             cluster_uris: vec![DEFAULT_NATS_URI.to_string()],
             auth_jwt: None,
             auth_seed: None,
@@ -67,10 +77,10 @@ impl Default for WadmProviderConfig {
     }
 }
 
-impl WadmProviderConfig {
-    /// Merge a given [`WadmProviderConfig`] with another, coalescing fields and overriding
+impl WadmConfig {
+    /// Merge a given [`WadmConfig`] with another, coalescing fields and overriding
     /// where necessary
-    pub fn merge(&self, extra: &WadmProviderConfig) -> WadmProviderConfig {
+    pub fn merge(&self, extra: &WadmConfig) -> WadmConfig {
         let mut out = self.clone();
 
         if !extra.cluster_uris.is_empty() {
@@ -91,20 +101,22 @@ impl WadmProviderConfig {
         if extra.ping_interval_sec.is_some() {
             out.ping_interval_sec = extra.ping_interval_sec;
         }
+        if extra.custom_inbox_prefix.is_some() {
+            out.custom_inbox_prefix = extra.custom_inbox_prefix.clone();
+        }
+        if !extra.lattice.is_empty() {
+            out.lattice = extra.lattice.clone();
+        }
+        if !extra.app_name.is_empty() {
+            out.app_name = extra.app_name.clone();
+        }
 
         out
     }
-}
 
-impl WadmProviderConfig {
     /// Construct configuration Struct from the passed hostdata config
-    pub fn from_map(values: &HashMap<String, String>) -> Result<WadmProviderConfig> {
-        let mut config = WadmProviderConfig::default();
-
-        // TODO - does this need to be on subscription?
-        // NOTE: for now extra subscriptions are not supported, and
-        // default to just the wadm api
-        config.subscriptions = vec![WADM_API_PREFIX.to_string()];
+    pub fn from_map(values: &HashMap<String, String>) -> Result<WadmConfig> {
+        let mut config = WadmConfig::default();
 
         if let Some(cluster_uris) = values.get(CONFIG_NATS_URI) {
             config.cluster_uris = cluster_uris.split(',').map(String::from).collect();
@@ -123,6 +135,15 @@ impl WadmProviderConfig {
         }
         if let Some(ping_interval_sec) = values.get(CONFIG_NATS_PING_INTERVAL_SEC) {
             config.ping_interval_sec = Some(ping_interval_sec.parse().unwrap());
+        }
+        if let Some(custom_inbox_prefix) = values.get(CONFIG_CUSTOM_INBOX_PREFIX) {
+            config.custom_inbox_prefix = Some(custom_inbox_prefix.clone());
+        }
+        if let Some(lattice) = values.get(CONFIG_LATTICE) {
+            config.lattice = lattice.clone();
+        }
+        if let Some(app_name) = values.get(CONFIG_APP_NAME) {
+            config.app_name = app_name.clone();
         }
 
         Ok(config)
