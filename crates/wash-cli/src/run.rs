@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::warn;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::run::{CtxBuilder, DirPerms, FilePerms as WasmtimeFilePerms, LocalRuntime};
+use wash_lib::run::{
+    CtxBuilder, DirPerms, FilePerms as WasmtimeFilePerms, LocalRuntime, SocketAddrUse,
+};
 
 #[derive(Parser, Debug, Clone)]
 pub struct RunCommand {
@@ -79,73 +81,16 @@ pub struct DirOptions {
 #[derive(Parser, Debug, Clone)]
 pub struct NetworkOptions {
     /// Allow name to IP resolution.
-    #[clap(long = "allow-net-name-resolution")]
+    #[clap(long = "allow-net-dns")]
     pub allow_name_resolution: bool,
 
-    /// Allow the component to connect to any peers.
-    #[clap(long = "allow-net-connect-all")]
-    pub allow_connect_all: bool,
-
     /// Allow the component to connect to peers.
-    ///
-    /// The format expected is `<ip_addr>[:<port>[-<upper_port>]]`, where:
-    /// - `<ip_addr>` is the peer address, it can be IPv4 or IPv6
-    /// - `<port>` is the peer port we can connect to
-    /// - `<upper_port>` authorize the connection to ports ranging from `<port>` to `<upper_port>` (inclusive)
-    ///
-    /// NOTE: In future versions, we may support hostname in place of `<ip_addr>`.
     #[clap(long = "allow-net-connect")]
-    pub allow_connect: Vec<String>,
+    pub allow_connect: bool,
 
-    /// Allow the component to connect to any TCP peers.
-    #[clap(long = "allow-net-connect-tcp-all")]
-    pub allow_connect_tcp_all: bool,
-
-    /// Allow the component to connect to a specific TCP peer.
-    ///
-    /// The format expected is the same as expected of `--allow-net-connect`.
-    #[clap(long = "allow-net-connect-tcp")]
-    pub allow_connect_tcp: Vec<String>,
-
-    /// Allow the component to connect to any UDP peers.
-    #[clap(long = "allow-net-connect-udp-all")]
-    pub allow_connect_udp_all: bool,
-
-    /// Allow the component to connect to UDP peers in the specified CIDR prefixes.
-    ///
-    /// The format expected is the same as expected of `--allow-net-connect`.
-    #[clap(long = "allow-net-connect-udp")]
-    pub allow_connect_udp: Vec<String>,
-
-    /// Allow the component to bind to any interface, port and protocol.
-    #[clap(long = "allow-net-bind-all")]
-    pub allow_bind_all: bool,
-
-    /// Allow the component to bind to a specific interface, specific port ranges but any protocol.
-    ///
-    /// The format expected is the same as expected of `--allow-net-connect`.
+    /// Allow the component to bind to network ports.
     #[clap(long = "allow-net-bind")]
-    pub allow_bind: Vec<String>,
-
-    /// Allow the component to bind to any interface and port using the TCP protocol.
-    #[clap(long = "allow-net-bind-tcp-all")]
-    pub allow_bind_tcp_all: bool,
-
-    /// Allow the component to bind to a specific interface and specific port ranges using the TCP protocol.
-    ///
-    /// The format expected is the same as expected of `--allow-net-connect`.
-    #[clap(long = "allow-net-bind-tcp")]
-    pub allow_bind_tcp: Vec<String>,
-
-    /// Allow the component to bind to any interface and port using the UDP protocol.
-    #[clap(long = "allow-net-bind-udp-all")]
-    pub allow_bind_udp_all: bool,
-
-    /// Allow the component to bind to a specific interface and specific port ranges using the UDP protocol.
-    ///
-    /// The format expected is the same as expected of `--allow-net-connect`.
-    #[clap(long = "allow-net-bind-udp")]
-    pub allow_bind_udp: Vec<String>,
+    pub allow_bind: bool,
 }
 
 struct ParsedDir {
@@ -191,10 +136,7 @@ fn parse_dir(raw: impl AsRef<str>) -> Result<ParsedDir> {
 
     Ok(ParsedDir {
         path: PathBuf::from(raw_path),
-        file_perms: parts
-            .next()
-            .map(FilePerms::from_str)
-            .transpose()?,
+        file_perms: parts.next().map(FilePerms::from_str).transpose()?,
         guest_dir: parts.next().map(|raw| raw.to_owned()),
     })
 }
@@ -210,6 +152,7 @@ pub async fn handle_command(cmd: RunCommand, _output_kind: OutputKind) -> Result
 
     handle_env(&mut ctx_builder, &cmd.env);
     handle_dir(&mut ctx_builder, &cmd.dir)?;
+    handle_net(&mut ctx_builder, &cmd.net);
 
     runtime.run(ctx_builder.build()?).await?;
 
@@ -235,7 +178,7 @@ fn handle_env(ctx_build: &mut CtxBuilder, env_opts: &EnvironmentOptions) {
     }
 }
 
-fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> anyhow::Result<()> {
+fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> Result<()> {
     for dir in &dir_opts.immutable {
         let parsed_dir = parse_dir(dir).context("failed to parse a dir flag")?;
         ctx_build
@@ -263,4 +206,22 @@ fn handle_dir(ctx_build: &mut CtxBuilder, dir_opts: &DirOptions) -> anyhow::Resu
     }
 
     Ok(())
+}
+
+fn handle_net(ctx_build: &mut CtxBuilder, net_opts: &NetworkOptions) {
+    let &NetworkOptions {
+        allow_bind: bind,
+        allow_connect: connect,
+        allow_name_resolution: name_resolution,
+    } = net_opts;
+
+    ctx_build
+        .wasi_ctx()
+        .socket_addr_check(move |_, usage| match usage {
+            SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => bind,
+            SocketAddrUse::TcpConnect | SocketAddrUse::UdpConnect => connect,
+            SocketAddrUse::UdpOutgoingDatagram => connect,
+        });
+
+    ctx_build.wasi_ctx().allow_ip_name_lookup(name_resolution);
 }

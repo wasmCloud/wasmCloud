@@ -7,7 +7,7 @@ use wasmtime_wasi::{WasiCtx, WasiView};
 
 pub use crate::run::ctx::CtxBuilder;
 
-pub use wasmtime_wasi::{DirPerms, FilePerms};
+pub use wasmtime_wasi::{DirPerms, FilePerms, SocketAddrUse};
 
 pub mod ctx;
 
