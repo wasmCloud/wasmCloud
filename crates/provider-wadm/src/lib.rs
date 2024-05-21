@@ -28,7 +28,7 @@ use wasmcloud_provider_sdk::{
 };
 
 mod config;
-use config::WadmProviderConfig;
+use config::{WadmConfig, WADM_STATUS_API_PREFIX};
 
 wit_bindgen_wrpc::generate!({
     with: {
@@ -67,7 +67,7 @@ impl Drop for NatsClientBundle {
 
 #[derive(Clone)]
 pub struct WadmProvider {
-    default_config: WadmProviderConfig,
+    default_config: WadmConfig,
     handler_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     consumer_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
 }
@@ -100,7 +100,7 @@ impl WadmProvider {
 
     /// Build a [`WadmProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> WadmProvider {
-        let config = WadmProviderConfig::from_map(&host_data.config);
+        let config = WadmConfig::from_map(&host_data.config);
         if let Ok(config) = config {
             WadmProvider {
                 default_config: config,
@@ -115,7 +115,7 @@ impl WadmProvider {
     /// Attempt to connect to nats url (with jwt credentials, if provided)
     async fn connect(
         &self,
-        cfg: WadmProviderConfig,
+        cfg: WadmConfig,
         component_id: &str,
     ) -> anyhow::Result<NatsClientBundle> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
@@ -147,26 +147,19 @@ impl WadmProvider {
             opts = opts.custom_inbox_prefix(prefix);
         }
 
-        let client = opts
-            .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
-            .connect(url)
-            .await?;
+        let client = opts.name("Wadm Provider").connect(url).await?;
 
         // Connections
         let mut sub_handles = Vec::new();
-        for sub in cfg.subscriptions.iter().filter(|s| !s.is_empty()) {
-            let (sub, queue) = match sub.split_once('|') {
-                Some((sub, queue)) => (sub, Some(queue.to_string())),
-                None => (sub.as_str(), None),
-            };
-
-            sub_handles.push((
-                sub.to_string(),
-                self.subscribe(&client, component_id, sub.to_string(), queue)
-                    .await?,
-            ));
-        }
-
+        let subscription_subject = format!(
+            "{}.{}.{}",
+            WADM_STATUS_API_PREFIX, cfg.lattice, cfg.app_name
+        );
+        sub_handles.push((
+            subscription_subject.clone(),
+            self.subscribe(&client, component_id, subscription_subject, None)
+                .await?,
+        ));
         Ok(NatsClientBundle {
             client,
             sub_handles,
@@ -307,11 +300,8 @@ impl Provider for WadmProvider {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match WadmProviderConfig::from_map(&config) {
-                Ok(cc) => self.default_config.merge(&WadmProviderConfig {
-                    subscriptions: Vec::new(),
-                    ..cc
-                }),
+            match WadmConfig::from_map(&config) {
+                Ok(cc) => self.default_config.merge(&WadmConfig { ..cc }),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
                     return Err(anyhow!(e).context("failed to build connection config"));
@@ -343,7 +333,7 @@ impl Provider for WadmProvider {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match WadmProviderConfig::from_map(&config) {
+            match WadmConfig::from_map(&config) {
                 Ok(cc) => self.default_config.merge(&cc),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
@@ -441,7 +431,7 @@ impl Provider for WadmProvider {
     }
 }
 
-/// Implement the 'wasmcloud:messaging' capability provider interface
+/// Implement the 'wasmcloud:wadm' capability provider interface
 impl exports::wasmcloud::wadm::wadm_client::Handler<Option<Context>> for WadmProvider {
     #[instrument(level = "debug", skip(self, ctx), fields(model_name = %model_name))]
     async fn deploy_model(
