@@ -20,7 +20,7 @@ runs:
   - uses: DeterminateSystems/magic-nix-cache-action@v6
 
   # Setup Cachix cache
-  - uses: cachix/cachix-action@v14
+  - uses: cachix/cachix-action@v15
     continue-on-error: true
     with:
       name: wasmcloud
