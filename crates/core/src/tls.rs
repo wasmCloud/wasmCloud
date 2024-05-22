@@ -64,10 +64,14 @@ pub static DEFAULT_HYPER_CONNECTOR: Lazy<
 #[cfg(all(feature = "reqwest", feature = "rustls-native-certs"))]
 pub static DEFAULT_REQWEST_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::ClientBuilder::default()
+        .user_agent(REQWEST_USER_AGENT)
         .with_native_certificates()
         .build()
         .expect("failed to build HTTP client")
 });
+
+pub static REQWEST_USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 #[cfg(feature = "rustls-native-certs")]
 pub trait NativeRootsExt {
