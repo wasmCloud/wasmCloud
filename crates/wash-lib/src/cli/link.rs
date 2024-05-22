@@ -85,7 +85,7 @@ pub enum LinkCommand {
     Put(LinkPutCommand),
 
     /// Delete a link
-    #[clap(name = "del")]
+    #[clap(name = "del", alias = "delete")]
     Del(LinkDelCommand),
 }
 
