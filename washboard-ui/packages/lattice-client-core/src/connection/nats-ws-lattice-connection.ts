@@ -72,9 +72,15 @@ class NatsWsLatticeConnection implements LatticeConnection {
     subject: string,
     data?: Uint8Array | string | undefined,
   ): Promise<Response> {
-    const connection = await this.#waitForConnection();
-    const response = await connection.request(subject, data);
-    return response.json<Response>();
+    try {
+      const connection = await this.#waitForConnection();
+      const response = await connection.request(subject, data);
+      return response.json<Response>();
+    } catch (error) {
+      throw new Error(
+        `Failed to request ${subject}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   }
 
   subscribe<Event = unknown>(subject: string, listenerFunction: (event: Event) => void) {
@@ -114,51 +120,69 @@ class NatsWsLatticeConnection implements LatticeConnection {
   }
 
   async getBucketKeys(bucketName: string): Promise<string[]> {
-    const connection = await this.#waitForConnection();
+    try {
+      const connection = await this.#waitForConnection();
 
-    const bucket = await connection.jetstream().views.kv(bucketName);
-    const keys = await toPromise(await bucket.keys());
+      const bucket = await connection.jetstream().views.kv(bucketName);
+      const keys = await toPromise(await bucket.keys());
 
-    return keys;
+      return keys;
+    } catch (error) {
+      throw new Error(
+        `Failed to get keys from bucket ${bucketName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   }
 
   async getBucketEntry<ResultType extends Record<string, JsonValue> = Record<string, JsonValue>>(
     bucketName: string,
     key: string,
   ): Promise<ResultType> {
-    const connection = await this.#waitForConnection();
+    try {
+      const connection = await this.#waitForConnection();
 
-    const bucket = await connection.jetstream().views.kv(bucketName);
-    const entry = await bucket.get(key);
+      const bucket = await connection.jetstream().views.kv(bucketName);
+      const entry = await bucket.get(key);
 
-    if (entry === null) {
-      throw new Error(`Entry with key ${key} not found in bucket ${bucketName}`);
+      if (entry === null) {
+        throw new Error(`Entry with key ${key} not found in bucket ${bucketName}`);
+      }
+
+      return entry.json<ResultType>();
+    } catch (error) {
+      throw new Error(
+        `Failed to get entry with key ${key} from bucket ${bucketName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
-
-    return entry.json<ResultType>();
   }
 
   async getBucketEntries<ResultType extends Record<string, JsonValue> = Record<string, JsonValue>>(
     bucketName: string,
   ): Promise<ResultType> {
-    const connection = await this.#waitForConnection();
+    try {
+      const connection = await this.#waitForConnection();
 
-    const bucket = await connection.jetstream().views.kv(bucketName);
-    const keys = await toPromise(await bucket.keys());
+      const bucket = await connection.jetstream().views.kv(bucketName);
+      const keys = await toPromise(await bucket.keys());
 
-    const maybeEntries = await Promise.all(keys.map(async (key) => bucket.get(key)));
+      const maybeEntries = await Promise.all(keys.map(async (key) => bucket.get(key)));
 
-    const entries = maybeEntries.reduce((entries: Record<string, JsonValue>, entry) => {
-      if (entry === null) return entries;
+      const entries = maybeEntries.reduce((entries: Record<string, JsonValue>, entry) => {
+        if (entry === null) return entries;
 
-      const {key} = entry;
-      const value = entry.json<JsonValue>();
-      entries[key] = value;
+        const {key} = entry;
+        const value = entry.json<JsonValue>();
+        entries[key] = value;
+
+        return entries;
+      }, {}) as ResultType;
 
       return entries;
-    }, {}) as ResultType;
-
-    return entries;
+    } catch (error) {
+      throw new Error(
+        `Failed to get entries from bucket ${bucketName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
   }
 
   watchBucket(
