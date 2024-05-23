@@ -263,7 +263,7 @@ pub async fn parse_and_validate_artifact(artifact: Vec<u8>) -> Result<SupportedA
         Ok(art) => Ok(art),
         Err(_) => match parse_provider_archive(artifact).await {
             Ok(art) => Ok(art),
-            Err(_) => bail!("Unsupported artifact type"),
+            Err(e) => bail!("Unsupported artifact type: {e:?}"),
         },
     }
 }
