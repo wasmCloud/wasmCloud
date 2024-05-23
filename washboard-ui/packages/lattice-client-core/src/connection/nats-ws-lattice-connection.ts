@@ -43,16 +43,19 @@ class NatsWsLatticeConnection implements LatticeConnection {
 
       void connection.closed().then((error) => {
         if (error) {
+          this.#connection = undefined;
           this.#status = 'error';
           console.error(`Closed with an error: ${error.message}`);
         }
 
+        this.#connection = undefined;
         this.#status = 'disconnected';
       });
 
       this.#connection = connection;
       this.#status = 'connected';
     } catch (error) {
+      this.#connection = undefined;
       this.#status = 'error';
       throw new Error(
         `Failed to connect to lattice: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -191,13 +194,17 @@ class NatsWsLatticeConnection implements LatticeConnection {
       }
 
       try {
-        if (this.#connection) {
+        if (this.#connection && this.#status === 'connected') {
           resolve(this.#connection);
-        } else {
-          setTimeout(() => {
-            resolve(this.#waitForConnection(count + 1));
-          }, 100);
+          return;
         }
+        this.connect()
+          .catch(() => {
+            return new Promise<void>((resolve) => {
+              setTimeout(() => resolve(), 500);
+            });
+          })
+          .finally(() => resolve(this.#waitForConnection(count + 1)));
       } catch (error) {
         reject(error as Error);
       }
