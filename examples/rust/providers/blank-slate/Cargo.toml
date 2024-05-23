@@ -1,0 +1,22 @@
+[package]
+name = "wasmcloud-example-blank-slate"
+version = "0.1.0"
+edition = "2021"
+description = """
+A blank slate capability provider built for quick implementation of custom capabilities.
+"""
+
+[workspace]
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = "1.0.82"
+async-nats = "0.33.0"
+serde = { version = "1.0.197" , features = ["derive"] }
+serde_json = "1.0.115"
+tokio = { version = "1.37.0", features = [ "full" ] }
+tracing = "0.1"
+wasmcloud-provider-sdk = "0.5.0"
+wit-bindgen-wrpc = "0.3.7"

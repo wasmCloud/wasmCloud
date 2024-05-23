@@ -1,0 +1,6 @@
+name = "BlankSlate"
+language = "rust"
+type = "provider"
+
+[provider]
+vendor = "Example Vendor"
