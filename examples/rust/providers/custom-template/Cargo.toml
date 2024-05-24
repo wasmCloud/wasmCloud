@@ -1,9 +1,9 @@
 [package]
-name = "wasmcloud-example-blank-slate"
+name = "wasmcloud-provider-custom-template"
 version = "0.1.0"
 edition = "2021"
 description = """
-A blank slate capability provider built for quick implementation of custom capabilities.
+A capability provider template built for implementation of custom capabilities.
 """
 
 [workspace]

@@ -13,7 +13,7 @@ wit_bindgen_wrpc::generate!();
 
 #[derive(Default, Clone)]
 /// Your provider struct is where you can store any state or configuration that your provider needs to keep track of.
-pub struct BlankSlateProvider {
+pub struct CustomTemplateProvider {
     config: Arc<RwLock<ProviderConfig>>,
     /// All components linked to this provider and their config.
     linked_from: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
@@ -23,16 +23,16 @@ pub struct BlankSlateProvider {
 
 /// This `impl` block is where you can implement additional methods for your provider. We've provided two examples
 /// to run and load [`HostData`], and when you have custom logic to implement, you can add it here.
-impl BlankSlateProvider {
+impl CustomTemplateProvider {
     /// Execute the provider, loading [`HostData`] from the host which includes the provider's configuration and
-    /// information about the host. Once you use the passed configuration to construct a [`BlankSlateProvider`],
+    /// information about the host. Once you use the passed configuration to construct a [`CustomTemplateProvider`],
     /// you can run the provider by calling `run_provider` and then serving the provider's exports on the proper
     /// RPC topics via `wrpc::serve`.
     ///
     /// This step is essentially the same for every provider, and you shouldn't need to modify this function.
     pub async fn run() -> anyhow::Result<()> {
         let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "blank-slate-provider")
+        let shutdown = run_provider(provider.clone(), "custom-template-provider")
             .await
             .context("failed to run provider")?;
 
@@ -66,7 +66,7 @@ use crate::provider::wasmcloud::example::process_data::Data;
 /// When a provider specifies an `export` in its `wit/world.wit` file, the `wit-bindgen-wrpc` tool generates
 /// a trait that the provider must implement. This trait is used to handle invocations from components that
 /// link to the provider. The `Handler` trait is generated for each export in the WIT world.
-impl Handler<Option<Context>> for BlankSlateProvider {
+impl Handler<Option<Context>> for CustomTemplateProvider {
     /// Request information about the system the provider is running on
     async fn request_info(&self, ctx: Option<Context>, kind: Kind) -> anyhow::Result<String> {
         // The `ctx` contains information about the component that invoked the request. You can use
@@ -137,7 +137,7 @@ impl Handler<Option<Context>> for BlankSlateProvider {
 /// Implementing the [`Provider`] trait is optional. Implementing the methods in the trait allow you to set up
 /// custom logic for handling links, deletions, and shutdowns. This is useful to set up any connections, state,
 /// resources, or cleanup that your provider needs to do when it is linked to or unlinked from a component.
-impl Provider for BlankSlateProvider {
+impl Provider for CustomTemplateProvider {
     /// Initialize your provider with the given configuration. This is a good place to set up any state or
     /// resources your provider needs to run.
     async fn init(&self, config: impl ProviderInitConfig) -> anyhow::Result<()> {

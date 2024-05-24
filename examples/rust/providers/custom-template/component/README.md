@@ -1,6 +1,6 @@
-# Blank slate test component
+# Custom template test component
 
-This component is meant to test the [blank slate capability provider](../) by an implementation of the interface on the component.
+This component is meant to test the [custom template capability provider](../) by an implementation of the interface on the component.
 
 ## Build
 

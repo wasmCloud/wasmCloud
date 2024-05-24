@@ -1,16 +1,16 @@
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
-  name: blank-slate-provider
+  name: custom-template-provider
   annotations:
     version: v0.0.1
-    description: 'A blank slate application with provider and component built for extending wasmCloud with custom capabilities'
+    description: 'An application with a provider and component built for extending wasmCloud with custom capabilities'
 spec:
   components:
     - name: test-component
       type: component
       properties:
-        image: file://./component/build/blank_slate_test_component.wasm
+        image: file://./component/build/custom_template_test_component.wasm
       traits:
         - type: spreadscaler
           properties:
@@ -18,16 +18,16 @@ spec:
         # Link the component to the provider on wasmcloud:example/system-info
         - type: link
           properties:
-            target: blank-slate
+            target: custom-template
             namespace: wasmcloud
             package: example
             interfaces: [system-info]
 
-    - name: blank-slate
+    - name: custom-template
       type: capability
       properties:
-        image: file://./build/wasmcloud-example-blank-slate.par.gz
-        id: blank-slate
+        image: file://./build/wasmcloud-example-custom-template.par.gz
+        id: custom-template
         config:
           - name: provider-config
             properties:

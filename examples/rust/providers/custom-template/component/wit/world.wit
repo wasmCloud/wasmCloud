@@ -1,4 +1,4 @@
-package wasmcloud:blankslate;
+package wasmcloud:custom;
 
 world component {
   // Import logging for processing data

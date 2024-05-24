@@ -1,6 +1,6 @@
-# Blank Slate Capability Provider
+# Custom Capability Provider
 
-This capability provider is a blank slate for creating providers with custom capabilities. It uses the [wasmcloud-provider-sdk](https://crates.io/crates/wasmcloud-provider-sdk) and implements the [Provider](https://docs.rs/wasmcloud-provider-sdk/0.5.0/wasmcloud_provider_sdk/trait.Provider.html) trait with an example handler that will persist the links that target the provider (target links) and links where the provider is the source and targets a component (source links).
+This capability provider is a template for creating providers with custom capabilities. It uses the [wasmcloud-provider-sdk](https://crates.io/crates/wasmcloud-provider-sdk) and implements the [Provider](https://docs.rs/wasmcloud-provider-sdk/0.5.0/wasmcloud_provider_sdk/trait.Provider.html) trait with an example handler that will persist the links that target the provider (target links) and links where the provider is the source and targets a component (source links).
 
 The purpose of this example is to provide comprehensive comments on the usage of our wasmCloud provider SDK, from serving RPC exports to invoking component imports. The code is informative to read through and provides a base for extending wasmCloud with custom capabilities.
 
@@ -25,19 +25,19 @@ You can run this capability provider as a binary by passing a simple base64 enco
 
 ```bash
 nats-server -js &
-echo '{"lattice_rpc_url": "0.0.0.0:4222", "lattice_rpc_prefix": "default", "provider_key": "blank-slate", "config": {"foo": "bar"}, "env_values": {}, "link_definitions": [], "otel_config": {"enable_observability": false}}' | base64 | cargo run
+echo '{"lattice_rpc_url": "0.0.0.0:4222", "lattice_rpc_prefix": "default", "provider_key": "custom-template", "config": {"foo": "bar"}, "env_values": {}, "link_definitions": [], "otel_config": {"enable_observability": false}}' | base64 | cargo run
 ```
 
 And in another terminal, you can request the health of the provider using the NATS CLI
 
 ```bash
-nats req "wasmbus.rpc.default.blank-slate.default.health '{}'
+nats req "wasmbus.rpc.default.custom-template.health" '{}'
 ```
 
 Additionally, you can invoke the provider directly which will send test data to each linked component
 
 ```bash
-wash call blank-slate wasmcloud:example/system-info.call
+wash call custom-template wasmcloud:example/system-info.call
 ```
 
 ## Running as an application
