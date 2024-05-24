@@ -1,5 +1,5 @@
 [package]
-name = "blank-slate-test-component"
+name = "custom-template-test-component"
 edition = "2021"
 version = "0.1.0"
 

@@ -5,9 +5,9 @@ use crate::exports::wasmcloud::example::process_data::Guest;
 use crate::wasi::logging::logging::*;
 use crate::wasmcloud::example::system_info::Kind;
 
-struct BlankSlateComponent;
+struct CustomTemplateComponent;
 
-impl Guest for BlankSlateComponent {
+impl Guest for CustomTemplateComponent {
     fn process(data: Data) -> String {
         log(Level::Info, "", &format!("Data received: {:?}", data));
         // Request OS and architecture information
@@ -17,4 +17,4 @@ impl Guest for BlankSlateComponent {
     }
 }
 
-export!(BlankSlateComponent);
+export!(CustomTemplateComponent);

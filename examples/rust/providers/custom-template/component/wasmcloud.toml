@@ -1,4 +1,4 @@
-name = "Blank slate test component"
+name = "Custom template test component"
 language = "rust"
 type = "component"
 
