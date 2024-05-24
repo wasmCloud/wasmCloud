@@ -94,3 +94,13 @@ pub struct LabelHostCommandOutput {
     pub deleted: bool,
     pub processed: Vec<(String, String)>,
 }
+
+/// JSON output representation of the `wash up` command
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpCommandOutput {
+    pub success: bool,
+    pub kill_cmd: String,
+    pub wasmcloud_log: String,
+    pub nats_url: String,
+    pub deployed_wadm_manifest_path: Option<String>,
+}
