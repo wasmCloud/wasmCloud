@@ -9,7 +9,10 @@ use std::{ffi::OsStr, io::Cursor};
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
-use wasmcloud_core::tls;
+use wasmcloud_core::tls::NativeRootsExt;
+
+const DOWNLOAD_CLIENT_USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 /// Reusable function to download a release tarball from GitHub and extract an embedded binary to a specified directory
 ///
@@ -35,7 +38,7 @@ where
 {
     let bin_path = dir.as_ref().join(bin_name);
     // Download release tarball
-    let body = match tls::DEFAULT_REQWEST_CLIENT.get(url).send().await {
+    let body = match get_download_client()?.get(url).send().await {
         Ok(resp) => resp.bytes().await?,
         Err(e) => bail!("Failed to request release tarball: {:?}", e),
     };
@@ -86,4 +89,33 @@ where
     metadata(dir.as_ref().join(bin_name))
         .await
         .map_or(false, |m| m.is_file())
+}
+
+/// Helper function to set up a reqwest client for performing the download
+pub(crate) fn get_download_client() -> Result<reqwest::Client> {
+    let proxy_username = std::env::var("WASH_PROXY_USERNAME").unwrap_or_default();
+    let proxy_password = std::env::var("WASH_PROXY_PASSWORD").unwrap_or_default();
+
+    let mut builder = reqwest::ClientBuilder::default()
+        .user_agent(DOWNLOAD_CLIENT_USER_AGENT)
+        .with_native_certificates();
+
+    if let Ok(http_proxy) = std::env::var("HTTP_PROXY").or_else(|_| std::env::var("http_proxy")) {
+        let mut proxy = reqwest::Proxy::http(http_proxy)?.no_proxy(reqwest::NoProxy::from_env());
+        if !proxy_username.is_empty() && !proxy_password.is_empty() {
+            proxy = proxy.basic_auth(&proxy_username, &proxy_password);
+        }
+        builder = builder.proxy(proxy);
+    }
+
+    if let Ok(https_proxy) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy"))
+    {
+        let mut proxy = reqwest::Proxy::https(https_proxy)?.no_proxy(reqwest::NoProxy::from_env());
+        if !proxy_username.is_empty() && !proxy_password.is_empty() {
+            proxy = proxy.basic_auth(&proxy_username, &proxy_password);
+        }
+        builder = builder.proxy(proxy);
+    }
+
+    Ok(builder.build()?)
 }
