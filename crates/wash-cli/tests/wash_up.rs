@@ -1,4 +1,7 @@
-use std::fs::{read_to_string, remove_dir_all};
+use std::{
+    fs::{read_to_string, remove_dir_all},
+    path::PathBuf,
+};
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
@@ -248,7 +251,7 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that wash up
+/// Ensure that wash up works with labels
 #[tokio::test]
 #[serial]
 async fn integration_up_works_with_labels() -> Result<()> {
@@ -268,6 +271,29 @@ async fn integration_up_works_with_labels() -> Result<()> {
             .any(|h| h.labels.get("is-label-test").is_some_and(|v| v == "yes")),
         "a host is present which has the created label",
     );
+
+    Ok(())
+}
+
+/// Ensure that wash up works with a provided WADM manifest
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_wadm_manifest() -> Result<()> {
+    let manifest_path = format!(
+        "{}",
+        PathBuf::from("./tests/fixtures/wadm/component-only.wadm.yaml")
+            .canonicalize()?
+            .display()
+    );
+
+    let instance =
+        TestWashInstance::create_with_extra_args(vec!["--wadm-manifest", manifest_path.as_ref()])
+            .await?;
+
+    assert!(instance
+        .deployed_wadm_manifest_path
+        .as_ref()
+        .is_some_and(|v| *v == manifest_path));
 
     Ok(())
 }

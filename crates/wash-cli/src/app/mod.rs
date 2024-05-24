@@ -220,10 +220,8 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
     // If --replace was specified, we should attempt to replace the resources by deleting them beforehand
     if cmd.replace {
-        if let (Ok(name), version) = (
-            get_model_name(&app_manifest),
-            get_model_version(&app_manifest).map(Into::into),
-        ) {
+        if let (Some(name), version) = (app_manifest.name(), app_manifest.version().map(Into::into))
+        {
             if let Err(e) =
                 wash_lib::app::delete_model_version(&client, lattice.clone(), name, version, false)
                     .await
@@ -233,10 +231,19 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         }
     }
 
-    match app_manifest {
+    deploy_model_from_manifest(&client, lattice, app_manifest, cmd.version).await
+}
+
+pub(crate) async fn deploy_model_from_manifest(
+    client: &async_nats::Client,
+    lattice: Option<String>,
+    manifest: AppManifest,
+    version: Option<String>,
+) -> Result<DeployModelResponse> {
+    match manifest {
         AppManifest::SerializedModel(manifest) => {
             let put_res = wash_lib::app::put_model(
-                &client,
+                client,
                 lattice.clone(),
                 serde_yaml::to_string(&manifest)
                     .context("failed to convert manifest to string")?
@@ -248,10 +255,10 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
                 PutResult::Created | PutResult::NewVersion => put_res.name,
                 _ => bail!("Could not put manifest to deploy {}", put_res.message),
             };
-            wash_lib::app::deploy_model(&client, lattice, &model_name, cmd.version).await
+            wash_lib::app::deploy_model(client, lattice, &model_name, version).await
         }
         AppManifest::ModelName(model_name) => {
-            wash_lib::app::deploy_model(&client, lattice, &model_name, cmd.version).await
+            wash_lib::app::deploy_model(client, lattice, &model_name, version).await
         }
     }
 }
@@ -282,36 +289,6 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
         AppManifest::ModelName(_) => {
             bail!("failed to retrieve manifest at `{:?}`", cmd.source)
         }
-    }
-}
-
-/// Retrieve the the model name (possibly missing) of a given [`AppManifest`]
-pub(crate) fn get_model_name(manifest: &AppManifest) -> Result<&str> {
-    match manifest {
-        AppManifest::ModelName(model_name) => Ok(model_name),
-        AppManifest::SerializedModel(manifest) => {
-            if let Some(metadata) = manifest.get("metadata") {
-                if let Some(name) = metadata.get("name") {
-                    return name
-                        .as_str()
-                        .context("metadata.name in provided manifest is not a string");
-                }
-            }
-            bail!("unexpected format for manifest, did not contain metadata.name");
-        }
-    }
-}
-
-/// Retrieve the version of a given [`AppManifest`], returning None if the manifest
-/// does not contain a version (or is not the type to contain a version)
-pub(crate) fn get_model_version(manifest: &AppManifest) -> Option<&str> {
-    match manifest {
-        AppManifest::ModelName(_) => None,
-        AppManifest::SerializedModel(manifest) => manifest
-            .get("metadata")?
-            .get("annotations")?
-            .get("version")
-            .and_then(|v| v.as_str()),
     }
 }
 
@@ -362,8 +339,11 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
             .await
             .with_context(|| format!("failed to load app manifest at [{}]", cmd.model_name))?;
         (
-            get_model_name(&manifest)?.into(),
-            get_model_version(&manifest).map(Into::into),
+            manifest
+                .name()
+                .map(Into::into)
+                .context("failed to find name of manifest")?,
+            manifest.version().map(Into::into),
         )
     } else {
         (cmd.model_name, cmd.version)
