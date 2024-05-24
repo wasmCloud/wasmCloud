@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.29.0 (2024-05-24)
+
+### Chore
+
+ - <csr-id-df6551c7990795b92c48b2b8a0062b8949410e7d/> bump wadm to v0.11.2
+ - <csr-id-c5b3ad049817edab6d809ffafd51d4ca6fe4db79/> Remove deprecated registry_ping
+
+### New Features
+
+ - <csr-id-4b38dddf2295316677cbe75695eb4bffadfe1d18/> add support for specifying multiple labels
+   This commit adds support for specifying multiple labels to `wash
+   label`.
+   
+   Users can use `wash label <host-id> key1=value1,key2=value2` to set
+   multiple labels on the host at the same time, in a best-effort manner
+
+### New Features (BREAKING)
+
+ - <csr-id-08b5e1e92c411d2d913537937aec3a8ca5ccb405/> Updates wash to use the new OCI spec for wasm
+   This is backwards compatible in that it can still pull the old manifest
+   type, but it now only pushes the new manifest type. For probably all of
+   our current users, they shouldn't notice this change, but it is
+   technically a breaking change to start pushing in a different way
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 8 calendar days.
+ - 14 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Updates wash to use the new OCI spec for wasm ([`08b5e1e`](https://github.com/wasmCloud/wasmCloud/commit/08b5e1e92c411d2d913537937aec3a8ca5ccb405))
+    - Bump wadm to v0.11.2 ([`df6551c`](https://github.com/wasmCloud/wasmCloud/commit/df6551c7990795b92c48b2b8a0062b8949410e7d))
+    - Add option to skip certificate validation for the OCI registry connection ([`f9aa387`](https://github.com/wasmCloud/wasmCloud/commit/f9aa3879d273ae9b44f5ee09a724f76df9859d7a))
+    - Add support for specifying multiple labels ([`4b38ddd`](https://github.com/wasmCloud/wasmCloud/commit/4b38dddf2295316677cbe75695eb4bffadfe1d18))
+    - Remove deprecated registry_ping ([`c5b3ad0`](https://github.com/wasmCloud/wasmCloud/commit/c5b3ad049817edab6d809ffafd51d4ca6fe4db79))
+</details>
+
+## v0.28.1 (2024-05-10)
+
+### Chore
+
+ - <csr-id-a4a772fb475c1f76215b7fe7aece9c2335bd0c69/> bump patch for release
+
+### Bug Fixes
+
+ - <csr-id-1b4faabea11ba6b77b75e34f6892f979be0adde5/> Make wash push returned digest based on the pushed manifest
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 2 commits contributed to the release.
+ - 1 day passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump patch for release ([`a4a772f`](https://github.com/wasmCloud/wasmCloud/commit/a4a772fb475c1f76215b7fe7aece9c2335bd0c69))
+    - Make wash push returned digest based on the pushed manifest ([`1b4faab`](https://github.com/wasmCloud/wasmCloud/commit/1b4faabea11ba6b77b75e34f6892f979be0adde5))
+</details>
+
 ## v0.28.0 (2024-05-08)
 
 <csr-id-4dc6c775d7780f6811435de0f2cd5401ce21d675/>
@@ -18,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-25eeb94fe4cae339ea6a2a1eddb44c90d2cf84ae/>
 <csr-id-f2d58a462f909d3b1293c43b43a8cbeca154cf99/>
 <csr-id-b2e3158614f3cebf1896c3d5539a69ded97e03fe/>
+<csr-id-ac3ec843f22b2946df8e2b52735a13569eaa78d6/>
 
 ### Chore
 
@@ -111,7 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 27 commits contributed to the release over the course of 20 calendar days.
+ - 28 commits contributed to the release over the course of 20 calendar days.
  - 20 days passed between releases.
  - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -123,6 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
     - Release and update CHANGELOG ([`ac3ec84`](https://github.com/wasmCloud/wasmCloud/commit/ac3ec843f22b2946df8e2b52735a13569eaa78d6))
     - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
     - Reg test failure ([`305e9b6`](https://github.com/wasmCloud/wasmCloud/commit/305e9b6615d2a2473caccd3dbcbcacbdec02c3ac))
