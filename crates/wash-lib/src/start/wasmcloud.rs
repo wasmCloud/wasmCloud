@@ -7,7 +7,6 @@ use tokio::process::{Child, Command};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use tracing::warn;
-use wasmcloud_core::tls;
 
 #[cfg(target_family = "unix")]
 use std::os::unix::prelude::PermissionsExt;
@@ -16,6 +15,8 @@ use std::process::Stdio;
 
 #[cfg(target_family = "unix")]
 use command_group::AsyncCommandGroup;
+
+use super::get_download_client;
 
 const WASMCLOUD_GITHUB_RELEASE_URL: &str =
     "https://github.com/wasmCloud/wasmCloud/releases/download";
@@ -149,7 +150,7 @@ where
     let url = wasmcloud_url(version);
     // NOTE(brooksmtownsend): This seems like a lot of work when I really just want to use AsyncRead
     // to pipe the response body into a file. I'm not sure if there's a better way to do this.
-    let download_response = tls::DEFAULT_REQWEST_CLIENT.get(&url).send().await?;
+    let download_response = get_download_client()?.get(&url).send().await?;
     if download_response.status() != StatusCode::OK {
         bail!(
             "failed to download wasmCloud host from {}. Status code: {}",
