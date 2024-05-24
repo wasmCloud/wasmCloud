@@ -66,6 +66,30 @@ impl AppManifest {
         }
         Ok(())
     }
+
+    /// Retrieve the name of a given [`AppManifest`]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AppManifest::ModelName(name) => Some(name),
+            AppManifest::SerializedModel(manifest) => manifest
+                .get("metadata")?
+                .get("name")
+                .and_then(|v| v.as_str()),
+        }
+    }
+
+    /// Retrieve the version of a given [`AppManifest`], returning None if the manifest
+    /// does not contain a version (or is not the type to contain a version)
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            AppManifest::ModelName(_) => None,
+            AppManifest::SerializedModel(manifest) => manifest
+                .get("metadata")?
+                .get("annotations")?
+                .get("version")
+                .and_then(|v| v.as_str()),
+        }
+    }
 }
 
 /// Resolve the relative paths in a YAML value, given a base path (directory)

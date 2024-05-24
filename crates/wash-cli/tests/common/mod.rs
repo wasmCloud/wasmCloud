@@ -21,7 +21,7 @@ use tokio::{
 
 use wash_lib::cli::output::{
     CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
-    StopCommandOutput,
+    StopCommandOutput, UpCommandOutput,
 };
 use wash_lib::config::{downloads_dir, WASMCLOUD_PID_FILE};
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
@@ -176,6 +176,8 @@ pub struct TestWashInstance {
     pub host_seed: String,
     /// Cluster seed generated when starting the host
     pub cluster_seed: String,
+    /// Deployed WADM manifest path (if there was one specified during `wash up`)
+    pub deployed_wadm_manifest_path: Option<String>,
     /// NATS server child process
     nats: Child,
 }
@@ -305,10 +307,13 @@ impl TestWashInstance {
 
         let out = read_to_string(&log_path).context("could not read output of wash up")?;
 
-        let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
-            Ok(v) => (v["kill_cmd"].clone(), v["wasmcloud_log"].clone()),
-            Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
-        };
+        let UpCommandOutput {
+            kill_cmd,
+            wasmcloud_log,
+            deployed_wadm_manifest_path,
+            ..
+        } = serde_json::from_str::<UpCommandOutput>(&out)
+            .context("failed to parse wash up cmd output")?;
 
         // Wait until the host starts by checking the logs
         let logs_path = String::from(wasmcloud_log.to_string().trim_matches('"'));
@@ -333,6 +338,7 @@ impl TestWashInstance {
         Ok(TestWashInstance {
             test_dir,
             kill_cmd: kill_cmd.to_string(),
+            deployed_wadm_manifest_path,
             nats,
             nats_port,
             host_seed: host_seed_str.into(),
