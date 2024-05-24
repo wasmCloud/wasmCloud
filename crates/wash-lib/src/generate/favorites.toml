@@ -59,3 +59,9 @@ name = "messaging-nats"
 description = "a capability provider with scaffolding to implement the `wasmcloud:messaging` interface for pubsub"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/providers/messaging-nats"
+
+[[provider]]
+name = "custom-template-rust"
+description = "a capability provider template written in Rust with scaffolding to implement a custom interface"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/rust/providers/custom-template"
