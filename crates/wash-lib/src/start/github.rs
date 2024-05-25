@@ -119,3 +119,234 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
 
     Ok(builder.build()?)
 }
+
+#[cfg(test)]
+mod test {
+    use std::{collections::HashMap, env::temp_dir};
+    use testcontainers::{
+        core::{Mount, WaitFor},
+        runners::AsyncRunner,
+        GenericImage,
+    };
+    use tokio::fs::{create_dir_all, remove_dir_all};
+    use tokio::io::AsyncBufReadExt;
+
+    use crate::start::{get_download_client, github::DOWNLOAD_CLIENT_USER_AGENT};
+
+    // For squid config reference, see: https://www.squid-cache.org/Doc/config/
+    // Sets up a squid-proxy listening on port 3128 that requires basic auth
+    const SQUID_CONFIG_WITH_BASIC_AUTH: &str = r#"
+# Listen on port 3128 for traffic, allows proxy to run as http endpoint,
+# while still serving responses for both HTTP_PROXY and HTTPS_PROXY.
+http_port 3128
+# log to stdout to make the logs accessible
+logfile_rotate 0
+# This format translates to: <request-method>|<url>|<return-code>|<user-agent>|<basic-auth-username>
+logformat wasmcloud %rm|%ru|%>Hs|%{User-Agent}>h|%[un
+cache_log stdio:/dev/stdout
+access_log stdio:/dev/stderr wasmcloud
+cache_store_log stdio:/dev/stdout
+# This set of directives tells squid to require basic auth,
+# but the passed in credentials can be whatever to make testing easier.
+auth_param basic program /usr/libexec/basic_fake_auth
+acl authenticated proxy_auth REQUIRED
+http_access allow authenticated
+http_access deny all
+shutdown_lifetime 1 seconds
+"#;
+
+    // Sets up a squid-proxy listening on port 3128 that does not require any auth
+    const SQUID_CONFIG_WITHOUT_AUTH: &str = r#"
+http_port 3128
+# log to stdout to make the logs accessible
+logfile_rotate 0
+logformat wasmcloud %rm|%ru|%>Hs|%{User-Agent}>h|%[un
+cache_log stdio:/dev/stdout
+access_log stdio:/dev/stderr wasmcloud
+cache_store_log stdio:/dev/stdout
+# Log query params
+strip_query_terms off
+# allow unauthenticated http(s) access
+http_access allow all
+shutdown_lifetime 1 seconds
+"#;
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    // NOTE: These are only run on linux for CI purposes, because they rely on
+    // the docker client being available, and for various reasons this has proven
+    // to be problematic on both the Windows and MacOS runners we use.
+    async fn test_download_client_with_proxy_settings() {
+        // NOTE: This is intentional to avoid the two tests running in parallel
+        // and contaminating each other's environment variables for configuring
+        // the http client based on the environment.
+        test_http_proxy_without_auth().await;
+        test_http_proxy_with_basic_auth().await;
+    }
+
+    async fn test_http_proxy_without_auth() {
+        let dir_path = temp_dir().join("test_http_proxy_no_auth");
+        let _ = remove_dir_all(&dir_path).await;
+        create_dir_all(&dir_path).await.unwrap();
+
+        let squid_config_path = dir_path.join("squid.conf");
+        tokio::fs::write(squid_config_path.clone(), SQUID_CONFIG_WITHOUT_AUTH)
+            .await
+            .unwrap();
+
+        let container = GenericImage::new("chainguard/squid-proxy", "latest")
+            .with_exposed_port(3128)
+            .with_mount(Mount::bind_mount(
+                squid_config_path.to_string_lossy().to_string(),
+                "/etc/squid.conf",
+            ))
+            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
+            .with_wait_for(WaitFor::seconds(3))
+            .start()
+            .await;
+
+        let mut env_vars = HashMap::from([("HTTP_PROXY", None), ("HTTPS_PROXY", None)]);
+        // Setup environment variables for the client
+        for env_var in env_vars.clone().keys() {
+            // Store the previous value so we can reset it once the test is done.
+            if let Ok(value) = std::env::var(env_var) {
+                env_vars.entry(env_var).and_modify(|v| *v = Some(value));
+            }
+            std::env::set_var(
+                env_var,
+                format!(
+                    "http://localhost:{}",
+                    container.get_host_port_ipv4(3128).await
+                ),
+            );
+        }
+
+        let client = get_download_client().unwrap();
+        let http_endpoint = "http://httpbin.org/get";
+        let https_endpoint = "https://httpbin.org/get";
+        let http = client.get(http_endpoint).send().await.unwrap();
+        let https = client.get(https_endpoint).send().await.unwrap();
+
+        container.stop().await;
+
+        assert_eq!(http.status(), reqwest::StatusCode::OK);
+        assert_eq!(https.status(), reqwest::StatusCode::OK);
+
+        let mut stderr = vec![];
+        let mut lines = container.stderr().lines();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            stderr.push(line);
+        }
+
+        // GET|http://httpbin.org/get|200|wash-lib/0.21.1|-
+        let http_log_entry = format!("GET|{http_endpoint}|200|{}|-", DOWNLOAD_CLIENT_USER_AGENT);
+        assert!(stderr.contains(&http_log_entry));
+
+        // CONNECT|httpbin.org:443|200|wash-lib/0.21.1|-
+        let https_url = url::Url::parse(https_endpoint).unwrap();
+        let https_log_entry = format!(
+            "CONNECT|{}:{}|200|{}|-",
+            https_url.host_str().unwrap(),
+            https_url.port_or_known_default().unwrap(),
+            DOWNLOAD_CLIENT_USER_AGENT
+        );
+        assert!(stderr.contains(&https_log_entry));
+
+        // Restore the environment variables prior to the test run
+        for (key, val) in env_vars {
+            if let Some(value) = val {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        let _ = remove_dir_all(dir_path).await;
+    }
+
+    async fn test_http_proxy_with_basic_auth() {
+        let dir_path = temp_dir().join("test_http_proxy_basic_auth");
+        let _ = remove_dir_all(&dir_path).await;
+        create_dir_all(&dir_path).await.unwrap();
+
+        let squid_config_path = dir_path.join("squid.conf");
+        tokio::fs::write(squid_config_path.clone(), SQUID_CONFIG_WITH_BASIC_AUTH)
+            .await
+            .unwrap();
+
+        let container = GenericImage::new("chainguard/squid-proxy", "latest")
+            .with_exposed_port(3128)
+            .with_mount(Mount::bind_mount(
+                squid_config_path.to_string_lossy().to_string(),
+                "/etc/squid.conf",
+            ))
+            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
+            .with_wait_for(WaitFor::seconds(3))
+            .start()
+            .await;
+
+        let mut env_vars = HashMap::from([("HTTP_PROXY", None), ("HTTPS_PROXY", None)]);
+        // Setup environment variables for the client
+        for env_var in env_vars.clone().keys() {
+            // Store the previous value so we can reset it once the test is done.
+            if let Ok(value) = std::env::var(env_var) {
+                env_vars.entry(env_var).and_modify(|v| *v = Some(value));
+            }
+            std::env::set_var(
+                env_var,
+                format!(
+                    "http://localhost:{}",
+                    container.get_host_port_ipv4(3128).await
+                ),
+            );
+        }
+        let proxy_username = "wasmcloud";
+        std::env::set_var("WASH_PROXY_USERNAME", proxy_username);
+        std::env::set_var("WASH_PROXY_PASSWORD", "this-can-be-whatever");
+
+        let client = get_download_client().unwrap();
+        let http_endpoint = "http://httpbin.org/get";
+        let https_endpoint = "https://httpbin.org/get";
+        let http = client.get(http_endpoint).send().await.unwrap();
+        let https = client.get(https_endpoint).send().await.unwrap();
+
+        container.stop().await;
+
+        assert_eq!(http.status(), reqwest::StatusCode::OK);
+        assert_eq!(https.status(), reqwest::StatusCode::OK);
+
+        let mut stderr = vec![];
+        let mut lines = container.stderr().lines();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            stderr.push(line);
+        }
+
+        // GET|http://httpbin.org/get|200|wash-lib/0.21.1|wasmcloud
+        let http_log_entry = format!(
+            "GET|{http_endpoint}|200|{}|{proxy_username}",
+            DOWNLOAD_CLIENT_USER_AGENT
+        );
+        assert!(stderr.contains(&http_log_entry));
+
+        // CONNECT|httpbin.org:443|200|wash-lib/0.21.1|wasmcloud
+        let https_url = url::Url::parse(https_endpoint).unwrap();
+        let https_log_entry = format!(
+            "CONNECT|{}:{}|200|{}|{proxy_username}",
+            https_url.host_str().unwrap(),
+            https_url.port_or_known_default().unwrap(),
+            DOWNLOAD_CLIENT_USER_AGENT
+        );
+        assert!(stderr.contains(&https_log_entry));
+
+        // Restore the environment variables prior to the test run
+        for (key, val) in env_vars {
+            if let Some(value) = val {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        let _ = remove_dir_all(dir_path).await;
+    }
+}
