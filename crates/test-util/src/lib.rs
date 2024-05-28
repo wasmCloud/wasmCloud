@@ -35,7 +35,7 @@
 //! assert_scale_component(
 //!     &ctl_client,
 //!     &host.host_key(),
-//!     "ghcr.io/wasmcloud/component-http-jsonify:0.1.1",
+//!     "ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1",
 //!     "example-component",
 //!     None,
 //!     1,
