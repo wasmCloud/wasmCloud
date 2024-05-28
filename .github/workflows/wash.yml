@@ -20,8 +20,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  unit_tests:
+  build-wash:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-latest-8-cores, macos-11]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build wash
+        run: make build
+        working-directory: ./crates/wash-cli
+
+  unit-tests:
     name: Unit Tests
+    needs:
+      - build-wash
     strategy:
       fail-fast: false # Ensure we can run the full suite even if one OS fails
       matrix:
@@ -33,14 +48,8 @@ jobs:
           node-version: "18.x"
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "${{ matrix.os }}-shared-cache"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
-
-      - name: Build wash
-        run: make build
-        working-directory: ./crates/wash-cli
 
       - name: Run all wash & wash-lib unit tests
         run: make test-wash-ci
@@ -49,11 +58,11 @@ jobs:
   integration_tests:
     name: Integration Tests
     runs-on: ubuntu-22.04
+    needs:
+      - build-wash
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "ubuntu-22.04-shared-cache"
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
@@ -61,8 +70,6 @@ jobs:
         with:
           tinygo-version: "0.31.0"
           install-binaryen: "false"
-      - name: Add wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@latest
         with:
@@ -78,11 +85,11 @@ jobs:
   e2e_tests_wash_new_actor:
     name: E2E Tests (`wash new`)
     runs-on: ubuntu-22.04
+    needs:
+      - build-wash
     strategy:
       matrix:
         wash-version:
-          # TODO: Use this once 0.27.0 is released
-          # - 0.26.0
           - current
         template:
           - hello-world-rust
@@ -90,8 +97,6 @@ jobs:
       - uses: actions/checkout@v4
         if: ${{ matrix.wash-version == 'current' }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
         uses: taiki-e/install-action@v2
