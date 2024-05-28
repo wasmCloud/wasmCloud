@@ -73,6 +73,10 @@ pub struct DeployCommand {
     #[clap(name = "version")]
     version: Option<String>,
 
+    /// Whether or not wash should attempt to replace the resources by performing an optimistic delete shortly before applying resources.
+    #[clap(long = "replace")]
+    replace: bool,
+
     #[clap(flatten)]
     opts: CliConnectionOpts,
 }
@@ -213,6 +217,21 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         Some(source) => load_app_manifest(source.parse()?).await?,
         None => load_app_manifest("-".parse()?).await?,
     };
+
+    // If --replace was specified, we should attempt to replace the resources by deleting them beforehand
+    if cmd.replace {
+        if let (Ok(name), version) = (
+            get_model_name(&app_manifest),
+            get_model_version(&app_manifest).map(Into::into),
+        ) {
+            if let Err(e) =
+                wash_lib::app::delete_model_version(&client, lattice.clone(), name, version, false)
+                    .await
+            {
+                eprintln!("🟨 Failed to delete model during replace operation: {e}");
+            }
+        }
+    }
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
