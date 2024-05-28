@@ -7,11 +7,9 @@ use wadm::server::{
     DeleteModelResponse, DeployModelResponse, GetModelResponse, GetResult, ModelSummary,
     PutModelResponse, PutResult, StatusResponse, VersionResponse,
 };
-use wash_lib::{
-    app::{load_app_manifest, AppManifest},
-    cli::{CliConnectionOpts, CommandOutput, OutputKind},
-    config::WashConnectionOptions,
-};
+use wash_lib::app::{load_app_manifest, AppManifest};
+use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
+use wash_lib::config::WashConnectionOptions;
 
 use crate::appearance::spinner::Spinner;
 
@@ -81,7 +79,7 @@ pub struct DeployCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct DeleteCommand {
-    /// Name of the app specification to delete
+    /// Name of the app specification to delete, or a path to a WADM Application Manifest
     #[clap(name = "name")]
     model_name: String,
 
@@ -90,7 +88,7 @@ pub struct DeleteCommand {
     delete_all: bool,
 
     /// Version of the app specification to delete. Not required if --delete-all is supplied
-    #[clap(name = "version", required_unless_present("delete_all"))]
+    #[clap(name = "version")]
     version: Option<String>,
 
     #[clap(flatten)]
@@ -268,6 +266,36 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
     }
 }
 
+/// Retrieve the the model name (possibly missing) of a given [`AppManifest`]
+pub(crate) fn get_model_name(manifest: &AppManifest) -> Result<&str> {
+    match manifest {
+        AppManifest::ModelName(model_name) => Ok(model_name),
+        AppManifest::SerializedModel(manifest) => {
+            if let Some(metadata) = manifest.get("metadata") {
+                if let Some(name) = metadata.get("name") {
+                    return name
+                        .as_str()
+                        .context("metadata.name in provided manifest is not a string");
+                }
+            }
+            bail!("unexpected format for manifest, did not contain metadata.name");
+        }
+    }
+}
+
+/// Retrieve the version of a given [`AppManifest`], returning None if the manifest
+/// does not contain a version (or is not the type to contain a version)
+pub(crate) fn get_model_version(manifest: &AppManifest) -> Option<&str> {
+    match manifest {
+        AppManifest::ModelName(_) => None,
+        AppManifest::SerializedModel(manifest) => manifest
+            .get("metadata")?
+            .get("annotations")?
+            .get("version")
+            .and_then(|v| v.as_str()),
+    }
+}
+
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
@@ -305,14 +333,31 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::delete_model_version(
-        &client,
-        lattice,
-        &cmd.model_name,
-        cmd.version,
-        cmd.delete_all,
-    )
-    .await
+    // If we have received a valid path to a model file, then read and extract the model name,
+    // otherwise use the supplied name as a model name
+    let (model_name, version): (String, Option<String>) = if tokio::fs::try_exists(&cmd.model_name)
+        .await
+        .is_ok_and(|exists| exists)
+    {
+        let manifest = load_app_manifest(cmd.model_name.parse()?)
+            .await
+            .with_context(|| format!("failed to load app manifest at [{}]", cmd.model_name))?;
+        (
+            get_model_name(&manifest)?.into(),
+            get_model_version(&manifest).map(Into::into),
+        )
+    } else {
+        (cmd.model_name, cmd.version)
+    };
+
+    // If we're deleting a model from either file or by name, and we don't know it's version
+    // --delete-all must be set
+    if version.is_none() && !cmd.delete_all {
+        bail!("--delete-all must be specified when deleting models by name, without a version")
+    }
+
+    wash_lib::app::delete_model_version(&client, lattice, &model_name, version, cmd.delete_all)
+        .await
 }
 
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
