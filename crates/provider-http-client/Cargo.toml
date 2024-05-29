@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-http-client"
-version = "0.9.0"
+version = "0.10.0"
 description = """
 HTTP client for wasmCloud, using hyper. This package provides a capability provider that satisfies the 'wrpc:http/outgoing-handler' contract.
 """
@@ -18,7 +18,7 @@ status = "actively-developed"
 anyhow = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-hyper-rustls = { workspace = true }
+hyper-rustls = { workspace = true, features = ["native-tokio"] }
 hyper-util = { workspace = true, features = ["client-legacy"] }
 tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
