@@ -21,6 +21,8 @@ pub struct HttpClientProvider {
     >,
 }
 
+const DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
 impl Default for HttpClientProvider {
     fn default() -> Self {
         Self {
@@ -36,7 +38,7 @@ impl OutgoingHandler for HttpClientProvider {
         &self,
         AcceptedInvocation {
             context,
-            params: (wrpc_interface_http::IncomingRequestHttp(req), opts),
+            params: (wrpc_interface_http::IncomingRequestHttp(mut req), opts),
             result_subject,
             transmitter,
             ..
@@ -54,6 +56,10 @@ impl OutgoingHandler for HttpClientProvider {
         // TODO: Use opts
         let _ = opts;
         debug!(uri = ?req.uri(), "send HTTP request");
+        // Ensure we have a User-Agent header set.
+        req.headers_mut()
+            .entry(http::header::USER_AGENT)
+            .or_insert(http::header::HeaderValue::from_static(DEFAULT_USER_AGENT));
         let res = match self
             .client
             .request(req)
