@@ -70,7 +70,8 @@ impl opentelemetry_sdk::metrics::reader::AggregationSelector
             | opentelemetry_sdk::metrics::InstrumentKind::ObservableUpDownCounter => {
                 opentelemetry_sdk::metrics::Aggregation::Sum
             }
-            opentelemetry_sdk::metrics::InstrumentKind::ObservableGauge => {
+            opentelemetry_sdk::metrics::InstrumentKind::Gauge
+            | opentelemetry_sdk::metrics::InstrumentKind::ObservableGauge => {
                 opentelemetry_sdk::metrics::Aggregation::LastValue
             }
             opentelemetry_sdk::metrics::InstrumentKind::Histogram => {
