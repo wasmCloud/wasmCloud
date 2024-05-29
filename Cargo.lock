@@ -6675,6 +6675,7 @@ version = "0.9.0"
 dependencies = [
  "anyhow",
  "futures",
+ "http 1.1.0",
  "hyper-rustls 0.27.0",
  "hyper-util",
  "tokio",

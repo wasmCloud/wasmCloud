@@ -17,6 +17,7 @@ status = "actively-developed"
 [dependencies]
 anyhow = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 hyper-rustls = { workspace = true }
 hyper-util = { workspace = true, features = ["client-legacy"] }
 tokio = { workspace = true, features = ["macros"] }
