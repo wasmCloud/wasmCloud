@@ -6952,9 +6952,13 @@ dependencies = [
  "http 1.1.0",
  "hyper-rustls 0.27.0",
  "hyper-util",
+ "rustls 0.23.5",
+ "rustls-native-certs 0.7.0",
+ "rustls-pemfile 2.1.2",
  "tokio",
  "tracing",
  "wasmcloud-provider-sdk",
+ "webpki-roots 0.26.1",
  "wrpc-interface-http",
  "wrpc-transport",
 ]

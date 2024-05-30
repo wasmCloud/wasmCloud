@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
 use tokio::spawn;
@@ -22,13 +24,68 @@ pub struct HttpClientProvider {
 }
 
 const DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+// Configuration
+const LOAD_NATIVE_CERTS: &str = "load_native_certs";
+const LOAD_WEBPKI_CERTS: &str = "load_webpki_certs";
+const SSL_CERTS_FILE: &str = "ssl_certs_file";
 
-impl Default for HttpClientProvider {
-    fn default() -> Self {
-        Self {
-            client: hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-                .build(tls::DEFAULT_HYPER_CONNECTOR.clone()),
+impl HttpClientProvider {
+    pub async fn new(config: &HashMap<String, String>) -> anyhow::Result<Self> {
+        // Short circuit to the default connector if no configuration is provided
+        if config.is_empty() {
+            return Ok(Self {
+                client: hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+                    .build(tls::DEFAULT_HYPER_CONNECTOR.clone()),
+            });
         }
+
+        let mut ca = rustls::RootCertStore::empty();
+
+        // Load native certificates
+        if config
+            .get(LOAD_NATIVE_CERTS)
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(true)
+        {
+            let (added, ignored) = ca.add_parsable_certificates(tls::NATIVE_ROOTS.iter().cloned());
+            tracing::debug!(added, ignored, "loaded native root certificate store");
+        }
+
+        // Load Mozilla trusted root certificates
+        if config
+            .get(LOAD_WEBPKI_CERTS)
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(true)
+        {
+            ca.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            tracing::debug!("loaded webpki root certificate store");
+        }
+
+        // Load root certificates from a file
+        if let Some(file_path) = config.get(SSL_CERTS_FILE) {
+            let f = std::fs::File::open(file_path)?;
+            let mut reader = std::io::BufReader::new(f);
+            let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+            let (added, ignored) = ca.add_parsable_certificates(certs);
+            tracing::debug!(
+                added,
+                ignored,
+                "added additional root certificates from file"
+            );
+        }
+
+        let tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(ca)
+            .with_no_client_auth();
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_all_versions()
+            .build();
+
+        Ok(Self {
+            client: hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(https),
+        })
     }
 }
 

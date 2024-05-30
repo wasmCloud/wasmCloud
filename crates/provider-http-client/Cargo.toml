@@ -20,8 +20,12 @@ futures = { workspace = true }
 http = { workspace = true }
 hyper-rustls = { workspace = true, features = ["native-tokio", "tls12"] }
 hyper-util = { workspace = true, features = ["client-legacy"] }
-tokio = { workspace = true, features = ["macros"] }
+rustls = { workspace = true, features = ["std"] }
+rustls-pemfile = { workspace = true }
+rustls-native-certs = { workspace = true }
+tokio = { workspace = true, features = ["macros", "io-util"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+webpki-roots = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
