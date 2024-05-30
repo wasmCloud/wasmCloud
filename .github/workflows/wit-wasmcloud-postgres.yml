@@ -1,0 +1,28 @@
+name: wit-wasmcloud-postgres-publish
+
+on:
+  push:
+    tags:
+      - 'wit-wasmcloud-postgres-v*'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Extract tag context
+      id: ctx
+      run: |
+          version=${GITHUB_REF_NAME#wit-wasmcloud-postgres-v}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tarball=wit-wasmcloud-postgres-${version}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "version is ${version}"
+    - name: Build
+      run: |
+        tar czf ${{ steps.ctx.outputs.tarball }} wit/postgres
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ steps.ctx.outputs.tarball }}
+        make_latest: "false"
