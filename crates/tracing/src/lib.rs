@@ -36,13 +36,9 @@ pub fn configure_observability(
     use_structured_logging: bool,
     log_level_override: Option<&Level>,
 ) -> anyhow::Result<()> {
-    let enable_metrics = otel_config
-        .enable_metrics
-        .unwrap_or(otel_config.enable_observability);
-
     let normalized_service_name = service_name.to_kebab_case();
 
-    if enable_metrics {
+    if otel_config.metrics_enabled() {
         metrics::configure_metrics(&normalized_service_name, otel_config)?;
     }
 

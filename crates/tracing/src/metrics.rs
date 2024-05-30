@@ -8,24 +8,24 @@ pub fn configure_metrics(
     service_name: &str,
     otel_config: &wasmcloud_core::OtelConfig,
 ) -> anyhow::Result<()> {
-    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_otlp::{MetricsExporterBuilder, WithExportConfig};
+    use wasmcloud_core::OtelProtocol;
 
-    let mut exporter = opentelemetry_otlp::new_exporter()
-        .http()
-        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary);
-
-    let metrics_endpoint = otel_config
-        .metrics_endpoint
-        .clone()
-        .or_else(|| otel_config.observability_endpoint.clone());
-
-    if let Some(ref endpoint) = metrics_endpoint {
-        exporter = exporter.with_endpoint(endpoint);
-    }
+    let builder: MetricsExporterBuilder = match otel_config.protocol {
+        OtelProtocol::Http => opentelemetry_otlp::new_exporter()
+            .http()
+            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+            .with_endpoint(otel_config.metrics_endpoint())
+            .into(),
+        OtelProtocol::Grpc => opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_endpoint(otel_config.metrics_endpoint())
+            .into(),
+    };
 
     opentelemetry_otlp::new_pipeline()
         .metrics(opentelemetry_sdk::runtime::Tokio)
-        .with_exporter(exporter)
+        .with_exporter(builder)
         .with_resource(opentelemetry_sdk::Resource::new(vec![
             opentelemetry::KeyValue::new("service.name", service_name.to_string()),
         ]))
