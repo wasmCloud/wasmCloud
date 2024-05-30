@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          wit
     - name: Extract tag context
       id: ctx
       run: |
@@ -20,7 +23,7 @@ jobs:
           echo "version is ${version}"
     - name: Build
       run: |
-        tar czf ${{ steps.ctx.outputs.tarball }} wit/postgres
+        tar cvzf ${{ steps.ctx.outputs.tarball }} -C wit postgres/wit
     - name: Release
       uses: softprops/action-gh-release@v2
       with:
