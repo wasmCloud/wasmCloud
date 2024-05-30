@@ -18,7 +18,7 @@ status = "actively-developed"
 anyhow = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-hyper-rustls = { workspace = true, features = ["native-tokio"] }
+hyper-rustls = { workspace = true, features = ["native-tokio", "tls12"] }
 hyper-util = { workspace = true, features = ["client-legacy"] }
 tokio = { workspace = true, features = ["macros"] }
 tracing = { workspace = true }
