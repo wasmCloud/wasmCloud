@@ -10,7 +10,7 @@ use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
 use tracing::{warn, Level as TracingLogLevel};
 use wasmcloud_core::logging::Level as WasmcloudLogLevel;
-use wasmcloud_core::OtelConfig;
+use wasmcloud_core::{OtelConfig, OtelProtocol};
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::wasmbus::host_config::PolicyService as PolicyServiceConfig;
@@ -241,6 +241,14 @@ struct Args {
     /// Overrides the OpenTelemetry endpoint used for emitting logs. This can also be set with `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
     #[clap(long = "override-logs-endpoint", hide = true)]
     logs_endpoint: Option<String>,
+
+    /// Configures whether grpc or http will be used for exporting the enabled telemetry. This defaults to 'http'.
+    #[clap(
+        long = "observability-protocol",
+        env = "WASMCLOUD_OBSERVABILITY_PROTOCOL",
+        hide = true
+    )]
+    observability_protocol: Option<OtelProtocol>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -259,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
         traces_endpoint: args.traces_endpoint,
         metrics_endpoint: args.metrics_endpoint,
         logs_endpoint: args.logs_endpoint,
+        protocol: args.observability_protocol.unwrap_or_default(),
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 

@@ -2159,6 +2159,7 @@ impl Host {
                 traces_endpoint: self.host_config.otel_config.traces_endpoint.clone(),
                 metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
+                protocol: self.host_config.otel_config.protocol,
             };
             let config_generator = self.config_generator.clone();
 
