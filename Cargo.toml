@@ -263,7 +263,6 @@ serde_with = { version = "2", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "0.9", default-features = false }
 sha2 = { version = "0.10", default-features = false }
-simple_env_load = { version = "0.2", default-features = false }
 sysinfo = { version = "0.27", default-features = false }
 tempfile = { version = "3", default-features = false }
 term-table = { version = "1", default-features = false }

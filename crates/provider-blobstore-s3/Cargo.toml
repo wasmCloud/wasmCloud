@@ -30,7 +30,6 @@ hyper-rustls = { version = "0.25", features = [
 rustls = { version = "0.22", default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
 serde = { workspace = true }
 serde_json = { workspace = true }
-simple_env_load = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }

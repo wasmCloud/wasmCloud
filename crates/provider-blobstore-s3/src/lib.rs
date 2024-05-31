@@ -27,7 +27,6 @@ use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use serde::Deserialize;
-use tokio::fs;
 use tokio::io::AsyncReadExt as _;
 use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
@@ -89,13 +88,6 @@ impl StorageConfig {
         } else {
             StorageConfig::default()
         };
-        // load environment variables from file
-        if let Some(env_file) = values.get("env") {
-            let data = fs::read_to_string(env_file)
-                .await
-                .with_context(|| format!("reading env file '{env_file}'"))?;
-            simple_env_load::parse_and_set(&data, |k, v| env::set_var(k, v));
-        }
 
         if let Ok(arn) = env::var("AWS_ROLE_ARN") {
             let mut sts_config = config.sts_config.unwrap_or_default();

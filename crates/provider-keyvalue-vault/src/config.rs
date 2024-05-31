@@ -49,13 +49,6 @@ impl Default for Config {
 impl Config {
     /// initialize from linkdef values, environment, and defaults
     pub fn from_values(values: &HashMap<String, String>) -> Result<Config> {
-        // load environment variables from file
-        if let Some(env_file) = values.get("env").or_else(|| values.get("ENV")) {
-            eprintln!("file try read env from file: {env_file}");
-            let data = std::fs::read_to_string(env_file)
-                .with_context(|| format!("reading env file '{env_file}'"))?;
-            simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
-        }
         let addr = env::var("VAULT_ADDR")
             .ok()
             .or_else(|| values.get("addr").cloned())
