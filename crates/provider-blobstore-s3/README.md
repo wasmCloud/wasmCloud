@@ -25,23 +25,6 @@ from different components configured with different access roles and policies.
   - `AWS_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
 
 
-### with 'env' file (link definition)
-
-When linking the Blobstore-s3 capability provider to a component, you can use the link parameter `env`
-to specify the name of the file containing configuration settings.
-The value of the `env` parameter should be an absolute path to a text file on disk.
-
-The file should be ascii or UTF-8, and contain one line per variable, with optional comments. The syntax is defined as follows:
-```
-# Comments are ignored
-VAR_NAME = "value"  # sets a string value. spaces around the equals ('=') are optional.
-VAR_NAME = value    # quotes around values are optional. This line has the same effect as the previous line.
-VAR_NAME="value"    # so does this
-```
-
-If a file is used to define settings, and any environment variables are defined for the provider process 
-_and_ defined in the 'env' file, values from the file take precedence.
-
 ### with environment variables
 
 Blobstore-s3 capability provider settings can be passed to the provider through an env file, as

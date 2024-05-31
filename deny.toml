@@ -12,8 +12,6 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "MIT",
-    "MPL-2.0",
-    "OpenSSL",
     "Unicode-DFS-2016",
 ]
 # The confidence threshold for detecting a license from license text.
@@ -23,7 +21,17 @@ allow = [
 confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
-exceptions = [{ name = "simple_env_load", allow = ["0BSD"] }]
+exceptions = [
+    # This license is allowed via exception in the CNCF: https://github.com/cncf/foundation/blob/509ed956a2fb549458f324c7a2962d98b0800fb5/license-exceptions/cncf-exceptions-2022-04-12.spdx#L12
+    { name = "webpki-roots", allow = [
+        "MPL-2.0",
+    ] },
+    # Ring has a...complicated license. However, since it is at the core of a large number of rust
+    # projects, we are manually allowing the OpenSSL part of the license
+    { name = "ring", allow = [
+        "OpenSSL",
+    ] },
+]
 
 [[licenses.clarify]]
 name = "ring"

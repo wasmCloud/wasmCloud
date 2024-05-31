@@ -5220,12 +5220,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "simple_env_load"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "062f063a8bb8336fa98ee0eae53115bf6753ca9c83437808bf000c65621ca5e3"
-
-[[package]]
 name = "siphasher"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6931,7 +6925,6 @@ dependencies = [
  "path-clean",
  "serde",
  "serde_json",
- "simple_env_load",
  "time",
  "tokio",
  "tokio-stream",
@@ -6976,7 +6969,6 @@ dependencies = [
  "rustls 0.22.4",
  "serde",
  "serde_json",
- "simple_env_load",
  "tokio",
  "tokio-util",
  "tracing",
@@ -7050,7 +7042,6 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "simple_env_load",
  "tokio",
  "tracing",
  "url",

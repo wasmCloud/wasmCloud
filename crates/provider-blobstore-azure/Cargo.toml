@@ -11,16 +11,21 @@ repository.workspace = true
 anyhow = { workspace = true }
 async-nats = { workspace = true }
 async-trait = { workspace = true }
-azure_core = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
-azure_storage = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
-azure_storage_blobs = { workspace = true, features = ["enable_reqwest_rustls"], default-features = false }
+azure_core = { workspace = true, features = [
+    "enable_reqwest_rustls",
+], default-features = false }
+azure_storage = { workspace = true, features = [
+    "enable_reqwest_rustls",
+], default-features = false }
+azure_storage_blobs = { workspace = true, features = [
+    "enable_reqwest_rustls",
+], default-features = false }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 path-clean = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-simple_env_load = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["fs"] }
