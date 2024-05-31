@@ -13,9 +13,11 @@ use serde_json::json;
 #[test]
 fn integration_inspect_component() {
     const SUBFOLDER: &str = "inspect";
-    const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
-    const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
+    const ECHO_OCI: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
+    const ECHO_ACC: &str = "ADVIWF6Z3BFZNWUXJYT5NEAZZ2YX4T6NRKI3YOR3HKOSQQN7IVDGWSNO";
+    const ECHO_MOD: &str = "MBFFVNGFK3IA2ZXXG5DQXQNYM6TNG45PHJMJIJFVFI6YKS3XTXL3DRRK";
+    const ECHO_SHA: &str =
+        "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
     let echo_inspect = &format!("{LOCAL_REGISTRY}/echo:inspect");
 
@@ -46,8 +48,7 @@ fn integration_inspect_component() {
         "component": ECHO_MOD,
         "can_be_used": "immediately",
         "expires": "never",
-        "tags": "None",
-        "version": "0.2.1"
+        "version": "0.1.0"
     });
 
     assert_json_include!(
@@ -68,14 +69,7 @@ fn integration_inspect_component() {
     );
 
     let remote_inspect = wash()
-        .args([
-            "inspect",
-            ECHO_OCI,
-            "--digest",
-            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
-            "-o",
-            "json",
-        ])
+        .args(["inspect", ECHO_OCI, "--digest", ECHO_SHA, "-o", "json"])
         .output()
         .expect("failed to inspect local registry wasm");
     assert!(remote_inspect.status.success());

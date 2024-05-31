@@ -121,6 +121,10 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
+// NOTE: These are only run on linux for CI purposes, because they rely on the docker client being
+// available, and for various reasons this has proven to be problematic on both the Windows and
+// MacOS runners we use.
 mod test {
     use std::{collections::HashMap, env::temp_dir};
     use testcontainers::{
@@ -172,10 +176,6 @@ shutdown_lifetime 1 seconds
 "#;
 
     #[tokio::test]
-    #[cfg(target_os = "linux")]
-    // NOTE: These are only run on linux for CI purposes, because they rely on
-    // the docker client being available, and for various reasons this has proven
-    // to be problematic on both the Windows and MacOS runners we use.
     async fn test_download_client_with_proxy_settings() {
         // NOTE: This is intentional to avoid the two tests running in parallel
         // and contaminating each other's environment variables for configuring

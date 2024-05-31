@@ -59,6 +59,8 @@ pub struct OciPushOptions {
     pub insecure_skip_tls_verify: bool,
     /// Optional annotations you'd like to add to the pushed artifact
     pub annotations: Option<HashMap<String, String>>,
+    /// Optional world name to use when pushing a binary wit component
+    pub world_name: Option<String>,
 }
 
 /// The types of artifacts that wash supports
@@ -67,6 +69,12 @@ pub enum SupportedArtifacts {
     Par(Config, ImageLayer),
     /// WebAssembly components and its configuration
     Wasm(Config, ImageLayer),
+}
+
+/// An enum indicating the type of artifact that was pulled
+pub enum ArtifactType {
+    Par,
+    Wasm,
 }
 
 // Based on https://github.com/krustlet/oci-distribution/blob/v0.9.4/src/lib.rs#L25-L28
@@ -191,26 +199,27 @@ pub async fn push_oci_artifact(
         .with_context(|| format!("failed to open artifact [{}]", artifact.as_ref().display()))?;
     f.read_to_end(&mut artifact_buf).await?;
 
-    let (config, layer, is_wasm) = match parse_and_validate_artifact(artifact_buf).await? {
-        SupportedArtifacts::Wasm(conf, layer) => (conf, layer, true),
-        SupportedArtifacts::Par(mut conf, layer) => {
-            let mut config_buf = vec![];
-            match options.config {
-                Some(config_file) => {
-                    let mut f = File::open(&config_file).await.with_context(|| {
-                        format!("failed to open config file [{}]", config_file.display())
-                    })?;
-                    f.read_to_end(&mut config_buf).await?;
-                }
-                None => {
-                    // If no config provided, send blank config
-                    config_buf = b"{}".to_vec();
-                }
-            };
-            conf.data = config_buf;
-            (conf, layer, false)
-        }
-    };
+    let (config, layer, is_wasm) =
+        match parse_and_validate_artifact(&artifact_buf, options.world_name).await? {
+            SupportedArtifacts::Wasm(conf, layer) => (conf, layer, true),
+            SupportedArtifacts::Par(mut conf, layer) => {
+                let mut config_buf = vec![];
+                match options.config {
+                    Some(config_file) => {
+                        let mut f = File::open(&config_file).await.with_context(|| {
+                            format!("failed to open config file [{}]", config_file.display())
+                        })?;
+                        f.read_to_end(&mut config_buf).await?;
+                    }
+                    None => {
+                        // If no config provided, send blank config
+                        config_buf = b"{}".to_vec();
+                    }
+                };
+                conf.data = config_buf;
+                (conf, layer, false)
+            }
+        };
 
     let layers = vec![layer];
 
@@ -255,11 +264,14 @@ pub async fn push_oci_artifact(
 
 /// Helper function to determine artifact type and parse it into a config and layer ready for use in
 /// pushing to OCI
-pub async fn parse_and_validate_artifact(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
+pub async fn parse_and_validate_artifact(
+    artifact: &[u8],
+    world_name: Option<String>,
+) -> Result<SupportedArtifacts> {
     // NOTE(thomastaylor312): I don't like having to clone here, but we need to either clone here or
     // later when calling parse_component/parse_provider_archive. If this gets to be a
     // problem, we can always change this, but it is a CLI, so _shrug_
-    match parse_component(artifact.clone()) {
+    match parse_component(artifact.to_owned(), world_name) {
         Ok(art) => Ok(art),
         Err(_) => match parse_provider_archive(artifact).await {
             Ok(art) => Ok(art),
@@ -268,17 +280,27 @@ pub async fn parse_and_validate_artifact(artifact: Vec<u8>) -> Result<SupportedA
     }
 }
 
+/// Function that identifies whether the artifact is a component or a provider archive. Returns an
+/// error if it isn't a known type
+// NOTE: This exists because we don't care about parsing the proper world when pulling
+pub async fn identify_artifact(artifact: &[u8]) -> Result<ArtifactType> {
+    if wasmparser::Parser::is_component(artifact) {
+        return Ok(ArtifactType::Wasm);
+    }
+    parse_provider_archive(artifact)
+        .await
+        .map(|_| ArtifactType::Par)
+}
+
 /// Attempts to parse the wit from a component. Fails if it isn't a component
-fn parse_component(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
-    // TODO(thomastaylor312): We should probably also support binary wit packages, but we don't
-    // really build or consume those for now, so this should be fine
-    let (conf, layer) = WasmConfig::from_raw_component(artifact, None, None)?;
+fn parse_component(artifact: Vec<u8>, world_name: Option<String>) -> Result<SupportedArtifacts> {
+    let (conf, layer) = WasmConfig::from_raw_component(artifact, world_name.as_deref(), None)?;
     Ok(SupportedArtifacts::Wasm(conf.to_config()?, layer))
 }
 
 /// Attempts to unpack a provider archive. Will fail without claims or if the archive is invalid
-async fn parse_provider_archive(artifact: Vec<u8>) -> Result<SupportedArtifacts> {
-    match ProviderArchive::try_load(&artifact).await {
+async fn parse_provider_archive(artifact: &[u8]) -> Result<SupportedArtifacts> {
+    match ProviderArchive::try_load(artifact).await {
         Ok(_par) => Ok(SupportedArtifacts::Par(
             Config {
                 data: Vec::default(),
@@ -286,7 +308,7 @@ async fn parse_provider_archive(artifact: Vec<u8>) -> Result<SupportedArtifacts>
                 annotations: None,
             },
             ImageLayer {
-                data: artifact,
+                data: artifact.to_owned(),
                 media_type: PROVIDER_ARCHIVE_MEDIA_TYPE.to_string(),
                 annotations: None,
             },

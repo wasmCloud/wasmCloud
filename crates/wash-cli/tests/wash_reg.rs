@@ -18,15 +18,12 @@ use serde_json::json;
 
 use crate::common::{init, set_test_file_content};
 
-const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
+const ECHO_WASM: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
 const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
 const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_reg_pull_basic() {
     const SUBFOLDER: &str = "pull_basic";
     let pull_dir = test_dir_with_subfolder(SUBFOLDER);
@@ -51,10 +48,7 @@ fn integration_reg_pull_basic() {
 }
 
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_reg_pull_comprehensive() {
     const SUBFOLDER: &str = "pull_comprehensive";
     let pull_dir = test_dir_with_subfolder(SUBFOLDER);
@@ -69,7 +63,7 @@ fn integration_reg_pull_comprehensive() {
             "--destination",
             comprehensive_echo.to_str().unwrap(),
             "--digest",
-            "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3",
+            "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72",
             "--output",
             "json",
         ])
@@ -109,10 +103,7 @@ fn integration_reg_pull_comprehensive() {
 
 // NOTE: This test will fail without a local docker registry running
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_reg_push_basic() {
     const SUBFOLDER: &str = "push_basic";
     let push_dir = test_dir_with_subfolder(SUBFOLDER);

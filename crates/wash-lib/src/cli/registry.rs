@@ -93,6 +93,11 @@ pub struct RegistryPushCommand {
     #[clap(short = 'a', long = "annotation", name = "annotations")]
     pub annotations: Option<Vec<String>>,
 
+    /// World name of the component you are pushing. This is only used if you are pushing a binary
+    /// wit component that may contain multiple worlds.
+    #[clap(long = "world", env = "WASH_REG_WORLD")]
+    pub world: Option<String>,
+
     #[clap(flatten)]
     pub opts: AuthOpts,
 }

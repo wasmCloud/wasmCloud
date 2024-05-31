@@ -12,11 +12,13 @@ use std::{
 use assert_json_diff::assert_json_include;
 use serde_json::json;
 
+const ECHO_OCI: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
+const ECHO_ACC: &str = "ADVIWF6Z3BFZNWUXJYT5NEAZZ2YX4T6NRKI3YOR3HKOSQQN7IVDGWSNO";
+const ECHO_MOD: &str = "MBFFVNGFK3IA2ZXXG5DQXQNYM6TNG45PHJMJIJFVFI6YKS3XTXL3DRRK";
+const ECHO_SHA: &str = "sha256:079275a324c0fcd0c201878f0c158120c4984472215ec3f64eb91ba9ee139f72";
+
 #[test]
-#[cfg_attr(
-    not(can_reach_wasmcloud_azurecr_io),
-    ignore = "wasmcloud.azurecr.io is not reachable"
-)]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
 fn integration_claims_sign() {
     const SUBFOLDER: &str = "claims_sign";
     let sign_dir = test_dir_with_subfolder(SUBFOLDER);
@@ -29,12 +31,7 @@ fn integration_claims_sign() {
     // as signing an unsigned wasm
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");
     let get_hello_wasm = wash()
-        .args([
-            "pull",
-            "wasmcloud.azurecr.io/echo:0.2.1",
-            "--destination",
-            echo.to_str().unwrap(),
-        ])
+        .args(["pull", ECHO_OCI, "--destination", echo.to_str().unwrap()])
         .output()
         .expect("failed to pull echo for claims sign test");
     assert!(get_hello_wasm.status.success());
@@ -150,9 +147,6 @@ fn integration_claims_sign() {
 )]
 fn integration_claims_inspect() {
     const SUBFOLDER: &str = "claims_inspect";
-    const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
-    const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
     let echo_claims = &format!("{LOCAL_REGISTRY}/echo:claimsinspect");
 
@@ -189,8 +183,7 @@ fn integration_claims_inspect() {
         "component": ECHO_MOD,
         "can_be_used": "immediately",
         "expires": "never",
-        "tags": "None",
-        "version": "0.2.1"
+        "version": "0.1.0"
     });
 
     assert_json_include!(
@@ -212,13 +205,7 @@ fn integration_claims_inspect() {
 
     let remote_inspect = wash()
         .args([
-            "claims",
-            "inspect",
-            ECHO_OCI,
-            "--digest",
-            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
-            "-o",
-            "json",
+            "claims", "inspect", ECHO_OCI, "--digest", ECHO_SHA, "-o", "json",
         ])
         .output()
         .expect("failed to inspect local registry wasm");
@@ -239,11 +226,8 @@ fn integration_claims_inspect() {
     ignore = "wasmcloud.azurecr.io is not reachable"
 )]
 fn integration_claims_inspect_cached() {
-    const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
     const ECHO_FAKE_OCI: &str = "foo.bar.io/echo:0.2.1";
     const ECHO_FAKE_CACHED: &str = "foo_bar_io_echo_0_2_1";
-    const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
 
     let mut echo_cache_path = temp_dir().join("wasmcloud_ocicache").join(ECHO_FAKE_CACHED);
     let _ = ::std::fs::create_dir_all(&echo_cache_path);
@@ -266,7 +250,7 @@ fn integration_claims_inspect_cached() {
             "inspect",
             ECHO_FAKE_OCI,
             "--digest",
-            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
+            ECHO_SHA,
             "-o",
             "json",
         ])
@@ -279,8 +263,7 @@ fn integration_claims_inspect_cached() {
         "component": ECHO_MOD,
         "can_be_used": "immediately",
         "expires": "never",
-        "tags": "None",
-        "version": "0.2.1"
+        "version": "0.1.0"
     });
 
     assert_json_include!(
@@ -294,7 +277,7 @@ fn integration_claims_inspect_cached() {
             "inspect",
             ECHO_FAKE_OCI,
             "--digest",
-            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
+            ECHO_SHA,
             "-o",
             "json",
             "--no-cache",
