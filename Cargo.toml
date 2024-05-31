@@ -332,7 +332,7 @@ wit-bindgen = { version = "0.24", default-features = false }
 wit-bindgen-core = { version = "0.24", default-features = false }
 wit-bindgen-go = { version = "0.24", default-features = false }
 wit-bindgen-wrpc = { version = "0.3.7", default-features = false }
-wit-component = { version = "0.202", default-features = false }
+wit-component = { version = "0.207", default-features = false }
 wit-parser = { version = "0.202", default-features = false }
 wrpc-interface-blobstore = { version = "0.16", default-features = false }
 wrpc-interface-http = { version = "0.22", default-features = false }
