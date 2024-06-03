@@ -17,7 +17,7 @@ runs:
         accept-flake-config = true
 
   # Setup magic Nix cache
-  - uses: DeterminateSystems/magic-nix-cache-action@v6
+  - uses: DeterminateSystems/magic-nix-cache-action@v7
 
   # Setup Cachix cache
   - uses: cachix/cachix-action@v15
