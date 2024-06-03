@@ -1,0 +1,42 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: custom-template-provider-golang
+  annotations:
+    version: v0.0.1
+    description: 'An application with a provider and component built for extending wasmCloud with custom capabilities'
+spec:
+  components:
+    - name: test-component
+      type: component
+      properties:
+        image: file://./component/build/custom_template_test_component.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        # Link the component to the provider on wasmcloud:example/system-info
+        - type: link
+          properties:
+            target: custom-template
+            namespace: wasmcloud
+            package: example
+            interfaces: [system-info]
+
+    - name: custom-template
+      type: capability
+      properties:
+        image: file://./build/wasmcloud-example-custom-template.par.gz
+        id: custom-template
+        config:
+          - name: provider-config
+            properties:
+              foo: bar
+      traits:
+        # Link the provider to the component on wasmcloud:example/process-data
+        - type: link
+          properties:
+            target: test-component
+            namespace: wasmcloud
+            package: example
+            interfaces: [process-data]
