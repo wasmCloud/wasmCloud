@@ -202,6 +202,8 @@ cloudevents-sdk = { version = "0.7", default-features = false }
 command-group = { version = "5", default-features = false }
 config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
+# TODO: remove after release of 1.0.0-alpha.5 
+couchbase = { git = "https://github.com/couchbaselabs/couchbase-rs", rev = "14be8d4217d9d3ab1984f78dec4035e09f07a41d", default-features = false }
 dashmap = { version = "5", default-features = false }
 data-encoding = { version = "2", default-features = false }
 deadpool-postgres = { version = "0.13", default-features = false }

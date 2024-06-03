@@ -1,0 +1,27 @@
+[package]
+name = "wasmcloud-provider-keyvalue-couchbase"
+version = "0.1.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+futures = { workspace = true }
+couchbase = { workspace = true, features = [ "libcouchbase", "libcouchbase-static" ]  }
+tokio = { workspace = true }
+tracing = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
+
+[dev-dependencies]
+
+async-nats = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["v4", "fast-rng"] }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-test-util = { workspace = true }
