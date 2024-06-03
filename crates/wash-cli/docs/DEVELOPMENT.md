@@ -56,6 +56,15 @@ To build continuously (thanks to [`cargo-watch`](https://crates.io/crates/cargo-
 ```console
 make build-watch
 ```
+## Testing Local Changes
+
+After making changes to code in `crates/wash-cli`, you can build and run a new version of `wash` similarly to any other Rust binary project with `cargo run`:
+
+```console
+cd crates/wash-cli
+cargo run -- <args>
+```
+For example : `cargo run -- up` is equivalent to `wash up`, with the latest code.
 
 ## Testing the project
 
