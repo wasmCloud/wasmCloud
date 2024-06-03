@@ -6946,6 +6946,7 @@ dependencies = [
  "wasmcloud-provider-blobstore-s3",
  "wasmcloud-provider-http-client",
  "wasmcloud-provider-http-server",
+ "wasmcloud-provider-keyvalue-nats",
  "wasmcloud-provider-keyvalue-redis",
  "wasmcloud-provider-keyvalue-vault",
  "wasmcloud-provider-lattice-controller",
@@ -7266,6 +7267,29 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-http",
+]
+
+[[package]]
+name = "wasmcloud-provider-keyvalue-nats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures",
+ "opentelemetry 0.23.0",
+ "opentelemetry-nats",
+ "rustls 0.23.5",
+ "rustls-pemfile 2.1.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry 0.24.0",
+ "wascap 0.14.0",
+ "wasmcloud-provider-sdk",
+ "wit-bindgen-wrpc",
 ]
 
 [[package]]
