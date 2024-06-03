@@ -4241,7 +4241,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap 0.14.0",
+ "wascap 0.15.0",
 ]
 
 [[package]]
@@ -5504,7 +5504,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-component-adapters",
  "wit-component 0.202.0",
 ]
@@ -6302,7 +6302,7 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "data-encoding",
  "humantime",
@@ -6368,7 +6368,7 @@ dependencies = [
  "url",
  "wadm-types",
  "warp",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wash-lib",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.6.0",
@@ -6435,7 +6435,7 @@ dependencies = [
  "url",
  "wadm-types",
  "walkdir",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasm-encoder 0.208.1",
  "wasmcloud-component-adapters",
  "wasmcloud-control-interface 1.0.0",
@@ -6659,7 +6659,7 @@ dependencies = [
  "url",
  "uuid 1.8.0",
  "vaultrs",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.6.0",
  "wasmcloud-host",
@@ -6814,7 +6814,7 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid 1.8.0",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "webpki-roots 0.26.1",
  "wrpc-transport",
  "wrpc-transport-nats",
@@ -6853,7 +6853,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid 1.8.0",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.6.0",
  "wasmcloud-runtime",
@@ -7030,7 +7030,7 @@ dependencies = [
  "async-nats",
  "tokio",
  "tracing",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
 ]
 
@@ -7066,7 +7066,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.24.0",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]
@@ -7153,7 +7153,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid 1.8.0",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-component",
  "wasmcloud-component-adapters",
  "wasmcloud-core 0.6.0",
@@ -7184,7 +7184,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.6.0",
  "wasmcloud-host",
