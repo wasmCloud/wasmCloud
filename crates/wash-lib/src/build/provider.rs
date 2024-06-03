@@ -9,7 +9,7 @@ use tracing::{trace, warn};
 use crate::build::SignConfig;
 use crate::cli::par::{create_provider_archive, detect_arch, ParCreateArgs};
 use crate::cli::{extract_keypair, OutputKind};
-use crate::parser::{CommonConfig, LanguageConfig, ProviderConfig};
+use crate::parser::{CommonConfig, GoConfig, LanguageConfig, ProviderConfig, RustConfig};
 
 /// Build a capability provider for the current machine's architecture
 /// and operating system using provided configuration.
@@ -19,64 +19,15 @@ pub(crate) async fn build_provider(
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
-    let LanguageConfig::Rust(rust_config) = language_config else {
-        bail!("Unsupported language for provider: {:?}", language_config)
-    };
-    let mut command = match rust_config.cargo_path.as_ref() {
-        Some(path) => process::Command::new(path),
-        None => process::Command::new("cargo"),
-    };
-
-    // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
-    trace!("Building provider in {:?}", common_config.path);
-
-    // Build for a specified target if provided, or the default rust target
-    let mut build_args = Vec::with_capacity(4);
-    build_args.extend_from_slice(&["build", "--release"]);
-    if let Some(override_target) = &provider_config.rust_target {
-        build_args.extend_from_slice(&["--target", override_target]);
-    };
-
-    let result = command.args(build_args).status().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.get_program())
-        } else {
-            anyhow!(e)
+    let (provider_path_buf, bin_name) = match language_config {
+        LanguageConfig::Rust(rust_config) => {
+            build_rust_provider(provider_config, rust_config, common_config)?
         }
-    })?;
-
-    if !result.success() {
-        bail!("Compiling provider failed: {result}")
-    }
-
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
-    let bin_name = if let Some(bin_name) = &provider_config.bin_name {
-        bin_name.to_string()
-    } else {
-        // Discover the binary name from the metadata
-        metadata
-            .packages
-            .iter()
-            .find_map(|p| {
-                p.targets.iter().find_map(|t| {
-                    if t.kind.iter().any(|k| k == "bin") {
-                        Some(t.name.clone())
-                    } else {
-                        None
-                    }
-                })
-            }).context("Could not infer provider binary name in metadata, please specify under provider.bin_name")?
+        LanguageConfig::Go(go_config) => {
+            build_go_provider(provider_config, go_config, common_config)?
+        }
+        _ => bail!("Unsupported language for provider: {:?}", language_config),
     };
-    let mut provider_path_buf = rust_config
-        .target_path
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
-    if let Some(override_target) = &provider_config.rust_target {
-        provider_path_buf.push(override_target);
-    }
-    provider_path_buf.push("release");
-    provider_path_buf.push(&bin_name);
 
     trace!("Retrieving provider binary from {:?}", provider_path_buf);
 
@@ -133,4 +84,136 @@ pub(crate) async fn build_provider(
     } else {
         common_config.path.join(destination)
     })
+}
+
+/// Build a Rust provider for the current machine's architecture
+///
+/// Returns a tuple of the path to the built provider binary and the binary name
+fn build_rust_provider(
+    provider_config: &ProviderConfig,
+    rust_config: &RustConfig,
+    common_config: &CommonConfig,
+) -> Result<(PathBuf, String)> {
+    let mut command = match rust_config.cargo_path.as_ref() {
+        Some(path) => process::Command::new(path),
+        None => process::Command::new("cargo"),
+    };
+
+    // Change directory into the project directory
+    std::env::set_current_dir(&common_config.path)?;
+    trace!("Building provider in {:?}", common_config.path);
+
+    // Build for a specified target if provided, or the default rust target
+    let mut build_args = Vec::with_capacity(4);
+    build_args.extend_from_slice(&["build", "--release"]);
+    if let Some(override_target) = &provider_config.rust_target {
+        build_args.extend_from_slice(&["--target", override_target]);
+    };
+
+    let result = command.args(build_args).status().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            anyhow!("{:?} command is not found", command.get_program())
+        } else {
+            anyhow!(e)
+        }
+    })?;
+
+    if !result.success() {
+        bail!("Compiling provider failed: {result}")
+    }
+
+    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+    let bin_name = if let Some(bin_name) = &provider_config.bin_name {
+        bin_name.to_string()
+    } else {
+        // Discover the binary name from the metadata
+        metadata
+            .packages
+            .iter()
+            .find_map(|p| {
+                p.targets.iter().find_map(|t| {
+                    if t.kind.iter().any(|k| k == "bin") {
+                        Some(t.name.clone())
+                    } else {
+                        None
+                    }
+                })
+            }).context("Could not infer provider binary name in metadata, please specify under provider.bin_name")?
+    };
+    let mut provider_path_buf = rust_config
+        .target_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
+    if let Some(override_target) = &provider_config.rust_target {
+        provider_path_buf.push(override_target);
+    }
+
+    provider_path_buf.push("release");
+    provider_path_buf.push(&bin_name);
+
+    Ok((provider_path_buf, bin_name))
+}
+
+/// Build a Go provider for the current machine's architecture
+///
+/// Returns a tuple of the path to the built provider binary and the binary name
+fn build_go_provider(
+    provider_config: &ProviderConfig,
+    go_config: &GoConfig,
+    common_config: &CommonConfig,
+) -> Result<(PathBuf, String)> {
+    let mut generate_command = match go_config.go_path.as_ref() {
+        Some(path) => process::Command::new(path),
+        None => process::Command::new("go"),
+    };
+
+    // Change directory into the project directory
+    std::env::set_current_dir(&common_config.path)?;
+    trace!("Building provider in {:?}", common_config.path);
+
+    // Generate interfaces, if not disabled
+    if !go_config.disable_go_generate {
+        let result = generate_command
+            .args(["generate", "./..."])
+            .status()
+            .map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    anyhow!("{:?} command is not found", generate_command.get_program())
+                } else {
+                    anyhow!(e)
+                }
+            })?;
+
+        if !result.success() {
+            bail!("Generating interfaces failed: {result}")
+        }
+    }
+
+    let bin_name = if let Some(bin_name) = &provider_config.bin_name {
+        bin_name.to_string()
+    } else {
+        bail!("Could not infer provider binary name, please specify in wasmcloud.toml under provider.bin_name")
+    };
+
+    let mut build_command = match go_config.go_path.as_ref() {
+        Some(path) => process::Command::new(path),
+        None => process::Command::new("go"),
+    };
+    // Build for a specified target
+    let result = build_command
+        .args(["build", "-o", &bin_name])
+        .status()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", build_command.get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
+
+    if !result.success() {
+        bail!("Compiling provider failed: {result}")
+    }
+
+    Ok((PathBuf::from(&bin_name), bin_name))
 }

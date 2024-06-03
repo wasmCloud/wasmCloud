@@ -20,6 +20,7 @@ use wasmcloud_control_interface::RegistryCredential;
 pub enum LanguageConfig {
     Rust(RustConfig),
     TinyGo(TinyGoConfig),
+    Go(GoConfig),
     Other(String),
 }
 
@@ -346,13 +347,44 @@ struct RawProjectConfig {
 
     pub rust: Option<RawRustConfig>,
     pub tinygo: Option<RawTinyGoConfig>,
+    pub go: Option<RawGoConfig>,
     pub registry: Option<RawRegistryConfig>,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+pub struct GoConfig {
+    /// The path to the go binary. Optional, will default to `go` if not specified.
+    pub go_path: Option<PathBuf>,
+    /// Whether to disable the `go generate` step in the build process. Defaults to false.
+    pub disable_go_generate: bool,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Default)]
+struct RawGoConfig {
+    /// The path to the go binary. Optional, will default to `go` if not specified.
+    pub go_path: Option<PathBuf>,
+    /// Whether to disable the `go generate` step in the build process. Defaults to false.
+    #[serde(default)]
+    pub disable_go_generate: bool,
+}
+
+impl TryFrom<RawGoConfig> for GoConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: RawGoConfig) -> Result<Self> {
+        Ok(Self {
+            go_path: raw.go_path,
+            disable_go_generate: raw.disable_go_generate,
+        })
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
+    /// Whether to disable the `go generate` step in the build process. Defaults to false.
+    pub disable_go_generate: bool,
 }
 
 impl TinyGoConfig {
@@ -369,6 +401,9 @@ impl TinyGoConfig {
 struct RawTinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
+    /// Whether to disable the `go generate` step in the build process. Defaults to false.
+    #[serde(default)]
+    pub disable_go_generate: bool,
 }
 
 impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
@@ -377,6 +412,7 @@ impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
     fn try_from(raw: RawTinyGoConfig) -> Result<Self> {
         Ok(Self {
             tinygo_path: raw.tinygo_path,
+            disable_go_generate: raw.disable_go_generate,
         })
     }
 }
@@ -519,6 +555,10 @@ impl RawProjectConfig {
                 Some(rust_config) => LanguageConfig::Rust(rust_config.try_into()?),
                 None => LanguageConfig::Rust(RustConfig::default()),
             },
+            "go" => match self.go {
+                Some(go_config) => LanguageConfig::Go(go_config.try_into()?),
+                None => LanguageConfig::Go(GoConfig::default()),
+            },
             "tinygo" => match self.tinygo {
                 Some(tinygo_config) => LanguageConfig::TinyGo(tinygo_config.try_into()?),
                 None => LanguageConfig::TinyGo(TinyGoConfig::default()),
@@ -560,18 +600,20 @@ impl RawProjectConfig {
                 }
             }
 
-            LanguageConfig::TinyGo(_) | LanguageConfig::Other(_) => Ok(CommonConfig {
-                name: self
-                    .name
-                    .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
-                version: self
-                    .version
-                    .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
-                revision: self.revision,
-                path: project_path,
-                wasm_bin_name: None,
-                registry: registry_config,
-            }),
+            LanguageConfig::Go(_) | LanguageConfig::TinyGo(_) | LanguageConfig::Other(_) => {
+                Ok(CommonConfig {
+                    name: self
+                        .name
+                        .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
+                    version: self
+                        .version
+                        .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                    revision: self.revision,
+                    path: project_path,
+                    wasm_bin_name: None,
+                    registry: registry_config,
+                })
+            }
         };
 
         Ok(ProjectConfig {

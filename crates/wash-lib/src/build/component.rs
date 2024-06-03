@@ -65,13 +65,18 @@ pub fn build_actor(
                 };
                 actor_wasm_path
             }
-            LanguageConfig::Other(_) if component_config.build_command.is_some() => {
+            LanguageConfig::Go(_) | LanguageConfig::Other(_)
+                if component_config.build_command.is_some() =>
+            {
                 // SAFETY: We checked that the build command is not None above
                 build_custom_actor(
                     common_config,
                     component_config,
                     component_config.build_command.as_ref().unwrap(),
                 )?
+            }
+            LanguageConfig::Go(_) => {
+                bail!("build command is required for unsupported language go");
             }
             LanguageConfig::Other(other) => {
                 bail!("build command is required for unsupported language {other}");
@@ -272,7 +277,7 @@ fn build_tinygo_actor(
     // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
     // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
     // we check for the `wit` directory which would be passed through to bindgen.
-    if component_config.wit_world.is_some() {
+    if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
         generate_tinygo_bindgen(
             &output_dir,
             common_config.path.join("wit"),
