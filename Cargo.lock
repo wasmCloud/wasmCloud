@@ -1071,7 +1071,7 @@ checksum = "709d9aa1c37abb89d40f19f5d0ad6f0d88cb1581264e571c9350fc5bb89cf1c5"
 dependencies = [
  "serde",
  "serde_repr",
- "serde_with 3.8.1",
+ "serde_with",
 ]
 
 [[package]]
@@ -5024,16 +5024,6 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "2.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07ff71d2c147a7b57362cead5e22f772cd52f6ab31cfcd9edcd7f6aeb2a0afbe"
-dependencies = [
- "serde",
- "serde_with_macros 2.3.3",
-]
-
-[[package]]
-name = "serde_with"
 version = "3.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ad483d2ab0149d5a5ebcd9972a3852711e0153d863bf5a5d0391d28883c4a20"
@@ -5046,20 +5036,8 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "serde_with_macros 3.8.1",
+ "serde_with_macros",
  "time",
-]
-
-[[package]]
-name = "serde_with_macros"
-version = "2.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "881b6f881b17d13214e5d494c939ebab463d01264ce1811e9d4ac3a882e7695f"
-dependencies = [
- "darling 0.20.8",
- "proc-macro2",
- "quote",
- "syn 2.0.58",
 ]
 
 [[package]]
@@ -5526,7 +5504,7 @@ dependencies = [
  "parse-display",
  "serde",
  "serde_json",
- "serde_with 3.8.1",
+ "serde_with",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -6350,7 +6328,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "serde_with 2.3.3",
+ "serde_with",
  "serde_yaml",
  "serial_test",
  "sha2",
@@ -6417,7 +6395,7 @@ dependencies = [
  "serde-transcode",
  "serde_cbor",
  "serde_json",
- "serde_with 2.3.3",
+ "serde_with",
  "serde_yaml",
  "sha2",
  "tempfile",

@@ -259,7 +259,7 @@ serde-transcode = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }
 serde_cbor = { version = "0.11", default-features = false }
 serde_json = { version = "1", default-features = false }
-serde_with = { version = "2", default-features = false }
+serde_with = { version = "3", default-features = false }
 serde_yaml = { version = "0.9", default-features = false }
 serial_test = { version = "0.9", default-features = false }
 sha2 = { version = "0.10", default-features = false }
