@@ -1,0 +1,34 @@
+[package]
+name = "wasmcloud-provider-keyvalue-nats"
+version = "0.1.0"
+description = """
+A capability provider that satisfies the 'wasi:keyvalue' contract using NATS as a backend.
+"""
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-nats = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wit-bindgen-wrpc = { workspace = true }
