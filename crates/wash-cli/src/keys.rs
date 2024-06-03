@@ -297,6 +297,7 @@ mod tests {
                             Server => assert!(cmd.eq("server") || cmd.eq("host")),
                             Operator => assert_eq!(&cmd, "operator"),
                             Cluster => assert_eq!(&cmd, "cluster"),
+                            Curve => assert_eq!(&cmd, "curve"),
                         }
                     }
                     _ => panic!("`keys gen` constructed incorrect command"),

@@ -244,7 +244,7 @@ dependencies = [
  "futures",
  "http 0.2.12",
  "memchr",
- "nkeys",
+ "nkeys 0.3.2",
  "nuid 0.5.0",
  "once_cell",
  "rand 0.8.5",
@@ -3365,6 +3365,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nkeys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc522a19199a0795776406619aa6aa78e1e55690fbeb3181b8db5265fd0e89ce"
+dependencies = [
+ "data-encoding",
+ "ed25519",
+ "ed25519-dalek",
+ "getrandom 0.2.14",
+ "log",
+ "rand 0.8.5",
+ "signatory",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5500,7 +5515,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
- "nkeys",
+ "nkeys 0.4.1",
  "serde",
  "serde_json",
  "tokio",
@@ -6212,7 +6227,7 @@ dependencies = [
  "indexmap 2.2.6",
  "jsonschema",
  "lazy_static",
- "nkeys",
+ "nkeys 0.3.2",
  "rand 0.8.5",
  "regex",
  "semver",
@@ -6290,7 +6305,7 @@ dependencies = [
  "data-encoding",
  "humantime",
  "log",
- "nkeys",
+ "nkeys 0.3.2",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -6306,7 +6321,7 @@ version = "0.14.0"
 dependencies = [
  "data-encoding",
  "humantime",
- "nkeys",
+ "nkeys 0.4.1",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -6334,7 +6349,7 @@ dependencies = [
  "http 1.1.0",
  "indicatif",
  "nix",
- "nkeys",
+ "nkeys 0.4.1",
  "notify",
  "oci-distribution 0.11.0",
  "oci-wasm",
@@ -6403,7 +6418,7 @@ dependencies = [
  "heck 0.5.0",
  "ignore",
  "indicatif",
- "nkeys",
+ "nkeys 0.4.1",
  "normpath",
  "oci-distribution 0.11.0",
  "oci-wasm",
@@ -6640,7 +6655,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.3.1",
  "hyper-util",
- "nkeys",
+ "nkeys 0.4.1",
  "once_cell",
  "provider-archive",
  "rand 0.8.5",
@@ -6772,7 +6787,7 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
- "nkeys",
+ "nkeys 0.3.2",
  "once_cell",
  "rustls 0.23.5",
  "serde",
@@ -6800,7 +6815,7 @@ dependencies = [
  "hex",
  "hyper-rustls 0.27.0",
  "hyper-util",
- "nkeys",
+ "nkeys 0.4.1",
  "oci-distribution 0.11.0",
  "once_cell",
  "reqwest 0.12.4",
@@ -6836,7 +6851,7 @@ dependencies = [
  "http-body 1.0.0",
  "humantime",
  "names",
- "nkeys",
+ "nkeys 0.4.1",
  "oci-distribution 0.11.0",
  "oci-wasm",
  "opentelemetry-nats",
@@ -7080,7 +7095,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
- "nkeys",
+ "nkeys 0.4.1",
  "once_cell",
  "opentelemetry 0.23.0",
  "rmp-serde",
@@ -7143,7 +7158,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.0",
  "http-body-util",
- "nkeys",
+ "nkeys 0.4.1",
  "once_cell",
  "rand 0.8.5",
  "serde",
@@ -7175,7 +7190,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "cloudevents-sdk",
- "nkeys",
+ "nkeys 0.4.1",
  "rmp-serde",
  "serde",
  "serde_json",

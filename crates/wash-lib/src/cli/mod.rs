@@ -361,7 +361,7 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
-    use KeyPairType::{Account, Cluster, Module, Operator, Server, Service, User};
+    use KeyPairType::{Account, Cluster, Curve, Module, Operator, Server, Service, User};
     match keypair_type {
         Account => "account",
         Cluster => "cluster",
@@ -370,6 +370,7 @@ fn keypair_type_to_str(keypair_type: &KeyPairType) -> &'static str {
         Server => "server",
         Operator => "operator",
         User => "user",
+        Curve => "curve",
     }
 }
 
