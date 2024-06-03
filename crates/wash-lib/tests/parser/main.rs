@@ -120,6 +120,7 @@ fn tinygo_component_module() {
         config.language,
         LanguageConfig::TinyGo(TinyGoConfig {
             tinygo_path: Some("path/to/tinygo".into()),
+            disable_go_generate: false,
         })
     );
 
