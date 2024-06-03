@@ -16,7 +16,9 @@ use tokio_postgres::Statement;
 use tracing::{error, instrument, warn};
 use ulid::Ulid;
 
-use wasmcloud_provider_sdk::{get_connection, run_provider, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{
+    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, Provider,
+};
 
 mod bindings;
 use bindings::{
@@ -210,7 +212,7 @@ impl Provider for PostgresProvider {
     /// Handle notification that a link is dropped
     ///
     /// Generally we can release the resources (connections) associated with the source
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut prepared_statements = self.prepared_statements.write().await;
         prepared_statements.retain(|_stmt_token, (_conn, src_id)| source_id != *src_id);
@@ -222,7 +224,7 @@ impl Provider for PostgresProvider {
     }
 
     /// Handle shutdown request by closing all connections
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip_all)]
     async fn shutdown(&self) -> anyhow::Result<()> {
         let mut prepared_statements = self.prepared_statements.write().await;
         prepared_statements.drain();
@@ -234,13 +236,14 @@ impl Provider for PostgresProvider {
 
 /// Implement the `wasmcloud:postgres/query` interface for [`PostgresProvider`]
 impl bindings::query::Handler<Option<Context>> for PostgresProvider {
-    #[instrument(level = "debug", skip_all, fields(connection_token, query))]
+    #[instrument(level = "debug", skip_all, fields(query))]
     async fn query(
         &self,
         ctx: Option<Context>,
         query: String,
         params: Vec<PgValue>,
     ) -> Result<Result<Vec<ResultRow>, QueryError>> {
+        propagate_trace_for_ctx!(ctx);
         let Some(Context {
             component: Some(source_id),
             ..
@@ -257,12 +260,13 @@ impl bindings::query::Handler<Option<Context>> for PostgresProvider {
 
 /// Implement the `wasmcloud:postgres/prepared` interface for [`PostgresProvider`]
 impl bindings::prepared::Handler<Option<Context>> for PostgresProvider {
-    #[instrument(level = "debug", skip_all, fields(connection_token, query))]
+    #[instrument(level = "debug", skip_all, fields(query))]
     async fn prepare(
         &self,
         ctx: Option<Context>,
         query: String,
     ) -> Result<Result<PreparedStatementToken, StatementPrepareError>> {
+        propagate_trace_for_ctx!(ctx);
         let Some(Context {
             component: Some(source_id),
             ..
@@ -275,12 +279,14 @@ impl bindings::prepared::Handler<Option<Context>> for PostgresProvider {
         Ok(self.do_statement_prepare(&source_id, &query).await)
     }
 
+    #[instrument(level = "debug", skip_all, fields(statement_token))]
     async fn exec(
         &self,
-        _ctx: Option<Context>,
+        ctx: Option<Context>,
         statement_token: PreparedStatementToken,
         params: Vec<PgValue>,
     ) -> Result<Result<u64, PreparedStatementExecError>> {
+        propagate_trace_for_ctx!(ctx);
         Ok(self.do_statement_execute(&statement_token, params).await)
     }
 }
