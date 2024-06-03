@@ -10,7 +10,7 @@ spec:
     - name: test-component
       type: component
       properties:
-        image: file://./component/build/custom_template_test_component.wasm
+        image: file://./component/build/custom_template_component_s.wasm
       traits:
         - type: spreadscaler
           properties:
