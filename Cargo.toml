@@ -187,6 +187,7 @@ azure_storage = { version = "0.20", default-features = false }
 azure_storage_blobs = { version = "0.20", default-features = false }
 bigdecimal = { version = "0.4", default-features = false }
 bit-vec = { version = "0.6", default-features = false }
+backoff = { version = "0.4", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bytes = { version = "1", default-features = false }
 cap-std = { version = "3", default-features = false }
@@ -321,6 +322,7 @@ wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-m
 wasmcloud-provider-sdk = { version = "^0.6.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
+wasmcloud-secrets-types = { version = "*", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.3.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.5.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.202", default-features = false }
