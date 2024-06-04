@@ -65,3 +65,9 @@ name = "custom-template-rust"
 description = "a capability provider template written in Rust with scaffolding to implement a custom interface"
 git = "wasmCloud/wasmCloud"
 subfolder = "examples/rust/providers/custom-template"
+
+[[provider]]
+name = "custom-template-go"
+description = "a capability provider template written in Go with scaffolding to implement a custom interface"
+git = "wasmCloud/wasmCloud"
+subfolder = "examples/golang/providers/custom-template"

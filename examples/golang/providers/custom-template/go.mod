@@ -3,7 +3,7 @@ module github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template
 go 1.22.3
 
 require (
-	github.com/wasmCloud/provider-sdk-go v0.0.0-20240124183610-1a92f8d04935
+	github.com/wasmCloud/provider-sdk-go v0.0.0-20240605180317-5423f4b7b591
 	github.com/wrpc/wrpc/go v0.0.0-20240508154835-d040797e7796
 )
 
@@ -15,6 +15,3 @@ require (
 	golang.org/x/crypto v0.22.0 // indirect
 	golang.org/x/sys v0.19.0 // indirect
 )
-
-// TODO: remove this in favor of upstream provider-sdk-go
-replace github.com/wasmCloud/provider-sdk-go => ../../../../../provider-sdk-go
