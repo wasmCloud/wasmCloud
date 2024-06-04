@@ -32,6 +32,6 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/provider-sqldb-postgres:0.1.0
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.1.0
         config:
           - name: "default-postgres"
