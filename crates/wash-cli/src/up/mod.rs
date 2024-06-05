@@ -8,10 +8,11 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
-use serde_json::json;
+use serde_json::{json, Value};
+use sysinfo::{System, SystemExt};
 
 use tokio::fs::create_dir_all;
 use tokio::{
@@ -324,6 +325,14 @@ pub struct WadmOpts {
     pub wadm_manifest: Option<PathBuf>,
 }
 
+#[derive(Debug, PartialEq, PartialOrd)]
+enum WasmCloudHostState {
+    NotRunning,
+    Starting,
+    Running,
+    MultipleRunning,
+}
+
 pub async fn handle_command(command: UpCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     handle_up(command, output_kind).await
 }
@@ -398,16 +407,73 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
     let client = nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
+    // Start building the CommandOutput providing some useful information like pids, ports, and logfiles
+    let mut out_json = HashMap::new();
+    let mut out_text = String::from("");
+    let lattice = wasmcloud_opts
+        .clone()
+        .lattice
+        .context("missing lattice prefix")?;
+    let host_started = Arc::new(AtomicBool::new(false));
+    let wasmcloud_log_path = install_dir.join("wasmcloud.log");
+    let ctl_client = wasmcloud_opts.clone().into_ctl_client(None).await?;
+
     if !cmd.wasmcloud_opts.multi_local
         && tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE))
             .await
             .is_ok_and(|exists| exists)
     {
-        bail!("Pid file {:?} exists. There are still hosts running, please stop them before starting new ones or use --multi-local to start more",
+        // Check if host is running.
+        let host_state = running_host_count(&ctl_client, &install_dir).await?;
+        if host_state == WasmCloudHostState::NotRunning {
+            eprintln!("🟨 Pid file {:?} exists but no hosts are running. Removing Pid file and proceeding with \"wash up\"",
             install_dir.join(WASMCLOUD_PID_FILE));
+            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+        } else if host_state == WasmCloudHostState::MultipleRunning {
+            bail!("🟨 Multiple hosts are running. Please use --multi-local to start another");
+        } else {
+            // Host is already running or starting, so interactive mode cannot continue. Close out as if
+            // detached.
+            spinner.finish_and_clear();
+            if let Some(ref manifest_path) = cmd.wadm_opts.wadm_manifest {
+                eprintln!("🟨 Wasmcloud host is already running. Deploying wadm manifest in detached mode.");
+                out_json.insert("deployed_wadm_manifest_path".into(), json!(manifest_path));
+                // Host has already started, no need to wait.
+                match process_wadm_manifest(
+                    client.clone(),
+                    lattice.clone(),
+                    host_started.clone(),
+                    host_state,
+                    ctl_client,
+                    install_dir.clone(),
+                    manifest_path.clone(),
+                    true,
+                )
+                .await
+                {
+                    Ok(_) => out_text.push_str("Deployed wadm manifest"),
+                    Err(e) => {
+                        let _ = write!(out_text, "Deployment failed {}", e);
+                    }
+                };
+            }
+            out_text.push_str("🛁 wash up completed successfully, already running");
+            out_json.insert("success".to_string(), json!(true));
+            let _ = write!(
+                out_text,
+                "\n🕸  NATS is running in the background at http://{nats_listen_address}"
+            );
+
+            let _ = write!(
+                out_text,
+                "\n📜 Logs for the host are being written to {}",
+                wasmcloud_log_path.to_string_lossy()
+            );
+            let _ = write!(out_text, "\n\n⬇️  To stop wasmCloud, run \"wash down\"");
+            return Ok(CommandOutput::new(out_text, out_json));
+        }
     }
 
-    let lattice = wasmcloud_opts.lattice.context("missing lattice prefix")?;
     let wadm_process = if !cmd.wadm_opts.disable_wadm
         && !is_wadm_running(
             &nats_host,
@@ -477,7 +543,6 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
     spinner.update_spinner_message(" Starting wasmCloud ...".to_string());
-    let wasmcloud_log_path = install_dir.join("wasmcloud.log");
     let stderr: Stdio = if cmd.detached {
         tokio::fs::File::create(&wasmcloud_log_path)
             .await?
@@ -512,76 +577,42 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     spinner.finish_and_clear();
 
-    // Start building the CommandOutput providing some useful information like pids, ports, and logfiles
-    let mut out_json = HashMap::new();
-    let mut out_text = String::from("");
     out_json.insert("success".to_string(), json!(true));
     out_text.push_str("🛁 wash up completed successfully");
 
-    // If a WADM manifest was provided, spawn off a task that waits until the host has started,
-    // then loads and deploys the WADM manifest.
-    let host_started = Arc::new(AtomicBool::new(false));
     if let Some(ref manifest_path) = cmd.wadm_opts.wadm_manifest {
         out_json.insert("deployed_wadm_manifest_path".into(), json!(manifest_path));
-        let detached = cmd.detached;
-        let manifest_path = manifest_path.clone();
-        let client = client.clone();
-        let lattice = lattice.clone();
-        let log_path = wasmcloud_log_path.clone();
-        let host_started = host_started.clone();
-
-        // Spawn a task that waits for the host to start
-        tokio::spawn(async move {
-            if detached {
-                // If the host is detached, we can read it's logs from the output file
-                let readonly_instance_stderr = tokio::fs::OpenOptions::new()
-                    .read(true)
-                    .open(&log_path)
-                    .await?;
-                tokio::time::timeout(tokio::time::Duration::from_secs(3), async {
-                    let mut lines = BufReader::new(readonly_instance_stderr).lines();
-                    loop {
-                        match lines.next_line().await {
-                            Ok(Some(line)) if line.contains("wasmCloud host started") => break,
-                            _ => {}
-                        }
-                    }
-                })
-                .await
-                .context("failed to wait for host start while deploying WADM application")?;
-            } else {
-                // If the host was *not* detached, wait until host_started is updated from run_wasmcloud_interactive()
-                while !host_started.load(Ordering::SeqCst) {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-            };
-
-            // Load the manifest, now that we're done waiting
-            let manifest = load_app_manifest(AppManifestSource::File(manifest_path.to_path_buf()))
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to load manifest from path [{}]",
-                        manifest_path.display()
-                    )
-                })?;
-
-            // Deploy the WADM application
-            deploy_wadm_application(&client, manifest, lattice.as_ref())
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to deploy wadm application [{}]",
-                        manifest_path.display()
-                    )
-                })?;
-
-            Ok(()) as Result<()>
-        });
+        match process_wadm_manifest(
+            client.clone(),
+            lattice.clone(),
+            host_started.clone(),
+            WasmCloudHostState::NotRunning,
+            ctl_client,
+            install_dir.clone(),
+            manifest_path.clone(),
+            cmd.detached,
+        )
+        .await
+        {
+            Ok(_) => out_text.push_str("Deployed wadm manifest"),
+            Err(e) => {
+                let _ = write!(out_text, "Deployment failed {}", e);
+            }
+        };
     }
 
-    // Write the pid file with the selected version
-    tokio::fs::write(install_dir.join(WASMCLOUD_PID_FILE), version).await?;
+    // Write the pid file with the selected version and process ID.
+    let pid_file_contents = json!({
+        "version": version,
+        "pid": wasmcloud_child.id().unwrap()
+    });
+
+    tokio::fs::write(
+        install_dir.join(WASMCLOUD_PID_FILE),
+        pid_file_contents.to_string(),
+    )
+    .await?;
+
     if !cmd.detached {
         run_wasmcloud_interactive(
             &mut wasmcloud_child,
@@ -607,9 +638,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         }
 
         spinner.finish_and_clear();
-    }
-
-    if cmd.detached {
+    } else {
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
@@ -628,6 +657,105 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     }
 
     Ok(CommandOutput::new(out_text, out_json))
+}
+
+/// Check if a wasmcloud host is running
+async fn running_host_count(
+    ctl_client: &CtlClient,
+    install_dir: &Path,
+) -> Result<WasmCloudHostState> {
+    match ctl_client
+        .get_hosts()
+        .await
+        .map_err(|e| anyhow!(e))?
+        .into_iter()
+        .filter_map(|r| r.response)
+        .count()
+    {
+        1 => return Ok(WasmCloudHostState::Running),
+        2.. => return Ok(WasmCloudHostState::MultipleRunning),
+        _ => (),
+    }
+
+    // Wasmcloud host might be starting but not up yet. Check if the process in the pid file is running.
+    let pid_file_string = tokio::fs::read_to_string(&install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    let pid_file_value: Value = serde_json::from_str(&pid_file_string)?;
+    if let Some(pid) = pid_file_value.get("pid") {
+        if is_process_running(&pid.to_string()) {
+            return Ok(WasmCloudHostState::Starting);
+        }
+    }
+    Ok(WasmCloudHostState::NotRunning)
+}
+
+/// Check is process is running
+fn is_process_running(pid: &str) -> bool {
+    match pid.parse() {
+        Ok(pid) => {
+            let mut sys = System::new_all();
+            sys.refresh_processes();
+            sys.processes().get(&pid).is_some()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Spawn off a task that waits until the host has started,
+/// then loads and deploys the WADM manifest.
+#[allow(clippy::too_many_arguments)]
+fn process_wadm_manifest(
+    client: async_nats::Client,
+    lattice: String,
+    host_started: Arc<AtomicBool>,
+    host_state: WasmCloudHostState,
+    ctl_client: CtlClient,
+    install_dir: PathBuf,
+    manifest_path: PathBuf,
+    detached: bool,
+) -> tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> {
+    // Spawn a task that waits for the host to start
+    tokio::spawn(async move {
+        if detached && host_state < WasmCloudHostState::Running {
+            tokio::time::timeout(tokio::time::Duration::from_secs(3), async {
+                loop {
+                    if let Ok(WasmCloudHostState::Running) =
+                        running_host_count(&ctl_client, &install_dir).await
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .context("failed to wait for host start while deploying WADM application")?;
+        } else if !detached {
+            // If the host was *not* detached, wait until host_started is updated from run_wasmcloud_interactive()
+            while !host_started.load(Ordering::SeqCst) {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        };
+
+        // Load the manifest, now that we're done waiting
+        let manifest = load_app_manifest(AppManifestSource::File(manifest_path.to_path_buf()))
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load manifest from path [{}]",
+                    manifest_path.display()
+                )
+            })?;
+
+        // Deploy the WADM application
+        deploy_wadm_application(&client, manifest, lattice.as_ref())
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to deploy wadm application [{}]",
+                    manifest_path.display()
+                )
+            })?;
+
+        Ok(()) as Result<()>
+    })
 }
 
 /// Helper function to deploy a WADM application (including removing a previous version)
@@ -1022,5 +1150,26 @@ mod tests {
         assert!(up_all_flags.detached);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_process_running() {
+        let current_pid = std::process::id().to_string();
+        assert!(
+            super::is_process_running(&current_pid),
+            "Current process should be running"
+        );
+
+        let non_existent_pid = "-1";
+        assert!(
+            !super::is_process_running(non_existent_pid),
+            "Non-existent process should not be running"
+        );
+
+        let invalid_pid = "wasmcloud";
+        assert!(
+            !super::is_process_running(invalid_pid),
+            "Invalid pid should not be running"
+        );
     }
 }
