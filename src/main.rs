@@ -249,6 +249,10 @@ struct Args {
         hide = true
     )]
     observability_protocol: Option<OtelProtocol>,
+
+    /// Configures whether to normalize configuration keys for config passed to providers
+    #[clap(long = "normalize-provider-config-keys")]
+    normalize_provider_config_keys: Option<bool>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -379,6 +383,7 @@ async fn main() -> anyhow::Result<()> {
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
         policy_service_config,
+        normalize_provider_config_keys: args.normalize_provider_config_keys.unwrap_or(false),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }))
     .await

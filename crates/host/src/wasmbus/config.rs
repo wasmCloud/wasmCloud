@@ -179,16 +179,19 @@ pub struct BundleGenerator {
     store: Store,
     watch_cache: WatchCache,
     watch_handles: Arc<RwLock<AbortHandles>>,
+    /// Whether to normalize configurations retrieved
+    pub normalize_keys: bool,
 }
 
 impl BundleGenerator {
     /// Create a new bundle generator
     #[must_use]
-    pub fn new(store: Store) -> Self {
+    pub fn from_store(store: Store) -> Self {
         Self {
             store,
             watch_cache: Arc::default(),
             watch_handles: Arc::default(),
+            normalize_keys: false,
         }
     }
 
@@ -215,12 +218,20 @@ impl BundleGenerator {
         // We need to actually try and fetch the config here. If we don't do this, then a watch will
         // just blindly watch even if the key doesn't exist. We should return an error if the config
         // doesn't exist or has data issues. It also allows us to set the intitial value
-        let config: HashMap<String, String> = match self.store.get(&name).await {
+        let mut config: HashMap<String, String> = match self.store.get(&name).await {
             Ok(Some(data)) => serde_json::from_slice(&data)
                 .context("Data corruption error, unable to decode data from store")?,
             Ok(None) => return Err(anyhow::anyhow!("Config {} does not exist", name)),
             Err(e) => return Err(anyhow::anyhow!("Error fetching config {}: {}", name, e)),
         };
+
+        // If we've decided to normalize the configurations, we'll change the keys
+        if self.normalize_keys {
+            config = config
+                .iter()
+                .map(|(k, v)| (k.to_lowercase().to_string(), v.to_string()))
+                .collect::<HashMap<String, String>>();
+        }
 
         // Otherwise we need to setup the watcher. We start by setting up the watch so we don't miss
         // any events after we query the initial config
@@ -228,7 +239,13 @@ impl BundleGenerator {
         let (done, wait) = tokio::sync::oneshot::channel();
         let (handle, reg) = AbortHandle::new_pair();
         tokio::task::spawn(Abortable::new(
-            watcher_loop(self.store.clone(), name.clone(), tx, done),
+            watcher_loop(
+                self.store.clone(),
+                name.clone(),
+                tx,
+                done,
+                self.normalize_keys,
+            ),
             reg,
         ));
 
@@ -256,6 +273,7 @@ async fn watcher_loop(
     name: String,
     tx: watch::Sender<HashMap<String, String>>,
     done: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    normalize_keys: bool,
 ) {
     // We need to watch with history so we can get the initial config.
     let mut watcher = match store.watch(&name).await {
@@ -286,13 +304,22 @@ async fn watcher_loop(
                 tx.send_replace(HashMap::new());
             }
             Ok(Some(entry)) => {
-                let config: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
+                let mut config: HashMap<String, String> = match serde_json::from_slice(&entry.value)
+                {
                     Ok(config) => config,
                     Err(e) => {
                         error!(%name, error = %e, "Error decoding config from store during watch");
                         continue;
                     }
                 };
+
+                if normalize_keys {
+                    config = config
+                        .iter()
+                        .map(|(k, v)| (k.to_lowercase().to_string(), v.to_string()))
+                        .collect::<HashMap<String, String>>();
+                }
+
                 tx.send_if_modified(|current| {
                     if current == &config {
                         false

@@ -907,7 +907,10 @@ impl Host {
             config.lattice.clone(),
         );
 
-        let config_generator = BundleGenerator::new(config_data.clone());
+        let mut config_generator = BundleGenerator::from_store(config_data.clone());
+        if config.normalize_provider_config_keys {
+            config_generator.normalize_keys = true;
+        }
 
         let host = Host {
             components: RwLock::default(),

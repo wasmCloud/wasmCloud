@@ -42,7 +42,7 @@ async fn config_updates() -> Result<()> {
         .await
         .context("Unable to set up NATS KV store for test")?;
 
-    let generator = BundleGenerator::new(store.clone());
+    let generator = BundleGenerator::from_store(store.clone());
 
     // First test that a non-existent config item returns an error
     generator
