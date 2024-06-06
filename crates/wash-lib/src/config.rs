@@ -58,6 +58,9 @@ pub struct WashConnectionOptions {
     /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
     pub ctl_credsfile: Option<PathBuf>,
 
+    /// Path to a file containing a CA certificate to use for TLS connections
+    pub ctl_tls_ca_file: Option<PathBuf>,
+
     /// JS domain for wasmcloud control interface. Defaults to None
     pub js_domain: Option<String>,
 
@@ -85,13 +88,22 @@ impl WashConnectionOptions {
         let ctl_credsfile = self
             .ctl_credsfile
             .or_else(|| self.ctx.ctl_credsfile.clone());
+        let ctl_tls_ca_file = self
+            .ctl_tls_ca_file
+            .or_else(|| self.ctx.ctl_tls_ca_file.clone());
 
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(self.timeout_ms);
 
-        let nc =
-            create_nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
-                .await
-                .context("Failed to create NATS client")?;
+        let nc = create_nats_client_from_opts(
+            &ctl_host,
+            &ctl_port,
+            ctl_jwt,
+            ctl_seed,
+            ctl_credsfile,
+            ctl_tls_ca_file,
+        )
+        .await
+        .context("Failed to create NATS client")?;
 
         let mut builder = CtlClientBuilder::new(nc)
             .lattice(lattice)
@@ -118,10 +130,19 @@ impl WashConnectionOptions {
         let ctl_credsfile = self
             .ctl_credsfile
             .or_else(|| self.ctx.ctl_credsfile.clone());
+        let ctl_tls_ca_file = self
+            .ctl_tls_ca_file
+            .or_else(|| self.ctx.ctl_tls_ca_file.clone());
 
-        let nc =
-            create_nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
-                .await?;
+        let nc = create_nats_client_from_opts(
+            &ctl_host,
+            &ctl_port,
+            ctl_jwt,
+            ctl_seed,
+            ctl_credsfile,
+            ctl_tls_ca_file,
+        )
+        .await?;
 
         Ok(nc)
     }
@@ -156,6 +177,7 @@ pub async fn create_nats_client_from_opts(
     jwt: Option<String>,
     seed: Option<String>,
     credsfile: Option<PathBuf>,
+    tls_ca_file: Option<PathBuf>,
 ) -> Result<async_nats::Client> {
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
@@ -176,37 +198,49 @@ pub async fn create_nats_client_from_opts(
         });
 
         // You must provide the JWT via a closure
-        async_nats::ConnectOptions::with_jwt(jwt_contents, move |nonce| {
+        let mut opts = async_nats::ConnectOptions::with_jwt(jwt_contents, move |nonce| {
             let key_pair = kp.clone();
             async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-        })
-        .connect(&nats_url)
-        .await
-        .with_context(|| {
+        });
+
+        if let Some(ca_file) = tls_ca_file {
+            opts = opts.add_root_certificates(ca_file).require_tls(true);
+        }
+
+        opts.connect(&nats_url).await.with_context(|| {
             format!(
                 "Failed to connect to NATS server {}:{} while creating client",
                 &host, &port
             )
         })?
     } else if let Some(credsfile_path) = credsfile {
-        ConnectOptions::with_credentials_file(credsfile_path.clone())
+        let mut opts = ConnectOptions::with_credentials_file(credsfile_path.clone())
             .await
             .with_context(|| {
                 format!(
                     "Failed to authenticate to NATS with credentials file {:?}",
                     &credsfile_path
                 )
-            })?
-            .connect(&nats_url)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect to NATS {} with credentials file {:?}",
-                    &nats_url, &credsfile_path
-                )
-            })?
+            })?;
+
+        if let Some(ca_file) = tls_ca_file {
+            opts = opts.add_root_certificates(ca_file).require_tls(true);
+        }
+
+        opts.connect(&nats_url).await.with_context(|| {
+            format!(
+                "Failed to connect to NATS {} with credentials file {:?}",
+                &nats_url, &credsfile_path
+            )
+        })?
     } else {
-        async_nats::connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
+        let mut opts = ConnectOptions::new();
+
+        if let Some(ca_file) = tls_ca_file {
+            opts = opts.add_root_certificates(ca_file).require_tls(true);
+        }
+
+        opts.connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
     };
     Ok(nc)
 }
