@@ -168,6 +168,10 @@ pub struct WasmcloudOpts {
     #[clap(long = "rpc-tls", env = WASMCLOUD_RPC_TLS)]
     pub rpc_tls: bool,
 
+    /// A TLS CA file to use to authenticate to NATS for RPC messages
+    #[clap(long = "rpc-tls-ca-file", env = WASMCLOUD_RPC_TLS_CA_FILE)]
+    pub rpc_tls_ca_file: Option<PathBuf>,
+
     /// Convenience flag for RPC authentication, internally this parses the JWT and seed from the credsfile
     #[clap(long = "rpc-credsfile", env = WASMCLOUD_RPC_CREDSFILE)]
     pub rpc_credsfile: Option<PathBuf>,
@@ -195,6 +199,10 @@ pub struct WasmcloudOpts {
     /// Optional flag to enable host communication with a NATS server over TLS for CTL messages
     #[clap(long = "ctl-tls", env = WASMCLOUD_CTL_TLS)]
     pub ctl_tls: bool,
+
+    /// A TLS CA file to use to authenticate to NATS for CTL messages
+    #[clap(long = "ctl-tls-ca-file", env = WASMCLOUD_CTL_TLS_CA_FILE)]
+    pub ctl_tls_ca_file: Option<PathBuf>,
 
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
     #[clap(long = "cluster-seed", env = WASMCLOUD_CLUSTER_SEED)]
@@ -275,6 +283,7 @@ impl WasmcloudOpts {
             self.ctl_jwt,
             self.ctl_seed,
             self.ctl_credsfile,
+            self.ctl_tls_ca_file,
         )
         .await
         .context("Failed to create NATS client")?;
@@ -662,6 +671,7 @@ async fn start_nats(
             None,
             None,
             Some(creds.to_owned()),
+            None,
         )
         .await
         {
@@ -814,9 +824,15 @@ async fn is_wadm_running(
     credsfile: Option<PathBuf>,
     lattice: &str,
 ) -> Result<bool> {
-    let client =
-        create_nats_client_from_opts(nats_host, &nats_port.to_string(), None, None, credsfile)
-            .await?;
+    let client = create_nats_client_from_opts(
+        nats_host,
+        &nats_port.to_string(),
+        None,
+        None,
+        credsfile,
+        None,
+    )
+    .await?;
 
     Ok(
         wash_lib::app::get_models(&client, Some(lattice.to_string()))
@@ -859,6 +875,7 @@ async fn nats_client_from_wasmcloud_opts(wasmcloud_opts: &WasmcloudOpts) -> Resu
         wasmcloud_opts.ctl_jwt.clone(),
         wasmcloud_opts.ctl_seed.clone(),
         wasmcloud_opts.ctl_credsfile.clone(),
+        wasmcloud_opts.ctl_tls_ca_file.clone(),
     )
     .await
 }
