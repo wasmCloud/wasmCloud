@@ -134,7 +134,6 @@ pub async fn registry_push(
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
-            world_name: cmd.world,
         },
     )
     .await?;
