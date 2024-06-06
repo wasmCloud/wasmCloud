@@ -18,7 +18,7 @@ use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 use crate::appearance::spinner::Spinner;
 use crate::up::{
     DEFAULT_LATTICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
-    WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE,
+    WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_LATTICE,
 };
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -52,6 +52,10 @@ pub struct DownCommand {
     #[clap(long = "ctl-jwt", env = WASMCLOUD_CTL_JWT, requires = "ctl_seed")]
     pub ctl_jwt: Option<String>,
 
+    /// A TLS CA file to use to authenticate to NATS for CTL messages
+    #[clap(long = "ctl-tls-ca-file", env = WASMCLOUD_CTL_TLS_CA_FILE)]
+    pub ctl_tls_ca_file: Option<PathBuf>,
+
     #[clap(long = "host-id")]
     pub host_id: Option<ServerId>,
 
@@ -83,6 +87,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
         cmd.ctl_jwt,
         cmd.ctl_seed,
         cmd.ctl_credsfile,
+        cmd.ctl_tls_ca_file,
     )
     .await
     {

@@ -132,6 +132,7 @@ pub async fn handle_command(
         opts.rpc_jwt.clone(),
         opts.rpc_seed.clone(),
         opts.rpc_credsfile.clone(),
+        opts.rpc_ca_file.clone(),
     )
     .await?;
 
@@ -242,6 +243,15 @@ pub struct ConnectionOpts {
     /// See https://docs.nats.io/using-nats/developer/connecting/creds for details.
     #[clap(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
     rpc_credsfile: Option<PathBuf>,
+
+    /// CA file for RPC authentication.
+    /// See https://docs.nats.io/using-nats/developer/security/securing_nats for details.
+    #[clap(
+        long = "rpc-ca-file",
+        env = "WASH_RPC_TLS_CA_FILE",
+        hide_env_values = true
+    )]
+    rpc_ca_file: Option<PathBuf>,
 
     /// Lattice for wasmcloud command interface, defaults to "default"
     #[clap(short = 'x', long = "lattice", env = "WASMCLOUD_LATTICE")]
