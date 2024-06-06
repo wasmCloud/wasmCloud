@@ -25,13 +25,13 @@ func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWrite
 	httpResponse.SetStatusCode(200)
 	body := httpResponse.Body().Unwrap()
 	bodyWrite := body.Write().Unwrap()
-	bodyWrite.BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
 
 	// Send HTTP response
 	okResponse := http.Ok[HttpOutgoingResponse, HttpError](httpResponse)
+	http.StaticResponseOutparamSet(responseWriter, okResponse)
+	bodyWrite.BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
 	bodyWrite.Drop()
 	http.StaticOutgoingBodyFinish(body, http.None[http.WasiHttp0_2_0_TypesTrailers]())
-	http.StaticResponseOutparamSet(responseWriter, okResponse)
 }
 
 //go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
