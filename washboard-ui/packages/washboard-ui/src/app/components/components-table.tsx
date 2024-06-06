@@ -98,7 +98,7 @@ const columns = [
       baseRow: 'visible',
       expandedRow: 'empty',
     },
-  })
+  }),
 ];
 
 export function ComponentsTable(): ReactElement {
