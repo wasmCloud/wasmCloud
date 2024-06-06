@@ -16,6 +16,12 @@ spec:
         - type: spreadscaler
           properties:
             replicas: 1
+        - type: link
+          properties:
+            target: httpclient
+            namespace: wasi
+            package: http
+            interfaces: [ outgoing-handler ]
 
     # Add a capability provider that enables HTTP access
     - name: httpserver
@@ -35,3 +41,8 @@ spec:
               - name: default-http
                 properties:
                   address: 127.0.0.1:8080
+
+    - name: httpclient
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-client:0.9.0

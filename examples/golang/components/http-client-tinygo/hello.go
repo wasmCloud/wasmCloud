@@ -24,8 +24,8 @@ func init() {
 func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWriter) {
 	req := http.NewOutgoingRequest(http.NewFields())
 	req.SetScheme(http.Some[http.WasiHttp0_2_0_TypesScheme](http.WasiHttp0_2_0_TypesSchemeHttps()))
-	req.SetAuthority(http.Some("postman-echo.com"))
-	req.SetPathWithQuery(http.Some("/bytes/100/mb"))
+	req.SetAuthority(http.Some("dog.ceo"))
+	req.SetPathWithQuery(http.Some("/api/breeds/image/random"))
 	result := http.WasiHttp0_2_0_OutgoingHandlerHandle(req, http.None[http.WasiHttp0_2_0_OutgoingHandlerRequestOptions]())
 	if result.IsOk() {
 		incomingResponse := result.Unwrap()
@@ -45,6 +45,7 @@ func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWrite
 			bodyWrite.Drop()
 			http.StaticOutgoingBodyFinish(body, http.None[http.WasiHttp0_2_0_TypesTrailers]())
 		}
+
 	} else {
 		errorCode := result.UnwrapErr()
 		log.Fatal("Error fetching response from http provider", errorCode)

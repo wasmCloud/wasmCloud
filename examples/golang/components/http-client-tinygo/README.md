@@ -1,6 +1,6 @@
-# HTTP Hello World
+# HTTP Client Example
 
-This is a simple TinyGo Wasm example that makes accepts a http request , then makes a http call to an external endpoint and returns a response for the request.
+This is a simple TinyGo Wasm example that makes accepts a http request, then makes a http call to an external endpoint and returns a response for the request.
 
 ## Prerequisites
 
