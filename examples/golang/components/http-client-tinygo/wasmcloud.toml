@@ -1,0 +1,9 @@
+name = "http-client-tinygo"
+language = "tinygo"
+type = "component"
+version = "0.1.0"
+
+[component]
+wit_world = "hello"
+wasm_target = "wasm32-wasi-preview2"
+destination = "build/http_client_tinygo_s.wasm"
