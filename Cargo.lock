@@ -3622,9 +3622,9 @@ dependencies = [
 
 [[package]]
 name = "oci-wasm"
-version = "0.0.3"
+version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1930a0cc13337feec6dfcc223d51707b0228189c1c9ac27fab0cf38487acb8"
+checksum = "a91502e5352f927156f2b6a28d2558cc59558b1f441b681df3f706ced6937e07"
 dependencies = [
  "anyhow",
  "chrono",
