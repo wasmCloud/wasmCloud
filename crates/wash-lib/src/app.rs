@@ -36,19 +36,22 @@ pub enum ModelOperation {
     Status,
 }
 
-impl ToString for ModelOperation {
-    fn to_string(&self) -> String {
-        match self {
-            ModelOperation::List => "list",
-            ModelOperation::Get => "get",
-            ModelOperation::History => "versions",
-            ModelOperation::Delete => "del",
-            ModelOperation::Put => "put",
-            ModelOperation::Deploy => "deploy",
-            ModelOperation::Undeploy => "undeploy",
-            ModelOperation::Status => "status",
-        }
-        .to_string()
+impl std::fmt::Display for ModelOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ModelOperation::List => "list",
+                ModelOperation::Get => "get",
+                ModelOperation::History => "versions",
+                ModelOperation::Delete => "del",
+                ModelOperation::Put => "put",
+                ModelOperation::Deploy => "deploy",
+                ModelOperation::Undeploy => "undeploy",
+                ModelOperation::Status => "status",
+            }
+        )
     }
 }
 
@@ -378,9 +381,8 @@ async fn model_request(
     // Topic is of the form of wadm.api.<lattice>.<category>.<operation>.<OPTIONAL: object_name>
     // We let callers of this function dictate the topic after the prefix + lattice
     let topic = format!(
-        "{WADM_API_PREFIX}.{}.model.{}{}",
+        "{WADM_API_PREFIX}.{}.model.{operation}{}",
         lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
-        operation.to_string(),
         object_name
             .map(|name| format!(".{name}"))
             .unwrap_or_default()
