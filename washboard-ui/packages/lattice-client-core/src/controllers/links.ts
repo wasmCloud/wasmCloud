@@ -24,7 +24,7 @@ type DeleteLinkRequest = {
   /** source identifier for the link */
   source_id: string;
   /** name of the link */
-  link_name?: string;
+  name?: string;
   /** WIT namespace of the link operation, e.g. `wasi` in `wasi:keyvalue/readwrite.get` */
   wit_namespace: string;
   /** WIT package of the link operation, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get` */
