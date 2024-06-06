@@ -32,6 +32,7 @@ pub struct OtelConfig {
     /// Overrides the OpenTelemetry endpoint for logs.
     pub logs_endpoint: Option<String>,
     /// Determines whether http or grpc will be used for exporting the telemetry.
+    #[serde(default)]
     pub protocol: OtelProtocol,
 }
 
