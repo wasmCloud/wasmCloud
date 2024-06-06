@@ -92,6 +92,13 @@ const columns = [
       expandedRow: 'empty',
     },
   }),
+  columnHelper.accessor('max_instances', {
+    header: 'Max Count',
+    meta: {
+      baseRow: 'visible',
+      expandedRow: 'empty',
+    },
+  })
 ];
 
 export function ComponentsTable(): ReactElement {
