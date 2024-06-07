@@ -11,8 +11,8 @@ pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 // wadm configuration values
 pub const WADM_VERSION: &str = "v0.12.0";
-// wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
-pub const WASMCLOUD_HOST_VERSION: &str = "v1.0.2";
+// wasmCloud configuration values, https://wasmcloud.com/docs/reference/host-config
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.0.3";
 // NATS isolation configuration variables
 pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
 pub const DEFAULT_LATTICE: &str = "default";
