@@ -2,7 +2,7 @@
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
-  name: rust-sqldb-postgres-managed
+  name: rust-sqldb-postgres-query
   annotations:
     version: v0.1.0
     description: |
@@ -13,7 +13,7 @@ spec:
       type: component
       properties:
         # NOTE: You must run `wash build` for the WebAssembly binary at the relative path below to be present
-        image: file://./build/sqldb_postgres_managed_s.wasm
+        image: file://./build/sqldb_postgres_query_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler

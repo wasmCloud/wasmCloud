@@ -111,7 +111,7 @@ For example, the following WADM manifest fragment:
     - name: querier
       type: component
       properties:
-        image: file://./build/sqldb_postgres_managed_s.wasm
+        image: file://./build/sqldb_postgres_query_s.wasm
       traits:
         - type: spreadscaler
           properties:
