@@ -1,5 +1,5 @@
 [package]
-name = "wasmcloud-component-http-jsonify"
+name = "http-jsonify"
 version = "0.1.1"
 edition = "2021"
 authors = ["The wasmCloud Team"]

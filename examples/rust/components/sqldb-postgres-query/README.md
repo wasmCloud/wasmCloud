@@ -42,7 +42,7 @@ docker run \
 wash build
 ```
 
-This will create a folder called `build` which contains `sqldb_postgres_managed_s.wasm`.
+This will create a folder called `build` which contains `sqldb_postgres_query_s.wasm`.
 
 > [!NOTE]
 > If you're using a local build of the provider (using `file://...` in `wadm.yaml`) this is a good time to ensure you've built the [provider archive `par.gz`][par] for your provider.
@@ -105,7 +105,7 @@ wash get inventory
 Once the component & provider are deployed, you can invoke the example component with `wash call`:
 
 ```console
-wash call rust_sqldb_postgres_managed-querier wasmcloud:examples/invoke.call
+wash call rust_sqldb_postgres_query-querier wasmcloud:examples/invoke.call
 ```
 
 Note that the name of the component is prefixed with the WADM application, and the interface on it we call is defined in `wit/provider.wit` (the `call` function of the `invoke` interface).
