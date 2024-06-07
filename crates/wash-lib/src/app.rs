@@ -1,59 +1,25 @@
 //! Interact with and manage wadm applications over NATS, requires the `nats` feature
+//!
+//! This crate is essentially a wrapper around the wadm_client crate, and it's recommended to use
+//! that crate directly instead.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use async_nats::{Client, Message};
+use anyhow::{bail, Context};
+use async_nats::Client;
 use regex::Regex;
 use tracing::warn;
-use wadm_types::api::{
-    DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
-    GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, StatusResponse,
-    UndeployModelRequest, VersionResponse,
-};
+use wadm_client::Result;
+use wadm_types::api::{ModelSummary, Status, VersionInfo};
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use url::Url;
+use wadm_types::Manifest;
 use wasmcloud_core::tls;
 
 use crate::config::DEFAULT_LATTICE;
-
-/// The NATS prefix wadm's API is listening on
-const WADM_API_PREFIX: &str = "wadm.api";
-
-/// A helper enum to easily refer to wadm model operations and then use the
-/// [ToString](ToString) implementation for NATS topic formation
-pub enum ModelOperation {
-    List,
-    Get,
-    History,
-    Delete,
-    Put,
-    Deploy,
-    Undeploy,
-    Status,
-}
-
-impl std::fmt::Display for ModelOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ModelOperation::List => "list",
-                ModelOperation::Get => "get",
-                ModelOperation::History => "versions",
-                ModelOperation::Delete => "del",
-                ModelOperation::Put => "put",
-                ModelOperation::Deploy => "deploy",
-                ModelOperation::Undeploy => "undeploy",
-                ModelOperation::Status => "status",
-            }
-        )
-    }
-}
 
 #[derive(Debug)]
 pub enum AppManifest {
@@ -152,7 +118,7 @@ pub enum AppManifestSource {
 impl FromStr for AppManifestSource {
     type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> anyhow::Result<Self, Self::Err> {
         if s == "-" {
             return Ok(Self::AsyncReadSource(Box::new(tokio::io::stdin())));
         }
@@ -195,22 +161,18 @@ impl FromStr for AppManifestSource {
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application is managed on, defaults to `default`
 /// * `model_name` - Model name to undeploy
-/// * `non_destructive` - Undeploy deletes managed resources by default, this can be overridden by setting this to `true`
 pub async fn undeploy_model(
     client: &Client,
     lattice: Option<String>,
     model_name: &str,
-) -> Result<DeployModelResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Undeploy,
-        lattice,
-        Some(model_name),
-        serde_json::to_vec(&UndeployModelRequest {})?,
-    )
-    .await?;
+) -> Result<()> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client.undeploy_manifest(model_name).await
 }
 
 /// Deploy a model, instructing wadm to manage the application
@@ -225,17 +187,16 @@ pub async fn deploy_model(
     lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
-) -> Result<DeployModelResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Deploy,
-        lattice,
-        Some(model_name),
-        serde_json::to_vec(&DeployModelRequest { version })?,
-    )
-    .await?;
+) -> Result<()> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client
+        .deploy_manifest(model_name, version.as_deref())
+        .await
 }
 
 /// Put a model definition, instructing wadm to store the application manifest for later deploys
@@ -244,21 +205,44 @@ pub async fn deploy_model(
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest will be stored on, defaults to `default`
 /// * `model` - The full YAML or JSON string containing the OAM wadm manifest
+///
+/// # Returns
+/// The name and version of the model that was put
 pub async fn put_model(
     client: &Client,
     lattice: Option<String>,
     model: &str,
-) -> Result<PutModelResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Put,
-        lattice,
+) -> Result<(String, String)> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
         None,
-        model.as_bytes().to_vec(),
-    )
-    .await?;
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client.put_manifest(model).await
+}
+
+/// Deploy a model, instructing wadm to manage the application
+///
+/// # Arguments
+/// * `client` - The [Client](async_nats::Client) to use in order to send the request message
+/// * `lattice` - Optional lattice name that the application will be managed on, defaults to `default`
+/// * `model` - The full YAML or JSON string containing the OAM wadm manifest
+///
+/// # Returns
+/// The name and version of the model that was put
+pub async fn put_and_deploy_model(
+    client: &Client,
+    lattice: Option<String>,
+    model: &str,
+) -> Result<(String, String)> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
+
+    wadm_client.put_and_deploy_manifest(model).await
 }
 
 /// Query wadm for the history of a given model name
@@ -271,17 +255,14 @@ pub async fn get_model_history(
     client: &Client,
     lattice: Option<String>,
     model_name: &str,
-) -> Result<VersionResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::History,
-        lattice,
-        Some(model_name),
-        vec![],
-    )
-    .await?;
+) -> Result<Vec<VersionInfo>> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client.list_versions(model_name).await
 }
 
 /// Query wadm for the status of a given model by name
@@ -294,17 +275,14 @@ pub async fn get_model_status(
     client: &Client,
     lattice: Option<String>,
     model_name: &str,
-) -> Result<StatusResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Status,
-        lattice,
-        Some(model_name),
-        vec![],
-    )
-    .await?;
+) -> Result<Status> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client.get_manifest_status(model_name).await
 }
 
 /// Query wadm for details on a given model
@@ -319,17 +297,16 @@ pub async fn get_model_details(
     lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
-) -> Result<GetModelResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Get,
-        lattice,
-        Some(model_name),
-        serde_json::to_vec(&GetModelRequest { version })?,
-    )
-    .await?;
+) -> Result<Manifest> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client
+        .get_manifest(model_name, version.as_deref())
+        .await
 }
 
 /// Delete a model version from wadm
@@ -339,23 +316,21 @@ pub async fn get_model_details(
 /// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model
 /// * `version` - Version to retrieve, defaults to deleting the latest "put" version (or all if `delete_all` is specified)
-/// * `delete_all` - Whether or not to delete all versions for a given model name
 pub async fn delete_model_version(
     client: &Client,
     lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
-) -> Result<DeleteModelResponse> {
-    let res = model_request(
-        client,
-        ModelOperation::Delete,
-        lattice,
-        Some(model_name),
-        serde_json::to_vec(&DeleteModelRequest { version })?,
-    )
-    .await?;
+) -> Result<bool> {
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
+    );
 
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
+    wadm_client
+        .delete_manifest(model_name, version.as_deref())
+        .await
 }
 
 /// Query wadm for all application manifests
@@ -364,45 +339,18 @@ pub async fn delete_model_version(
 /// * `client` - The [Client](async_nats::Client) to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifests are stored on, defaults to `default`
 pub async fn get_models(client: &Client, lattice: Option<String>) -> Result<Vec<ModelSummary>> {
-    let res = model_request(client, ModelOperation::List, lattice, None, vec![]).await?;
-
-    serde_json::from_slice(&res.payload).map_err(|e| anyhow::anyhow!(e))
-}
-
-/// Helper function to make a NATS request given connection options, an operation, optional name, and bytes
-/// Designed for internal use
-async fn model_request(
-    client: &Client,
-    operation: ModelOperation,
-    lattice: Option<String>,
-    object_name: Option<&str>,
-    bytes: Vec<u8>,
-) -> Result<Message> {
-    // Topic is of the form of wadm.api.<lattice>.<category>.<operation>.<OPTIONAL: object_name>
-    // We let callers of this function dictate the topic after the prefix + lattice
-    let topic = format!(
-        "{WADM_API_PREFIX}.{}.model.{operation}{}",
-        lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
-        object_name
-            .map(|name| format!(".{name}"))
-            .unwrap_or_default()
+    let wadm_client = wadm_client::Client::from_nats_client(
+        &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
+        None,
+        client.clone(),
     );
 
-    match tokio::time::timeout(
-        Duration::from_millis(2_000),
-        client.request(topic, bytes.into()),
-    )
-    .await
-    {
-        Ok(Ok(res)) => Ok(res),
-        Ok(Err(e)) => bail!("Error making model request: {}", e),
-        Err(e) => bail!("model_request timed out:  {}", e),
-    }
+    wadm_client.list_manifests().await
 }
 
 //  NOTE(ahmedtadde): This should probably be refactored at some point to account for cases where the source's input is unusually (or erroneously) large.
 //  For now, we'll just assume that the input is small enough to be a oneshot read into memory and that the default timeout of 1 sec is plenty sufficient (or even too generous?) for the desired/expected behavior.
-pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest> {
+pub async fn load_app_manifest(source: AppManifestSource) -> anyhow::Result<AppManifest> {
     let load_from_source = || async {
         match source {
             AppManifestSource::AsyncReadSource(mut stdin) => {
@@ -473,6 +421,8 @@ pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest>
 mod test {
     use super::*;
     use tempfile::tempdir;
+
+    use anyhow::Result;
 
     #[test]
     #[cfg_attr(

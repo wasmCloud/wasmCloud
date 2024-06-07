@@ -87,6 +87,7 @@ url = { workspace = true }
 wadm-types = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
+wadm-client = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
