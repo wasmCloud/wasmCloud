@@ -10,7 +10,9 @@ spec:
     - name: http-component
       type: component
       properties:
-        image: file://./build/http_hello_world_s.wasm
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/http_hello_world_s.wasm
+        image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler

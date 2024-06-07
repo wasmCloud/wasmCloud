@@ -10,8 +10,9 @@ spec:
     - name: counter
       type: component
       properties:
-        # NOTE: If the file at the relative path below is missing, run `wash build`
-        image: file://./build/http_keyvalue_counter_s.wasm
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/http_keyvalue_counter_s.wasm
+        image: ghcr.io/wasmcloud/components/http-keyvalue-counter-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
