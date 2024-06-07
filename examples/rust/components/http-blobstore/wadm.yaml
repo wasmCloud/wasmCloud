@@ -11,7 +11,9 @@ spec:
     - name: http-blobstore
       type: component
       properties:
-        image: file://./build/http_blobstore_s.wasm
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/http_blobstore_s.wasm
+        image: ghcr.io/wasmcloud/components/http-blobstore-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler

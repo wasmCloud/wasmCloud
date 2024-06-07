@@ -12,8 +12,9 @@ spec:
     - name: querier
       type: component
       properties:
-        # NOTE: You must run `wash build` for the WebAssembly binary at the relative path below to be present
-        image: file://./build/sqldb_postgres_query_s.wasm
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/sqldb_postgres_query_s.wasm
+        image: ghcr.io/wasmcloud/components/sqldb-postgres-query-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler

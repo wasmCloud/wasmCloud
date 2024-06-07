@@ -10,7 +10,9 @@ spec:
     - name: echo
       type: component
       properties:
-        image: file://./build/echo_messaging_s.wasm
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/echo_messaging_s.wasm
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
         id: echo
       traits:
         # Govern the spread/scheduling of the component
