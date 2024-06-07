@@ -698,7 +698,7 @@ impl Provider for FsProvider {
         }
 
         // Determine the root path value
-        let root_val: PathBuf = match config.iter().find(|(key, _)| **key == "ROOT") {
+        let root_val: PathBuf = match config.iter().find(|(key, _)| key.to_uppercase() == "ROOT") {
             None => "/tmp".into(),
             Some((_, value)) => value.into(),
         };
