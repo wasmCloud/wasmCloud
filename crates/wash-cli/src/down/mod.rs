@@ -78,7 +78,11 @@ pub struct DownCommand {
     pub all: bool,
 
     /// Purge NATS Jetstream storage and streams that persist when wasmCloud is stopped
-    #[clap(long = "purge", alias = "flush")]
+    #[clap(
+        long = "purge-jetstream",
+        alias = "flush-jetstream",
+        default_value = "none"
+    )]
     pub purge: PurgeJetstream,
 }
 
@@ -128,16 +132,19 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             );
             return Ok(CommandOutput::new(out_text, out_json));
         } else {
-            // TODO: don't die on this
             let wasmcloud_pid_file_path = install_dir.join(WASMCLOUD_PID_FILE);
-            tokio::fs::remove_file(&wasmcloud_pid_file_path)
+            // Failing to find the pid file is not an error that should prevent stopping other resources
+            if let Err(e) = tokio::fs::remove_file(&wasmcloud_pid_file_path)
                 .await
                 .with_context(|| {
                     format!(
                         "failed to find wasmcloud pid file [{}]",
                         wasmcloud_pid_file_path.display()
                     )
-                })?;
+                })
+            {
+                warn!("{}", e.to_string());
+            }
         }
     } else {
         warn!("Couldn't connect to NATS, unable to stop running hosts")
@@ -146,12 +153,16 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     match stop_wadm(&install_dir).await {
         Ok(_) => {
             let pid_file_path = &install_dir.join(WADM_PID);
-            // TODO: don't die on this
-            tokio::fs::remove_file(&pid_file_path)
+            // Failing to find the pid file is not an error that should prevent stopping other resources
+            if let Err(e) = tokio::fs::remove_file(&pid_file_path)
                 .await
                 .with_context(|| {
                     format!("failed to find WADM pid file [{}]", pid_file_path.display())
-                })?;
+                })
+            {
+                warn!("{}", e.to_string());
+            }
+
             out_json.insert("wadm_stopped".to_string(), json!(true));
             out_text.push_str("✅ wadm stopped successfully\n");
         }
