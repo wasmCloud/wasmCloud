@@ -6818,6 +6818,7 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+ "url",
  "uuid 1.8.0",
  "wascap 0.15.0",
  "webpki-roots 0.26.1",
