@@ -6180,6 +6180,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
+name = "wadm-client"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7323280a9b69ac1bd9a3ebc829f24a7b03de974b67531026341f89cf7271584c"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "nkeys 0.3.2",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "wadm-types",
+]
+
+[[package]]
 name = "wadm-types"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6350,6 +6371,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wadm-client",
  "wadm-types",
  "warp",
  "wascap 0.15.0",
@@ -6417,6 +6439,7 @@ dependencies = [
  "toml 0.8.14",
  "tracing",
  "url",
+ "wadm-client",
  "wadm-types",
  "walkdir",
  "wascap 0.15.0",
