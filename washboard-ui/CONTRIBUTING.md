@@ -33,7 +33,7 @@ to avoid the following error:
 `Unable to resolve path to module '@wasmcloud/lattice-client-react'  import/no-unresolved`
 
 ```bash
-yarn run turbo:lint
+yarn run turbo:build
 ```
 ### Start a local UI development server
 
