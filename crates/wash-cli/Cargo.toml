@@ -63,6 +63,7 @@ tracing-subscriber = { workspace = true, features = [
     "std",
 ] }
 url = { workspace = true }
+wadm-client = { workspace = true }
 wadm-types = { workspace = true }
 warp = { workspace = true }
 wascap = { workspace = true }

@@ -554,7 +554,7 @@ impl TestWashInstance {
                 "--timeout-ms",
                 DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG,
                 "--ctl-port",
-                &self.nats_port.to_string().as_ref(),
+                self.nats_port.to_string().as_ref(),
             ])
             .kill_on_drop(true)
             .output()
