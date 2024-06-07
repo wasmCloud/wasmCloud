@@ -4,6 +4,7 @@ use std::process::{Output, Stdio};
 
 use anyhow::{bail, Context as _, Result};
 use clap::Parser;
+use futures::future::join_all;
 use serde_json::json;
 use tokio::process::Command;
 use tracing::warn;
@@ -20,6 +21,19 @@ use crate::up::{
     DEFAULT_LATTICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
     WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_LATTICE,
 };
+
+#[derive(Parser, Debug, Clone, Default, clap::ValueEnum, Eq, PartialEq)]
+pub enum PurgeJetstream {
+    /// Don't purge any Jetstream data, the default
+    #[default]
+    None,
+    /// Purge all streams and KV buckets for wasmCloud and wadm
+    All,
+    /// Purge all streams and KV buckets for wadm, removing all application manifests
+    Wadm,
+    /// Purge all KV buckets for wasmCloud, removing all links and configuration data
+    Wasmcloud,
+}
 
 #[derive(Parser, Debug, Clone, Default)]
 pub struct DownCommand {
@@ -59,8 +73,13 @@ pub struct DownCommand {
     #[clap(long = "host-id")]
     pub host_id: Option<ServerId>,
 
+    /// Shutdown all hosts running locally if launched with --multi-local
     #[clap(long = "all")]
     pub all: bool,
+
+    /// Purge NATS Jetstream storage and streams that persist when wasmCloud is stopped
+    #[clap(long = "purge", alias = "flush")]
+    pub purge: PurgeJetstream,
 }
 
 pub async fn handle_command(
@@ -78,7 +97,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     let mut out_json = HashMap::new();
     let mut out_text = String::from("");
 
-    if let Ok(client) = create_nats_client_from_opts(
+    let nats_client = create_nats_client_from_opts(
         &cmd.ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string()),
         &cmd.ctl_port
@@ -89,9 +108,10 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
         cmd.ctl_credsfile,
         cmd.ctl_tls_ca_file,
     )
-    .await
-    {
-        let ctl_client = wasmcloud_control_interface::ClientBuilder::new(client)
+    .await;
+
+    if let Ok(client) = nats_client.as_ref() {
+        let ctl_client = wasmcloud_control_interface::ClientBuilder::new(client.clone())
             .lattice(&cmd.lattice)
             .auction_timeout(std::time::Duration::from_secs(2))
             .build();
@@ -108,6 +128,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             );
             return Ok(CommandOutput::new(out_text, out_json));
         } else {
+            // TODO: don't die on this
             let wasmcloud_pid_file_path = install_dir.join(WASMCLOUD_PID_FILE);
             tokio::fs::remove_file(&wasmcloud_pid_file_path)
                 .await
@@ -125,6 +146,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     match stop_wadm(&install_dir).await {
         Ok(_) => {
             let pid_file_path = &install_dir.join(WADM_PID);
+            // TODO: don't die on this
             tokio::fs::remove_file(&pid_file_path)
                 .await
                 .with_context(|| {
@@ -137,6 +159,55 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             out_json.insert("wadm_stopped".to_string(), json!(false));
             out_text.push_str(&format!("❌ Could not stop wadm: {e:?}\n"));
         }
+    }
+
+    if nats_client
+        .as_ref()
+        .is_ok_and(|_| cmd.purge != PurgeJetstream::None)
+    {
+        sp.update_spinner_message(" Purging NATS Jetstream ...".to_string());
+        // SAFETY: nats_client is checked to be Ok() above
+        let client = nats_client.unwrap();
+        let js_client = async_nats::jetstream::new(client);
+
+        if cmd.purge == PurgeJetstream::All || cmd.purge == PurgeJetstream::Wasmcloud {
+            join_all(vec![
+                delete_kv_idempotent(&js_client, format!("CONFIGDATA_{}", &cmd.lattice)),
+                delete_kv_idempotent(&js_client, format!("LATTICEDATA_{}", &cmd.lattice)),
+            ])
+            .await
+            .iter()
+            .for_each(|result| {
+                if let Err(e) = result {
+                    out_text.push_str(&format!("❌ Error removing stream: {e:?}\n"));
+                }
+            });
+        }
+
+        if cmd.purge == PurgeJetstream::All || cmd.purge == PurgeJetstream::Wadm {
+            let kvs = join_all(vec![
+                delete_kv_idempotent(&js_client, "wadm_manifests"),
+                delete_kv_idempotent(&js_client, "wadm_state"),
+            ])
+            .await;
+
+            let streams = join_all(vec![
+                delete_stream_idempotent(&js_client, "wadm_commands"),
+                delete_stream_idempotent(&js_client, "wadm_events"),
+                delete_stream_idempotent(&js_client, "wadm_mirror"),
+                delete_stream_idempotent(&js_client, "wadm_notify"),
+                delete_stream_idempotent(&js_client, "wadm_status"),
+            ])
+            .await;
+
+            kvs.iter().chain(streams.iter()).for_each(|result| {
+                if let Err(e) = result {
+                    out_text.push_str(&format!("❌ Error removing stream: {e:?}\n"));
+                }
+            });
+        }
+
+        out_text.push_str("✅ NATS Jetstream purged successfully\n");
     }
 
     let nats_bin = install_dir.join(NATS_SERVER_BINARY);
@@ -203,5 +274,29 @@ where
             .map_err(|e| anyhow::anyhow!(e))
     } else {
         bail!("No pidfile found at [{}]", wadm_pidfile_path.display())
+    }
+}
+
+/// Delete a Jetstream stream, ignoring errors if the stream doesn't exist
+async fn delete_stream_idempotent(
+    js: &async_nats::jetstream::Context,
+    stream_name: impl AsRef<str>,
+) -> Result<()> {
+    match js.delete_stream(stream_name).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("stream not found") => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
+    }
+}
+
+/// Delete a Jetstream key-value bucket, ignoring errors if the bucket doesn't exist
+async fn delete_kv_idempotent(
+    js: &async_nats::jetstream::Context,
+    key: impl AsRef<str>,
+) -> Result<()> {
+    match js.delete_key_value(key).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("stream not found") => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
     }
 }
