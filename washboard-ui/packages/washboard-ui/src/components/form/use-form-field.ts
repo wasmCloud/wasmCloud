@@ -1,20 +1,8 @@
 import * as React from 'react';
-import {FieldError, useFormContext} from 'react-hook-form';
+import {useFormContext} from 'react-hook-form';
 import {FormFieldContext, FormItemContext} from './context';
 
-type UseFormField = {
-  invalid: boolean;
-  isDirty: boolean;
-  isTouched: boolean;
-  error?: FieldError | undefined;
-  id: string;
-  name: string;
-  formItemId: string;
-  formDescriptionId: string;
-  formMessageId: string;
-};
-
-export const useFormField = (): UseFormField => {
+export const useFormField = () => {
   const fieldContext = React.useContext(FormFieldContext);
   const itemContext = React.useContext(FormItemContext);
   const {getFieldState, formState} = useFormContext();
