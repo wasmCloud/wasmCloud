@@ -320,7 +320,7 @@ wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-s
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-test-util = { version = "^0.2.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.4.0", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.202", default-features = false }
+wasmparser = { version = "0.209", default-features = false }
 wasmtime = { version = "20", default-features = false }
 wasmtime-wasi = { version = "20", default-features = false }
 wasmtime-wasi-http = { version = "20", default-features = false }
