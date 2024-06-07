@@ -144,7 +144,6 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
         if !inv.components.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
-                TableCell::new_with_alignment("Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
                 TableCell::new_with_alignment("Max Count", 1, Alignment::Left),
             ]));
@@ -152,7 +151,6 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
                 let a = a.clone();
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(a.id, 1, Alignment::Left),
-                    TableCell::new_with_alignment(format_optional(a.name), 1, Alignment::Left),
                     TableCell::new_with_alignment(a.image_ref, 2, Alignment::Left),
                     TableCell::new_with_alignment(a.max_instances, 1, Alignment::Left),
                 ]))

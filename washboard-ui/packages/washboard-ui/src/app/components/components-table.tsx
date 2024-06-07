@@ -35,8 +35,9 @@ const columns = [
       expandedRow: 'empty',
     },
   }),
-  columnHelper.accessor('name', {
-    header: 'Name',
+  columnHelper.accessor('id', {
+    header: 'ID',
+    cell: (info) => <ShortCopy text={info.getValue()} />,
     meta: {
       baseRow: 'visible',
       expandedRow: 'empty',
@@ -82,14 +83,6 @@ const columns = [
       expandedCell: (_hostId: string, instances: string) => () => {
         return instances.length;
       },
-    },
-  }),
-  columnHelper.accessor('id', {
-    header: 'ID',
-    cell: (info) => <ShortCopy text={info.getValue()} />,
-    meta: {
-      baseRow: 'visible',
-      expandedRow: 'empty',
     },
   }),
   columnHelper.accessor('max_instances', {
