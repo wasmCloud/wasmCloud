@@ -1,4 +1,6 @@
-interface oam-types {
+package wasmcloud:oam@0.1.0;
+
+interface types {
     // The overall structure of an OAM manifest.
     record oam-manifest {
         api-version: string,
@@ -23,7 +25,7 @@ interface oam-types {
     record component {
         name: string,
         properties: properties,
-        traits: option<list<trait>>,
+        traits: list<trait>,
     }
 
     // Properties that can be defined for a component
