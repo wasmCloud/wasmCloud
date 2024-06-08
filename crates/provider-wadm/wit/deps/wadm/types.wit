@@ -3,43 +3,6 @@ package wasmcloud:wadm@0.1.0;
 interface types {
     use wasmcloud:oam/types@0.1.0.{oam-manifest};
 
-    record deploy-response {
-        %result: deploy-result,
-        message: string
-    }
-
-    record put-model-response {
-        %result: put-result,
-        total-versions: u32,
-        current-version: string,
-        message: string,
-        name: string
-    }
-
-    record version-response {
-        %result: get-result,
-        message: string,
-        versions: list<version-info>
-    }
-
-    record status-response {
-        %result: status-result,
-        message: string,
-        status: option<status>
-    }
-
-    record get-model-response {
-        %result: get-result,
-        message: string,
-        manifest: option<oam-manifest>
-    }
-
-    record delete-model-response {
-        %result: delete-result,
-        message: string,
-        undeploy: bool
-    }
-
     record model-summary {
         name: string,
         version: string,
