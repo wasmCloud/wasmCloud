@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-wadm"
-version = "0.20.0"
+version = "0.1.0"
 description = """
 """
 
@@ -29,3 +29,5 @@ wasmcloud-provider-sdk = { workspace = true }
 wash-lib = { workspace = true, features = ["nats"] }
 wadm = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
+wadm-client = { workspace = true }
+wadm-types = { workspace = true }
