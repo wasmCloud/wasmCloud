@@ -13,7 +13,7 @@ spec:
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         # image: file://./build/dog_fetcher_s.wasm
-        image: ghcr.io/wasmcloud/components/dog-fetcher:0.1.0
+        image: ghcr.io/wasmcloud/components/dog-fetcher-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
