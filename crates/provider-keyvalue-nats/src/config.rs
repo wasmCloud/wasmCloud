@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
-const DEFAULT_JETSTREAM_DOMAIN: &str = "core";
+const DEFAULT_NATS_URI: &str = "nats://0.0.0.0:4222";
 
 const CONFIG_NATS_URI: &str = "cluster_uri";
 const CONFIG_NATS_JETSTREAM_DOMAIN: &str = "js_domain";
@@ -21,6 +20,7 @@ pub struct NatsConnectionConfig {
     #[serde(default)]
     pub cluster_uri: Option<String>,
 
+    /// NOTE: If the ID of a NATS Kv Store is passed to the provider, then the JetStream Domain could be removed.
     /// JetStream Domain to connect to
     #[serde(default)]
     pub js_domain: Option<String>,
@@ -76,7 +76,7 @@ impl Default for NatsConnectionConfig {
     fn default() -> NatsConnectionConfig {
         NatsConnectionConfig {
             cluster_uri: Some(DEFAULT_NATS_URI.into()),
-            js_domain: Some(DEFAULT_JETSTREAM_DOMAIN.into()),
+            js_domain: None,
             auth_jwt: None,
             auth_seed: None,
             tls_ca: None,

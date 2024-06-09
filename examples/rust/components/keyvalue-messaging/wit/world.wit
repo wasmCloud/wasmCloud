@@ -4,6 +4,7 @@ world demo {
   import wasi:logging/logging;
   import wasi:config/runtime@0.2.0-draft;
   import wasi:keyvalue/atomics@0.2.0-draft;
+  import wasi:keyvalue/batch@0.2.0-draft;
   import wasi:keyvalue/store@0.2.0-draft;
   import wasmcloud:messaging/consumer@0.2.0;
 

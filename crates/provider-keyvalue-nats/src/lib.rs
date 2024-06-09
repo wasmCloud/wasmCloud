@@ -13,14 +13,14 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::jetstream::kv::Store;
 use futures::{StreamExt, TryStreamExt};
-use tokio::sync::{RwLock, Mutex};
 use tokio::fs;
-use tracing::{debug, error, warn, info, instrument};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, instrument, warn};
 use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
-    propagate_trace_for_ctx,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
+    Provider,
 };
 
 mod config;
@@ -36,23 +36,29 @@ pub async fn run() -> anyhow::Result<()> {
     KvNatsProvider::run().await
 }
 
+/// The `atomic::increment` function's exponential backoff base interval
+const EXPONENTIAL_BACKOFF_BASE_INTERVAL: u64 = 5; // milliseconds
+
+// TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
+/// [`NatsKvStore`] holds a NATS client's handle to a Kv store.
+#[derive(Debug, Clone)]
+struct NatsKvStore {
+    pub js_domain: Option<String>,
+    pub bucket_id: Option<String>,
+    pub handle: Option<async_nats::jetstream::kv::Store>,
+}
+
 /// [`NatsClientBundle`] holds a NATS client, and stream and locks information related to it.
 #[derive(Debug, Clone)]
 struct NatsClientBundle {
     pub client: async_nats::Client,
-    pub js_context: async_nats::jetstream::Context,
-    // Combination of the NATS server URI and the JetStream domain
-    pub atomic_lock_suffix: String,
+    pub kv_store: NatsKvStore,
 }
 
 /// NATS implementation for wasi:keyvalue (via wrpc:keyvalue)
 #[derive(Default, Clone)]
 pub struct KvNatsProvider {
     consumer_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
-    // Ensuring thread-safety across invocations of the wrpc-keyvalue/atomic's `increment`
-    // function, when the same NATS Kv bucket/key pair is used.
-    // See the `increment` function for more details.
-    atomic_locks: Arc<Mutex<HashMap<String, Arc<RwLock<()>>>>>,
     default_config: NatsConnectionConfig,
 }
 /// Implement the [`KvNatsProvider`] and [`Provider`] traits
@@ -87,10 +93,7 @@ impl KvNatsProvider {
     }
 
     /// Attempt to connect to NATS url (with JWT credentials, if provided)
-    async fn connect(
-        &self,
-        cfg: NatsConnectionConfig,
-    ) -> anyhow::Result<NatsClientBundle> {
+    async fn connect(&self, cfg: NatsConnectionConfig) -> anyhow::Result<NatsClientBundle> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
                 let seed = KeyPair::from_seed(&seed).context("failed to parse seed key pair")?;
@@ -121,21 +124,22 @@ impl KvNatsProvider {
             .connect(uri.clone())
             .await?;
 
-        // Connect to JetStream
-        let js_context = if let Some(domain) = cfg.js_domain.as_ref() {
-            async_nats::jetstream::with_domain(client.clone(), domain)
-        } else {
-            async_nats::jetstream::new(client.clone())
-        };
-
-        // Set the atomic lock prefix
-        let atomic_lock_suffix = format!("{}@{}", cfg.js_domain.unwrap_or_default(), uri);
-
-        Ok(NatsClientBundle { client, js_context, atomic_lock_suffix })
+        Ok(NatsClientBundle {
+            client,
+            kv_store: NatsKvStore {
+                js_domain: cfg.js_domain,
+                bucket_id: None,
+                handle: None,
+            },
+        })
     }
 
+    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
     /// Helper function to get the NATS client bundle from the client component's context
-    async fn get_nats_client_bundle(&self, context: Option<Context>) -> anyhow::Result<NatsClientBundle> {
+    async fn get_nats_client_bundle(
+        &self,
+        context: Option<Context>,
+    ) -> anyhow::Result<NatsClientBundle> {
         if let Some(ref source_id) = context
             .as_ref()
             .and_then(|Context { component, .. }| component.clone())
@@ -155,6 +159,23 @@ impl KvNatsProvider {
         }
     }
 
+    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
+    /// Helper function to set the NATS client bundle, with client's updated NatsKvStore, from the client component's context
+    async fn set_nats_client_bundle(
+        &self,
+        context: Option<Context>,
+        nats_bundle: NatsClientBundle,
+    ) {
+        if let Some(ref source_id) = context
+            .as_ref()
+            .and_then(|Context { component, .. }| component.clone())
+        {
+            let mut components = self.consumer_components.write().await;
+            components.insert(source_id.clone(), nats_bundle);
+        }
+    }
+
+    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
     /// Helper function to open an existing NATS Kv bucket from the client component's context
     #[instrument(level = "debug", skip_all)]
     async fn kv_store(
@@ -162,34 +183,67 @@ impl KvNatsProvider {
         context: Option<Context>,
         bucket: String,
     ) -> Result<Store, keyvalue::store::Error> {
-        let nats_bundle = self.get_nats_client_bundle(context).await
+        let mut nats_bundle = self
+            .get_nats_client_bundle(context.clone())
+            .await
             .map_err(|e| keyvalue::store::Error::Other(e.to_string()))?;
-        match nats_bundle.js_context.get_key_value(&bucket).await
-        {
-            Ok(store) => {
-                info!(%bucket, "bucket opened");
-                Ok(store)
+        if nats_bundle.kv_store.bucket_id != Some(bucket.clone()) {
+            // Determine the JetStream client based on js_domain
+            let js_context = if let Some(domain) = &nats_bundle.kv_store.js_domain {
+                async_nats::jetstream::with_domain(nats_bundle.client.clone(), domain.clone())
+            } else {
+                async_nats::jetstream::new(nats_bundle.client.clone())
+            };
+
+            // Connect to JetStream, and get the key-value store
+            match js_context.get_key_value(&bucket).await {
+                Ok(store) => {
+                    nats_bundle.kv_store.bucket_id = Some(bucket.clone());
+                    nats_bundle.kv_store.handle = Some(store.clone());
+                    self.set_nats_client_bundle(context, nats_bundle).await;
+                    info!(%bucket, "NATS Kv store opened");
+                    Ok(store)
+                }
+                Err(e) => {
+                    error!(%bucket, "failed to open NATS Kv store: {e:?}");
+                    Err(keyvalue::store::Error::Other(e.to_string()))
+                }
             }
-            Err(e) => {
-                error!(%bucket, "failed to open bucket: {e:?}");
-                Err(keyvalue::store::Error::Other(e.to_string()))
-            }
+        } else {
+            // If the bucket_id matches, simply return the store
+            Ok(nats_bundle.kv_store.handle.as_ref().unwrap().clone())
         }
     }
 
     /// Helper function to get a value from the key-value store
     #[instrument(level = "debug", skip_all)]
-    async fn get(&self, context: Option<Context>, bucket: String, key: String) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    async fn get(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
         keyvalue::store::Handler::get(self, context, bucket, key).await
     }
 
     /// Helper function to set a value in the key-value store
-    async fn set(&self, context: Option<Context>, bucket: String, key: String, value: Vec<u8>) -> anyhow::Result<Result<()>> {
+    async fn set(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+        value: Vec<u8>,
+    ) -> anyhow::Result<Result<()>> {
         keyvalue::store::Handler::set(self, context, bucket, key, value).await
     }
 
     /// Helper function to delete a key-value pair from the key-value store
-    async fn delete(&self, context: Option<Context>, bucket: String, key: String) -> anyhow::Result<Result<()>> {
+    async fn delete(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<()>> {
         keyvalue::store::Handler::delete(self, context, bucket, key).await
     }
 }
@@ -241,7 +295,7 @@ impl Provider for KvNatsProvider {
         if let Some(bundle) = links.remove(source_id) {
             let client = &bundle.client;
             debug!(
-                "droping NATS client [{}] for (consumer) component [{}]...",
+                "dropping NATS client [{}] for (consumer) component [{}]...",
                 format!(
                     "{}:{}",
                     client.server_info().server_id,
@@ -282,14 +336,12 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         match self.kv_store(context, bucket).await {
-            Ok(store) => {
-                match store.get(key.clone()).await {
-                    Ok(Some(bytes)) => Ok(Ok(Some(bytes.to_vec()))),
-                    Ok(None) => Ok(Ok(None)),
-                    Err(err) => {
-                      error!(%key, "failed to get key value: {err:?}");
-                      Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-                    }
+            Ok(store) => match store.get(key.clone()).await {
+                Ok(Some(bytes)) => Ok(Ok(Some(bytes.to_vec()))),
+                Ok(None) => Ok(Ok(None)),
+                Err(err) => {
+                    error!(%key, "failed to get key value: {err:?}");
+                    Ok(Err(keyvalue::store::Error::Other(err.to_string())))
                 }
             },
             Err(err) => Ok(Err(err)),
@@ -308,13 +360,11 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         match self.kv_store(context, bucket).await {
-            Ok(store) => {
-                match store.put(key.clone(), bytes::Bytes::from(value)).await {
+            Ok(store) => match store.put(key.clone(), bytes::Bytes::from(value)).await {
                 Ok(_) => Ok(Ok(())),
                 Err(err) => {
                     error!(%key, "failed to set key value: {err:?}");
                     Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-                }
                 }
             },
             Err(err) => Ok(Err(err)),
@@ -332,13 +382,11 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         match self.kv_store(context, bucket).await {
-            Ok(store) => {
-                match store.purge(key.clone()).await {
+            Ok(store) => match store.purge(key.clone()).await {
                 Ok(_) => Ok(Ok(())),
                 Err(err) => {
                     error!(%key, "failed to delete key: {err:?}");
                     Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-                }
                 }
             },
             Err(err) => Ok(Err(err)),
@@ -356,10 +404,10 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         match self.get(context, bucket, key).await {
-          Ok(Ok(Some(_))) => Ok(Ok(true)),
-          Ok(Ok(None)) => Ok(Ok(false)),
-          Ok(Err(err)) => Ok(Err(err)),
-          Err(err) => Ok(Err(keyvalue::store::Error::Other(err.to_string()))),
+            Ok(Ok(Some(_))) => Ok(Ok(true)),
+            Ok(Ok(None)) => Ok(Ok(false)),
+            Ok(Err(err)) => Ok(Err(err)),
+            Err(err) => Ok(Err(keyvalue::store::Error::Other(err.to_string()))),
         }
     }
 
@@ -374,24 +422,24 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         match self.kv_store(context, bucket).await {
-            Ok(store) => {
-                match store.keys().await {
-                    Ok(keys) => {
-                        match keys.skip(cursor.unwrap_or(0) as usize).take(usize::MAX).try_collect().await {
-                            Ok(keys) => Ok(Ok(keyvalue::store::KeyResponse {
-                                keys,
-                                cursor: None,
-                            })),
-                            Err(err) => {
-                                error!("failed to list keys: {err:?}");
-                                Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-                            }
+            Ok(store) => match store.keys().await {
+                Ok(keys) => {
+                    match keys
+                        .skip(cursor.unwrap_or(0) as usize)
+                        .take(usize::MAX)
+                        .try_collect()
+                        .await
+                    {
+                        Ok(keys) => Ok(Ok(keyvalue::store::KeyResponse { keys, cursor: None })),
+                        Err(err) => {
+                            error!("failed to list keys: {err:?}");
+                            Ok(Err(keyvalue::store::Error::Other(err.to_string())))
                         }
-                    },
-                    Err(err) => {
-                        error!("failed to list keys: {err:?}");
-                        Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-                    },
+                    }
+                }
+                Err(err) => {
+                    error!("failed to list keys: {err:?}");
+                    Ok(Err(keyvalue::store::Error::Other(err.to_string())))
                 }
             },
             Err(err) => Ok(Err(err)),
@@ -400,15 +448,6 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
 }
 
 /// Implement the 'wasi:keyvalue/atomic' capability provider interface
-///
-/// True atomic operations requires the `resource provider`, in this case NATS server, support.
-/// NATS, however, does not support keyvalue store atomic operations; so to avoid depriving the
-/// consumer components of the atomic increment operation, the implementation is using a
-/// tokio::sync::RwLock, which will ensure atomicity of value increments given the following
-/// constraints:
-///  1. The same KvNatsProvider instance is used for the increment operation.
-///  2. The same NATS server and Jetstream domain are targeted.
-///  3. The same NATS Kv key-bucket pair is targeted.
 impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
     /// Increments a numeric value, returning the new value
     #[instrument(level = "debug", skip(self))]
@@ -421,34 +460,65 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
         propagate_trace_for_ctx!(context);
 
-        // Get or create the lock for this bucket:key pair
-        let lock = {
-          let mut locks = self.atomic_locks.lock().await;
-          let lock_key = format!("{}-{}-{}", key, bucket, self.get_nats_client_bundle(context.clone()).await?.atomic_lock_suffix);
-          locks.entry(lock_key).or_insert_with(|| Arc::new(RwLock::new(()))).clone()
-        };
+        // Try to increment the value up to 5 times with exponential backoff
+        let kv_store = self.kv_store(context.clone(), bucket.clone()).await?;
 
-        // Lock the bucket:key pair
-        let _permit = lock.write().await;
+        let mut new_value = 0;
+        let mut success = false;
+        for attempt in 0..5 {
+            // Get the latest entry from the key-value store
+            let entry = kv_store.entry(key.clone()).await?;
 
-        // Get the current value
-        let current_value = match self.get(context.clone(), bucket.clone(), key.clone()).await? {
-            Ok(Some(value)) => {
-                // Convert the value to a u64
-                let value_str = std::str::from_utf8(&value)?;
-                value_str.parse::<u64>()?
+            // Get the current value and revision
+            let (current_value, revision) = match &entry {
+                Some(entry) if !entry.value.is_empty() => {
+                    let value_str = std::str::from_utf8(&entry.value)?;
+                    match value_str.parse::<u64>() {
+                        Ok(num) => (num, entry.revision),
+                        Err(_) => {
+                            return Err(keyvalue::store::Error::Other(
+                                "Cannot increment a non-numerical value".to_string(),
+                            )
+                            .into())
+                        }
+                    }
+                }
+                _ => (0, entry.as_ref().map_or(0, |e| e.revision)),
+            };
+
+            new_value = current_value + delta;
+
+            // Increment the value of the key
+            match kv_store
+                .update(
+                    key.clone(),
+                    bytes::Bytes::from(new_value.to_string().into_bytes()),
+                    revision,
+                )
+                .await
+            {
+                Ok(_) => {
+                    success = true;
+                    break; // Exit the loop on success
+                }
+                Err(_) => {
+                    // Apply exponential backoff delay if the revision has changed (i.e. the key has been updated since the last read)
+                    if attempt > 0 {
+                        let wait_time = EXPONENTIAL_BACKOFF_BASE_INTERVAL * 2u64.pow(attempt - 1);
+                        tokio::time::sleep(std::time::Duration::from_millis(wait_time)).await;
+                    }
+                }
             }
-            Ok(None) => 0,  // If the key doesn't exist, start from 0
-            Err(err) => return Ok(Err(err)),
-        };
+        }
 
-        // Increment the value
-        let new_value = current_value + delta;
-
-        // Set the new value
-        let _ = self.set(context, bucket, key, new_value.to_string().into_bytes()).await?;
-
-        Ok(Ok(new_value))
+        if success {
+            Ok(Ok(new_value))
+        } else {
+            // If all attempts fail, let user know
+            Ok(Err(keyvalue::store::Error::Other(
+                "Failed to increment the value after 5 attempts".to_string(),
+            )))
+        }
     }
 }
 
@@ -462,7 +532,6 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
-
         let ctx = ctx.clone();
         let bucket = bucket.clone();
 
@@ -473,7 +542,9 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
                 let ctx = ctx.clone();
                 let bucket = bucket.clone();
                 async move {
-                self.get(ctx, bucket, key.clone()).await.map(|value| (key, value))
+                    self.get(ctx, bucket, key.clone())
+                        .await
+                        .map(|value| (key, value))
                 }
             })
             .collect::<futures::stream::FuturesUnordered<_>>()
@@ -482,20 +553,23 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
 
         match results {
             Ok(values) => {
-                let values: Result<Vec<_>, _> = values.into_iter().map(|(k, res)| match res {
-                    Ok(Some(v)) => Ok(Some((k, v))),
-                    Ok(None) => Ok(None),
-                    Err(err) => {
-                        error!("failed to parse key-value pairs: {err:?}");
-                        Err(keyvalue::store::Error::Other(err.to_string()))
-                    },
-                }).collect();
+                let values: Result<Vec<_>, _> = values
+                    .into_iter()
+                    .map(|(k, res)| match res {
+                        Ok(Some(v)) => Ok(Some((k, v))),
+                        Ok(None) => Ok(None),
+                        Err(err) => {
+                            error!("failed to parse key-value pairs: {err:?}");
+                            Err(keyvalue::store::Error::Other(err.to_string()))
+                        }
+                    })
+                    .collect();
                 Ok(values)
             }
             Err(err) => {
                 error!("failed to get many keys: {err:?}");
                 Ok(Err(keyvalue::store::Error::Other(err.to_string())))
-            },
+            }
         }
     }
 
@@ -507,7 +581,6 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
         bucket: String,
         items: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<Result<()>> {
-
         let ctx = ctx.clone();
         let bucket = bucket.clone();
 
@@ -517,9 +590,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
             .map(|(key, value)| {
                 let ctx = ctx.clone();
                 let bucket = bucket.clone();
-                async move {
-                self.set(ctx, bucket, key, value).await
-                }
+                async move { self.set(ctx, bucket, key, value).await }
             })
             .collect::<futures::stream::FuturesUnordered<_>>()
             .try_collect()
@@ -537,7 +608,6 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<()>> {
-
         let ctx = ctx.clone();
         let bucket = bucket.clone();
 
@@ -547,9 +617,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
             .map(|key| {
                 let ctx = ctx.clone();
                 let bucket = bucket.clone();
-                async move {
-                self.delete(ctx, bucket, key).await
-                }
+                async move { self.delete(ctx, bucket, key).await }
             })
             .collect::<futures::stream::FuturesUnordered<_>>()
             .try_collect()
@@ -573,12 +641,14 @@ fn add_tls_ca(
         bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
     };
     let tls_client = async_nats::rustls::ClientConfig::builder()
+        // TODO: Replace the `with_safe_defaults` method with the following 2 lines, when the async_nats crate is upgraded to 0.35.x, or higher
+        // .with_safe_default_protocol_versions()
+        // .map_err(|e| format!("Failed to set protocol versions: {}", e))?
         .with_safe_defaults()
         .with_root_certificates(roots)
         .with_no_client_auth();
     Ok(opts.tls_client_config(tls_client).require_tls(true))
 }
-
 
 // Performing various provider configuration tests
 #[cfg(test)]
@@ -653,22 +723,22 @@ mod test {
     // Verify that the NatsConnectionConfig's merge function prioritizes the new values over the old ones
     #[test]
     fn test_merge_non_default_values() {
-      let ncc1 = NatsConnectionConfig {
-        js_domain: Some("old_domain".to_string()),
-        cluster_uri: Some("old_server".to_string()),
-        auth_jwt: Some("old_jawty".to_string()),
-        ..Default::default()
-      };
-      let ncc2 = NatsConnectionConfig {
-        js_domain: Some("new_domain".to_string()),
-        cluster_uri: Some("server1".to_string()),
-        auth_jwt: Some("new_jawty".to_string()),
-        ..Default::default()
-      };
-      let ncc3 = ncc1.merge(&ncc2);
-      assert_eq!(ncc3.js_domain, ncc2.js_domain);
-      assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
-      assert_eq!(ncc3.auth_jwt, ncc2.auth_jwt);
+        let ncc1 = NatsConnectionConfig {
+            js_domain: Some("old_domain".to_string()),
+            cluster_uri: Some("old_server".to_string()),
+            auth_jwt: Some("old_jawty".to_string()),
+            ..Default::default()
+        };
+        let ncc2 = NatsConnectionConfig {
+            js_domain: Some("new_domain".to_string()),
+            cluster_uri: Some("server1".to_string()),
+            auth_jwt: Some("new_jawty".to_string()),
+            ..Default::default()
+        };
+        let ncc3 = ncc1.merge(&ncc2);
+        assert_eq!(ncc3.js_domain, ncc2.js_domain);
+        assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
+        assert_eq!(ncc3.auth_jwt, ncc2.auth_jwt);
     }
 
     // Verify that tls_ca is set

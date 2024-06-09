@@ -17,4 +17,6 @@ dump.rdb
 host_config.json
 node_modules
 target/
+**/build/
 examples/**/Cargo.lock
+*-workspace
