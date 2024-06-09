@@ -17,7 +17,7 @@ spec:
           - name: nats-kv-example
             properties:
               bucket: "WASMCLOUD"
-              count: "5"
+              count: "3"
               pub_subject: "nats.atomic"
       traits:
         # Govern the spread/scheduling of the component
@@ -35,7 +35,7 @@ spec:
             # target_config:
             #   - name: nats-connection
             #     properties:
-            #       cluster_uri: "0.0.0.0:4222"
+            #       cluster_uri: "nats://0.0.0.0:4222"
             #       js_domain: "core"
         - type: link
           properties:
@@ -50,18 +50,19 @@ spec:
       properties:
         #image: ghcr.io/wasmcloud/provider-keyvalue-nats:0.1.0
         # NOTE: For the purpose of running this example, prior to the PR merge, a local archive using `wash par create` was used
-        image: file:///tmp/test/keyvalue-nats/build/wasmcloud-provider-keyvalue-nats.par.gz
+        image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
         # # NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
         # config:
         #   - name: nats-connection
         #     properties:
-        #       cluster_uri: "0.0.0.0:4222"
+        #       cluster_uri: "nats://0.0.0.0:4222"
         #       js_domain: "core"
     # Add a capability provider that implements `wasmcloud:messaging` using NATS
     - name: nats-msg
       type: capability
       properties:
         image: ghcr.io/wasmcloud/messaging-nats:canary
+        # image: file://../../../../src/bin/messaging-nats-provider/build/messaging-nats-provider.par.gz
       traits:
         - type: link
           properties:

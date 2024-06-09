@@ -322,7 +322,7 @@ jobs:
             subject: MESSAGING_NATS_SUBJECT
 
           - name: sqldb-postgres
-          subject: SQLDB_POSTGRES_SUBJECT
+            subject: SQLDB_POSTGRES_SUBJECT
 
     needs:
       - build-bin
