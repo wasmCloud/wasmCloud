@@ -33,11 +33,15 @@ pub struct Handler {
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     pub config_data: Arc<RwLock<ConfigBundle>>,
+    /// The lattice this handler will use for RPC
     pub lattice: String,
     /// The identifier of the component that this handler is associated with
     pub component_id: String,
     /// The current link targets. `instance:interface` -> `link-name`
     pub targets: Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    /// The current trace context of the handler, required to propagate trace context
+    /// when crossing the Wasm guest/host boundary
+    pub trace_ctx: Arc<RwLock<Vec<(String, String)>>>,
 
     /// Map of link names -> WIT ns & package -> WIT interface -> Target
     ///
@@ -71,13 +75,16 @@ impl Handler {
             lattice: self.lattice.clone(),
             component_id: self.component_id.clone(),
             targets: Arc::default(),
+            trace_ctx: Arc::default(),
             interface_links: self.interface_links.clone(),
             polyfills: self.polyfills.clone(),
             invocation_timeout: self.invocation_timeout,
         }
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
+        // TODO: store injector in handler, then use it?
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
         headers.insert("source-id", self.component_id.as_str());
@@ -88,6 +95,11 @@ impl Handler {
             headers,
             self.invocation_timeout,
         )
+    }
+
+    /// Set the current trace context in use by the handler
+    pub async fn set_trace_context(&self, trace_ctx: Vec<(String, String)>) {
+        *self.trace_ctx.write().await = trace_ctx;
     }
 
     async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
@@ -102,6 +114,7 @@ impl Handler {
         Ok(self.wrpc_client(&id))
     }
 
+    #[instrument(skip(self))]
     async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -782,7 +795,7 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(skip_all)]
     async fn handle(
         &self,
         request: wasmtime_wasi_http::types::OutgoingRequest,
@@ -793,6 +806,12 @@ impl OutgoingHttp for Handler {
         >,
     > {
         use wrpc_interface_http::OutgoingHandler;
+        // Reading a trace context should _never_ block because writing happens once at the beginning of a component
+        // invocation. If it does block here, it's a bug in the runtime, and it's better to deal with a
+        // disconnected trace than to block on the invocation for an extended period of time.
+        if let Ok(trace_context) = self.trace_ctx.try_read() {
+            wasmcloud_tracing::context::attach_span_context(&trace_context);
+        }
 
         let wrpc = self.wrpc_http_outgoing_handler().await?;
         let (res, body_errors, tx) = wrpc
