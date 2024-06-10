@@ -25,7 +25,7 @@
     "eslint": "^8.57.0",
     "eslint-config-turbo": "^1.13.4",
     "prettier": "^3.3.1",
-    "turbo": "^1.13.4",
+    "turbo": "^2.0.3",
     "typescript": "^5.4.5"
   }
 }
