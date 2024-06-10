@@ -15,7 +15,7 @@ spec:
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
         # image: file://./build/http_blobstore_s.wasm
-        image: ghcr.io/wasmcloud/components/http-blobstore-rust:0.1.0
+        image: ghcr.io/wasmcloud/components/http-blobstore-rust:0.2.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -62,4 +62,4 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         # 
         # image: file://../../../../crates/provider-blobstore-fs/provider-blobstore-fs.par.gz
-        image: ghcr.io/wasmcloud/blobstore-fs:canary
+        image: ghcr.io/wasmcloud/blobstore-fs:0.6.0
