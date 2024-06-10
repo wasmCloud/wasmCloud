@@ -32,7 +32,7 @@ Before we can connect to a Postgres database cluster, we'll need to have one run
 docker run \
     --rm \
     -e POSTGRES_PASSWORD=postgres \
-    --name pg \
+    --name pg -p 5432:5432\
     postgres:16.2-alpine
 ```
 
