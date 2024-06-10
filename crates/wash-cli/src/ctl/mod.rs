@@ -373,6 +373,8 @@ mod test {
                 max_instances,
                 annotations,
                 config,
+                skip_wait,
+                wait_timeout_ms,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
@@ -384,6 +386,8 @@ mod test {
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
                 assert_eq!(config, vec!["default-port", "lang"]);
+                assert!(!skip_wait);
+                assert_eq!(wait_timeout_ms, 5000);
             }
             cmd => panic!("ctl scale component constructed incorrect command {cmd:?}"),
         }

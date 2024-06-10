@@ -105,8 +105,8 @@ pub async fn scale_component(
     let event = wait_for_component_scaled_event(
         &mut receiver,
         Duration::from_millis(timeout_ms),
-        host_id.into(),
-        component_ref.into(),
+        host_id,
+        component_ref,
     )
     .await
     .with_context(|| {

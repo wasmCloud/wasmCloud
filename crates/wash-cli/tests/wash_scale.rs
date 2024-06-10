@@ -26,6 +26,7 @@ async fn integration_scale_component_serial() -> Result<()> {
             "json",
             "--timeout-ms",
             "40000",
+            "--skip-wait",
             "--ctl-port",
             &wash_instance.nats_port.to_string(),
         ])

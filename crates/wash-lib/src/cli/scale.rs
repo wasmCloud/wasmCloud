@@ -1,12 +1,15 @@
-use anyhow::Result;
+use std::collections::HashMap;
+use std::time::Duration;
+
+use anyhow::{Context as _, Result};
 use clap::Parser;
 
-use crate::{
-    actor::{scale_component, ScaleComponentArgs},
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
-    common::find_host_id,
-    config::WashConnectionOptions,
-};
+use crate::actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
+use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
+use crate::common::{boxed_err_to_anyhow, find_host_id};
+use crate::config::WashConnectionOptions;
+use crate::context::default_component_operation_timeout_ms;
+use crate::wait::{wait_for_component_scaled_event, FindEventOutcome};
 
 use super::validate_component_id;
 
@@ -47,6 +50,16 @@ pub struct ScaleComponentCommand {
     /// List of named configuration to apply to the component, may be empty
     #[clap(long = "config")]
     pub config: Vec<String>,
+
+    /// By default, the command will wait until the component has been scaled.
+    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the component to be scaled.
+    /// If this flag is omitted, the command will wait until the scaled event has been acknowledged.
+    #[clap(long = "skip-wait")]
+    pub skip_wait: bool,
+
+    /// Timeout for waiting for scale to occur (normally on an auction response), defaults to 2000 milliseconds
+    #[clap(long = "wait-timeout-ms", default_value_t = default_component_operation_timeout_ms())]
+    pub wait_timeout_ms: u64,
 }
 
 pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<CommandOutput> {
@@ -76,11 +89,62 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         format!("{} max concurrent instances", cmd.max_instances)
     };
 
-    Ok(CommandOutput::from_key_and_text(
-        "result",
+    // If --skip-wait was specified,immediately return the result
+    if cmd.skip_wait {
+        return Ok(CommandOutput::from_key_and_text(
+            "result",
+            format!(
+                "Request to scale component {} to {scale_msg} has been accepted",
+                cmd.component_ref
+            ),
+        ));
+    }
+
+    // Build a receiver to wait for the component_scaled event
+    let mut receiver = client
+        .events_receiver(vec!["component_scaled".into()])
+        .await
+        .map_err(boxed_err_to_anyhow)?;
+
+    // If skip wait was *not* provided, then we should wait for scaled event
+    let event = wait_for_component_scaled_event(
+        &mut receiver,
+        Duration::from_millis(cmd.wait_timeout_ms),
+        &cmd.host_id,
+        &cmd.component_ref,
+    )
+    .await
+    .with_context(|| {
         format!(
-            "Request to scale component {} to {scale_msg} has been accepted",
-            cmd.component_ref
-        ),
-    ))
+            "Timed out waiting for scale event for component [{}] (ref: [{}]) on host [{}]",
+            &cmd.component_id, &cmd.component_ref, &cmd.host_id
+        )
+    })?;
+
+    match event {
+        FindEventOutcome::Success(ComponentScaledInfo {
+            host_id,
+            component_ref,
+            component_id,
+        }) => {
+            let text = format!(
+                "Component [{component_id}] (ref: [{component_ref}]) scaled on host [{host_id}]",
+            );
+            Ok(CommandOutput::new(
+                text.clone(),
+                HashMap::from([
+                    ("host_id".into(), host_id.into()),
+                    ("component_id".into(), component_id.into()),
+                    ("component_ref".into(), component_ref.into()),
+                    ("result".into(), text.into()),
+                ]),
+            ))
+        }
+        FindEventOutcome::Failure(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to scale component [{}] (ref: [{}]) on host [{}]",
+                cmd.component_id, cmd.component_ref, cmd.host_id,
+            )
+        }),
+    }
 }
