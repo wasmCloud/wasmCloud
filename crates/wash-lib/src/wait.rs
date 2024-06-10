@@ -113,13 +113,15 @@ async fn find_event<T>(
 pub async fn wait_for_component_scaled_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
-    host_id: String,
-    actor_ref: String,
+    host_id: impl AsRef<str>,
+    component_ref: impl AsRef<str>,
 ) -> Result<FindEventOutcome<ComponentScaledInfo>> {
+    let host_id = host_id.as_ref();
+    let component_ref = component_ref.as_ref();
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
-        if cloud_event.source != host_id.as_str() {
+        if cloud_event.source != host_id {
             return Ok(EventCheckOutcome::NotApplicable);
         }
 
@@ -127,24 +129,25 @@ pub async fn wait_for_component_scaled_event(
             "com.wasmcloud.lattice.component_scaled" | "com.wasmcloud.lattice.actor_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
-                if image_ref == actor_ref {
+                if image_ref == component_ref {
                     // NOTE(brooksmtownsend): Temporary handling of both actor_id and component_id
-                    let actor_id = get_string_data_from_json(&cloud_event.data, "actor_id")
+                    let component_id = get_string_data_from_json(&cloud_event.data, "actor_id")
                         .or_else(|_| {
                             get_string_data_from_json(&cloud_event.data, "component_id")
                         })?;
                     return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
-                        host_id: host_id.as_str().into(),
-                        component_ref: actor_ref.as_str().into(),
-                        component_id: actor_id.as_str().into(),
+                        host_id: host_id.into(),
+                        component_ref: component_ref.into(),
+                        component_id: component_id.as_str().into(),
                     }));
                 }
             }
             "com.wasmcloud.lattice.component_scale_failed"
             | "com.wasmcloud.lattice.actor_scale_failed" => {
-                let returned_actor_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
+                let returned_component_ref =
+                    get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
-                if returned_actor_ref == actor_ref {
+                if returned_component_ref == component_ref {
                     let error = anyhow!(
                         "{}",
                         cloud_event

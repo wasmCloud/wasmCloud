@@ -17,6 +17,7 @@ pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE: &str = "default";
 pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
 pub const DEFAULT_START_ACTOR_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 

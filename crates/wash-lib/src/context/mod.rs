@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, NoneAsEmptyString};
 
 use crate::{
-    config::{DEFAULT_LATTICE, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS},
+    config::{
+        DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS, DEFAULT_LATTICE, DEFAULT_NATS_HOST,
+        DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+    },
     id::ClusterSeed,
 };
 
@@ -142,4 +145,10 @@ fn default_lattice() -> String {
 #[must_use]
 pub fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
+}
+
+/// Default timeout that should be used with operations that manipulate components (ex. scale)
+#[must_use]
+pub fn default_component_operation_timeout_ms() -> u64 {
+    DEFAULT_COMPONENT_OPERATION_TIMEOUT_MS
 }
