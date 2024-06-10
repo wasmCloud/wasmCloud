@@ -447,6 +447,9 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             Err(e) => {
                 let wadm_version: String = cmd.wadm_opts.wadm_version.clone();
                 eprintln!("🟨 Couldn't download wadm {wadm_version}: {e}");
+                if e.to_string().contains("Text file busy") {
+                    eprintln!("🛟 Please ensure there aren't any leftover wadm processes");
+                }
                 None
             }
         }
