@@ -35,6 +35,7 @@ providers = [
     "dep:wasmcloud-provider-messaging-nats",
     "dep:wasmcloud-provider-sqldb-postgres",
     "dep:wasmcloud-provider-sdk",
+    "dep:wasmcloud-provider-wadm",
 ]
 default = ["providers"]
 
@@ -79,6 +80,10 @@ name = "messaging-nats-provider"
 required-features = ["providers"]
 
 [[bin]]
+name = "wadm-provider"
+required-features = ["providers"]
+
+[[bin]]
 name = "sqldb-postgres-provider"
 required-features = ["providers"]
 
@@ -88,6 +93,7 @@ opt-level = "z"
 lto = true
 
 [dependencies]
+wasmcloud-provider-wadm = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = [
     "color",
@@ -293,6 +299,7 @@ uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
 wadm = { version = "0.12", default-features = false }
 wadm-types = { version = "0.1", default-features = false }
+wadm-client = { version = "0.1", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "0.15", path = "./crates/wascap", default-features = false }
@@ -315,6 +322,7 @@ wasmcloud-provider-keyvalue-vault = { version = "*", path = "./crates/provider-k
 wasmcloud-provider-lattice-controller = { version = "*", path = "./crates/provider-lattice-controller", default-features = false }
 wasmcloud-provider-messaging-kafka = { version = "*", path = "./crates/provider-messaging-kafka", default-features = false }
 wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-messaging-nats", default-features = false }
+wasmcloud-provider-wadm = { version = "*", path = "./crates/provider-wadm", default-features = false }
 wasmcloud-provider-sdk = { version = "^0.5.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
