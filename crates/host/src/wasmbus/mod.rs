@@ -292,6 +292,7 @@ impl Component {
                 })
                 .collect::<Vec<(String, String)>>();
             wasmcloud_tracing::context::attach_span_context(&trace_context);
+            self.handler.set_trace_context(trace_context).await;
         }
 
         // Instantiate component with expected handlers
@@ -1465,6 +1466,7 @@ impl Host {
             lattice: self.host_config.lattice.clone(),
             component_id: component_id.clone(),
             targets: Arc::default(),
+            trace_ctx: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfills: Arc::clone(component.polyfills()),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
