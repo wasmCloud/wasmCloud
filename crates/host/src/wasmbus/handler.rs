@@ -82,9 +82,8 @@ impl Handler {
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
-        // TODO: store injector in handler, then use it?
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
         headers.insert("source-id", self.component_id.as_str());
@@ -102,6 +101,7 @@ impl Handler {
         *self.trace_ctx.write().await = trace_ctx;
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -114,7 +114,7 @@ impl Handler {
         Ok(self.wrpc_client(&id))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -127,6 +127,7 @@ impl Handler {
         Ok(self.wrpc_client(&id))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -137,6 +138,7 @@ impl Handler {
         Ok(self.wrpc_client(&id))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_store(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -147,6 +149,7 @@ impl Handler {
         Ok(self.wrpc_client(&id))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
         let LatticeInterfaceTarget { id, .. } = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -795,7 +798,7 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle(
         &self,
         request: wasmtime_wasi_http::types::OutgoingRequest,
