@@ -37,7 +37,7 @@ pub struct SignConfig {
 }
 
 /// Using a [`ProjectConfig`], usually parsed from a `wasmcloud.toml` file, build the project
-/// with the installed language toolchain. This will delegate to [`build_actor`] when the project is an component,
+/// with the installed language toolchain. This will delegate to [`build_component`] when the project is an component,
 /// or [`build_provider`] when the project is a provider.
 ///
 /// This function returns the path to the compiled artifact, a signed Wasm component or signed provider archive.
@@ -46,19 +46,19 @@ pub struct SignConfig {
 /// ```no_run
 /// use wash_lib::{build::build_project, parser::get_config};
 /// let config = get_config(None, Some(true))?;
-/// let artifact_path = build_project(config)?;
+/// let artifact_path = build_project(&config, None)?;
 /// println!("Here is the signed artifact: {}", artifact_path.to_string_lossy());
 /// ```
 /// # Arguments
-/// * `config`: [`ProjectConfig`] for required information to find, build, and sign an component
+/// * `config`: [`ProjectConfig`] for required information to find, build, and sign a component
 /// * `signing`: Optional [`SignConfig`] with information for signing the project artifact. If omitted, the artifact will only be built
 pub async fn build_project(
     config: &ProjectConfig,
     signing: Option<&SignConfig>,
 ) -> Result<PathBuf> {
     match &config.project_type {
-        TypeConfig::Component(actor_config) => {
-            build_actor(actor_config, &config.language, &config.common, signing)
+        TypeConfig::Component(component_config) => {
+            build_component(component_config, &config.language, &config.common, signing)
         }
         TypeConfig::Provider(provider_config) => {
             build_provider(provider_config, &config.language, &config.common, signing).await

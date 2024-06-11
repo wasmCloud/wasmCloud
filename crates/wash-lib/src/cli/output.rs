@@ -25,8 +25,8 @@ pub struct StopCommandOutput {
     pub host_id: Option<String>,
     pub result: String,
 
-    pub actor_ref: Option<String>,
-    pub actor_id: Option<String>,
+    pub component_ref: Option<String>,
+    pub component_id: Option<String>,
 
     pub provider_id: Option<String>,
     pub provider_ref: Option<String>,

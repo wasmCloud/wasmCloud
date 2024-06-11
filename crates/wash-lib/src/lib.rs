@@ -13,7 +13,7 @@
 //! | start | true | Contains the [start](start) module, with utilities to start wasmCloud runtimes, NATS, and wadm |
 //! | parser | true | Contains the [parser](parser) module, with utilities to parse `wasmcloud.toml` files |
 //! | cli | false | Contains the build, cli, and generate modules with additional trait derives for usage in building CLI applications |
-//! | nats| true| Contains the [app](app), [component](actor), [capture](capture), [config](config), [context](context), [drain](drain), [spier](spier) and [wait](wait) modules with a dependency on `async_nats` |
+//! | nats| true| Contains the [app](app), [component](component), [capture](capture), [config](config), [context](context), [drain](drain), [spier](spier) and [wait](wait) modules with a dependency on `async_nats` |
 
 #[cfg(feature = "nats")]
 pub mod app;
@@ -29,7 +29,7 @@ pub mod parser;
 pub mod start;
 
 #[cfg(feature = "nats")]
-pub mod actor;
+pub mod component;
 #[cfg(feature = "nats")]
 pub mod capture;
 pub mod common;

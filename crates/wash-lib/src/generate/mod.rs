@@ -1,4 +1,4 @@
-//! Generate wasmCloud projects (WebAssembly actors, native capability providers, or contract interfaces) from templates
+//! Generate wasmCloud projects (WebAssembly components, native capability providers, or contract interfaces) from templates
 
 use std::{
     fmt, fs,

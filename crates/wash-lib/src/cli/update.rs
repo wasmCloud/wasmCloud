@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::{
-    actor::update_actor,
+    component::update_component,
     common::{boxed_err_to_anyhow, get_all_inventories},
     config::WashConnectionOptions,
 };
@@ -38,7 +38,7 @@ pub struct UpdateComponentCommand {
     pub new_component_ref: String,
 }
 
-pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
+pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
@@ -89,7 +89,7 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         ));
     }
 
-    let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
+    let ack = update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
     if !ack.success {
         bail!("Operation failed on host [{}]: {}", host_id, ack.message);
     }

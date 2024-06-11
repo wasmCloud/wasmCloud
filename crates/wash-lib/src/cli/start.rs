@@ -5,11 +5,11 @@ use clap::Parser;
 use tokio::time::Duration;
 
 use crate::{
-    actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
+    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
     config::{
-        WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
+        WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_COMPONENT_TIMEOUT_MS,
         DEFAULT_START_PROVIDER_TIMEOUT_MS,
     },
     context::default_timeout_ms,
@@ -81,7 +81,7 @@ pub struct StartComponentCommand {
 pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
-        DEFAULT_START_ACTOR_TIMEOUT_MS
+        DEFAULT_START_COMPONENT_TIMEOUT_MS
     } else {
         cmd.opts.timeout_ms
     };

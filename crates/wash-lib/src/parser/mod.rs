@@ -535,8 +535,8 @@ impl RawProjectConfig {
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "component" => {
-                let actor_config = self.component.context("missing component config")?;
-                TypeConfig::Component(actor_config.try_into()?)
+                let component_config = self.component.context("missing component config")?;
+                TypeConfig::Component(component_config.try_into()?)
             }
 
             "provider" => TypeConfig::Provider(
