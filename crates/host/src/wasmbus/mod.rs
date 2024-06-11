@@ -39,7 +39,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval_at, timeout, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
@@ -292,7 +292,6 @@ impl Component {
                 })
                 .collect::<Vec<(String, String)>>();
             wasmcloud_tracing::context::attach_span_context(&trace_context);
-            self.handler.set_trace_context(trace_context).await;
         }
 
         // Instantiate component with expected handlers
@@ -319,6 +318,14 @@ impl Component {
             KeyValue::new("host", self.metrics.host_id.clone()),
         ];
 
+        // Associate the current context with the span
+        let injector = TraceContextInjector::default_with_span();
+        let trace_context = injector
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        self.handler.set_trace_context(trace_context).await;
+
         let start_at = Instant::now();
         match params {
             InvocationParams::Custom {
@@ -328,6 +335,7 @@ impl Component {
             } => {
                 let res = component
                     .call(&instance, &name, params)
+                    .instrument(tracing::trace_span!("call_component"))
                     .await
                     .context("failed to call component");
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
@@ -356,7 +364,8 @@ impl Component {
                             .handle(request, response_tx)
                             .await
                             .context("failed to call `wasi:http/incoming-handler.handle`")
-                    },
+                    }
+                    .instrument(tracing::trace_span!("wasi:http/incoming-handler.handle")),
                     async {
                         let res = match response_rx.await.context("failed to receive response")? {
                             Ok(resp) => {
@@ -376,6 +385,7 @@ impl Component {
                             .await
                             .context("failed to transmit response")
                     }
+                    .instrument(tracing::trace_span!("transmit_response"))
                 );
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
                 attributes.push(KeyValue::new(
@@ -404,6 +414,9 @@ impl Component {
                         body,
                         reply_to,
                     })
+                    .instrument(tracing::trace_span!(
+                        "wasmcloud:messaging/handler.handle-message"
+                    ))
                     .await
                     .context("failed to call `wasmcloud:messaging/handler.handle-message`");
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
@@ -1212,7 +1225,7 @@ impl Host {
         .await
     }
 
-    /// Instantiate an actor
+    /// Instantiate a component
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
     #[instrument(level = "debug", skip_all)]
     async fn instantiate_component(

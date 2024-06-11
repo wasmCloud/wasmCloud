@@ -154,7 +154,7 @@ struct RequestContext {
     scheme: http::uri::Scheme,
 }
 
-#[instrument]
+#[instrument(level = "debug")]
 async fn handle_request(
     extract::State(RequestContext {
         target,

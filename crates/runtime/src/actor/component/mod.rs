@@ -730,7 +730,7 @@ impl Instance {
     }
 
     /// Invoke an operation on an [Instance] producing a result.
-    #[instrument(skip(self, params, instance, name), fields(interface = instance, function = name))]
+    #[instrument(level = "debug", skip(self, params, instance, name), fields(interface = instance, function = name))]
     pub async fn call(
         &mut self,
         instance: &str,

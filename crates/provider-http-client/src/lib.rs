@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
 use tokio::spawn;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, Instrument};
 
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::http::OutgoingHandler;
@@ -31,7 +31,7 @@ impl Default for HttpClientProvider {
 }
 
 impl OutgoingHandler for HttpClientProvider {
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn serve_handle<Tx: wrpc_transport::Transmitter>(
         &self,
         AcceptedInvocation {
@@ -57,6 +57,7 @@ impl OutgoingHandler for HttpClientProvider {
         let res = match self
             .client
             .request(req)
+            .instrument(tracing::debug_span!("http_request"))
             .await
             .map(try_http_to_outgoing_response)
         {
