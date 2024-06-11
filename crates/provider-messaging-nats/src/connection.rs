@@ -55,31 +55,32 @@ impl ConnectionConfig {
     pub fn merge(&self, extra: &ConnectionConfig) -> ConnectionConfig {
         let mut out = self.clone();
         if !extra.subscriptions.is_empty() {
-            out.subscriptions = extra.subscriptions.clone();
+            out.subscriptions.clone_from(&extra.subscriptions);
         }
         // If the default configuration has a URL in it, and then the link definition
         // also provides a URL, the assumption is to replace/override rather than combine
         // the two into a potentially incompatible set of URIs
         if !extra.cluster_uris.is_empty() {
-            out.cluster_uris = extra.cluster_uris.clone();
+            out.cluster_uris.clone_from(&extra.cluster_uris);
         }
         if extra.auth_jwt.is_some() {
-            out.auth_jwt = extra.auth_jwt.clone();
+            out.auth_jwt.clone_from(&extra.auth_jwt);
         }
         if extra.auth_seed.is_some() {
-            out.auth_seed = extra.auth_seed.clone();
+            out.auth_seed.clone_from(&extra.auth_seed);
         }
         if extra.tls_ca.is_some() {
-            out.tls_ca = extra.tls_ca.clone();
+            out.tls_ca.clone_from(&extra.tls_ca);
         }
         if extra.tls_ca_file.is_some() {
-            out.tls_ca_file = extra.tls_ca_file.clone();
+            out.tls_ca_file.clone_from(&extra.tls_ca_file);
         }
         if extra.ping_interval_sec.is_some() {
             out.ping_interval_sec = extra.ping_interval_sec;
         }
         if extra.custom_inbox_prefix.is_some() {
-            out.custom_inbox_prefix = extra.custom_inbox_prefix.clone();
+            out.custom_inbox_prefix
+                .clone_from(&extra.custom_inbox_prefix);
         }
         out
     }
