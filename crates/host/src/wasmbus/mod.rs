@@ -2462,7 +2462,7 @@ impl Host {
         Ok(CtlResponse::ok(inventory))
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_claims(&self) -> anyhow::Result<CtlResponse<Vec<HashMap<String, String>>>> {
         trace!("handling claims");
 
@@ -2480,9 +2480,9 @@ impl Host {
         ))
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_links(&self) -> anyhow::Result<Vec<u8>> {
-        debug!("handling links");
+        trace!("handling links");
 
         let links = self.links.read().await;
         let links: Vec<&InterfaceLinkDefinition> = links.values().flatten().collect();
