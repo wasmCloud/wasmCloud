@@ -5,7 +5,7 @@ metadata:
   name: dog-fetcher
   annotations:
     version: v0.0.1
-    description: "HTTP hello world demo in Rust, showing use of the server and client providers"
+    description: 'HTTP hello world demo in Rust, showing use of the server and client providers'
 spec:
   components:
     - name: http-component
