@@ -451,7 +451,7 @@ mod test {
 
         // test url
         let url = AppManifestSource::from_str(
-            "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+            "https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/examples/rust/components/http-hello-world/wadm.yaml",
         )?;
 
         assert!(
@@ -460,7 +460,7 @@ mod test {
         );
 
         let url = AppManifestSource::from_str(
-            "http://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+            "https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/examples/rust/components/http-hello-world/wadm.yaml",
         )?;
 
         assert!(
@@ -538,7 +538,7 @@ mod test {
 
         // test url
         let url = AppManifestSource::from_str(
-            "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+            "https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/examples/rust/components/http-hello-world/wadm.yaml",
         )?;
 
         let manifest = load_app_manifest(url).await?;

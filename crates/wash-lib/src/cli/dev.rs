@@ -3,7 +3,7 @@ use console::style;
 use wasmcloud_control_interface::Client;
 
 use crate::{
-    actor::update_actor,
+    component::update_component,
     build::{build_project, SignConfig},
     generate::emoji,
     id::{ModuleId, ServerId},
@@ -13,8 +13,8 @@ use crate::{
 /// Perform a single execution of the dev loop for an artifact
 pub async fn run_dev_loop(
     project_cfg: &ProjectConfig,
-    actor_id: ModuleId,
-    actor_ref: &str,
+    component_id: ModuleId,
+    component_ref: &str,
     host_id: ServerId,
     ctl_client: &Client,
     sign_cfg: Option<SignConfig>,
@@ -43,7 +43,7 @@ pub async fn run_dev_loop(
                 .bold(),
             );
 
-            update_actor(ctl_client, &host_id, &actor_id, actor_ref).await?;
+            update_component(ctl_client, &host_id, &component_id, component_ref).await?;
         }
     }
 

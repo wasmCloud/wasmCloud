@@ -6,7 +6,7 @@ use wasmcloud_control_interface::{Client as CtlClient, CtlResponse};
 
 use crate::{
     common::boxed_err_to_anyhow,
-    config::DEFAULT_START_ACTOR_TIMEOUT_MS,
+    config::DEFAULT_START_COMPONENT_TIMEOUT_MS,
     wait::{wait_for_component_scaled_event, FindEventOutcome},
 };
 
@@ -62,12 +62,12 @@ pub async fn scale_component(
     }: ScaleComponentArgs<'_>,
 ) -> Result<ComponentScaledInfo> {
     // If timeout isn't supplied, override with a longer timeout for starting component
-    let timeout_ms = timeout_ms.unwrap_or(DEFAULT_START_ACTOR_TIMEOUT_MS);
+    let timeout_ms = timeout_ms.unwrap_or(DEFAULT_START_COMPONENT_TIMEOUT_MS);
 
     // Create a receiver to use with the client
     let mut receiver = client
         .events_receiver(vec![
-            "actor_scaled".to_string(),
+            "actor_scaled".to_string(), // NOTE(nitame): Is these events_types still relevant?
             "actor_scale_failed".to_string(),
             "component_scaled".to_string(),
             "component_scale_failed".to_string(),
@@ -123,14 +123,14 @@ pub async fn scale_component(
     }
 }
 
-pub async fn update_actor(
+pub async fn update_component(
     client: &CtlClient,
     host_id: &str,
-    actor_id: &str,
-    actor_ref: &str,
+    component_id: &str,
+    component_ref: &str,
 ) -> Result<CtlResponse<()>> {
     client
-        .update_component(host_id, actor_id, actor_ref, None)
+        .update_component(host_id, component_id, component_ref, None)
         .await
         .map_err(boxed_err_to_anyhow)
 }

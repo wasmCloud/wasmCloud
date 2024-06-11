@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use clap::Parser;
 
-use crate::actor::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
+use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
 use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
 use crate::common::{boxed_err_to_anyhow, find_host_id};
 use crate::config::WashConnectionOptions;

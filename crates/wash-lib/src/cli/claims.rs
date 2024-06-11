@@ -99,14 +99,14 @@ pub struct SignCommand {
     pub destination: Option<String>,
 
     #[clap(flatten)]
-    pub metadata: ActorMetadata,
+    pub metadata: ComponentMetadata,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TokenCommand {
     /// Generate a signed JWT for an component module
     #[clap(name = "component")]
-    Actor(ActorMetadata),
+    Component(ComponentMetadata),
     /// Generate a signed JWT for an operator
     #[clap(name = "operator")]
     Operator(OperatorMetadata),
@@ -255,7 +255,7 @@ impl ProviderMetadata {
 }
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ActorMetadata {
+pub struct ComponentMetadata {
     /// A human-readable, descriptive name for the token
     #[clap(short = 'n', long = "name")]
     pub name: Option<String>,
@@ -294,19 +294,19 @@ pub struct ActorMetadata {
     pub common: GenerateCommon,
 }
 
-impl ActorMetadata {
+impl ComponentMetadata {
     #[must_use]
     pub fn update_with_project_config(self, project_config: &ProjectConfig) -> Self {
-        let actor_config = match project_config.project_type {
-            TypeConfig::Component(ref actor_config) => actor_config.clone(),
+        let component_config = match project_config.project_type {
+            TypeConfig::Component(ref component_config) => component_config.clone(),
             _ => ComponentConfig::default(),
         };
 
-        ActorMetadata {
+        ComponentMetadata {
             name: self.name.or(Some(project_config.common.name.clone())),
             rev: self.rev.or(Some(project_config.common.revision)),
             ver: self.ver.or(Some(project_config.common.version.to_string())),
-            tags: match actor_config.tags.clone() {
+            tags: match component_config.tags.clone() {
                 Some(tags) => tags
                     .clone()
                     .into_iter()
@@ -316,9 +316,9 @@ impl ActorMetadata {
                     .collect::<Vec<String>>(),
                 None => self.tags,
             },
-            call_alias: self.call_alias.or(actor_config.call_alias),
+            call_alias: self.call_alias.or(component_config.call_alias),
             common: GenerateCommon {
-                directory: self.common.directory.or(Some(actor_config.key_directory)),
+                directory: self.common.directory.or(Some(component_config.key_directory)),
                 ..self.common
             },
             ..self
@@ -361,10 +361,10 @@ pub async fn handle_command(
                 },
                 destination: match project_config {
                     Some(ref config) => match config.project_type {
-                        TypeConfig::Component(ref actor_config) => {
+                        TypeConfig::Component(ref component_config) => {
                             signcmd
                                 .destination
-                                .or(actor_config.destination.clone().map(|d| {
+                                .or(component_config.destination.clone().map(|d| {
                                     d.to_str()
                                         .expect("unable to convert destination pathbuf to str")
                                         .to_string()
@@ -390,13 +390,13 @@ fn generate_token(
     project_config: Option<&ProjectConfig>,
 ) -> Result<CommandOutput> {
     match (cmd, project_config) {
-        (TokenCommand::Actor(actor), Some(config)) => {
-            generate_actor(actor.update_with_project_config(config), output_kind)
+        (TokenCommand::Component(component), Some(config)) => {
+            generate_component(component.update_with_project_config(config), output_kind)
         }
         (TokenCommand::Provider(provider), Some(config)) => {
             generate_provider(provider.update_with_project_config(config), output_kind)
         }
-        (TokenCommand::Actor(actor), _) => generate_actor(actor, output_kind),
+        (TokenCommand::Component(component), _) => generate_component(component, output_kind),
         (TokenCommand::Provider(provider), _) => generate_provider(provider, output_kind),
         (TokenCommand::Operator(operator), _) => generate_operator(operator, output_kind),
         (TokenCommand::Account(account), _) => generate_account(account, output_kind),
@@ -425,35 +425,35 @@ fn get_keypair_vec(
         .collect()
 }
 
-fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
+fn generate_component(component: ComponentMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
     let issuer = extract_keypair(
-        actor.issuer.as_deref(),
-        actor.name.as_deref(),
-        actor.common.directory.clone(),
+        component.issuer.as_deref(),
+        component.name.as_deref(),
+        component.common.directory.clone(),
         KeyPairType::Account,
-        actor.common.disable_keygen,
+        component.common.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        actor.subject.as_deref(),
-        actor.name.as_deref(),
-        actor.common.directory.clone(),
+        component.subject.as_deref(),
+        component.name.as_deref(),
+        component.common.directory.clone(),
         KeyPairType::Module,
-        actor.common.disable_keygen,
+        component.common.disable_keygen,
         output_kind,
     )?;
 
     let claims = Claims::<Component>::with_dates(
-        actor.name.context("component name is required")?,
+        component.name.context("component name is required")?,
         issuer.public_key(),
         subject.public_key(),
-        Some(actor.tags.clone()),
-        days_from_now_to_jwt_time(actor.common.not_before_days),
-        days_from_now_to_jwt_time(actor.common.expires_in_days),
+        Some(component.tags.clone()),
+        days_from_now_to_jwt_time(component.common.not_before_days),
+        days_from_now_to_jwt_time(component.common.expires_in_days),
         false,
-        Some(actor.rev.context("component revision number is required")?),
-        Some(actor.ver.context("component version is required")?),
-        sanitize_alias(actor.call_alias)?,
+        Some(component.rev.context("component revision number is required")?),
+        Some(component.ver.context("component version is required")?),
+        sanitize_alias(component.call_alias)?,
     );
 
     let jwt = claims.encode(&issuer)?;
@@ -868,7 +868,7 @@ mod test {
     /// Enumerates all options and flags of the `claims sign` command
     /// to ensure command line arguments do not change between versions
     fn test_claims_sign_comprehensive() {
-        const LOCAL_WASM: &str = "./myactor.wasm";
+        const LOCAL_WASM: &str = "./mycomponent.wasm";
         const ISSUER_KEY: &str = "SAAOBYD6BLELXSNN4S3TXUM7STGPB3A5HYU3D5T7XA4WHGVQBDBD4LJPOM";
         const SUBJECT_KEY: &str = "SMAMA4ABHIJUYQR54BDFHEMXIIGQATUXK6RYU6XLTFHDNCRVWT4KSDDSVE";
         let long_cmd: Cmd = Parser::try_parse_from([
@@ -876,9 +876,9 @@ mod test {
             "sign",
             LOCAL_WASM,
             "--name",
-            "MyActor",
+            "MyComponent",
             "--destination",
-            "./myactor_s.wasm",
+            "./mycomponent_s.wasm",
             "--directory",
             "./dir",
             "--expires",
@@ -906,12 +906,12 @@ mod test {
                 metadata,
             }) => {
                 assert_eq!(source, LOCAL_WASM);
-                assert_eq!(destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(destination.unwrap(), "./mycomponent_s.wasm");
                 assert_eq!(metadata.common.directory.unwrap(), PathBuf::from("./dir"));
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert_eq!(metadata.name.unwrap(), "MyActor");
+                assert_eq!(metadata.name.unwrap(), "MyComponent");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert_eq!(metadata.rev.unwrap(), 2);
@@ -924,9 +924,9 @@ mod test {
             "sign",
             LOCAL_WASM,
             "-n",
-            "MyActor",
+            "MyComponent",
             "-d",
-            "./myactor_s.wasm",
+            "./mycomponent_s.wasm",
             "--directory",
             "./dir",
             "-x",
@@ -954,12 +954,12 @@ mod test {
                 metadata,
             }) => {
                 assert_eq!(source, LOCAL_WASM);
-                assert_eq!(destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(destination.unwrap(), "./mycomponent_s.wasm");
                 assert_eq!(metadata.common.directory.unwrap(), PathBuf::from("./dir"));
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert_eq!(metadata.name.unwrap(), "MyActor");
+                assert_eq!(metadata.name.unwrap(), "MyComponent");
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert_eq!(metadata.rev.unwrap(), 2);
@@ -979,7 +979,7 @@ mod test {
         const OPERATOR_KEY: &str = "SOALSFXSHRVKCNOP2JSOVOU267XMF2ZMLF627OM6ZPS6WMKVS6HKQGU7QM";
         const OPERATOR_TWO_KEY: &str = "SOAC7EGQIMNPUF3XBSWR2IQIX7ITDNRYZZ4PN3ZZTFEVHPMG7BFOJMGPW4";
         const ACCOUNT_KEY: &str = "SAAH3WW3NDAT7GQOO5IHPHNIGS5JNFQN2F72P6QBSHCOKPBLEEDXQUWI4Q";
-        const ACTOR_KEY: &str = "SMAA2XB7UP7FZLPLO27NJB65PKYISNQAH7PZ6PJUHR6CUARVANXZ4OTZOU";
+        const COMPONENT_KEY: &str = "SMAA2XB7UP7FZLPLO27NJB65PKYISNQAH7PZ6PJUHR6CUARVANXZ4OTZOU";
         const PROVIDER_KEY: &str = "SVAKIVYER6D2LZS7QJFOU7LQYLRAMJ5DZE4B7BJHX6QFJIY24KN43JZGN4";
 
         let account_cmd: Cmd = Parser::try_parse_from([
@@ -1031,7 +1031,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {cmd:?}"),
         }
-        let actor_cmd: Cmd = Parser::try_parse_from([
+        let component_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
             "component",
@@ -1047,7 +1047,7 @@ mod test {
             "--issuer",
             ACCOUNT_KEY,
             "--subject",
-            ACTOR_KEY,
+            COMPONENT_KEY,
             "--rev",
             "2",
             "--tag",
@@ -1056,8 +1056,8 @@ mod test {
             "0.0.1",
         ])
         .unwrap();
-        match actor_cmd.claims {
-            ClaimsCliCommand::Token(TokenCommand::Actor(ActorMetadata {
+        match component_cmd.claims {
+            ClaimsCliCommand::Token(TokenCommand::Component(ComponentMetadata {
                 name,
                 issuer,
                 subject,
@@ -1079,7 +1079,7 @@ mod test {
                 );
                 assert!(common.disable_keygen);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
-                assert_eq!(subject.unwrap(), ACTOR_KEY);
+                assert_eq!(subject.unwrap(), COMPONENT_KEY);
                 assert!(!tags.is_empty());
                 assert_eq!(tags[0], "testtag");
                 assert_eq!(rev.unwrap(), 2);
@@ -1242,10 +1242,10 @@ mod test {
         );
 
         //=== check project config overrides when cli args are NOT specified...
-        let actor_metadata = ActorMetadata::default().update_with_project_config(&project_config);
+        let component_metadata = ComponentMetadata::default().update_with_project_config(&project_config);
         assert_eq!(
-            actor_metadata,
-            ActorMetadata {
+            component_metadata,
+            ComponentMetadata {
                 name: Some("testcomponent".to_string()),
                 ver: Some(Version::parse("0.1.0")?.to_string()),
                 rev: Some(666),
@@ -1255,7 +1255,7 @@ mod test {
                     directory: Some(PathBuf::from("./keys")),
                     ..GenerateCommon::default()
                 },
-                ..ActorMetadata::default()
+                ..ComponentMetadata::default()
             }
         );
 
@@ -1285,10 +1285,10 @@ mod test {
                 let cmd = SignCommand {
                     metadata: signcmd.metadata.update_with_project_config(&project_config),
                     destination: match &project_config.project_type {
-                        TypeConfig::Component(ref actor_config) => {
+                        TypeConfig::Component(ref component_config) => {
                             signcmd
                                 .destination
-                                .or(actor_config.destination.clone().map(|d| {
+                                .or(component_config.destination.clone().map(|d| {
                                     d.to_str()
                                         .expect("unable to convert destination pathbuf to str")
                                         .to_string()

@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
 use wash_lib::{
-    actor::{scale_component, ScaleComponentArgs},
+    component::{scale_component, ScaleComponentArgs},
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::{sanitize_component_id, CommandOutput},
