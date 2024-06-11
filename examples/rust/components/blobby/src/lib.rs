@@ -52,6 +52,11 @@ const CONTAINER_PARAM_NAME: &str = "container";
 /// A helper that will automatically create a container if it doesn't exist and returns an owned copy of the name for immediate use
 fn ensure_container(name: &String) -> Result<()> {
     if !blobstore::container_exists(name).map_err(Error::from_blobstore_error)? {
+        log(
+            Level::Info,
+            "handle",
+            format!("creating missing container/bucket [{name}]").as_str(),
+        );
         blobstore::create_container(name).map_err(Error::from_blobstore_error)?;
     }
     Ok(())
@@ -86,13 +91,19 @@ impl Guest for Blobby {
     fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
         let path_and_query = request.path_with_query().unwrap_or_else(|| "/".to_string());
 
+        // Derive the appropriate file and container name from the path & query string
+        //
+        // ex. 'localhost:8080' -> bucket name 'default', file_name ''
+        // ex. 'localhost:8080?container=test' -> bucket name 'test', file name ''
+        // ex. 'localhost:8080/your-file.txt?container=test' -> bucket name 'test', file name 'your-file.txt'
         let (file_name, container_id) = match path_and_query.split_once('?') {
             Some((path, query)) => {
                 // We have a query string, so let's split it into a container name and a file name
-                let mut params = query.split('&');
-                let container_id = params
-                    .find(|p| *p == CONTAINER_PARAM_NAME)
-                    .and_then(|p| p.split_once('=').map(|(_, val)| val))
+                let container_id = query
+                    .split('&')
+                    .filter_map(|p| p.split_once('='))
+                    .find(|(k, _)| *k == CONTAINER_PARAM_NAME)
+                    .map(|(_, v)| v)
                     .unwrap_or(DEFAULT_CONTAINER_NAME);
                 (path.trim_matches('/').to_string(), container_id.to_string())
             }
@@ -102,14 +113,26 @@ impl Guest for Blobby {
             ),
         };
 
-        // Check that there isn't any subpathing. If we can split, it means that we have more than
-        // one path element
+        // Ensure that a file name is present
+        if file_name.is_empty() {
+            send_response_error(
+                response_out,
+                Error {
+                    status_code: StatusCode::BAD_REQUEST,
+                    message: "Please pass a valid file (object) by specifying a URL path (ex. 'localhost:8080/some-path')".into(),
+                },
+            );
+            return;
+        }
+
+        // Check that there isn't any sub-pathing.
+        // If we can split, it means that we have more than one path element
         if file_name.split_once('/').is_some() {
             send_response_error(
                 response_out,
                 Error {
                     status_code: StatusCode::BAD_REQUEST,
-                    message: "Cannot use a subpathed file name (e.g. foo/bar.txt)".to_string(),
+                    message: "Cannot use a subpathed file name (e.g. foo/bar.txt)".into(),
                 },
             );
             return;

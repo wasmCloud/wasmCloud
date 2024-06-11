@@ -44,6 +44,7 @@ async fn test_client() -> StorageClient {
         region: Some("local".into()),
         session_token: None,
         sts_config: None,
+        bucket_region: None,
     };
 
     StorageClient::new(conf, &HashMap::new()).await
