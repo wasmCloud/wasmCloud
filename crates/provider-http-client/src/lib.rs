@@ -90,7 +90,7 @@ impl HttpClientProvider {
 }
 
 impl OutgoingHandler for HttpClientProvider {
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn serve_handle<Tx: wrpc_transport::Transmitter>(
         &self,
         AcceptedInvocation {

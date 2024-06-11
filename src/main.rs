@@ -227,19 +227,34 @@ struct Args {
     enable_logs: Option<bool>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting traces, metrics and logs. This can also be set with `OTEL_EXPORTER_OTLP_ENDPOINT`.
-    #[clap(long = "override-observability-endpoint")]
+    #[clap(
+        long = "override-observability-endpoint",
+        env = "WASMCLOUD_OVERRIDE_OBSERVABILITY_ENDPOINT",
+    )]
     observability_endpoint: Option<String>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting traces. This can also be set with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
-    #[clap(long = "override-traces-endpoint", hide = true)]
+    #[clap(
+        long = "override-traces-endpoint",
+        env = "WASMCLOUD_OVERRIDE_TRACES_ENDPOINT",
+        hide = true
+    )]
     traces_endpoint: Option<String>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting metrics. This can also be set with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
-    #[clap(long = "override-metrics-endpoint", hide = true)]
+    #[clap(
+        long = "override-metrics-endpoint",
+        env = "WASMCLOUD_OVERRIDE_METRICS_ENDPOINT",
+        hide = true,
+    )]
     metrics_endpoint: Option<String>,
 
     /// Overrides the OpenTelemetry endpoint used for emitting logs. This can also be set with `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
-    #[clap(long = "override-logs-endpoint", hide = true)]
+    #[clap(
+        long = "override-logs-endpoint",
+        env = "WASMCLOUD_OVERRIDE_METRICS_ENDPOINT",
+        hide = true,
+    )]
     logs_endpoint: Option<String>,
 
     /// Configures whether grpc or http will be used for exporting the enabled telemetry. This defaults to 'http'.

@@ -15,11 +15,14 @@ struct DogFetcher;
 
 impl Guest for DogFetcher {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
+        // Build a request to dog.ceo which returns a URL at which we can find a doggo
         let req = wasi::http::outgoing_handler::OutgoingRequest::new(Fields::new());
         req.set_scheme(Some(&Scheme::Https)).unwrap();
         req.set_authority(Some("dog.ceo")).unwrap();
         req.set_path_with_query(Some("/api/breeds/image/random"))
             .unwrap();
+
+        // Perform the API call to dog.ceo, expecting a URL to come back as the response body
         let dog_picture_url = match wasi::http::outgoing_handler::handle(req, None) {
             Ok(resp) => {
                 resp.subscribe().block();
@@ -53,6 +56,8 @@ impl Guest for DogFetcher {
                 format!("Got error when trying to fetch dog: {}", e)
             }
         };
+
+        // Build the HTTP response we'll send back to the user
         let response = OutgoingResponse::new(Fields::new());
         response.set_status_code(200).unwrap();
         let response_body = response.body().unwrap();
@@ -60,11 +65,20 @@ impl Guest for DogFetcher {
 
         // Write the headers and then write the body
         ResponseOutparam::set(response_out, Ok(response));
-        // For simplicity, we're just writing this string out. However, when the body gets long
-        // enough (generally >4096 bytes), you'll need to loop and write chunks of the body.
+
+        // wasi:io/outgoing-stream.blocking_write_and_flush() is the simplest way to
+        // write small payloads to an IO stream, but it is limited (up to 4096 bytes).
+        //
+        // Since it's likely that the URL we retrieved from the dog.ceo API is likely
+        // within that limit, we use blocking_write_and_flush() here.
+        //
+        // If we expected the body to possibly be longer, we'd need to loop and write chunks,
+        // paying attention to how to use the appropriate wasi:io APIs.
         write_stream
             .blocking_write_and_flush(dog_picture_url.as_bytes())
             .unwrap();
+        drop(write_stream);
+
         OutgoingBody::finish(response_body, None).expect("failed to finish response body");
     }
 }

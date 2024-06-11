@@ -1212,7 +1212,7 @@ impl Host {
         .await
     }
 
-    /// Instantiate an component
+    /// Instantiate a component
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
     #[instrument(level = "debug", skip_all)]
     async fn instantiate_component(

@@ -12,8 +12,8 @@ spec:
       type: component
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        # image: file://./build/dog_fetcher_s.wasm
-        image: ghcr.io/wasmcloud/components/dog-fetcher:0.1.0
+        image: file://./build/dog_fetcher_s.wasm
+        # image: ghcr.io/wasmcloud/components/dog-fetcher:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -30,7 +30,8 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: file://../../../../http-server-provider.par.gz
+        #image: ghcr.io/wasmcloud/http-server:0.20.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
@@ -48,4 +49,5 @@ spec:
     - name: httpclient
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-client:0.9.0
+        image: file://../../../../http-client-provider.par.gz
+        #image: ghcr.io/wasmcloud/http-client:0.9.0
