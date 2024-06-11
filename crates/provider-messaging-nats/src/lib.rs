@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
-use async_nats::HeaderMap;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
@@ -18,7 +17,8 @@ use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
+    Provider,
 };
 
 mod connection;
@@ -177,30 +177,17 @@ impl NatsMessagingProvider {
             let semaphore = Arc::new(Semaphore::new(75));
 
             // Listen for NATS message(s)
-            while let Some(mut msg) = subscriber.next().await {
+            while let Some(msg) = subscriber.next().await {
                 debug!(?msg, ?component_id, "received messsage");
                 // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", ?component_id);
-                match msg.headers {
-                    // If there are some headers on the message they might contain a span context
-                    // so attempt to attach them.
-                    Some(ref h) if !h.is_empty() => {
-                        span.in_scope(|| {
-                            attach_span_context(&msg);
-                        });
-                    }
-                    // If the header map is completely missing or present but empty, create a new trace context add it
-                    // to the message that is flowing through -- i.e. None or Some(h) where h is empty
-                    _ => {
-                        let mut headers = HeaderMap::new();
-                        TraceContextInjector::default_with_span()
-                            .iter()
-                            .for_each(|(k, v)| headers.insert(k.as_str(), v.as_str()));
-                        msg.headers = Some(headers);
-                    }
-                };
 
-                let permit = match semaphore.clone().acquire_owned().await {
+                let permit = match semaphore
+                    .clone()
+                    .acquire_owned()
+                    .instrument(tracing::trace_span!("acquire_semaphore"))
+                    .await
+                {
                     Ok(p) => p,
                     Err(_) => {
                         warn!("Work pool has been closed, exiting queue subscribe");
@@ -227,6 +214,21 @@ async fn dispatch_msg(
     nats_msg: async_nats::Message,
     _permit: OwnedSemaphorePermit,
 ) {
+    match nats_msg.headers {
+        // If there are some headers on the message they might contain a span context
+        // so attempt to attach them.
+        Some(ref h) if !h.is_empty() => {
+            attach_span_context(&nats_msg);
+        }
+        // Otherwise, we'll use the existing span context starting with this message
+        _ => (),
+    };
+
+    let trace_headers = TraceContextInjector::default_with_span()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
     let msg = BrokerMessage {
         body: nats_msg.payload.into(),
         reply_to: nats_msg.reply.map(|s| s.to_string()),
@@ -239,7 +241,7 @@ async fn dispatch_msg(
         "sending message to component",
     );
     if let Err(e) = wasmcloud::messaging::handler::handle_message(
-        &get_connection().get_wrpc_client(component_id),
+        &get_connection().get_wrpc_client_custom(component_id, Some(trace_headers), None),
         &msg,
     )
     .await
@@ -410,6 +412,8 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
         ctx: Option<Context>,
         msg: BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
+        propagate_trace_for_ctx!(ctx);
+
         let nats_client =
             if let Some(ref source_id) = ctx.and_then(|Context { component, .. }| component) {
                 let actors = self.consumer_components.read().await;
