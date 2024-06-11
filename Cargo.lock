@@ -6953,7 +6953,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-client"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "futures",
