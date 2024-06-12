@@ -219,7 +219,8 @@ pub async fn put_model(
         client.clone(),
     );
 
-    wadm_client.put_manifest(model).await
+    let manifest = model.as_bytes();
+    wadm_client.put_manifest(manifest).await
 }
 
 /// Deploy a model, instructing wadm to manage the application
@@ -242,7 +243,8 @@ pub async fn put_and_deploy_model(
         client.clone(),
     );
 
-    wadm_client.put_and_deploy_manifest(model).await
+    let manifest = model.as_bytes();
+    wadm_client.put_and_deploy_manifest(manifest).await
 }
 
 /// Query wadm for the history of a given model name
