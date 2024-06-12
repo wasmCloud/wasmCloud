@@ -126,15 +126,11 @@ pub async fn wait_for_component_scaled_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.component_scaled" | "com.wasmcloud.lattice.actor_scaled" => { // NOTE(nitame): Is actor still need to be part of match case?
+            "com.wasmcloud.lattice.component_scaled" => {
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == component_ref {
-                    // NOTE(brooksmtownsend): Temporary handling of both actor_id and component_id
-                    let component_id = get_string_data_from_json(&cloud_event.data, "actor_id")
-                        .or_else(|_| {
-                            get_string_data_from_json(&cloud_event.data, "component_id")
-                        })?;
+                    let component_id = get_string_data_from_json(&cloud_event.data, "component_id")?;
                     return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
                         host_id: host_id.into(),
                         component_ref: component_ref.into(),
@@ -142,8 +138,7 @@ pub async fn wait_for_component_scaled_event(
                     }));
                 }
             }
-            "com.wasmcloud.lattice.component_scale_failed"
-            | "com.wasmcloud.lattice.actor_scale_failed" => {
+            "com.wasmcloud.lattice.component_scale_failed" => {
                 let returned_component_ref =
                     get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
@@ -330,7 +325,7 @@ pub async fn wait_for_component_stop_event(
         }
 
         match cloud_event.event_type.as_str() {
-            "com.wasmcloud.lattice.actor_stopped" | "com.wasmcloud.lattice.component_scaled" => {
+            "com.wasmcloud.lattice.component_scaled" => {
                 let returned_component_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
                 if returned_component_id == component_id {
                     return Ok(EventCheckOutcome::Success(ComponentStoppedInfo {
@@ -339,8 +334,7 @@ pub async fn wait_for_component_stop_event(
                     }));
                 }
             }
-            "com.wasmcloud.lattice.actor_stop_failed"
-            | "com.wasmcloud.lattice.component_scale_failed" => {
+            "com.wasmcloud.lattice.component_scale_failed" => {
                 let returned_component_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
 
                 if returned_component_id == component_id {

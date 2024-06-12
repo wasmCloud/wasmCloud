@@ -67,8 +67,6 @@ pub async fn scale_component(
     // Create a receiver to use with the client
     let mut receiver = client
         .events_receiver(vec![
-            "actor_scaled".to_string(), // NOTE(nitame): Is these events_types still relevant?
-            "actor_scale_failed".to_string(),
             "component_scaled".to_string(),
             "component_scale_failed".to_string(),
         ])
