@@ -334,7 +334,7 @@ wasmcloud-provider-sdk = { version = "^0.6.0", path = "./crates/provider-sdk", d
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
 wasmcloud-secrets-types = { version = "*", path = "./crates/secrets-types", default-features = false }
-wasmcloud-test-util = { version = "^0.3.0", path = "./crates/test-util", default-features = false }
+wasmcloud-test-util = { version = "^0.12.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.5.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.212", default-features = false }
 wasmtime = { version = "22", default-features = false }
