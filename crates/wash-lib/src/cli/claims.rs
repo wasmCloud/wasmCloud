@@ -318,7 +318,10 @@ impl ComponentMetadata {
             },
             call_alias: self.call_alias.or(component_config.call_alias),
             common: GenerateCommon {
-                directory: self.common.directory.or(Some(component_config.key_directory)),
+                directory: self
+                    .common
+                    .directory
+                    .or(Some(component_config.key_directory)),
                 ..self.common
             },
             ..self
@@ -425,7 +428,10 @@ fn get_keypair_vec(
         .collect()
 }
 
-fn generate_component(component: ComponentMetadata, output_kind: OutputKind) -> Result<CommandOutput> {
+fn generate_component(
+    component: ComponentMetadata,
+    output_kind: OutputKind,
+) -> Result<CommandOutput> {
     let issuer = extract_keypair(
         component.issuer.as_deref(),
         component.name.as_deref(),
@@ -451,7 +457,11 @@ fn generate_component(component: ComponentMetadata, output_kind: OutputKind) -> 
         days_from_now_to_jwt_time(component.common.not_before_days),
         days_from_now_to_jwt_time(component.common.expires_in_days),
         false,
-        Some(component.rev.context("component revision number is required")?),
+        Some(
+            component
+                .rev
+                .context("component revision number is required")?,
+        ),
         Some(component.ver.context("component version is required")?),
         sanitize_alias(component.call_alias)?,
     );
@@ -1242,7 +1252,8 @@ mod test {
         );
 
         //=== check project config overrides when cli args are NOT specified...
-        let component_metadata = ComponentMetadata::default().update_with_project_config(&project_config);
+        let component_metadata =
+            ComponentMetadata::default().update_with_project_config(&project_config);
         assert_eq!(
             component_metadata,
             ComponentMetadata {

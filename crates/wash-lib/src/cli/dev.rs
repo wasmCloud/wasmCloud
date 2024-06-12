@@ -3,8 +3,8 @@ use console::style;
 use wasmcloud_control_interface::Client;
 
 use crate::{
-    component::update_component,
     build::{build_project, SignConfig},
+    component::update_component,
     generate::emoji,
     id::{ModuleId, ServerId},
     parser::{ProjectConfig, TypeConfig},

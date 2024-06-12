@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::{
-    component::update_component,
     common::{boxed_err_to_anyhow, get_all_inventories},
+    component::update_component,
     config::WashConnectionOptions,
 };
 
@@ -89,7 +89,8 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
         ));
     }
 
-    let ack = update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
+    let ack =
+        update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
     if !ack.success {
         bail!("Operation failed on host [{}]: {}", host_id, ack.message);
     }

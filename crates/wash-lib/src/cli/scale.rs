@@ -4,9 +4,9 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use clap::Parser;
 
-use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
 use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
 use crate::common::{boxed_err_to_anyhow, find_host_id};
+use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
 use crate::config::WashConnectionOptions;
 use crate::context::default_component_operation_timeout_ms;
 use crate::wait::{wait_for_component_scaled_event, FindEventOutcome};

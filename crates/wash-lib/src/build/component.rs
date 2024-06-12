@@ -87,13 +87,14 @@ pub fn build_component(
         if component_config.wasm_target == WasmTarget::WasiPreview2 {
             let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
             // Adapt the component, using the adapter that is available locally
-            let wasm_bytes = adapt_wasi_preview1_component(&component_wasm_path, adapter_wasm_bytes)
-                .with_context(|| {
-                    format!(
-                        "failed to adapt component at [{}] to WASI preview2",
-                        component_wasm_path.display(),
-                    )
-                })?;
+            let wasm_bytes =
+                adapt_wasi_preview1_component(&component_wasm_path, adapter_wasm_bytes)
+                    .with_context(|| {
+                        format!(
+                            "failed to adapt component at [{}] to WASI preview2",
+                            component_wasm_path.display(),
+                        )
+                    })?;
 
             // Write the adapted file out to disk
             fs::write(&component_wasm_path, wasm_bytes).with_context(|| {
