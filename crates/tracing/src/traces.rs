@@ -14,7 +14,9 @@ use tracing_subscriber::layer::{Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 use wasmcloud_core::logging::Level;
-use wasmcloud_core::{OtelConfig, OtelProtocol};
+use wasmcloud_core::OtelConfig;
+#[cfg(feature = "otel")]
+use wasmcloud_core::OtelProtocol;
 
 struct LockedWriter<'a> {
     stderr: StderrLock<'a>,
