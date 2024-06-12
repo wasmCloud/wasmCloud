@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "1.0.2"
+version = "1.0.4"
 description = "wasmCloud host runtime"
 default-run = "wasmcloud"
 
