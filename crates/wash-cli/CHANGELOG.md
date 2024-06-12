@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.29.0 (2024-06-11)
+## v0.29.0 (2024-06-12)
+
+<csr-id-7e7cbd74ba6713ebf6b9fab60ef533f46b6a840d/>
+<csr-id-7f0ac03e86a010cbeef3dc4410a40ad58e0c5d88/>
+<csr-id-c26f2096d9f5ad8dd3aaec6de56395dfab1a5a04/>
+<csr-id-d3188d0c9990e39d9f63e0ed154fac7568956af5/>
+<csr-id-ed98b8981bea38b43cf05195adf081dd38f275a1/>
+<csr-id-7b8800121b7112d3ce44a7f4b939a5d654c35a61/>
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+<csr-id-df6551c7990795b92c48b2b8a0062b8949410e7d/>
+<csr-id-c5b3ad049817edab6d809ffafd51d4ca6fe4db79/>
 
 ### Chore
 
@@ -45,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features
 
+<csr-id-2aa6086f5ef482cd596e022f8ef1649238ccb4f4/>
+<csr-id-358a616f4b0e542228ba143aa8c238adf35ad483/>
+<csr-id-6018d3730b3d78e21b064b7c71d5478ed86399b6/>
+<csr-id-4b38dddf2295316677cbe75695eb4bffadfe1d18/>
+
  - <csr-id-fd79e99ef8d8ef14f3e7efae0b3904dade4d7fc3/> display max instances count in washboard output
    feat(wash-cli): display max instances count in wash get inventory output
  - <csr-id-89e0f5ba79fe4c9d1c2485c2f1e28c28885caa4c/> enable custom TLS CA usage
@@ -61,32 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    For now, it checks:
    - interface names (ex. typos, misnamed host-supported interfaces)
-   - dangling providers/components which aren't linked to anything
- - <csr-id-2aa6086f5ef482cd596e022f8ef1649238ccb4f4/> add support for `wash up --wadm-manifest`
-   This commit adds support for `wash up --wadm-manifest`, which deploys
-   a WADM manifest after running `wash up`. If the manifest *exists
-   already*, it is not re-deployed, but it is deployed once.
- - <csr-id-358a616f4b0e542228ba143aa8c238adf35ad483/> add --replace option to `wash app deploy`
-   This commit adds an option `--replace` to `wash app deploy` which
-   helps run repeated deploys of the *same* manifest by undeploying the
-   specified model right before deploying.
-   
-   While this isn't quite as robust as we want an option like `wash app
-   dev` to be, it does enable easy scripting.
- - <csr-id-6018d3730b3d78e21b064b7c71d5478ed86399b6/> enable deleting manifests by file name
-   This commit enables `wash app delete` to delete applications by
-   manifest file, rather than strictly by model name inside the manifest.
-   
-   We do this simply by checking whether the filename is a valid file
-   path, and attempting to read that file, with the assumption that it is
-   very unlikely someone would call their model `wadm.yaml` (or any
-   variation of a normally named YAML WADM manifest.
- - <csr-id-4b38dddf2295316677cbe75695eb4bffadfe1d18/> add support for specifying multiple labels
-   This commit adds support for specifying multiple labels to `wash
-   label`.
-   
-   Users can use `wash label <host-id> key1=value1,key2=value2` to set
-   multiple labels on the host at the same time, in a best-effort manner
+- dangling providers/components which aren't linked to anything
 
 ### Bug Fixes
 
@@ -118,7 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 26 commits contributed to the release over the course of 26 calendar days.
+ - 27 commits contributed to the release over the course of 27 calendar days.
  - 32 days passed between releases.
  - 25 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -130,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump wascap v0.15.0, wasmcloud-core v0.7.0, wash-lib v0.22.0, wasmcloud-tracing v0.5.0, wasmcloud-provider-sdk v0.6.0, wash-cli v0.29.0, safety bump 5 crates ([`2e38cd4`](https://github.com/wasmCloud/wasmCloud/commit/2e38cd45adef18d47af71b87ca456a25edb2f53a))
     - Add --skip-wait option to scale subcommand ([`adbced4`](https://github.com/wasmCloud/wasmCloud/commit/adbced40c06ec035f3f8b5d0fd062f20d622e0ee))
     - Continue down if pidfile is missing ([`bf10b48`](https://github.com/wasmCloud/wasmCloud/commit/bf10b48299bb26a51b0c9181230c672e72a2282c))
     - Fix #1740, support purging with wash down ([`ca98cd6`](https://github.com/wasmCloud/wasmCloud/commit/ca98cd65d943b3ba5b39d7ece6983635f5a300e4))
@@ -158,7 +149,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Remove deprecated registry_ping ([`c5b3ad0`](https://github.com/wasmCloud/wasmCloud/commit/c5b3ad049817edab6d809ffafd51d4ca6fe4db79))
 </details>
 
+<csr-unknown>
+ add support for wash up --wadm-manifestThis commit adds support for wash up --wadm-manifest, which deploysa WADM manifest after running wash up. If the manifest existsalready, it is not re-deployed, but it is deployed once. add –replace option to wash app deployThis commit adds an option --replace to wash app deploy whichhelps run repeated deploys of the same manifest by undeploying thespecified model right before deploying.While this isn’t quite as robust as we want an option like wash app dev to be, it does enable easy scripting. enable deleting manifests by file nameThis commit enables wash app delete to delete applications bymanifest file, rather than strictly by model name inside the manifest.We do this simply by checking whether the filename is a valid filepath, and attempting to read that file, with the assumption that it isvery unlikely someone would call their model wadm.yaml (or anyvariation of a normally named YAML WADM manifest. add support for specifying multiple labelsThis commit adds support for specifying multiple labels to wash label.Users can use wash label <host-id> key1=value1,key2=value2 to setmultiple labels on the host at the same time, in a best-effort manner<csr-unknown/>
+
 ## v0.28.1 (2024-05-10)
+
+<csr-id-a4a772fb475c1f76215b7fe7aece9c2335bd0c69/>
 
 ### Chore
 

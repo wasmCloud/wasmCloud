@@ -5,7 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.6.0 (2024-06-11)
+## 0.6.0 (2024-06-12)
+
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-8c93b0edbf37f1d0b40e065acfafc89af936a425/>
+<csr-id-902a17ec9bd73e6bf4dc08dca109d7e11765e6e4/>
+<csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
+<csr-id-859663e775f5505ec8fd7ee2bbb2ada73faae0e2/>
+<csr-id-3d7b64321686139e2e266ff7c69f094bcfac1f6d/>
+<csr-id-6b369d49cd37a87dca1f92f31c4d4d3e33dec501/>
+<csr-id-435300a5d5461860ad5f9abaf2f85cdb6ca3f900/>
+<csr-id-56e48aaac4a3e11f2f5e98ff2fa136ce9bb2235c/>
+<csr-id-b9770de23b8d3b0fa1adffddb94236403d7e1d3f/>
+<csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
+<csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/>
+<csr-id-0023f7e86d5a40a534f623b7220743f27871549e/>
+<csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/>
+<csr-id-4adbf0647f1ef987e92fbf927db9d09e64d3ecd8/>
+<csr-id-0f967b065f30a0b5418f7ed519fdef3dc75a6205/>
+<csr-id-d98a317b30e352ea0d73439ad3fa790ddfb8bf3f/>
+<csr-id-7c664a88cd7bbaa201b9b07a2bb9ba1c215a3b56/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-5d7383137897d28a1bc5df9b1c48f75281dab55b/>
+<csr-id-54321c7cce159b7dad073dfc254dd4f13c21d2a2/>
+<csr-id-637be5dea8c8bef72f6f76ccc673477b7b0f1d0f/>
+<csr-id-05ae20c8ef474ad2249c6ad4b6ca8cc3b7d01b01/>
+<csr-id-2e473aa8b3337179566c71a9a93a945519b467db/>
+<csr-id-68dadeddb79cc041851d2adcfeb0417a4006d296/>
+<csr-id-b6a6b04229730d6783c3fee61c6e078cd3b962ef/>
+<csr-id-aea0a282911a704ee0d70ad38f267d8d8cc00d78/>
+<csr-id-0319a9245589709d96b03786374d8026beb5d5d0/>
+<csr-id-6f0a7d848e49d4cdc66dffe38fd8b41657f32649/>
+<csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/>
+<csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/>
+<csr-id-3430c72b11564acc0624987cd3df08c629d7d197/>
+<csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/>
+<csr-id-8e15d48258489dbb94f83cbea3872d4ee946c70b/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/>
+<csr-id-e75d3e2f2da91371266715723a3229b2138bf4f9/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
+<csr-id-5fd0557c7ff454211e3f590333ff4dda208a1f7a/>
+<csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
 
 ### Chore
 
@@ -101,6 +145,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+<csr-id-2dbc392215c9fa1971b1f3bd83fab0807c60aaee/>
+<csr-id-07d818cdbd50ae350d236fb1cc309d86b75739ea/>
+<csr-id-74142c4cff683565fb321b7b65fbb158b5a9c990/>
+<csr-id-c604aca1db1017e2458cf66eab232b081d615521/>
+
  - <csr-id-27cb86d9e86b09c2da9e23a4ebfbddf22f3abad2/> wasmcloud messaging provider directionality
  - <csr-id-0f6a1eb97cb46a43c9b24977a8e8dc11061af330/> add messaging triggered test actor
    This commit is the culmination of a few things that were required for
@@ -110,18 +159,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
-   - Uncomments implementation from the host for wasmcloud:messaging
-   - Adds an invoker component that reacts to messaging rather than HTTP
-   - Uses messaging & keyvalue providers plus the actor in a single test
-   
-   With this, we have an easy to understand way to test every provider
-   that we have in the repository.
- - <csr-id-2dbc392215c9fa1971b1f3bd83fab0807c60aaee/> use send_request to handle request timeout
- - <csr-id-07d818cdbd50ae350d236fb1cc309d86b75739ea/> add what clippy took from me
- - <csr-id-74142c4cff683565fb321b7b65fbb158b5a9c990/> attach traces on inbound and outbound messages
-   Parse headers from CTL interface and RPC messages, and publish tracing headers
-   on CTL and RPC responses
- - <csr-id-c604aca1db1017e2458cf66eab232b081d615521/> enable `ansi` feature
+- Uncomments implementation from the host for wasmcloud:messaging
+- Adds an invoker component that reacts to messaging rather than HTTP
+- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
@@ -212,7 +252,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 80 commits contributed to the release over the course of 321 calendar days.
+ - 81 commits contributed to the release over the course of 322 calendar days.
  - 76 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -223,6 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump wascap v0.15.0, wasmcloud-core v0.7.0, wash-lib v0.22.0, wasmcloud-tracing v0.5.0, wasmcloud-provider-sdk v0.6.0, wash-cli v0.29.0, safety bump 5 crates ([`2e38cd4`](https://github.com/wasmCloud/wasmCloud/commit/2e38cd45adef18d47af71b87ca456a25edb2f53a))
     - Allow providers to access wit metadata for links ([`feaf5f9`](https://github.com/wasmCloud/wasmCloud/commit/feaf5f9cd63fa7bf8476389396808fac9ba4ce09))
     - Bump provider-archive v0.10.2, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0 ([`73c0ef0`](https://github.com/wasmCloud/wasmCloud/commit/73c0ef0bbe2f6b525655939d2cd30740aef4b6bc))
     - Bump provider-archive v0.10.1, wasmcloud-core v0.6.0, wash-lib v0.21.0, wasmcloud-tracing v0.4.0, wasmcloud-provider-sdk v0.5.0, wash-cli v0.28.0, safety bump 5 crates ([`75a2e52`](https://github.com/wasmCloud/wasmCloud/commit/75a2e52f52690ba143679c90237851ebd07e153f))
@@ -304,6 +345,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Merge pull request #396 from rvolosatovs/feat/provider-sdk ([`6ed04f0`](https://github.com/wasmCloud/wasmCloud/commit/6ed04f00a335333196f6bafb96f2c40155537df3))
     - Add new provider SDK to repo ([`ada9067`](https://github.com/wasmCloud/wasmCloud/commit/ada90674df5130be6320788bcb08b7868f3b67a5))
 </details>
+
+<csr-unknown>
+With this, we have an easy to understand way to test every providerthat we have in the repository. use send_request to handle request timeout add what clippy took from me attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses enable ansi feature<csr-unknown/>
 
 ## 0.5.0 (2024-05-08)
 
