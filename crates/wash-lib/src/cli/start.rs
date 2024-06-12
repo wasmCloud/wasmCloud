@@ -5,9 +5,9 @@ use clap::Parser;
 use tokio::time::Duration;
 
 use crate::{
-    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id},
+    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     config::{
         WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_COMPONENT_TIMEOUT_MS,
         DEFAULT_START_PROVIDER_TIMEOUT_MS,

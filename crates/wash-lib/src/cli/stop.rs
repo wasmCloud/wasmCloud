@@ -6,9 +6,9 @@ use tracing::error;
 use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     cli::{CliConnectionOpts, CommandOutput},
     common::{boxed_err_to_anyhow, find_host_id, get_all_inventories, FindIdError, Match},
+    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
     config::{downloads_dir, WashConnectionOptions, WASMCLOUD_PID_FILE},
     context::default_timeout_ms,
     id::ServerId,

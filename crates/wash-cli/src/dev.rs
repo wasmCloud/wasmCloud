@@ -11,10 +11,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
 use wash_lib::{
-    component::{scale_component, ScaleComponentArgs},
     build::{build_project, SignConfig},
     cli::dev::run_dev_loop,
     cli::{sanitize_component_id, CommandOutput},
+    component::{scale_component, ScaleComponentArgs},
     config::{downloads_dir, WASMCLOUD_PID_FILE},
     generate::emoji,
     id::{ModuleId, ServerId},

@@ -29,10 +29,10 @@ pub mod parser;
 pub mod start;
 
 #[cfg(feature = "nats")]
-pub mod component;
-#[cfg(feature = "nats")]
 pub mod capture;
 pub mod common;
+#[cfg(feature = "nats")]
+pub mod component;
 #[cfg(feature = "nats")]
 pub mod config;
 #[cfg(feature = "nats")]

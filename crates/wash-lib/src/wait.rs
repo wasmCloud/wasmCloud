@@ -130,7 +130,8 @@ pub async fn wait_for_component_scaled_event(
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == component_ref {
-                    let component_id = get_string_data_from_json(&cloud_event.data, "component_id")?;
+                    let component_id =
+                        get_string_data_from_json(&cloud_event.data, "component_id")?;
                     return Ok(EventCheckOutcome::Success(ComponentScaledInfo {
                         host_id: host_id.into(),
                         component_ref: component_ref.into(),
@@ -326,7 +327,8 @@ pub async fn wait_for_component_stop_event(
 
         match cloud_event.event_type.as_str() {
             "com.wasmcloud.lattice.component_scaled" => {
-                let returned_component_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
+                let returned_component_id =
+                    get_string_data_from_json(&cloud_event.data, "public_key")?;
                 if returned_component_id == component_id {
                     return Ok(EventCheckOutcome::Success(ComponentStoppedInfo {
                         host_id: host_id.as_str().into(),
@@ -335,7 +337,8 @@ pub async fn wait_for_component_stop_event(
                 }
             }
             "com.wasmcloud.lattice.component_scale_failed" => {
-                let returned_component_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
+                let returned_component_id =
+                    get_string_data_from_json(&cloud_event.data, "public_key")?;
 
                 if returned_component_id == component_id {
                     let error = anyhow!(
