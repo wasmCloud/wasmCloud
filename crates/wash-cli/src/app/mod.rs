@@ -203,9 +203,26 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
 
     let client = connection_opts.into_nats_client().await?;
 
-    wash_lib::app::undeploy_model(&client, lattice, &cmd.app_name).await?;
+    // If we have received a valid path to a model file, then read and extract the model name,
+    // otherwise use the supplied name as a model name
+    let model_name = if tokio::fs::try_exists(&cmd.app_name)
+        .await
+        .is_ok_and(|exists| exists)
+    {
+        let manifest = load_app_manifest(cmd.app_name.parse()?)
+            .await
+            .with_context(|| format!("failed to load app manifest at [{}]", cmd.app_name))?;
+        manifest
+            .name()
+            .map(ToString::to_string)
+            .context("failed to find name of manifest")?
+    } else {
+        cmd.app_name
+    };
 
-    let message = format!("Undeployed application: {}", cmd.app_name);
+    wash_lib::app::undeploy_model(&client, lattice, &model_name).await?;
+
+    let message = format!("Undeployed application: {}", model_name);
     let mut map = HashMap::new();
     map.insert("results".to_string(), json!(message));
     Ok(CommandOutput::new(message, map))
@@ -225,8 +242,10 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
 
     // If --replace was specified, we should attempt to replace the resources by deleting them beforehand
     if cmd.replace {
-        if let (Some(name), version) = (app_manifest.name(), app_manifest.version().map(Into::into))
-        {
+        if let (Some(name), version) = (
+            app_manifest.name(),
+            app_manifest.version().map(ToString::to_string),
+        ) {
             if let Err(e) =
                 wash_lib::app::delete_model_version(&client, lattice.clone(), name, version).await
             {
@@ -377,9 +396,9 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
         (
             manifest
                 .name()
-                .map(Into::into)
+                .map(ToString::to_string)
                 .context("failed to find name of manifest")?,
-            manifest.version().map(Into::into),
+            manifest.version().map(ToString::to_string),
         )
     } else {
         (cmd.app_name, cmd.version)
