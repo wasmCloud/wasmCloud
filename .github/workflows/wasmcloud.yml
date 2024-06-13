@@ -160,7 +160,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-latest-8-cores-shared-cache
-        if: ${{ !startswith(github.ref, format('refs/tags')) && github.ref != 'refs/heads/main' }}
+        if: ${{ !startswith(github.ref, format('refs/tags')) }}
 
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
