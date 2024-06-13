@@ -80,6 +80,17 @@ choco install wash
 nix run github:wasmCloud/wash
 ```
 
+## Proxy authentication
+In a scenario where you are behind a proxy, you can set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables to the proxy URL.
+And if your proxy requires authentication, you can set the `WASH_PROXY_USERNAME` and `WASH_PROXY_PASSWORD` environment variables to the username and password, respectively. Since most passwords contain special characters, it's recommended to specify the value for 'WASH_PROXY_PASSWORD' in single quotes.
+
+For example, in a unix environment:
+
+```console
+export WASH_PROXY_USERNAME='username' 
+export WASH_PROXY_PASSWORD='p@ssw0rd'
+```
+
 ## Using wash
 
 `wash` has multiple subcommands, each specializing in one specific area of the wasmCloud development process.
