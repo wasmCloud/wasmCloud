@@ -62,10 +62,11 @@ func (h *Handler) Call(ctx context.Context) (string, error) {
 		// Get the outgoing RPC client for the target
 		client := h.provider.OutgoingRpcClient(target)
 		// Send the data to the target for processing
-		res, err := process_data.Process(ctx, client, &data)
+		res, close, err := process_data.Process(ctx, client, &data)
 		if err != nil {
 			return "", err
 		}
+		close()
 		lastResponse = res
 	}
 
