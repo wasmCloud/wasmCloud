@@ -37,7 +37,7 @@ pub const HELLO_OCI_REF: &str = "ghcr.io/brooksmtownsend/http-hello-world-rust:0
 pub const HTTP_JSONIFY_OCI_REF: &str = "ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1";
 
 #[allow(unused)]
-pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.20.0";
+pub const PROVIDER_HTTPSERVER_OCI_REF: &str = "ghcr.io/wasmcloud/http-server:0.21.0";
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
 

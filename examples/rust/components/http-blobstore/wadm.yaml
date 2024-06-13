@@ -5,8 +5,8 @@ metadata:
   name: rust-http-blobstore
   annotations:
     version: v0.0.1
-    description: "HTTP Blobstore demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
-    experimental: true
+    description: 'HTTP Blobstore demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    experimental: 'true'
 spec:
   components:
     # Component that serves the blobstore-over-HTTP abstraction
@@ -31,7 +31,7 @@ spec:
             target_config:
               - name: root-directory
                 properties:
-                  root: "/tmp"
+                  root: '/tmp'
         # Link to the HTTP provider which serves the component over HTTP
         - type: link
           properties:
@@ -50,9 +50,9 @@ spec:
       properties:
         # To use a locally compiled provider, uncomment the line below
         # (and ensure that you've used `wash par crate` to create the par file below)
-        # 
+        #
         # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.21.0
 
     # Capability provider that exposes a blobstore with the filesystem
     - name: blobstore-fs
@@ -60,6 +60,6 @@ spec:
       properties:
         # To use a locally compiled provider, uncomment the line below
         # (and ensure that you've used `wash par crate` to create the par file below)
-        # 
+        #
         # image: file://../../../../crates/provider-blobstore-fs/provider-blobstore-fs.par.gz
-        image: ghcr.io/wasmcloud/blobstore-fs:0.6.0
+        image: ghcr.io/wasmcloud/blobstore-fs:0.7.0
