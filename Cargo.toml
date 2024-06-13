@@ -285,6 +285,7 @@ tower = { version = "0.4", default-features = false }
 tower-http = { version = "0.5", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-appender = { version = "0.2", default-features = false }
+tracing-flame = { version = "0.2", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.24", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
