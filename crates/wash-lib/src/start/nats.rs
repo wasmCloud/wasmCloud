@@ -125,6 +125,7 @@ pub struct NatsConfig {
     pub remote_url: Option<String>,
     pub credentials: Option<PathBuf>,
     pub websocket_port: u16,
+    pub config_path: Option<PathBuf>,
 }
 
 /// Returns a standalone NATS config with the following values:
@@ -144,6 +145,7 @@ impl Default for NatsConfig {
             remote_url: None,
             credentials: None,
             websocket_port: 4223,
+            config_path: None,
         }
     }
 }
@@ -168,6 +170,7 @@ impl NatsConfig {
         remote_url: String,
         credentials: PathBuf,
         websocket_port: u16,
+        config_path: Option<PathBuf>,
     ) -> Self {
         NatsConfig {
             host: host.to_owned(),
@@ -177,6 +180,7 @@ impl NatsConfig {
             remote_url: Some(remote_url),
             credentials: Some(credentials),
             websocket_port,
+            config_path,
         }
     }
     /// Instantiates config for a standalone NATS server. Unless you're looking to extend
@@ -262,40 +266,60 @@ where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
-    let host_addr = format!("{}:{}", config.host, config.port);
-    // If we can connect to the local port, NATS won't be able to listen on that port
-    if tokio::net::TcpStream::connect(&host_addr).await.is_ok() {
-        bail!(
-            "could not start NATS server, a process is already listening on {}:{}",
-            config.host,
-            config.port
-        );
-    }
-    let child = if let Some(parent_path) = bin_path.as_ref().parent() {
-        let config_path = parent_path.join(NATS_SERVER_CONF);
-        let host = config.host.clone();
-        let port = config.port;
-        config.write_to_path(&config_path).await?;
-        Command::new(bin_path.as_ref())
+    if let Some(natscfg_path) = config.config_path {
+        // Use the existing config path
+        let child = Command::new(bin_path.as_ref())
             .stderr(stderr)
             .stdin(Stdio::null())
             .arg("-js")
             .arg("--config")
-            .arg(config_path)
-            .arg("--addr")
-            .arg(host)
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--pid")
-            .arg(parent_path.join(NATS_SERVER_PID))
+            .arg(natscfg_path)
             .spawn()
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from)?;
+
+        // Return immediately as we don't need to wait for the server
+        return Ok(child);
     } else {
-        bail!("could not write config to disk, couldn't find download directory")
-    }?;
-    wait_for_server(&host_addr, "NATS server")
-        .await
-        .map(|()| child)
+        // We need to use host and port from config
+        let host_addr = format!("{}:{}", config.host, config.port);
+        
+        // If we can connect to the local port, NATS won't be able to listen on that port
+        if tokio::net::TcpStream::connect(&host_addr).await.is_ok() {
+            bail!(
+                "could not start NATS server, a process is already listening on {}:{}",
+                config.host,
+                config.port
+            );
+        }
+
+        let child = if let Some(parent_path) = bin_path.as_ref().parent() {
+            // Write the config to a new path
+            let config_path = parent_path.join(NATS_SERVER_CONF);
+            let host = config.host.clone();
+            let port = config.port;
+            config.write_to_path(&config_path).await?;
+            Command::new(bin_path.as_ref())
+                .stderr(stderr)
+                .stdin(Stdio::null())
+                .arg("-js")
+                .arg("--config")
+                .arg(config_path)
+                .arg("--addr")
+                .arg(host)
+                .arg("--port")
+                .arg(port.to_string())
+                .arg("--pid")
+                .arg(parent_path.join(NATS_SERVER_PID))
+                .spawn()
+                .map_err(anyhow::Error::from)
+        } else {
+            bail!("could not write config to disk, couldn't find download directory")
+        }?;
+
+        wait_for_server(&host_addr, "NATS server")
+            .await
+            .map(|()| child)
+    }
 }
 
 /// Helper function to get the path to the NATS server pid file
@@ -444,6 +468,7 @@ mod test {
             "connect.ngs.global".to_string(),
             creds.clone(),
             4204,
+            None,
         );
 
         config.write_to_path(creds.clone()).await?;
