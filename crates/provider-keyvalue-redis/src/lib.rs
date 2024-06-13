@@ -150,9 +150,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         key: String,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
-
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(context, &mut Cmd::del(key)).await)
     }
 
@@ -164,9 +162,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         key: String,
     ) -> anyhow::Result<Result<bool>> {
         propagate_trace_for_ctx!(context);
-
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(context, &mut Cmd::exists(key)).await)
     }
 
@@ -178,9 +174,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
         propagate_trace_for_ctx!(context);
-
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         match self
             .exec_cmd::<redis::Value>(context, &mut Cmd::get(key))
             .await
@@ -203,9 +197,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         value: Vec<u8>,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
-
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(context, &mut Cmd::set(key, value)).await)
     }
 
@@ -217,8 +209,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
         propagate_trace_for_ctx!(context);
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         match self
             .exec_cmd(
                 context,
@@ -246,8 +237,7 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvRedisProvider {
         delta: u64,
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
         propagate_trace_for_ctx!(context);
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self
             .exec_cmd::<u64>(context, &mut Cmd::incr(key, delta))
             .await)
@@ -261,8 +251,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(ctx, &mut Cmd::mget(&keys)).await)
     }
 
@@ -272,8 +261,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         items: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<Result<()>> {
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(ctx, &mut Cmd::mset(&items)).await)
     }
 
@@ -283,8 +271,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Result<()>> {
-        // TODO: Use bucket
-        _ = bucket;
+        check_bucket_name(&bucket);
         Ok(self.exec_cmd(ctx, &mut Cmd::del(&keys)).await)
     }
 }
@@ -381,6 +368,14 @@ pub fn retrieve_default_url(config: &HashMap<String, String>) -> String {
     } else {
         debug!(DEFAULT_CONNECT_URL, "using default Redis URL");
         DEFAULT_CONNECT_URL.to_string()
+    }
+}
+
+/// Check for unsupported bucket names,
+/// primarily warning on non-empty bucket names, since this provider does not yet properly support named buckets
+fn check_bucket_name(bucket: &str) {
+    if !bucket.is_empty() {
+        warn!(bucket, "non-empty bucket names are not yet supported; ignoring non-empty bucket name (using a non-empty bucket name may become an error in the future).")
     }
 }
 
