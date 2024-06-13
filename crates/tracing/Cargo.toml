@@ -41,6 +41,7 @@ opentelemetry-otlp = { workspace = true, features = [
 ], optional = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = [
