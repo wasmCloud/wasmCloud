@@ -1,4 +1,6 @@
-//! Core reusable logic around [OpenTelemetry ("OTEL")](https://opentelemetry.io/) support
+//! Reusable logic around [OpenTelemetry ("OTEL")][otel] support
+//!
+//! [otel]: https://opentelemetry.io
 
 use std::str::FromStr;
 

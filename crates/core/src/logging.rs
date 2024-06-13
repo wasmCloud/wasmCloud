@@ -1,4 +1,8 @@
-// This would be the generated types from wasi logging when we generate it
+//! Reusable types related to links on wasmCloud lattices
+//!
+//! NOTE: In the future, generated types to enable easy interoperation with [wasi:logging][wasi-logging] should live here.
+//!
+//! [wasi-logging]: <https://github.com/WebAssembly/wasi-logging>
 
 use serde::{Deserialize, Serialize};
 
