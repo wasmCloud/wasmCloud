@@ -249,6 +249,10 @@ struct Args {
         hide = true
     )]
     observability_protocol: Option<OtelProtocol>,
+
+    /// Path to generate flame graph at
+    #[clap(long = "flame-graph", env = "WASMCLOUD_FLAME_GRAPH")]
+    flame_graph: Option<String>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -275,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
         "wasmcloud-host",
         &otel_config,
         args.enable_structured_logging,
+        args.flame_graph,
         Some(&log_level),
     );
     if let Err(e) = res {

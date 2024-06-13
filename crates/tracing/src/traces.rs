@@ -1,26 +1,30 @@
 use std::env;
-use std::io::IsTerminal;
+use std::fs::File;
+use std::io::{BufWriter, IsTerminal};
+use std::path::Path;
+#[cfg(feature = "otel")]
 use std::sync::Arc;
 
-use anyhow::Context;
-use once_cell::sync::OnceCell;
+use anyhow::Context as _;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{LogExporterBuilder, SpanExporterBuilder, WithExportConfig};
 use tracing::{Event, Subscriber};
+use tracing_flame::FlameLayer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
 use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::{Layered, SubscriberExt};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::EnvFilter;
 use wasmcloud_core::logging::Level;
 use wasmcloud_core::OtelConfig;
 #[cfg(feature = "otel")]
 use wasmcloud_core::OtelProtocol;
 
 #[cfg(feature = "otel")]
-static LOG_PROVIDER: OnceCell<opentelemetry_sdk::logs::LoggerProvider> = OnceCell::new();
+static LOG_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::logs::LoggerProvider> =
+    once_cell::sync::OnceCell::new();
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
 /// This is just so we avoid any sort of possible slow down in logging code
@@ -50,6 +54,11 @@ where
     }
 }
 
+pub struct FlushGuard {
+    _stderr: tracing_appender::non_blocking::WorkerGuard,
+    _flame: Option<tracing_flame::FlushGuard<BufWriter<File>>>,
+}
+
 /// Configures a global tracing subscriber, which includes:
 /// - A level filter, which forms the base and applies to all other layers
 /// - A local logging layer, which is either plaintext or structured (JSON)
@@ -62,23 +71,41 @@ where
 pub fn configure_tracing(
     _: &str,
     _: &OtelConfig,
-    structured_logging_enabled: bool,
+    use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
-    let base_reg = tracing_subscriber::Registry::default();
-    let level_filter = get_level_filter(log_level_override);
-
-    let (res, guard) = if structured_logging_enabled {
-        let (out, guard) = get_json_log_layer()?;
-        let layered = base_reg.with(level_filter).with(out);
-        (tracing::subscriber::set_global_default(layered), guard)
+) -> anyhow::Result<FlushGuard> {
+    let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
+    let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
+    let reg = tracing_subscriber::Registry::default()
+        .with(get_level_filter(log_level_override))
+        .with(flame);
+    let stderr = std::io::stderr();
+    let ansi = stderr.is_terminal();
+    let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    let fmt = tracing_subscriber::fmt::layer()
+        .with_writer(stderr)
+        .with_ansi(ansi);
+    if use_structured_logging {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Json(Format::default().json()))
+                    .fmt_fields(JsonFields::new()),
+            ),
+        )
     } else {
-        let (out, guard) = get_plaintext_log_layer()?;
-        let layered = base_reg.with(level_filter).with(out);
-        (tracing::subscriber::set_global_default(layered), guard)
-    };
-    res.context("logger was already configured")?;
-    Ok(guard)
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Not(Format::default()))
+                    .fmt_fields(DefaultFields::new()),
+            ),
+        )
+    }
+    .context("logger already configured")?;
+    Ok(FlushGuard {
+        _stderr: stderr_guard,
+        _flame: flame_guard,
+    })
 }
 
 /// Configures a global tracing subscriber, which includes:
@@ -95,8 +122,9 @@ pub fn configure_tracing(
     service_name: &str,
     otel_config: &OtelConfig,
     use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
+) -> anyhow::Result<FlushGuard> {
     let service_name = Arc::from(service_name);
 
     let traces = otel_config
@@ -107,13 +135,16 @@ pub fn configure_tracing(
         .logs_enabled()
         .then(|| get_otel_logging_layer(Arc::clone(&service_name), otel_config))
         .transpose()?;
+    let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
+    let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
     let reg = tracing_subscriber::Registry::default()
         .with(get_level_filter(log_level_override))
         .with(traces)
-        .with(logs);
+        .with(logs)
+        .with(flame);
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
-    let (stderr, guard) = tracing_appender::non_blocking(stderr);
+    let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(stderr)
         .with_ansi(ansi);
@@ -133,14 +164,17 @@ pub fn configure_tracing(
         )
     }
     .context("logger/tracer already configured")?;
-    Ok(guard)
+    Ok(FlushGuard {
+        _stderr: stderr_guard,
+        _flame: flame_guard,
+    })
 }
 
 #[cfg(feature = "otel")]
 fn get_otel_tracing_layer<S>(
     service_name: Arc<str>,
     otel_config: &OtelConfig,
-) -> anyhow::Result<impl Layer<S>>
+) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -181,7 +215,7 @@ where
 fn get_otel_logging_layer<S>(
     service_name: Arc<str>,
     otel_config: &OtelConfig,
-) -> anyhow::Result<impl Layer<S>>
+) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
