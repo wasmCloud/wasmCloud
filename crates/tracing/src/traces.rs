@@ -1,5 +1,6 @@
 use std::env;
 use std::io::IsTerminal;
+use std::sync::Arc;
 
 use anyhow::Context;
 use once_cell::sync::OnceCell;
@@ -76,7 +77,7 @@ pub fn configure_tracing(
         let layered = base_reg.with(level_filter).with(out);
         (tracing::subscriber::set_global_default(layered), guard)
     };
-    res.context("logger was already created")?;
+    res.context("logger was already configured")?;
     Ok(guard)
 }
 
@@ -96,112 +97,48 @@ pub fn configure_tracing(
     use_structured_logging: bool,
     log_level_override: Option<&Level>,
 ) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
-    let base_reg = tracing_subscriber::Registry::default();
+    let service_name = Arc::from(service_name);
 
-    let level_filter = get_level_filter(log_level_override);
-
-    let normalized_service_name = service_name.to_string();
-
-    // NOTE: this logic would be simpler if we could conditionally/imperatively construct and add
-    // layers, but due to the dynamic types, this is not possible
-    // TODO: the above is not true and most of this needs serious refactoring
-    let (res, guard) = match (
-        otel_config.traces_enabled(),
-        otel_config.logs_enabled(),
-        use_structured_logging,
-    ) {
-        (true, true, true) => {
-            let (out, guard) = get_json_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (true, true, false) => {
-            let (out, guard) = get_plaintext_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (true, false, true) => {
-            let (out, guard) = get_json_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (true, false, false) => {
-            let (out, guard) = get_plaintext_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (false, true, true) => {
-            let (out, guard) = get_json_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (false, true, false) => {
-            let (out, guard) = get_plaintext_log_layer()?;
-            let layered = base_reg
-                .with(level_filter)
-                .with(out)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (false, false, true) => {
-            let (out, guard) = get_json_log_layer()?;
-            let layered = base_reg.with(level_filter).with(out);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-        (false, false, false) => {
-            let (out, guard) = get_plaintext_log_layer()?;
-            let layered = base_reg.with(level_filter).with(out);
-            (tracing::subscriber::set_global_default(layered), guard)
-        }
-    };
-    res.context("logger/tracer was already created")?;
+    let traces = otel_config
+        .traces_enabled()
+        .then(|| get_otel_tracing_layer(Arc::clone(&service_name), otel_config))
+        .transpose()?;
+    let logs = otel_config
+        .logs_enabled()
+        .then(|| get_otel_logging_layer(Arc::clone(&service_name), otel_config))
+        .transpose()?;
+    let reg = tracing_subscriber::Registry::default()
+        .with(get_level_filter(log_level_override))
+        .with(traces)
+        .with(logs);
+    let stderr = std::io::stderr();
+    let ansi = stderr.is_terminal();
+    let (stderr, guard) = tracing_appender::non_blocking(stderr);
+    let fmt = tracing_subscriber::fmt::layer()
+        .with_writer(stderr)
+        .with_ansi(ansi);
+    if use_structured_logging {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Json(Format::default().json()))
+                    .fmt_fields(JsonFields::new()),
+            ),
+        )
+    } else {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Not(Format::default()))
+                    .fmt_fields(DefaultFields::new()),
+            ),
+        )
+    }
+    .context("logger/tracer already configured")?;
     Ok(guard)
 }
 
 #[cfg(feature = "otel")]
 fn get_otel_tracing_layer<S>(
-    service_name: String,
+    service_name: Arc<str>,
     otel_config: &OtelConfig,
 ) -> anyhow::Result<impl Layer<S>>
 where
@@ -242,7 +179,7 @@ where
 
 #[cfg(feature = "otel")]
 fn get_otel_logging_layer<S>(
-    service_name: String,
+    service_name: Arc<str>,
     otel_config: &OtelConfig,
 ) -> anyhow::Result<impl Layer<S>>
 where
@@ -283,42 +220,6 @@ where
     );
 
     Ok(log_layer)
-}
-
-fn get_plaintext_log_layer<S>(
-) -> anyhow::Result<(impl Layer<S>, tracing_appender::non_blocking::WorkerGuard)>
-where
-    S: Subscriber,
-    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    let stderr = std::io::stderr();
-    let ansi = stderr.is_terminal();
-    let (stderr, guard) = tracing_appender::non_blocking(stderr);
-    Ok((
-        tracing_subscriber::fmt::layer()
-            .with_writer(stderr)
-            .with_ansi(ansi)
-            .event_format(JsonOrNot::Not(Format::default()))
-            .fmt_fields(DefaultFields::new()),
-        guard,
-    ))
-}
-
-fn get_json_log_layer() -> anyhow::Result<(
-    impl Layer<Layered<EnvFilter, Registry>>,
-    tracing_appender::non_blocking::WorkerGuard,
-)> {
-    let stderr = std::io::stderr();
-    let ansi = stderr.is_terminal();
-    let (stderr, guard) = tracing_appender::non_blocking(stderr);
-    Ok((
-        tracing_subscriber::fmt::layer()
-            .with_writer(stderr)
-            .with_ansi(ansi)
-            .event_format(JsonOrNot::Json(Format::default().json()))
-            .fmt_fields(JsonFields::new()),
-        guard,
-    ))
 }
 
 fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
