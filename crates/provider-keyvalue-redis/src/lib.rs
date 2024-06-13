@@ -45,8 +45,8 @@ pub enum DefaultConnection {
 /// Redis `wrpc:keyvalue` provider implementation.
 #[derive(Clone)]
 pub struct KvRedisProvider {
-    // store redis connections per source ID
-    sources: Arc<RwLock<HashMap<String, ConnectionManager>>>,
+    // store redis connections per source ID & link name
+    sources: Arc<RwLock<HashMap<(String, String), ConnectionManager>>>,
     // default connection, which may be uninitialized
     default_connection: Arc<RwLock<DefaultConnection>>,
 }
@@ -104,19 +104,28 @@ impl KvRedisProvider {
 
     #[instrument(level = "debug", skip(self))]
     async fn invocation_conn(&self, context: Option<Context>) -> anyhow::Result<ConnectionManager> {
-        if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
-            let sources = self.sources.read().await;
-            let Some(conn) = sources.get(source_id) else {
-                error!(source_id, "no Redis connection found for component");
-                bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
-            };
-            Ok(conn.clone())
-        } else {
-            self.get_default_connection().await.map_err(|err| {
+        let Some(Context {
+            component: Some(source_id),
+            tracing,
+        }) = context
+        else {
+            return self.get_default_connection().await.map_err(|err| {
                 error!(error = ?err, "failed to get default connection for invocation");
                 err
-            })
-        }
+            });
+        };
+
+        let Some(link_name) = tracing.get("link-name") else {
+            bail!("unexpectedly missing link name on context for invocation");
+        };
+
+        let sources = self.sources.read().await;
+        let Some(conn) = sources.get(&(source_id.to_string(), link_name.to_string())) else {
+            error!(source_id, "no Redis connection found for component");
+            bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
+        };
+
+        Ok(conn.clone())
     }
 
     /// Execute Redis async command
@@ -285,7 +294,10 @@ impl Provider for KvRedisProvider {
     async fn receive_link_config_as_target(
         &self,
         LinkConfig {
-            source_id, config, ..
+            source_id,
+            config,
+            link_name,
+            ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         let conn = if let Some(url) = config
@@ -323,7 +335,7 @@ impl Provider for KvRedisProvider {
             })?
         };
         let mut sources = self.sources.write().await;
-        sources.insert(source_id.to_string(), conn);
+        sources.insert((source_id.to_string(), link_name.to_string()), conn);
 
         Ok(())
     }
@@ -332,13 +344,14 @@ impl Provider for KvRedisProvider {
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut aw = self.sources.write().await;
-        if let Some(conn) = aw.remove(source_id) {
-            debug!(
-                component_id = source_id,
-                "redis closing connection for component"
-            );
-            drop(conn);
-        }
+        // NOTE: ideally we should *not* get rid of all links for a given source here,
+        // but delete_link actually does not tell us enough about the link to know whether
+        // we're dealing with one link or the other.
+        aw.retain(|(src_id, _link_name), _| src_id != source_id);
+        debug!(
+            component_id = source_id,
+            "closing all redis connections for component"
+        );
         Ok(())
     }
 
