@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use wasmcloud_control_interface::HostInventory;
 
 use crate::{
     common::{boxed_err_to_anyhow, get_all_inventories},
@@ -53,17 +54,36 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
                 host_id
             ))?
     } else {
-        let inventories = get_all_inventories(&client).await?;
-        inventories
+        let mut inventories = get_all_inventories(&client)
+            .await?
             .into_iter()
-            .find(|inv| {
+            .filter(|inv| {
                 inv.components
                     .iter()
                     .any(|component| component.id == cmd.component_id)
             })
-            .ok_or_else(|| {
-                anyhow::anyhow!("No host found running component [{}]", cmd.component_id)
-            })?
+            .collect::<Vec<HostInventory>>();
+
+        match inventories[..] {
+            // No hosts
+            [] => {
+                bail!("No host found running component [{}]", cmd.component_id)
+            }
+            // Single host
+            [_] => inventories.remove(0),
+            // Multiple hosts
+            _ => {
+                bail!(
+                    "Component [{}] cannot be updated because multiple hosts are running it: [{}]",
+                    cmd.component_id,
+                    inventories
+                        .iter()
+                        .map(|h| h.host_id.to_string())
+                        .collect::<Vec<String>>()
+                        .join(","),
+                );
+            }
+        }
     };
 
     let Some((host_id, component_ref)) = inventory
