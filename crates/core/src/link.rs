@@ -1,4 +1,6 @@
-//! Core reusable types related to links on wasmCloud lattices
+//! Core reusable types related to [links on wasmCloud lattices][docs-links]
+//!
+//! [docs-links]: <https://wasmcloud.com/docs/concepts/linking-components>
 
 use std::collections::HashMap;
 

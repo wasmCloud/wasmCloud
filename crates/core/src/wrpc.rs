@@ -1,4 +1,4 @@
-//! This module provides `wasmcloud`-specific implementations of `wrpc_transport` traits.
+//! This module provides `wasmcloud`-specific implementations of [`wrpc_transport`] traits.
 //!
 //! Specifically, we wrap the [`wrpc_transport::Transmitter`], [`wrpc_transport::Invocation`],
 //! and [`wrpc_transport::Client`] traits in order to:
@@ -8,6 +8,8 @@
 //!
 //! Most logic is delegated to the underlying `wrpc_transport_nats` client, which provides the
 //! actual NATS-based transport implementation.
+//!
+//! [wrpc-transport]: https://docs.rs/wrpc-transport
 
 use core::future::Future;
 use core::time::Duration;

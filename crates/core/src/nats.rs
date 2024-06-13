@@ -1,3 +1,7 @@
+//! Core reusable types related to interacting with/using [NATS][nats]
+//!
+//! [nats]: https://nats.io
+
 use async_nats::HeaderMap;
 use std::collections::HashMap;
 
