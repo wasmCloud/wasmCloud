@@ -271,12 +271,13 @@ async fn main() -> anyhow::Result<()> {
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
-    if let Err(e) = configure_observability(
+    let res = configure_observability(
         "wasmcloud-host",
         &otel_config,
         args.enable_structured_logging,
         Some(&log_level),
-    ) {
+    );
+    if let Err(e) = res {
         eprintln!("Failed to configure observability: {e}");
     };
 
