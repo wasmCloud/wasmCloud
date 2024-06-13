@@ -16,7 +16,7 @@ An example of starting this provider with all of the configuration values looks 
 
 ```bash
 wash config put http-client-config load_native_certs=true load_webpki_certs=true ssl_certs_file=/tmp/certs.pem
-wash start provider ghcr.io/wasmcloud/http-client:0.10.0 http-client --config http-client-config
+wash start provider ghcr.io/wasmcloud/http-client:0.11.0 http-client --config http-client-config
 ```
 
 An example of starting this provider with all of the configuration values looks like this in `wadm`:
@@ -25,7 +25,7 @@ An example of starting this provider with all of the configuration values looks 
 - name: httpclient
   type: capability
   properties:
-    image: ghcr.io/wasmcloud/http-client:0.10.0
+    image: ghcr.io/wasmcloud/http-client:0.11.0
     config:
       - name: http-client-config
         properties:
