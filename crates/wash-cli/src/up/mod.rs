@@ -846,7 +846,7 @@ async fn run_wasmcloud_interactive(
     });
 
     if output_kind != OutputKind::Json {
-        println!("🏃 Running in interactive mode.",);
+        println!("🏃 Running in interactive mode.");
         if let Some(ref manifest_path) = wadm_manifest {
             println!(
                 "🚀 Deploying WADM manifest at [{}]",
