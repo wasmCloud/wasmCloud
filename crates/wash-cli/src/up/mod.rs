@@ -66,6 +66,12 @@ pub struct NatsOpts {
     )]
     pub nats_credsfile: Option<PathBuf>,
 
+    #[clap(
+        long = "nats-config",
+        env = "NATS_CONFIG",
+    )]
+    pub nats_configfile: Option<PathBuf>,
+
     /// Optional remote URL of existing NATS infrastructure to extend.
     #[clap(long = "nats-remote-url", env = "NATS_REMOTE_URL")]
     pub nats_remote_url: Option<String>,
@@ -121,6 +127,7 @@ impl From<NatsOpts> for NatsConfig {
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
             websocket_port: other.nats_websocket_port,
+            config_path: other.nats_configfile,
         }
     }
 }
@@ -386,6 +393,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             remote_url: cmd.nats_opts.nats_remote_url,
             credentials: cmd.nats_opts.nats_credsfile.clone(),
             websocket_port: cmd.nats_opts.nats_websocket_port,
+            config_path: cmd.nats_opts.nats_configfile,
         };
         start_nats(&install_dir, &nats_binary, nats_config).await?;
         Some(nats_binary)
@@ -680,7 +688,7 @@ async fn start_nats(
         .await?
         .into_std()
         .await;
-    let nats_process = start_nats_server(nats_binary, nats_log_file, nats_config).await?;
+    let nats_process = start_nats_server(nats_binary, nats_log_file, nats_config).await?;   
 
     // save the PID so we can kill it later
     if let Some(pid) = nats_process.id() {
