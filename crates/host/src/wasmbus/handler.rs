@@ -83,14 +83,18 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn wrpc_client(&self, target: &str) -> wasmcloud_core::wrpc::Client {
+    fn wrpc_client(
+        &self,
+        LatticeInterfaceTarget { id, link_name, .. }: &LatticeInterfaceTarget,
+    ) -> wasmcloud_core::wrpc::Client {
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
         headers.insert("source-id", self.component_id.as_str());
+        headers.insert("link-name", link_name.as_str());
         wasmcloud_core::wrpc::Client::new(
             Arc::clone(&self.nats),
             &self.lattice,
-            target,
+            id,
             headers,
             self.invocation_timeout,
         )
@@ -103,7 +107,7 @@ impl Handler {
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
@@ -111,12 +115,12 @@ impl Handler {
             )))
             .await
             .context("unknown `wasi:blobstore/blobstore` target")?;
-        Ok(self.wrpc_client(&id))
+        Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "http",
@@ -124,34 +128,34 @@ impl Handler {
             )))
             .await
             .context("unknown `wasi:http/outgoing-handler` target")?;
-        Ok(self.wrpc_client(&id))
+        Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "atomics",
             )))
             .await
             .context("unknown `wasi:keyvalue/atomics` target")?;
-        Ok(self.wrpc_client(&id))
+        Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_store(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "store",
             )))
             .await
             .context("unknown `wasi:keyvalue/store` target")?;
-        Ok(self.wrpc_client(&id))
+        Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasmcloud",
                 "messaging",
@@ -159,7 +163,8 @@ impl Handler {
             )))
             .await
             .context("unknown `wasmcloud:messaging/consumer` target")?;
-        Ok(self.wrpc_client(&id))
+
+        Ok(self.wrpc_client(&lit))
     }
 }
 
@@ -519,7 +524,7 @@ impl Bus for Handler {
         name: &str,
         params: Vec<wrpc_transport::Value>,
     ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        if let TargetEntity::Lattice(LatticeInterfaceTarget { id, .. }) = target {
+        if let TargetEntity::Lattice(lit) = target {
             let result_ty = self
                 .polyfills
                 .get(instance)
@@ -533,11 +538,8 @@ impl Bus for Handler {
                 .with_context(|| {
                     format!("export {instance}/{name} not found, could not determine result types")
                 })?;
-            let injector = TraceContextInjector::default_with_span();
-            let mut headers = injector_to_headers(&injector);
-            headers.insert("source-id", self.component_id.as_str());
             let (results, tx) = self
-                .wrpc_client(&id)
+                .wrpc_client(&lit)
                 .invoke_dynamic(instance, name, DynamicTuple(params), result_ty)
                 .await?;
             tx.await.context("failed to transmit parameters")?;
