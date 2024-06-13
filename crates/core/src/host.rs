@@ -1,4 +1,6 @@
-//! Core reusable functionality related to hosts
+//! Reusable functionality related to [wasmCloud hosts][docs-wasmcloud-hosts]
+//!
+//! [docs-wasmcloud-hosts]: <https://wasmcloud.com/docs/concepts/hosts>
 
 use std::collections::HashMap;
 

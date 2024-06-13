@@ -1,3 +1,25 @@
+//! Reusable types related to enabling consistent TLS ([webpki-roots]/[rustls-native-certs]) usage in downstream libraries.
+//!
+//! Downstream libraries can utilize this module to ensure a consistent set of CA roots and/or connectors.
+//!
+//! For example, when building a [`rustls::ClientConfig`]:
+//!
+//! ```rust
+//! use rustls;
+//! use wasmcloud_core::tls;
+//!
+//! let config = rustls::ClientConfig::builder()
+//!     .with_root_certificates(rustls::RootCertStore {
+//!         roots: tls::DEFAULT_ROOTS.roots.clone(),
+//!     })
+//!     .with_no_client_auth();
+//!
+//! # assert!(config.is_ok());
+//! ```
+//!
+//! [webpki-roots]: https://crates.io/crates/webpki-roots
+//! [rustls-native-certs]: https://crates.io/crates/rustls-native-certs
+
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
