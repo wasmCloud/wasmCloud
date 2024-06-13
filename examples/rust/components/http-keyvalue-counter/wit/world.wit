@@ -1,6 +1,8 @@
 package wasmcloud:hello;
 
 world hello {
+  import wasmcloud:bus/lattice@1.0.0;
+
   import wasi:keyvalue/atomics@0.2.0-draft; 
   import wasi:keyvalue/store@0.2.0-draft; 
 
