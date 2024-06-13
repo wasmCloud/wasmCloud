@@ -6192,9 +6192,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54dff43b877842c657447e073a87b9d636fac74b1b97cc3032e946fbd637760c"
+checksum = "422db00d06cf461d6410396dd5a2653bcf21bccb883659f39173756b91f3f477"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6399,7 +6399,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.22.1"
+version = "0.22.2"
 dependencies = [
  "anyhow",
  "async-compression",
