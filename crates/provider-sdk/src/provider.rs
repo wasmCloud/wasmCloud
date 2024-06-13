@@ -359,6 +359,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         name,
         otel_config,
         *structured_logging,
+        None::<&str>,
         log_level.as_ref(),
     );
     if let Err(err) = res {
