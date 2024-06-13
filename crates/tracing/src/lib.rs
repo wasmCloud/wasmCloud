@@ -22,7 +22,7 @@ pub fn configure_observability(
     _: &OtelConfig,
     use_structured_logging: bool,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     // if OTEL is not enabled, explicitly do not emit observability
     let otel_config = OtelConfig::default();
     traces::configure_tracing("", &otel_config, use_structured_logging, log_level_override)
@@ -35,7 +35,7 @@ pub fn configure_observability(
     otel_config: &OtelConfig,
     use_structured_logging: bool,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     let normalized_service_name = service_name.to_kebab_case();
 
     if otel_config.metrics_enabled() {
