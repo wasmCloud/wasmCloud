@@ -2,4 +2,6 @@ package test-wrpc:ponger;
 
 world component {
   export test-components:testing/pingpong;
+  import wasmcloud:secrets/store@0.1.0-draft;
+  import wasmcloud:secrets/reveal@0.1.0-draft;
 }
