@@ -3,15 +3,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context as _;
+use anyhow::{bail, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
+use secrecy::Secret;
 use tokio::sync::RwLock;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 use wasmcloud_runtime::capability::config::runtime::ConfigError;
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::CallTargetInterface;
-use wasmcloud_runtime::component::{Bus, Config, Logging, ReplacedInstanceTarget};
+use wasmcloud_runtime::capability::secrets::store::SecretValue;
+use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
+use wasmcloud_runtime::component::{Bus, Config, Logging, ReplacedInstanceTarget, Secrets};
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
 
@@ -25,6 +27,8 @@ pub struct Handler {
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     pub config_data: Arc<RwLock<ConfigBundle>>,
+    /// Secreeeeeets
+    pub secrets: Arc<RwLock<HashMap<String, Secret<SecretValue>>>>,
     /// The lattice this handler will use for RPC
     pub lattice: Arc<str>,
     /// The identifier of the component that this handler is associated with
@@ -58,6 +62,7 @@ impl Handler {
         Handler {
             nats: self.nats.clone(),
             config_data: self.config_data.clone(),
+            secrets: self.secrets.clone(),
             lattice: self.lattice.clone(),
             component_id: self.component_id.clone(),
             targets: Arc::default(),
@@ -271,5 +276,39 @@ impl Logging for Handler {
             }
         };
         Ok(())
+    }
+}
+
+#[async_trait]
+impl Secrets for Handler {
+    #[instrument(level = "debug", skip_all)]
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<secrets::store::Secret, secrets::store::SecretsError>> {
+        if self.secrets.read().await.get(key).is_some() {
+            Ok(Ok(Arc::new(key.to_string())))
+        } else {
+            Ok(Err(secrets::store::SecretsError::NotFound))
+        }
+    }
+
+    async fn reveal(
+        &self,
+        secret: secrets::store::Secret,
+    ) -> anyhow::Result<secrets::store::SecretValue> {
+        let read_lock = self.secrets.read().await;
+        // TODO(#2344): If I undo the change in using the secret key isntead of the name, do I need to add secret_ as a prefix?
+        let Some(secret_val) = read_lock.get(&format!("{secret}")) else {
+            // NOTE(brooksmtownsend): This error case should never happen, since we check for existence during `get` and
+            // fail to start the component if the secret is missing. We might hit this during wRPC testing with resources.
+            let error_msg = "secret not found to reveal, ensure the secret is declared and associated with this component at startup";
+            // NOTE: This "secret" is just the name of the key, not the actual secret value. Regardless the secret itself
+            // both wasn't found and is wrapped by `secrecy` so it won't be logged.
+            error!(?secret, error_msg);
+            bail!(error_msg)
+        };
+        use secrecy::ExposeSecret;
+        Ok(secret_val.expose_secret().clone())
     }
 }

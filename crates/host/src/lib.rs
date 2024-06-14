@@ -15,6 +15,9 @@ pub mod policy;
 /// Common registry types
 pub mod registry;
 
+/// Secret management
+pub mod secrets;
+
 /// Provider archive functionality
 mod par;
 
@@ -27,6 +30,7 @@ pub use policy::{
     HostInfo as PolicyHostInfo, Manager as PolicyManager, Response as PolicyResponse,
 };
 pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
+pub use secrets::Manager as SecretsManager;
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
 pub use url;
