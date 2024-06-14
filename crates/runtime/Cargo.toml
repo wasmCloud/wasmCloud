@@ -27,6 +27,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
+secrecy = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 uuid = { workspace = true }

@@ -22,7 +22,10 @@ pub struct Config {
 /// # Arguments
 ///
 /// * `wasm` - Bytes that constitute a valid WebAssembly binary
-fn claims(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Claims<jwt::Component>>> {
+///
+/// # Returns
+/// The token embedded in the component, including the [`jwt::Claims`] and the raw JWT
+fn claims_token(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Token<jwt::Component>>> {
     let Some(claims) = extract_claims(wasm).context("failed to extract module claims")? else {
         return Ok(None);
     };
@@ -35,5 +38,5 @@ fn claims(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Claims<jwt::Component>>>
         v.not_before_human
     );
     ensure!(v.signature_valid, "signature is not valid");
-    Ok(Some(claims.claims))
+    Ok(Some(claims))
 }
