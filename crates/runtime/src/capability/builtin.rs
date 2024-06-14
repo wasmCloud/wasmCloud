@@ -1,5 +1,5 @@
 use super::logging::logging;
-use super::{blobstore, config, format_opt, keyvalue, messaging};
+use super::{blobstore, config, format_opt, keyvalue, messaging, secrets};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
@@ -33,6 +33,7 @@ pub struct Handler {
     keyvalue_store: Option<Arc<dyn KeyValueStore + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
+    secrets: Option<Arc<dyn Secrets + Sync + Send>>,
 }
 
 impl Debug for Handler {
@@ -46,6 +47,7 @@ impl Debug for Handler {
             .field("keyvalue_store", &format_opt(&self.keyvalue_store))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
+            .field("secrets", &format_opt(&self.secrets))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
             .finish()
     }
@@ -73,6 +75,10 @@ impl Handler {
 
     fn proxy_config(&self, method: &str) -> anyhow::Result<&Arc<dyn Config + Sync + Send>> {
         proxy(&self.config, "Config", method)
+    }
+
+    fn proxy_secrets(&self, method: &str) -> anyhow::Result<&Arc<dyn Secrets + Sync + Send>> {
+        proxy(&self.secrets, "Secrets", method)
     }
 
     fn proxy_keyvalue_atomic(
@@ -155,6 +161,14 @@ impl Handler {
         messaging: Arc<dyn Messaging + Send + Sync>,
     ) -> Option<Arc<dyn Messaging + Send + Sync>> {
         self.messaging.replace(messaging)
+    }
+
+    /// Replace [`Secrets`] handler returning the old one, if such was set
+    pub fn replace_secrets(
+        &mut self,
+        secrets: Arc<dyn Secrets + Send + Sync>,
+    ) -> Option<Arc<dyn Secrets + Send + Sync>> {
+        self.secrets.replace(secrets)
     }
 
     /// Replace [`OutgoingHttp`] handler returning the old one, if such was set
@@ -489,6 +503,22 @@ pub trait MessagingHandler {
         &self,
         msg: &messaging::types::BrokerMessage,
     ) -> impl Future<Output = anyhow::Result<Result<(), String>>> + Send;
+}
+
+/// `wasmcloud:secrets` implementation
+#[async_trait]
+pub trait Secrets {
+    /// Handle `wasmcloud:secrets/store.get`
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<secrets::store::Secret, secrets::store::SecretsError>>;
+
+    /// Handle `wasmcloud:secrets/reveal.reveal`
+    async fn reveal(
+        &self,
+        secret: secrets::reveal::Secret,
+    ) -> anyhow::Result<secrets::reveal::SecretValue>;
 }
 
 #[async_trait]
@@ -835,6 +865,29 @@ impl Messaging for Handler {
 }
 
 #[async_trait]
+impl Secrets for Handler {
+    #[instrument(level = "trace", skip(self))]
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<secrets::store::Secret, secrets::store::SecretsError>> {
+        self.proxy_secrets("wasmcloud:secrets/store.get")?
+            .get(key)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn reveal(
+        &self,
+        secret: secrets::reveal::Secret,
+    ) -> anyhow::Result<secrets::reveal::SecretValue> {
+        self.proxy_secrets("wasmcloud:secrets/reveal.reveal")?
+            .reveal(secret)
+            .await
+    }
+}
+
+#[async_trait]
 impl OutgoingHttp for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn handle(
@@ -875,6 +928,8 @@ pub(crate) struct HandlerBuilder {
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
     /// [`Messaging`] handler
     pub messaging: Option<Arc<dyn Messaging + Sync + Send>>,
+    /// [`Secrets`] handler
+    pub secrets: Option<Arc<dyn Secrets + Sync + Send>>,
     /// [`OutgoingHttp`] handler
     pub outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
 }
@@ -976,6 +1031,7 @@ impl Debug for HandlerBuilder {
             .field("keyvalue_store", &format_opt(&self.keyvalue_store))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
+            .field("secrets", &format_opt(&self.secrets))
             .field("outgoing_http", &format_opt(&self.outgoing_http))
             .finish()
     }
@@ -992,6 +1048,7 @@ impl From<Handler> for HandlerBuilder {
             keyvalue_store,
             logging,
             messaging,
+            secrets,
             outgoing_http,
         }: Handler,
     ) -> Self {
@@ -1004,6 +1061,7 @@ impl From<Handler> for HandlerBuilder {
             keyvalue_store,
             logging,
             messaging,
+            secrets,
             outgoing_http,
         }
     }
@@ -1020,6 +1078,7 @@ impl From<HandlerBuilder> for Handler {
             keyvalue_store,
             logging,
             messaging,
+            secrets,
             outgoing_http,
         }: HandlerBuilder,
     ) -> Self {
@@ -1033,6 +1092,7 @@ impl From<HandlerBuilder> for Handler {
             keyvalue_store,
             logging,
             messaging,
+            secrets,
         }
     }
 }

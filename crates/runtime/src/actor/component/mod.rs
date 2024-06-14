@@ -1,4 +1,4 @@
-use crate::actor::claims;
+use crate::actor::claims_token;
 use crate::capability::{builtin, Bus, Interfaces};
 use crate::Runtime;
 
@@ -38,6 +38,7 @@ mod http;
 mod keyvalue;
 mod logging;
 mod messaging;
+mod secrets;
 
 /// skips instance names, for which static (builtin) bindings exist
 macro_rules! skip_static_instances {
@@ -80,7 +81,9 @@ macro_rules! skip_static_instances {
             | "wasmcloud:bus/lattice@1.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
             | "wasmcloud:messaging/handler@0.2.0"
-            | "wasmcloud:messaging/types@0.2.0" => continue,
+            | "wasmcloud:messaging/types@0.2.0"
+            | "wasmcloud:secrets/store@0.1.0-draft"
+            | "wasmcloud:secrets/reveal@0.1.0-draft" => continue,
             _ => {}
         }
     };
@@ -260,7 +263,7 @@ impl Debug for Ctx {
 #[derive(Clone)]
 pub struct Component {
     engine: wasmtime::Engine,
-    claims: Option<jwt::Claims<jwt::Component>>,
+    claims_token: Option<jwt::Token<jwt::Component>>,
     handler: builtin::HandlerBuilder,
     polyfills: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
     exports: Arc<HashMap<String, HashMap<String, DynamicFunction>>>,
@@ -272,7 +275,7 @@ pub struct Component {
 impl Debug for Component {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Component")
-            .field("claims", &self.claims)
+            .field("claims", &self.claims_token)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
             .field("polyfills", &self.polyfills)
@@ -521,7 +524,7 @@ impl Component {
             return Self::new(rt, wasm);
         }
         let engine = rt.engine.clone();
-        let claims = claims(wasm)?;
+        let claims_token = claims_token(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
 
@@ -562,7 +565,7 @@ impl Component {
         // TODO: Record the substituted type exports, not parser exports
         Ok(Self {
             engine,
-            claims,
+            claims_token,
             handler: rt.handler.clone(),
             polyfills,
             exports: Arc::new(function_exports(&resolve, exports)),
@@ -625,7 +628,13 @@ impl Component {
     /// [Claims](jwt::Claims) associated with this [Component].
     #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Component>> {
-        self.claims.as_ref()
+        self.claims_token.as_ref().map(|token| &token.claims)
+    }
+
+    /// JWT token associated with this [Component].
+    #[instrument(level = "trace")]
+    pub fn jwt(&self) -> Option<&String> {
+        self.claims_token.as_ref().map(|token| &token.jwt)
     }
 
     /// Like [Self::instantiate], but moves the [Component].
@@ -646,7 +655,7 @@ impl Component {
             self.instance_pre,
             self.max_execution_time,
         )?;
-        Ok((instance, self.claims))
+        Ok((instance, self.claims_token.map(|token| token.claims)))
     }
 
     /// Instantiates a [Component] and returns the resulting [Instance].
@@ -677,8 +686,13 @@ impl Component {
 }
 
 impl From<Component> for Option<jwt::Claims<jwt::Component>> {
-    fn from(Component { claims, .. }: Component) -> Self {
-        claims
+    fn from(
+        Component {
+            claims_token: claims,
+            ..
+        }: Component,
+    ) -> Self {
+        claims.map(|token| token.claims)
     }
 }
 
