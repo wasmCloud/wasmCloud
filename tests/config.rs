@@ -149,9 +149,16 @@ async fn config_e2e() -> anyhow::Result<()> {
     );
     let wrpc_client = Arc::new(wrpc_client);
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, LATTICE)
-        .await
-        .context("failed to start test host")?;
+    let host = WasmCloudTestHost::start_custom(
+        &nats_url,
+        LATTICE,
+        None,
+        None,
+        None,
+        Some("wasmcloud.secret".to_string()),
+    )
+    .await
+    .context("failed to start test host")?;
 
     // Put configs for first component
     assert_config_put(
@@ -278,13 +285,19 @@ async fn assert_incoming_http(
                 single_val: Option<String>,
                 multi_val: HashMap<String, String>,
                 pong: String,
+                pong_secret: String,
             }
             let Response {
                 single_val,
                 multi_val,
                 pong,
+                pong_secret,
             } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
             ensure!(pong == "config", "pong value was not correct");
+            ensure!(
+                pong_secret == "sup3rs3cr3t-v4lu3",
+                "pong_secret value was not correct"
+            );
             ensure!(
                 single_val == Some("baz".to_string()),
                 "single value was not correct"

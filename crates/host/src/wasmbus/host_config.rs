@@ -56,6 +56,8 @@ pub struct Host {
     pub otel_config: OtelConfig,
     /// configuration for wasmCloud policy service
     pub policy_service_config: PolicyService,
+    /// topic for wasmCloud secrets backend
+    pub secrets_topic_prefix: Option<String>,
     /// The semver version of the host. This is used by a consumer of this crate to indicate the
     /// host version (which may differ from the crate version)
     pub version: String,
@@ -99,6 +101,7 @@ impl Default for Host {
             config_service_enabled: false,
             otel_config: OtelConfig::default(),
             policy_service_config: PolicyService::default(),
+            secrets_topic_prefix: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
