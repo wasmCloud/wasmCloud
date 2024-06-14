@@ -1,5 +1,6 @@
 mod event;
 mod handler;
+mod secrets;
 
 pub mod config;
 /// wasmCloud host configuration
@@ -31,6 +32,8 @@ use futures::future::Either;
 use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
+use secrecy::Secret;
+use secrets::fetch_secrets;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
@@ -50,7 +53,9 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{ComponentId, HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::{messaging, IncomingHttp as _, MessagingHandler as _};
+use wasmcloud_runtime::capability::{
+    messaging, secrets::store::SecretValue, IncomingHttp as _, MessagingHandler as _,
+};
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
@@ -309,6 +314,7 @@ impl Component {
             .keyvalue_store(Arc::new(self.handler.clone()))
             .logging(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()))
+            .secrets(Arc::new(self.handler.clone()))
             .outgoing_http(Arc::new(self.handler.clone()));
 
         // TODO(metrics): insert information about the source once we have concrete context data
@@ -449,6 +455,7 @@ pub struct Host {
     heartbeat: AbortHandle,
     host_config: HostConfig,
     host_key: Arc<KeyPair>,
+    host_token: Arc<jwt::Token<jwt::Host>>,
     labels: RwLock<HashMap<String, String>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
@@ -803,6 +810,21 @@ impl Host {
         let friendly_name =
             Self::generate_friendly_name().context("failed to generate friendly name")?;
 
+        let host_issuer = Arc::new(KeyPair::new_account());
+        let claims = jwt::Claims::<jwt::Host>::new(
+            friendly_name.clone(),
+            host_issuer.public_key(),
+            host_key.public_key().clone(),
+            Some(HashMap::from_iter([(
+                "self_signed".to_string(),
+                "true".to_string(),
+            )])),
+        );
+        let jwt = claims
+            .encode(&host_issuer)
+            .context("failed to encode host claims")?;
+        let host_token = Arc::new(jwt::Token { jwt, claims });
+
         let start_evt = json!({
             "friendly_name": friendly_name,
             "labels": labels,
@@ -930,6 +952,7 @@ impl Host {
             heartbeat: heartbeat_abort.clone(),
             ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
+            host_token,
             labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
@@ -1454,6 +1477,7 @@ impl Host {
         max_instances: NonZeroUsize,
         annotations: impl Into<Annotations>,
         config: ConfigBundle,
+        secrets: HashMap<String, Secret<SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(component_ref, ?max_instances, "starting new component");
 
@@ -1476,6 +1500,7 @@ impl Host {
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
+            secrets: Arc::new(RwLock::new(secrets)),
             lattice: self.host_config.lattice.clone(),
             component_id: component_id.clone(),
             targets: Arc::default(),
@@ -1741,6 +1766,7 @@ impl Host {
             )
         };
 
+        // TODO(#2344): split secrets out into secrets and config
         let component_ref = component_ref.to_string();
         match (
             self.components
@@ -1753,11 +1779,28 @@ impl Host {
             (hash_map::Entry::Vacant(_), None) => {}
             // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
+                let (secret_names, config_names) = config
+                    .into_iter()
+                    .partition(|name| name.starts_with("secret_"));
+
                 let config = self
                     .config_generator
-                    .generate(config)
+                    .generate(config_names)
                     .await
                     .context("Unable to fetch requested config")?;
+
+                let secrets = fetch_secrets(
+                    &self.config_data,
+                    secret_names,
+                    self.host_config.secrets_topic_prefix.as_ref(),
+                    &self.ctl_nats,
+                    component.jwt().expect("to get secrets must have this"),
+                    &self.host_token.jwt,
+                    // TODO(#2344): fetch type from wadm crate if we already depend on it
+                    annotations.get("wasmcloud.dev/appspec"),
+                )
+                .await?;
+
                 if let Err(e) = self
                     .start_component(
                         entry,
@@ -1767,6 +1810,7 @@ impl Host {
                         max,
                         annotations.clone(),
                         config,
+                        secrets,
                     )
                     .await
                 {
@@ -1829,6 +1873,7 @@ impl Host {
                 let component = entry.get_mut();
                 let config_changed =
                     &config != component.handler.config_data.read().await.config_names();
+                // TODO: need to consider fetching new secrets here
 
                 // Modify scale only if the requested max differs from the current max or if the configuration has changed
                 if component.max_instances != max || config_changed {

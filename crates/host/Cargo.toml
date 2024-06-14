@@ -58,6 +58,8 @@ wasmcloud-core = { workspace = true, features = [
     "rustls-native-certs",
 ] }
 wasmcloud-runtime = { workspace = true }
+wasmcloud-secrets-client = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wasmtime-wasi-http = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
