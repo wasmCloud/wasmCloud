@@ -1,9 +1,9 @@
 name = "lattice-control-http-smithy"
 language = "rust"
-type = "actor"
+type = "component"
 version = "0.1.0"
 
-[actor]
+[component]
 claims = [
   "wasmcloud:httpserver",
   "wasmcloud:latticecontrol",
