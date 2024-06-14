@@ -1,6 +1,6 @@
 name = "pinger-config-component"
 language = "rust"
-type = "actor"
+type = "component"
 
-[actor]
+[component]
 wasm_target = "wasm32-wasi-preview2"

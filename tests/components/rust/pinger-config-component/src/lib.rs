@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use serde::Deserialize;
 use serde_json::json;
 use test_components::testing::*;
-use wasmcloud_component::wasi::{http, config};
+use wasmcloud_component::wasi::{config, http};
 use wasmcloud_component::{InputStreamReader, OutputStreamWriter};
 
 struct Actor;
@@ -43,11 +43,13 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         // No args, return string
         let pong = pingpong::ping();
+        let pong_secret = pingpong::ping_secret();
 
         let res = json!({
             "single_val": config::runtime::get(&config_key).expect("failed to get config value"),
             "multi_val": config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
             "pong": pong,
+            "pong_secret": pong_secret,
         });
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
         let response = http::types::OutgoingResponse::new(http::types::Fields::new());
