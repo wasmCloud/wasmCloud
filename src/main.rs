@@ -177,6 +177,10 @@ struct Args {
     )]
     policy_timeout_ms: Option<Duration>,
 
+    /// If provided, enables interfacing with a secrets backend for secret retrieval
+    #[clap(long = "secrets-topic", env = "WASMCLOUD_SECRETS_TOPIC")]
+    secrets_topic_prefix: Option<String>,
+
     /// Used in tandem with `oci_user` and `oci_password` to override credentials for a specific OCI registry.
     #[clap(
         long = "oci-registry",
@@ -385,6 +389,7 @@ async fn main() -> anyhow::Result<()> {
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
         policy_service_config,
+        secrets_topic_prefix: args.secrets_topic_prefix,
         version: env!("CARGO_PKG_VERSION").to_string(),
     }))
     .await
