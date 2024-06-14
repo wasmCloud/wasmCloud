@@ -24,6 +24,7 @@ use wrpc_runtime_wasmtime::{
 pub use bus::Bus;
 pub use config::Config;
 pub use logging::Logging;
+pub use secrets::Secrets;
 
 mod blobstore;
 mod bus;
@@ -32,6 +33,7 @@ mod http;
 mod keyvalue;
 mod logging;
 mod messaging;
+mod secrets;
 
 /// Instance target, which is replaced in wRPC
 ///
@@ -93,7 +95,9 @@ macro_rules! skip_static_instances {
             | "wasmcloud:bus/lattice@1.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
             | "wasmcloud:messaging/handler@0.2.0"
-            | "wasmcloud:messaging/types@0.2.0" => continue,
+            | "wasmcloud:messaging/types@0.2.0"
+            | "wasmcloud:secrets/store@0.1.0-draft"
+            | "wasmcloud:secrets/reveal@0.1.0-draft" => continue,
             _ => {}
         }
     };
@@ -105,6 +109,7 @@ pub trait Handler:
     + Bus
     + Config
     + Logging
+    + Secrets
     + Send
     + Sync
     + Clone
@@ -117,6 +122,7 @@ impl<
             + Bus
             + Config
             + Logging
+            + Secrets
             + Send
             + Sync
             + Clone
@@ -141,7 +147,10 @@ pub struct ComponentConfig {
 /// # Errors
 ///
 /// Fails if either parsing fails, or claims are not valid
-pub fn claims(wasm: impl AsRef<[u8]>) -> anyhow::Result<Option<jwt::Claims<jwt::Component>>> {
+///
+/// # Returns
+/// The token embedded in the component, including the [`jwt::Claims`] and the raw JWT
+pub fn claims_token(wasm: impl AsRef<[u8]>) -> anyhow::Result<Option<jwt::Token<jwt::Component>>> {
     let Some(claims) = extract_claims(wasm).context("failed to extract module claims")? else {
         return Ok(None);
     };
@@ -154,7 +163,7 @@ pub fn claims(wasm: impl AsRef<[u8]>) -> anyhow::Result<Option<jwt::Claims<jwt::
         v.not_before_human
     );
     ensure!(v.signature_valid, "signature is not valid");
-    Ok(Some(claims.claims))
+    Ok(Some(claims))
 }
 
 /// Pre-compiled component [Component], which is cheapily-[Cloneable](Clone)
@@ -278,7 +287,8 @@ where
             return Self::new(rt, &wasm);
         }
         let engine = rt.engine.clone();
-        let claims = claims(wasm)?;
+        let claims_token = claims_token(wasm)?;
+        let claims = claims_token.map(|c| c.claims);
         let component = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
 
@@ -317,6 +327,10 @@ where
             .context("failed to link `wasmcloud:bus/lattice`")?;
         capability::messaging::consumer::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:messaging/consumer`")?;
+        capability::secrets::reveal::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:secrets/reveal`")?;
+        capability::secrets::store::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:secrets/store`")?;
 
         let ty = component.component_type();
         let mut guest_resources = Vec::new();
