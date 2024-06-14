@@ -4,6 +4,6 @@ sha256 = "384d54bed5a91e7673732138b9b35c85351c64abd4d359e196aaf11a97d663ed"
 sha512 = "feabffd5a6b10b1043342aa7378132f2f6aace06c1d0bb67492e8ec8c23db62b2cf357db51f1672f21bb6b20e3bf8952347ce6fc2e108955e66766574e8e7793"
 
 [messaging]
-url = "https://github.com/wasmCloud/messaging/archive/v0.2.0-rc.1.tar.gz"
+url = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
 sha256 = "41ada083aceb2b4ba92d9bd16d19b6462cc02b10378c9a49135c3447f9138a44"
 sha512 = "aa9c819dfd9e85b19661f6087ffd824c44fc38c8a4bc1005c4e7fd34fe844633c52cae7a0412e9ea90f71826e0660e8a3b5672a0f0303c524e4139643ae675ac"
