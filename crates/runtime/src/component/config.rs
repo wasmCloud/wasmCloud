@@ -27,7 +27,7 @@ impl<H: Handler> runtime::Host for Ctx<H> {
         &mut self,
         key: String,
     ) -> anyhow::Result<Result<Option<String>, config::runtime::ConfigError>> {
-        self.handler.get(&key).await
+        Config::get(&self.handler, &key).await
     }
 
     #[instrument(skip_all)]

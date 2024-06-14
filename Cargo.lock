@@ -7192,8 +7192,6 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.7.0",
  "wasmcloud-runtime",
- "wasmcloud-secrets-client",
- "wasmcloud-secrets-types",
  "wasmcloud-tracing",
  "wrpc-transport 0.26.6",
  "wrpc-transport-nats 0.22.2",
