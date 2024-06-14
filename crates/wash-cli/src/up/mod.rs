@@ -66,6 +66,15 @@ pub struct NatsOpts {
         requires = "nats_remote_url"
     )]
     pub nats_credsfile: Option<PathBuf>,
+    /// Optional path to a NATS config file
+    /// NOTE: If your configuration changes the address or port to listen on from 0.0.0.0:4222, ensure you set --nats-host and --nats-port
+    #[clap(
+        long = "nats-config-file",
+        env = "NATS_CONFIG",
+        requires = "nats_host",
+        requires = "nats_port"
+    )]
+    pub nats_configfile: Option<PathBuf>,
 
     /// Optional remote URL of existing NATS infrastructure to extend.
     #[clap(long = "nats-remote-url", env = "NATS_REMOTE_URL")]
@@ -122,6 +131,7 @@ impl From<NatsOpts> for NatsConfig {
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
             websocket_port: other.nats_websocket_port,
+            config_path: other.nats_configfile,
         }
     }
 }
@@ -395,6 +405,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             remote_url: cmd.nats_opts.nats_remote_url,
             credentials: cmd.nats_opts.nats_credsfile.clone(),
             websocket_port: cmd.nats_opts.nats_websocket_port,
+            config_path: cmd.nats_opts.nats_configfile,
         };
         start_nats(&install_dir, &nats_binary, nats_config).await?;
         Some(nats_binary)
