@@ -1,0 +1,25 @@
+package wasmcloud:email@0.1.0-draft;
+
+/// Types that are used by the email interface
+interface types {
+  /// Alias for an email address
+  type email-address = string;
+
+  /// Record that represents a simple outgoing email whose contents can easily be held in memory.
+  record outgoing-email {
+    /// The email address(es) from which the email will be sent
+    sender: email-address,
+    /// The email address(es) to which the email will be sent
+    recipients: list<email-address>,
+    /// List of email addresses Carbon Copy list
+    cc: option<list<email-address>>,
+    /// List of email address on Blind Carbon Copy list
+    bcc: option<list<email-address>>,
+    /// Subject of the message
+    subject: string,
+    /// Plain text content of the message
+    text: option<string>,
+    /// HTML content of the message
+    html: option<string>,
+  }
+}
