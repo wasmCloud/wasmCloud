@@ -44,7 +44,7 @@ pub enum CtlGetCommand {
     #[clap(name = "hosts")]
     Hosts(GetHostsCommand),
 
-    /// Query a single host for its inventory of labels, actors and providers
+    /// Query a single host for its inventory of labels, components and providers
     #[clap(name = "inventory")]
     HostInventories(GetHostInventoriesCommand),
 
@@ -77,7 +77,7 @@ mod test {
     const DEFAULT_LATTICE: &str = "default";
     const JS_DOMAIN: &str = "custom-domain";
 
-    const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
+    const COMPONENT_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
     const PROVIDER_ID: &str = "VBKTSBG2WKP6RJWLQ5O7RDVIIB4LMW6U5R67A7QMIDBZDGZWYTUE3TSI";
     const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
 
@@ -86,7 +86,7 @@ mod test {
     /// change between versions. This test will fail if any subcommand of `wash ctl`
     /// changes syntax, ordering of required elements, or flags.
     fn test_ctl_comprehensive() -> anyhow::Result<()> {
-        let stop_actor_all: Cmd = Parser::try_parse_from([
+        let stop_component_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
             "component",
@@ -100,13 +100,13 @@ mod test {
             "2001",
             "--host-id",
             HOST_ID,
-            ACTOR_ID,
+            COMPONENT_ID,
         ])?;
-        match stop_actor_all.command {
+        match stop_component_all.command {
             CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 opts,
                 host_id,
-                component_id: actor_id,
+                component_id,
                 skip_wait,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -114,21 +114,21 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
-                assert_eq!(actor_id, ACTOR_ID);
+                assert_eq!(component_id, COMPONENT_ID);
                 assert!(!skip_wait);
             }
             cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
-        let stop_actor_minimal: Cmd =
+        let stop_component_minimal: Cmd =
             Parser::try_parse_from(["ctl", "stop", "component", "foobar"])?;
-        match stop_actor_minimal.command {
+        match stop_component_minimal.command {
             CtlCliCommand::Stop(StopCommand::Component(StopComponentCommand {
                 host_id,
-                component_id: actor_id,
+                component_id,
                 ..
             })) => {
                 assert_eq!(host_id, None);
-                assert_eq!(actor_id, "foobar");
+                assert_eq!(component_id, "foobar");
             }
             cmd => panic!("ctl stop component constructed incorrect command {cmd:?}"),
         }
@@ -266,7 +266,7 @@ mod test {
             "2001",
             "--link-name",
             "notdefault",
-            ACTOR_ID,
+            COMPONENT_ID,
             PROVIDER_ID,
             "wasmcloud",
             "provider",
@@ -290,7 +290,7 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(source_id, ACTOR_ID);
+                assert_eq!(source_id, COMPONENT_ID);
                 assert_eq!(target, PROVIDER_ID);
                 assert_eq!(wit_namespace, "wasmcloud".to_string());
                 assert_eq!(wit_package, "provider".to_string());
@@ -315,7 +315,7 @@ mod test {
             "2001",
             "--host-id",
             HOST_ID,
-            ACTOR_ID,
+            COMPONENT_ID,
             "wasmcloud.azurecr.io/component:v2",
         ])?;
         match update_all.command {
@@ -330,7 +330,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, Some(HOST_ID.to_string()));
-                assert_eq!(component_id, ACTOR_ID);
+                assert_eq!(component_id, COMPONENT_ID);
                 assert_eq!(
                     new_component_ref,
                     "wasmcloud.azurecr.io/component:v2".to_string()
@@ -339,7 +339,7 @@ mod test {
             cmd => panic!("ctl get claims constructed incorrect command {cmd:?}"),
         }
 
-        let scale_actor_all: Cmd = Parser::try_parse_from([
+        let scale_component_all: Cmd = Parser::try_parse_from([
             "ctl",
             "scale",
             "component",
@@ -353,7 +353,7 @@ mod test {
             "2001",
             HOST_ID,
             "wasmcloud.azurecr.io/component:v2",
-            "myactorv2",
+            "mycomponentv2",
             "--count",
             "1",
             "--annotations",
@@ -364,12 +364,12 @@ mod test {
             "lang",
         ])?;
 
-        match scale_actor_all.command {
+        match scale_component_all.command {
             CtlCliCommand::Scale(ScaleCommand::Component(ScaleComponentCommand {
                 opts,
                 host_id,
-                component_ref: actor_ref,
-                component_id: actor_id,
+                component_ref,
+                component_id,
                 max_instances,
                 annotations,
                 config,
@@ -381,8 +381,11 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID);
-                assert_eq!(actor_ref, "wasmcloud.azurecr.io/component:v2".to_string());
-                assert_eq!(actor_id, "myactorv2".to_string());
+                assert_eq!(
+                    component_ref,
+                    "wasmcloud.azurecr.io/component:v2".to_string()
+                );
+                assert_eq!(component_id, "mycomponentv2".to_string());
                 assert_eq!(max_instances, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
                 assert_eq!(config, vec!["default-port", "lang"]);
