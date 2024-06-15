@@ -591,7 +591,7 @@ pub struct WorkspaceTestSetup {
 pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
     std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_actor_from_template(component_name, template_name).await?;
+    let project_dir = init_component_from_template(component_name, template_name).await?;
     std::env::set_current_dir(&project_dir)?;
     Ok(TestSetup {
         test_dir,
@@ -601,12 +601,15 @@ pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup
 
 /// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created component's directory.
 #[allow(dead_code)]
-pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
+pub async fn init_component_from_template(
+    component_name: &str,
+    template_name: &str,
+) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "new",
             "component",
-            actor_name,
+            component_name,
             "--template-name",
             template_name,
             "--silent",
@@ -619,7 +622,7 @@ pub async fn init_actor_from_template(actor_name: &str, template_name: &str) -> 
 
     assert!(status.success());
 
-    let project_dir = std::env::current_dir()?.join(actor_name);
+    let project_dir = std::env::current_dir()?.join(component_name);
     Ok(project_dir)
 }
 
@@ -710,20 +713,21 @@ pub async fn wait_for_single_host(
 /// Inits an component build test by setting up a test directory and creating an component from a template.
 /// Returns the paths of the test directory and component directory.
 #[allow(dead_code)]
-pub async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
+pub async fn init_workspace(component_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
     let test_dir = TempDir::new()?;
     std::env::set_current_dir(&test_dir)?;
 
     let project_dirs: Vec<_> =
-        futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
-            let project_dir = init_actor_from_template(actor_name, "hello-world-rust").await?;
+        futures::future::try_join_all(component_names.iter().map(|component_name| async {
+            let project_dir =
+                init_component_from_template(component_name, "hello-world-rust").await?;
             Result::<PathBuf>::Ok(project_dir)
         }))
         .await?;
 
-    let members = actor_names
+    let members = component_names
         .iter()
-        .map(|actor_name| format!("\"{actor_name}\""))
+        .map(|component_name| format!("\"{component_name}\""))
         .collect::<Vec<_>>()
         .join(",");
     let cargo_toml = format!(

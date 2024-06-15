@@ -242,7 +242,7 @@ async fn integration_reg_push_comprehensive() -> Result<()> {
 async fn integration_reg_config() -> Result<()> {
     //===== Inital project setup and build component artifact
     let test_setup = init(
-        /* actor_name= */ "hello",
+        /* component_name= */ "hello",
         /* template_name= */ "hello-world-rust",
     )
     .await?;

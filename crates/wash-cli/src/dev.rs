@@ -281,17 +281,17 @@ pub async fn handle_command(
     );
 
     // Since we're using the component from file on disk, the ref should be the file path (canonicalized) on disk as URI
-    let actor_ref = format!("file://{}", artifact_path.display());
-    // Since the only restriction on actor_id is that it must be unique, we can just use the artifact path as the actor_id
+    let component_ref = format!("file://{}", artifact_path.display());
+    // Since the only restriction on component_id is that it must be unique, we can just use the artifact path as the component_id
     // to ensure uniqueness
-    let actor_id = sanitize_component_id(&artifact_path.display().to_string());
+    let component_id = sanitize_component_id(&artifact_path.display().to_string());
 
     // Scale the component to one max replica
     scale_component(ScaleComponentArgs {
         client: &ctl_client,
         host_id: &host.id,
-        component_id: &actor_id,
-        component_ref: &actor_ref,
+        component_id: &component_id,
+        component_ref: &component_ref,
         max_instances: 1,
         annotations: Some(HashMap::from_iter(vec![(
             "wash_dev".to_string(),
@@ -361,8 +361,8 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
                 run_dev_loop(
                     &project_cfg,
-                    ModuleId::from_str(&actor_id)?,
-                    &actor_ref,
+                    ModuleId::from_str(&component_id)?,
+                    &component_ref,
                     ServerId::from_str(&host.id)?,
                     &ctl_client,
                     sign_cfg.clone(),
