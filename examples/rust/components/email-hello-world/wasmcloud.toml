@@ -1,0 +1,8 @@
+name = "email-hello-world"
+version = "0.0.1"
+language = "rust"
+type = "component"
+
+[actor]
+wit_world = "component"
+wasm_target = "wasm32-wasi-preview2"

@@ -1,0 +1,2 @@
+logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+email = "https://github.com/vados-cosmonic/email-wit/archive/main.tar.gz"

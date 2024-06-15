@@ -1,0 +1,36 @@
+package wasmcloud:email@0.1.0-draft;
+
+/// Inteface for configuring outgoing email
+interface outgoing-config {
+  /// An opaque token that represents an existing outgoing configuration
+  type outgoing-email-config-token = string;
+
+  /// Retreive and initialize an outgoing email configuration
+  get-configuration: func(name: string) -> option<outgoing-email-config-token>;
+}
+
+/// Interface for sending outgoing email
+interface outgoing-sender {
+  use types.{outgoing-email};
+  use outgoing-config.{outgoing-email-config-token};
+
+  /// Errors that occur while sending emails
+  variant send-email-error {
+    /// Transport sending failure
+    transport-failure(string),
+    /// Failed to parse/use the given email message
+    invalid-outgoing-email(string),
+    /// The configuration that was found was unusable
+    unusable-config(string),
+    /// Failed to find a configuration for sending email
+    no-such-config(string),
+    /// Completely unexpected and possibly lower-level error that has occurred
+    unexpected(string),
+  }
+
+  /// Send a single outgoing email, using a pre-existing outgoing email configuration
+  send-email: func(
+    cfg: outgoing-email-config-token,
+    msg: outgoing-email
+  ) -> result<_, send-email-error>;
+}

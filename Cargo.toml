@@ -82,6 +82,10 @@ required-features = ["providers"]
 name = "sqldb-postgres-provider"
 required-features = ["providers"]
 
+[[bin]]
+name = "email-outgoing-provider"
+required-features = ["providers"]
+
 [profile.release]
 strip = true
 opt-level = "z"
@@ -220,6 +224,7 @@ hyper-rustls = { version = "0.27", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 ignore = { version = "0.4", default-features = false }
 indicatif = { version = "0.17", default-features = false }
+lettre = { version = "0.11", default-features = false }
 names = { version = "0.14", default-features = false }
 nix = { version = "0.27", default-features = false }
 nkeys = { version = "0.4", default-features = false }

@@ -1,0 +1,17 @@
+package examples:email-hello-world;
+
+/// Invoke a component and receive string output. Similar to wasi:cli/command.run, without args
+///
+/// This can be used with `wash call`
+interface invoke {
+  call: func() -> string;
+}
+
+/// Component world that makes use of the outgoing email provider,
+/// and does some logging of the results, invokable with `wash call`
+world component {
+  import wasi:logging/logging;
+  import prototype:email/outgoing-sender@0.0.1;
+
+  export invoke;
+}

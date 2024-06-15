@@ -1,0 +1,10 @@
+package wasmcloud:outgoing-email-provider;
+
+/// Provides outgoing emails to other components
+///
+/// By implementing this world, you should implement email *sending*
+/// capabilities and provide relevant functionality for outgoing email configuration
+world provider {
+  export wasmcloud:email/outgoing-config@0.1.0-draft;
+  export wasmcloud:email/outgoing-sender@0.1.0-draft;
+}

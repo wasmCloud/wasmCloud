@@ -1,0 +1,30 @@
+[package]
+name = "wasmcloud-provider-email-outgoing-provider"
+version = "0.1.0"
+edition = "2021"
+description = """
+An outgoing email capability provider for wasmCloud, the universal application platform.
+"""
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+async-nats = { workspace = true }
+dashmap = { workspace = true }
+lettre = { workspace = true, features = [
+  "builder",
+  "rustls-tls",
+  "smtp-transport",
+  "tokio1",
+  "tokio1-native-tls",
+  "tokio1-rustls-tls",
+  "tracing",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+ulid = { workspace = true, features = ["uuid", "std"] }
+wasmcloud-provider-sdk = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }

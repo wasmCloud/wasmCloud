@@ -1,0 +1,46 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: email-hello-world
+  annotations:
+    version: v0.0.1
+    description: "wasmCloud email provider demo"
+spec:
+  components:
+    # A simple component that sends a pre-determined email using the provider
+    - name: email-hello-world
+      type: component
+      properties:
+        # NOTE: make sure to `wash build` the component before applying this WADM manifest!
+        image: file://examples/rust/components/email-hello-world/build/email_hello_world_s.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        # Link the component to the provider, with the provider as the "target" of the link
+        - type: linkdef
+          properties:
+            # Target the capability provider defined later
+            target: email-outgoing
+            namespace: prototype
+            package: email
+            interfaces: [outgoing-sender, outgoing-config]
+            target_config:
+              - name: example
+                properties:
+                  # This is email configuration that the provider will use
+                  OUTGOING_CFG_hello-world_JSON: |
+                    {
+                      "name": "hello-world",
+                      "smtp": {
+                          "url": "smtp://127.0.0.1:1025"
+                      }
+                    }
+
+    # Outoing email provider
+    - name: email-outgoing
+      type: capability
+      properties:
+        # NOTE: make sure to `wash build` the provider (i.e. at the top level) before applying this WADM manifest!
+        image: file://build/email-outgoing-provider.par.gz

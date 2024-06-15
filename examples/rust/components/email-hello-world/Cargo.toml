@@ -1,0 +1,14 @@
+[package]
+name = "email-hello-world"
+version = "0.1.0"
+edition = "2021"
+description = """
+Basic component that sends hello world over email
+"""
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+async-traits = "0.0.0"
+wit-bindgen = "0.24.0"

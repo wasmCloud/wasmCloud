@@ -1,0 +1,10 @@
+package prototype:email@0.0.1;
+
+/// Provides outgoing emails to other components
+///
+/// By implementing this world, you should implement email *sending*
+/// capabilities and provide relevant functionality for outgoing email configuration
+world outgoing-email-provider {
+  export outgoing-config;
+  export outgoing-sender;
+}
