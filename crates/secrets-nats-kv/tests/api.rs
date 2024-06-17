@@ -6,12 +6,11 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use secrets_nats_kv::{Api, PutSecretResponse};
 use std::collections::HashMap;
 use wascap::jwt::{Claims, ClaimsBuilder, Component, Host};
-use wasmcloud_secrets_types::{
-    Context, Secret, SecretRequest, SecretResponse, RESPONSE_XKEY, WASMCLOUD_HOST_XKEY,
-};
+use wasmcloud_secrets_types::{Context, Secret, SecretRequest, WASMCLOUD_HOST_XKEY};
 
 const SUBJECT_BASE: &str = "kvstore_test";
 const NAME_BASE: &str = "nats-kv";
+const TEST_API_VERSION: &str = "test";
 
 struct Suite {
     name: String,
@@ -152,28 +151,19 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
         },
         version: None,
     };
-    let request = serde_json::to_string(&request).unwrap();
-    let encrypted_request = request_key.seal(request.as_bytes(), &server_xkey).unwrap();
+    // wasmcloud-secrets-nats-kv uses async-nats 0.35, but
+    // wasmcloud-secrets-client uses 0.33 so we can't just clone the existing client.
+    let nats_client = nats_033::connect("127.0.0.1:4222").await?;
+    let secrets_client = wasmcloud_secrets_client::Client::new_with_version(
+        &name,
+        SUBJECT_BASE,
+        nats_client,
+        Some(TEST_API_VERSION),
+    )
+    .await?;
 
-    let resp = client
-        .request_with_headers(
-            format!("{base_sub}.get"),
-            headers.clone(),
-            encrypted_request.into(),
-        )
-        .await?;
-    println!("{:?}", resp);
-
-    let message_headers = resp.headers.unwrap();
-    let message_key = message_headers.get(RESPONSE_XKEY).unwrap();
-    let message_xkey = XKey::from_public_key(message_key.as_str()).unwrap();
-
-    let decrypted = request_key.open(&resp.payload, &message_xkey)?;
-    let decrypted_secret: SecretResponse = serde_json::from_slice(&decrypted).unwrap();
-    assert_eq!(
-        decrypted_secret.secret.unwrap().string_secret.unwrap(),
-        "value"
-    );
+    let resp = secrets_client.get(request, request_key).await?;
+    assert_eq!(resp.string_secret.unwrap(), "value");
 
     Ok(())
 }
@@ -268,33 +258,21 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
         },
         version: Some("1".to_string()),
     };
-    let request = serde_json::to_string(&request).unwrap();
-    let encrypted_request = request_key.seal(request.as_bytes(), &server_xkey).unwrap();
 
-    let resp = client
-        .request_with_headers(
-            format!("{base_sub}.get"),
-            headers.clone(),
-            encrypted_request.into(),
-        )
-        .await?;
+    // wasmcloud-secrets-nats-kv uses async-nats 0.35, but
+    // wasmcloud-secrets-client uses 0.33 so we can't just clone the existing client.
+    let nats_client = nats_033::connect("127.0.0.1:4222").await?;
+    let secrets_client = wasmcloud_secrets_client::Client::new_with_version(
+        &name,
+        SUBJECT_BASE,
+        nats_client,
+        Some(TEST_API_VERSION),
+    )
+    .await?;
+    let resp = secrets_client.get(request, request_key).await?;
 
-    let msg_headers = resp.headers.unwrap();
-    let message_key = msg_headers.get(RESPONSE_XKEY).unwrap();
-    let message_xkey = XKey::from_public_key(message_key.as_str()).unwrap();
-    let decrypted = request_key.open(&resp.payload, &message_xkey)?;
-    let decrypted_secret: SecretResponse = serde_json::from_slice(&decrypted).unwrap();
-    assert_eq!(
-        decrypted_secret
-            .secret
-            .as_ref()
-            .unwrap()
-            .string_secret
-            .as_ref()
-            .unwrap(),
-        "value"
-    );
-    assert_eq!(decrypted_secret.secret.as_ref().unwrap().version, "1");
+    assert_eq!(resp.string_secret.unwrap(), "value");
+    assert_eq!(resp.version, "1");
 
     Ok(())
 }
@@ -320,7 +298,7 @@ fn setup_api(client: Client, enc_seed: String, server_seed: String) -> (Api, Str
             name.clone(),
             64,
             "wasmcloud_secrets_test".to_string(),
-            "test".to_string(),
+            TEST_API_VERSION.to_string(),
         ),
         name,
     )
