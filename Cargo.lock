@@ -5127,6 +5127,7 @@ name = "secrets-nats-kv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats",
  "async-nats-wrpc",
  "async-trait",
  "backoff",
@@ -5142,6 +5143,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wascap 0.15.0",
+ "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
 ]
 
@@ -7546,6 +7548,16 @@ dependencies = [
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
  "wrpc-transport 0.26.6",
+]
+
+[[package]]
+name = "wasmcloud-secrets-client"
+version = "0.1.0"
+dependencies = [
+ "async-nats-wrpc",
+ "nkeys 0.4.1",
+ "serde_json",
+ "wasmcloud-secrets-types",
 ]
 
 [[package]]
