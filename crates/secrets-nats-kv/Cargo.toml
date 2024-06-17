@@ -31,3 +31,5 @@ wasmcloud-secrets-types = { workspace = true }
 
 [dev-dependencies]
 rand = {workspace = true}
+wasmcloud-secrets-client = { workspace = true }
+nats_033 = { package = "async-nats", version = "0.33" }
