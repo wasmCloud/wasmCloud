@@ -60,7 +60,7 @@ impl Api {
     }
 
     pub fn subject(&self) -> String {
-        format!("{}.{}.{}", self.subject_base, self.name, self.api_version)
+        format!("{}.{}.{}", self.subject_base, self.api_version, self.name)
     }
 
     pub fn state_bucket_name(&self) -> String {
