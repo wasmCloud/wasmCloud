@@ -11,6 +11,7 @@ to help get your contribution accepted.
   - [Pull Requests](#pull-requests)
     - [PR Lifecycle](#pr-lifecycle)
       - [Documentation PRs](#documentation-prs)
+      - [Conventional Commits](#conventional-commits)
   - [Reporting a Security Issue](#reporting-a-security-issue)
   - [Developer Certificate of Origin](#developer-certificate-of-origin)
   - [Support Channels](#support-channels)
@@ -48,6 +49,8 @@ Like any good open source project, we use Pull Requests (PRs) to track code chan
    - It is preferred, but not required, to have a PR tied to a specific issue. There can be
      circumstances where if it is a quick fix then an issue might be overkill. The details provided
      in the PR description would suffice in this case.
+   - It is preferred, but not required, to use [Conventional Commits][conventional-commits]. In the case
+     that your commits do not match the conventional commit standards, maintainers will help where possible.
 2. Triage
    - The maintainer in charge of triaging will apply the proper labels for the issue. This should
      include at least a `bug` or `feature` label once all labels are applied. See the [Labels
@@ -91,6 +94,20 @@ Like any good open source project, we use Pull Requests (PRs) to track code chan
 Documentation PRs will follow the same lifecycle as other PRs. They will also be labeled with the
 `documentation` label. For documentation, special attention will be paid to spelling, grammar, and
 clarity (whereas those things don't matter _as_ much for comments in code).
+
+#### Conventional Commits
+
+[Conventional Commits][conventional-commits] is a standard for creating consistently human and machine
+readable commit messages (in particular commit titles).
+
+To enable better automation and more consistency across codebases, the wasmCloud project encourages 
+the use of Conventional Commits, also introducing checks (ex. via CI) in some projects to enable 
+automated checking of the standard.
+
+We allow multiple conventional commits in a single PR. Maintainers may choose to squash merge PRs to combine
+them into a single conventional commit.
+
+[conventional-commits]: https://www.conventionalcommits.org/en/v1.0.0
 
 ## Reporting a Security Issue
 
