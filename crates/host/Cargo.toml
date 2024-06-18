@@ -31,6 +31,7 @@ oci-wasm = { workspace = true, features = ["rustls-tls"] }
 opentelemetry-nats = { workspace = true }
 provider-archive = { workspace = true }
 rmp-serde = { workspace = true }
+secrecy = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
