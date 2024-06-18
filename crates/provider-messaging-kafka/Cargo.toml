@@ -18,8 +18,9 @@ status = "actively-developed"
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["clock"] }
 futures = { workspace = true }
-rskafka = { workspace = true }
+kafka = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-tracing = { workspace = true }
