@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
-use async_nats::jetstream::kv::Store;
 use futures::{StreamExt, TryStreamExt};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -39,26 +38,13 @@ pub async fn run() -> anyhow::Result<()> {
 /// The `atomic::increment` function's exponential backoff base interval
 const EXPONENTIAL_BACKOFF_BASE_INTERVAL: u64 = 5; // milliseconds
 
-// TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
-/// [`NatsKvStore`] holds a NATS client's handle to a Kv store.
-#[derive(Debug, Clone)]
-struct NatsKvStore {
-    pub js_domain: Option<String>,
-    pub bucket_id: Option<String>,
-    pub handle: Option<async_nats::jetstream::kv::Store>,
-}
-
-/// [`NatsClientBundle`] holds a NATS client, and stream and locks information related to it.
-#[derive(Debug, Clone)]
-struct NatsClientBundle {
-    pub client: async_nats::Client,
-    pub kv_store: NatsKvStore,
-}
+/// [`NatsKvStores`] holds the handles to opened NATS Kv Stores, and their respective identifiers.
+type NatsKvStores = HashMap<String, async_nats::jetstream::kv::Store>;
 
 /// NATS implementation for wasi:keyvalue (via wrpc:keyvalue)
 #[derive(Default, Clone)]
 pub struct KvNatsProvider {
-    consumer_components: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
+    consumer_components: Arc<RwLock<HashMap<String, NatsKvStores>>>,
     default_config: NatsConnectionConfig,
 }
 /// Implement the [`KvNatsProvider`] and [`Provider`] traits
@@ -93,7 +79,10 @@ impl KvNatsProvider {
     }
 
     /// Attempt to connect to NATS url (with JWT credentials, if provided)
-    async fn connect(&self, cfg: NatsConnectionConfig) -> anyhow::Result<NatsClientBundle> {
+    async fn connect(
+        &self,
+        cfg: NatsConnectionConfig,
+    ) -> anyhow::Result<async_nats::jetstream::kv::Store> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
                 let seed = KeyPair::from_seed(&seed).context("failed to parse seed key pair")?;
@@ -124,94 +113,51 @@ impl KvNatsProvider {
             .connect(uri.clone())
             .await?;
 
-        Ok(NatsClientBundle {
-            client,
-            kv_store: NatsKvStore {
-                js_domain: cfg.js_domain,
-                bucket_id: None,
-                handle: None,
-            },
-        })
+        // Get the JetStream context based on js_domain
+        let js_context = if let Some(domain) = &cfg.js_domain {
+            async_nats::jetstream::with_domain(client.clone(), domain.clone())
+        } else {
+            async_nats::jetstream::new(client.clone())
+        };
+
+        // Open the key-value store
+        let store = js_context.get_key_value(&cfg.bucket).await?;
+        info!(%cfg.bucket, "NATS Kv store opened");
+
+        // Return the handle to the opened NATS Kv store
+        Ok(store)
     }
 
-    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
-    /// Helper function to get the NATS client bundle from the client component's context
-    async fn get_nats_client_bundle(
+    /// Helper function to lookup and return the NATS Kv store handle, from the client component's context
+    async fn get_kv_store(
         &self,
         context: Option<Context>,
-    ) -> anyhow::Result<NatsClientBundle> {
+        bucket_id: String,
+    ) -> Result<async_nats::jetstream::kv::Store, keyvalue::store::Error> {
         if let Some(ref source_id) = context
             .as_ref()
             .and_then(|Context { component, .. }| component.clone())
         {
             let components = self.consumer_components.read().await;
-            let nats_bundle = match components.get(source_id) {
-                Some(nats_bundle) => nats_bundle,
+            let kv_stores = match components.get(source_id) {
+                Some(kv_stores) => kv_stores,
                 None => {
-                    error!("consumer component not linked: {source_id}");
-                    bail!("consumer component not linked: {source_id}")
+                    return Err(keyvalue::store::Error::Other(format!(
+                        "consumer component not linked: {}",
+                        source_id
+                    )));
                 }
             };
-            Ok((*nats_bundle).clone())
+            kv_stores.get(&bucket_id).cloned().ok_or_else(|| {
+                keyvalue::store::Error::Other(format!(
+                    "No NATS Kv store found for bucket id (link name): {}",
+                    bucket_id
+                ))
+            })
         } else {
-            error!("no consumer component in request");
-            bail!("no consumer component in request")
-        }
-    }
-
-    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
-    /// Helper function to set the NATS client bundle, with client's updated NatsKvStore, from the client component's context
-    async fn set_nats_client_bundle(
-        &self,
-        context: Option<Context>,
-        nats_bundle: NatsClientBundle,
-    ) {
-        if let Some(ref source_id) = context
-            .as_ref()
-            .and_then(|Context { component, .. }| component.clone())
-        {
-            let mut components = self.consumer_components.write().await;
-            components.insert(source_id.clone(), nats_bundle);
-        }
-    }
-
-    // TODO: Reevaluate the relevance and usefullness, once it's clear how to get the NATS Kv store handle, from the passed bucket identifier.
-    /// Helper function to open an existing NATS Kv bucket from the client component's context
-    #[instrument(level = "debug", skip_all)]
-    async fn kv_store(
-        &self,
-        context: Option<Context>,
-        bucket: String,
-    ) -> Result<Store, keyvalue::store::Error> {
-        let mut nats_bundle = self
-            .get_nats_client_bundle(context.clone())
-            .await
-            .map_err(|e| keyvalue::store::Error::Other(e.to_string()))?;
-        if nats_bundle.kv_store.bucket_id != Some(bucket.clone()) {
-            // Determine the JetStream client based on js_domain
-            let js_context = if let Some(domain) = &nats_bundle.kv_store.js_domain {
-                async_nats::jetstream::with_domain(nats_bundle.client.clone(), domain.clone())
-            } else {
-                async_nats::jetstream::new(nats_bundle.client.clone())
-            };
-
-            // Connect to JetStream, and get the key-value store
-            match js_context.get_key_value(&bucket).await {
-                Ok(store) => {
-                    nats_bundle.kv_store.bucket_id = Some(bucket.clone());
-                    nats_bundle.kv_store.handle = Some(store.clone());
-                    self.set_nats_client_bundle(context, nats_bundle).await;
-                    info!(%bucket, "NATS Kv store opened");
-                    Ok(store)
-                }
-                Err(e) => {
-                    error!(%bucket, "failed to open NATS Kv store: {e:?}");
-                    Err(keyvalue::store::Error::Other(e.to_string()))
-                }
-            }
-        } else {
-            // If the bucket_id matches, simply return the store
-            Ok(nats_bundle.kv_store.handle.as_ref().unwrap().clone())
+            return Err(keyvalue::store::Error::Other(format!(
+                "no consumer component in the request"
+            )));
         }
     }
 
@@ -257,7 +203,10 @@ impl Provider for KvNatsProvider {
     async fn receive_link_config_as_target(
         &self,
         LinkConfig {
-            source_id, config, ..
+            source_id,
+            link_name,
+            config,
+            ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         let config = if config.is_empty() {
@@ -273,16 +222,28 @@ impl Provider for KvNatsProvider {
                 }
             }
         };
+        println!("NATS Kv configuration: {:?}", config);
 
-        let mut consumer_components = self.consumer_components.write().await;
-        let nats_bundle = match self.connect(config).await {
+        let kv_store = match self.connect(config).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
                 bail!(anyhow!(e).context("failed to connect to NATS"))
             }
         };
-        consumer_components.insert(source_id.into(), nats_bundle);
+
+        let mut consumer_components = self.consumer_components.write().await;
+        // Check if there's an existing hashmap for the source_id
+        if let Some(existing_kv_stores) = consumer_components.get_mut(&source_id.to_string()) {
+            // If so, insert the new kv_store into it
+            existing_kv_stores.insert(link_name.into(), kv_store);
+        } else {
+            // Otherwise, create a new hashmap and insert it
+            consumer_components.insert(
+                source_id.into(),
+                HashMap::from([(link_name.into(), kv_store)]),
+            );
+        }
 
         Ok(())
     }
@@ -292,15 +253,10 @@ impl Provider for KvNatsProvider {
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
         let mut links = self.consumer_components.write().await;
-        if let Some(bundle) = links.remove(source_id) {
-            let client = &bundle.client;
+        if let Some(kv_store) = links.remove(source_id) {
             debug!(
-                "dropping NATS client [{}] for (consumer) component [{}]...",
-                format!(
-                    "{}:{}",
-                    client.server_info().server_id,
-                    client.server_info().client_id
-                ),
+                "dropping NATS Kv store [{}] for (consumer) component [{}]...",
+                format!("{:?}", kv_store),
                 source_id
             );
         }
@@ -335,7 +291,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
         propagate_trace_for_ctx!(context);
 
-        match self.kv_store(context, bucket).await {
+        match self.get_kv_store(context, bucket).await {
             Ok(store) => match store.get(key.clone()).await {
                 Ok(Some(bytes)) => Ok(Ok(Some(bytes.to_vec()))),
                 Ok(None) => Ok(Ok(None)),
@@ -359,7 +315,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
 
-        match self.kv_store(context, bucket).await {
+        match self.get_kv_store(context, bucket).await {
             Ok(store) => match store.put(key.clone(), bytes::Bytes::from(value)).await {
                 Ok(_) => Ok(Ok(())),
                 Err(err) => {
@@ -381,7 +337,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
 
-        match self.kv_store(context, bucket).await {
+        match self.get_kv_store(context, bucket).await {
             Ok(store) => match store.purge(key.clone()).await {
                 Ok(_) => Ok(Ok(())),
                 Err(err) => {
@@ -421,7 +377,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse>> {
         propagate_trace_for_ctx!(context);
 
-        match self.kv_store(context, bucket).await {
+        match self.get_kv_store(context, bucket).await {
             Ok(store) => match store.keys().await {
                 Ok(keys) => {
                     match keys
@@ -461,7 +417,7 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
         propagate_trace_for_ctx!(context);
 
         // Try to increment the value up to 5 times with exponential backoff
-        let kv_store = self.kv_store(context.clone(), bucket.clone()).await?;
+        let kv_store = self.get_kv_store(context.clone(), bucket.clone()).await?;
 
         let mut new_value = 0;
         let mut success = false;
@@ -522,6 +478,9 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
     }
 }
 
+/// Reducing type complexity for the `get_many` function of wasi:keyvalue/batch
+type KvResult = Vec<Option<(String, Vec<u8>)>>;
+
 /// Implement the 'wasi:keyvalue/batch' capability provider interface
 impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
     // Get multiple values from the key-value store
@@ -531,7 +490,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
         ctx: Option<Context>,
         bucket: String,
         keys: Vec<String>,
-    ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
+    ) -> anyhow::Result<Result<KvResult>> {
         let ctx = ctx.clone();
         let bucket = bucket.clone();
 
@@ -661,8 +620,9 @@ mod test {
     fn test_default_connection_serialize() {
         let input = r#"
 {
-    "js_domain": "optional",
     "cluster_uri": "nats://super-cluster",
+    "js_domain": "optional",
+    "bucket": "kv_store",
     "auth_jwt": "authy",
     "auth_seed": "seedy"
 }
@@ -671,6 +631,7 @@ mod test {
         let config: NatsConnectionConfig = serde_json::from_str(input).unwrap();
         assert_eq!(config.cluster_uri, Some("nats://super-cluster".to_string()));
         assert_eq!(config.js_domain, Some("optional".to_string()));
+        assert_eq!(config.bucket, "kv_store");
         assert_eq!(config.auth_jwt.unwrap(), "authy");
         assert_eq!(config.auth_seed.unwrap(), "seedy");
     }
@@ -683,14 +644,16 @@ mod test {
             ..Default::default()
         };
         let ncc2 = NatsConnectionConfig {
-            js_domain: Some("new_domain".to_string()),
             cluster_uri: Some("server1".to_string()),
+            js_domain: Some("new_domain".to_string()),
+            bucket: "new_bucket".to_string(),
             auth_jwt: Some("jawty".to_string()),
             ..Default::default()
         };
         let ncc3 = ncc1.merge(&ncc2);
-        assert_eq!(ncc3.js_domain, ncc2.js_domain);
         assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
+        assert_eq!(ncc3.js_domain, ncc2.js_domain);
+        assert_eq!(ncc3.bucket, ncc2.bucket);
         assert_eq!(ncc3.auth_jwt, Some("jawty".to_string()));
     }
 
@@ -702,11 +665,13 @@ mod test {
         let ncc = NatsConnectionConfig::from_map(&HashMap::from([
             ("tls_ca".to_string(), "rootCA".to_string()),
             ("js_domain".to_string(), "optional".to_string()),
+            ("bucket".to_string(), "kv_store".to_string()),
             (CONFIG_NATS_CLIENT_JWT.to_string(), "authy".to_string()),
             (CONFIG_NATS_CLIENT_SEED.to_string(), "seedy".to_string()),
         ]))?;
         assert_eq!(ncc.tls_ca, Some("rootCA".to_string()));
         assert_eq!(ncc.js_domain, Some("optional".to_string()));
+        assert_eq!(ncc.bucket, "kv_store");
         assert_eq!(ncc.auth_jwt, Some("authy".to_string()));
         assert_eq!(ncc.auth_seed, Some("seedy".to_string()));
         Ok(())
@@ -714,9 +679,18 @@ mod test {
 
     // Verify that a default NatsConnectionConfig will be constructed from an empty HashMap
     #[test]
-    fn test_from_map_empty() -> anyhow::Result<()> {
-        let ncc = NatsConnectionConfig::from_map(&HashMap::new())?;
-        assert_eq!(ncc, NatsConnectionConfig::default());
+    fn test_from_map_empty() {
+        let ncc = NatsConnectionConfig::from_map(&HashMap::new());
+        assert!(ncc.is_err());
+    }
+
+    // Verify that a NatsConnectionConfig will be constructed from an empty HashMap, plus a required bucket
+    #[test]
+    fn test_from_map_with_minimal_valid_bucket() -> anyhow::Result<()> {
+        let mut map = HashMap::new();
+        map.insert("bucket".to_string(), "some_bucket_value".to_string()); // Providing a minimal valid 'bucket' attribute
+        let ncc = NatsConnectionConfig::from_map(&map)?;
+        assert_eq!(ncc.bucket, "some_bucket_value".to_string());
         Ok(())
     }
 
@@ -724,20 +698,23 @@ mod test {
     #[test]
     fn test_merge_non_default_values() {
         let ncc1 = NatsConnectionConfig {
-            js_domain: Some("old_domain".to_string()),
             cluster_uri: Some("old_server".to_string()),
+            js_domain: Some("old_domain".to_string()),
+            bucket: "old_bucket".to_string(),
             auth_jwt: Some("old_jawty".to_string()),
             ..Default::default()
         };
         let ncc2 = NatsConnectionConfig {
-            js_domain: Some("new_domain".to_string()),
             cluster_uri: Some("server1".to_string()),
+            js_domain: Some("new_domain".to_string()),
+            bucket: "kv_store".to_string(),
             auth_jwt: Some("new_jawty".to_string()),
             ..Default::default()
         };
         let ncc3 = ncc1.merge(&ncc2);
-        assert_eq!(ncc3.js_domain, ncc2.js_domain);
         assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
+        assert_eq!(ncc3.js_domain, ncc2.js_domain);
+        assert_eq!(ncc3.bucket, ncc2.bucket);
         assert_eq!(ncc3.auth_jwt, ncc2.auth_jwt);
     }
 

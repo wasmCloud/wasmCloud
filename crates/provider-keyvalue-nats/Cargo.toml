@@ -21,6 +21,7 @@ bytes = { workspace = true }
 futures = { workspace = true }
 rustls-pemfile = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 wascap = { workspace = true }
