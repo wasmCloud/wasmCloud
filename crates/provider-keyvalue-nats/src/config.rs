@@ -7,23 +7,26 @@ const DEFAULT_NATS_URI: &str = "nats://0.0.0.0:4222";
 
 const CONFIG_NATS_URI: &str = "cluster_uri";
 const CONFIG_NATS_JETSTREAM_DOMAIN: &str = "js_domain";
+const CONFIG_NATS_KV_STORE: &str = "bucket";
 const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
 const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
 const CONFIG_NATS_TLS_CA: &str = "tls_ca";
 const CONFIG_NATS_TLS_CA_FILE: &str = "tls_ca_file";
 
 /// Configuration for connecting a NATS client.
-/// More options are available if you use the json than variables in the values string map.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NatsConnectionConfig {
     /// Cluster(s) to connect to
     #[serde(default)]
     pub cluster_uri: Option<String>,
 
-    /// NOTE: If the ID of a NATS Kv Store is passed to the provider, then the JetStream Domain could be removed.
     /// JetStream Domain to connect to
     #[serde(default)]
     pub js_domain: Option<String>,
+
+    /// NATS Kv Store to open
+    #[serde(default)]
+    pub bucket: String,
 
     /// Auth JWT to use (if necessary)
     #[serde(default)]
@@ -56,6 +59,9 @@ impl NatsConnectionConfig {
         if extra.js_domain.is_some() {
             out.js_domain = extra.js_domain.clone();
         }
+        if !extra.bucket.is_empty() {
+            out.bucket = extra.bucket.clone();
+        }
         if extra.auth_jwt.is_some() {
             out.auth_jwt = extra.auth_jwt.clone();
         }
@@ -72,11 +78,13 @@ impl NatsConnectionConfig {
     }
 }
 
+///
 impl Default for NatsConnectionConfig {
     fn default() -> NatsConnectionConfig {
         NatsConnectionConfig {
             cluster_uri: Some(DEFAULT_NATS_URI.into()),
             js_domain: None,
+            bucket: String::new(),
             auth_jwt: None,
             auth_seed: None,
             tls_ca: None,
@@ -95,6 +103,11 @@ impl NatsConnectionConfig {
         }
         if let Some(domain) = values.get(CONFIG_NATS_JETSTREAM_DOMAIN) {
             config.js_domain = Some(domain.clone());
+        }
+        if let Some(bucket) = values.get(CONFIG_NATS_KV_STORE) {
+            config.bucket = bucket.clone();
+        } else {
+            bail!("missing required configuration item: {}", CONFIG_NATS_KV_STORE);
         }
         if let Some(jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
             config.auth_jwt = Some(jwt.clone());
