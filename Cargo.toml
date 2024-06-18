@@ -264,6 +264,7 @@ rustls-native-certs = { version = "0.7", default-features = false }
 rustls-pemfile = { version = "2", default-features = false }
 rustversion = { version = "1.0", default-features = false }
 sanitize-filename = { version = "0.4", default-features = false }
+secrecy = { version = "0.8", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
 serde-transcode = { version = "1", default-features = false }
