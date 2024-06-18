@@ -763,6 +763,7 @@ pub fn invocation_context(headers: &HeaderMap) -> Context {
     }
 }
 
+#[derive(Clone)]
 pub struct WrpcClient {
     nats: wrpc_transport_nats::Client,
     timeout: Duration,

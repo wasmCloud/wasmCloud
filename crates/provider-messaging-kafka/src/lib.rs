@@ -1,23 +1,24 @@
 //! Implementation for wasmcloud:messaging
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use anyhow::{bail, Context as _};
+use anyhow::{bail, Context as _, Result};
 use bytes::Bytes;
-use futures::TryStreamExt as _;
-use rskafka::client::consumer::{StartOffset, StreamConsumerBuilder};
-use rskafka::client::partition::{Compression, UnknownTopicHandling};
-use rskafka::client::ClientBuilder;
-use rskafka::record::{Record, RecordAndOffset};
+use kafka::producer::{Producer, Record};
 use tokio::spawn;
+use tokio::sync::oneshot::Sender;
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use tokio::time::Duration;
+use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 use wasmcloud_tracing::context::TraceContextInjector;
 
-use bindings::wasmcloud::messaging::types::BrokerMessage;
+mod client;
+use client::{AsyncKafkaClient, AsyncKafkaConsumer};
 
 mod bindings {
     wit_bindgen_wrpc::generate!({
@@ -28,6 +29,7 @@ mod bindings {
         },
     });
 }
+use bindings::wasmcloud::messaging::types::BrokerMessage;
 
 /// Config value for hosts, accepted as a comma separated string
 const KAFKA_HOSTS_CONFIG_KEY: &str = "hosts";
@@ -37,21 +39,48 @@ const DEFAULT_HOST: &str = "127.0.0.1:9092";
 const KAFKA_TOPIC_CONFIG_KEY: &str = "topic";
 const DEFAULT_TOPIC: &str = "my-topic";
 
-pub async fn run() -> anyhow::Result<()> {
+/// Config value for specifying a consumer group
+const KAFKA_CONSUMER_GROUP_CONFIG_KEY: &str = "consumer_group";
+
+/// Config value for specifying one or more comma delimited partition(s)
+/// to use when consuming values
+const KAFKA_CONSUMER_PARTITIONS_CONFIG_KEY: &str = "consumer_partitions";
+
+/// Config value for specifying one or more comma delimited partition(s)
+/// to use when producing values
+const KAFKA_PRODUCER_PARTITIONS_CONFIG_KEY: &str = "producer_partitions";
+
+/// Number of seconds to wait for a consumer to stop after triggering it
+const CONSUMER_STOP_TIMEOUT_SECS: u64 = 5;
+
+pub async fn run() -> Result<()> {
     KafkaMessagingProvider::run().await
 }
 
-#[derive(Clone)]
 /// A struct that contains a consumer task handler and the host connection strings
+#[allow(dead_code)]
 struct KafkaConnection {
-    connection_hosts: Vec<String>,
-    consumer_handle: Arc<JoinHandle<Result<(), rskafka::client::error::Error>>>,
+    /// Hosts that the connection is using
+    hosts: Vec<String>,
+    /// Kafka client that can be used for one-off things
+    client: AsyncKafkaClient,
+    /// Handle to a tokio consumer task handle
+    consumer: JoinHandle<anyhow::Result<()>>,
+    /// Stop the consumer
+    consumer_stop_tx: Sender<()>,
+    /// Topic partition(s) on which the consumer is consuming messages
+    consumer_partitions: Vec<i32>,
+    /// Topic partition(s) on which the producer is sending messages
+    producer_partitions: Vec<i32>,
+    /// Consumer group
+    consumer_group: Option<String>,
 }
 
 #[derive(Clone, Default)]
 pub struct KafkaMessagingProvider {
-    // Map of component ID to the JoinHandle where messages are consumed. When a link is put
-    // we spawn a tokio::task to handle messages, and on delete the task is closed
+    // Map of Component ID to the JoinHandle where messages are consumed.
+    //
+    // When a link is put we spawn a tokio::task to handle messages, and on delete the task is closed
     connections: Arc<RwLock<HashMap<String, KafkaConnection>>>,
 }
 
@@ -82,116 +111,202 @@ impl KafkaMessagingProvider {
     }
 }
 
+/// Extract hostnames (separated by commas, found under key [`KAFKA_HOSTS_CONFIG_KEY`]) from config hashmap
+///
+/// If no hostnames are found [`DEFAULT_HOST`] is split (by ',') and returned.
+fn extract_hosts_from_config(config: &HashMap<String, String>) -> Vec<String> {
+    // Collect comma separated hosts into a Vec<String>
+    config
+        .iter()
+        .find_map(|(k, v)| {
+            if *k == KAFKA_HOSTS_CONFIG_KEY {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| DEFAULT_HOST.to_string())
+        .trim()
+        .split(',')
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<String>>()
+}
+
+/// Extract a topic (found under key [`KAFKA_TOPIC_CONFIG_KEY`]) from config hashmap
+///
+/// If no topic is found, [`DEFAULT_TOPIC`] is returned.
+fn extract_topic_from_config(config: &HashMap<String, String>) -> &str {
+    config
+        .iter()
+        .find_map(|(k, v)| {
+            if *k == KAFKA_TOPIC_CONFIG_KEY {
+                Some(v.as_str())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(DEFAULT_TOPIC)
+        .trim()
+}
+
 impl Provider for KafkaMessagingProvider {
+    /// Called when this provider is linked to, when the provider is the *target* of the link.
     #[instrument(skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
         LinkConfig {
-            source_id, config, ..
+            link_name,
+            source_id,
+            config,
+            ..
         }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        debug!("putting link for component [{source_id}]");
+    ) -> Result<()> {
+        debug!(link_name, source_id, "receiving link as target");
 
-        // Collect comma separated hosts into a Vec<String>
-        let hosts = config
-            .iter()
-            .find_map(|(k, v)| {
-                if *k == KAFKA_HOSTS_CONFIG_KEY {
-                    Some(v.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| DEFAULT_HOST.to_string())
-            .trim()
+        // Collect various values from config (if present)
+        let hosts = extract_hosts_from_config(config);
+        let topic = extract_topic_from_config(config);
+        let consumer_group = config
+            .get(KAFKA_CONSUMER_GROUP_CONFIG_KEY)
+            .map(String::to_string);
+        let consumer_partitions = config
+            .get(KAFKA_CONSUMER_PARTITIONS_CONFIG_KEY)
+            .map(String::to_string)
+            .unwrap_or_default()
             .split(',')
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<String>>();
-
-        // Retrieve or use default topic, trimming off extra whitespace
-        let topic = config
+            .map(|s| s.into())
+            .collect::<HashSet<String>>()
             .iter()
-            .find_map(|(k, v)| {
-                if *k == KAFKA_TOPIC_CONFIG_KEY {
-                    Some(v.as_str())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(DEFAULT_TOPIC)
-            .trim();
+            .filter_map(|v| v.parse::<i32>().ok())
+            .collect::<Vec<i32>>();
+        let producer_partitions = config
+            .get(KAFKA_PRODUCER_PARTITIONS_CONFIG_KEY)
+            .map(String::to_string)
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.into())
+            .collect::<HashSet<String>>()
+            .iter()
+            .filter_map(|v| v.parse::<i32>().ok())
+            .collect::<Vec<i32>>();
 
-        // Do some basic validation before spawning off in a thread
-        let Ok(client) = ClientBuilder::new(hosts.clone()).build().await else {
+        // Build client for use with the consumer
+        let client = AsyncKafkaClient::from_hosts(hosts.clone()).await.with_context(|| {
             warn!(
                 source_id,
-                "failed to create Kafka client for component, messages won't be received",
+                "failed to create Kafka client for component",
             );
-            bail!("failed to create Kafka client for component, messages won't be received")
-        };
+            format!("failed to build async kafka client for component [{source_id}], messages won't be received")
+        })?;
 
-        // Create a partition client
-        let Ok(partition_client) = client
-            .partition_client(topic, 0, UnknownTopicHandling::Error)
-            .await
-        else {
+        // Build a consumer configured with our given client
+        let _consumer_group = consumer_group.clone();
+        let _consumer_partitions = consumer_partitions.clone();
+        debug!(topic, ?consumer_partitions, "creating kafka async consumer");
+        let consumer = AsyncKafkaConsumer::from_async_client(client, move |mut b| {
+            b = b.with_topic(topic.into());
+            b = b.with_topic_partitions(topic.into(), _consumer_partitions.as_slice());
+            if let Some(g) = _consumer_group {
+                b = b.with_group(g);
+            }
+            b
+        }).await.with_context(|| {
             warn!(
                 source_id,
-                "failed to create partition client for component, messages won't be received",
+                "failed to build consumer from Kafka client for component",
             );
-            bail!("failed to create partition client for component, messages won't be received")
-        };
-        let partition_client = Arc::new(partition_client);
+            format!("failed to build consumer from kafka client for component [{source_id}], messages won't be received")
+        })?;
 
-        let source_id: Arc<str> = source_id.into();
+        // Build a second client to store in the connection
+        let client = AsyncKafkaClient::from_hosts(hosts.clone()).await.with_context(|| {
+            warn!(
+                source_id,
+                "failed to create Kafka client for component",
+            );
+            format!("failed to build async kafka client for component [{source_id}], messages won't be received")
+        })?;
+
+        // Store reusable information for use when processing new messages
+        let component_id: Arc<str> = source_id.into();
         let subject: Arc<str> = topic.into();
+
+        // Allow triggering listeners to stop
+        let (stop_listener_tx, mut stop_listener_rx) = tokio::sync::oneshot::channel();
+
+        // Start listening for incoming messages
+        let (mut stream, inner_stop_tx) = match consumer
+            .messages()
+            .await
+            .context("failed to start listening to consumer messages")
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("failed listening to consumer message stream: {e}");
+                bail!(e);
+            }
+        };
+
         // StartOffset::Latest only processes new messages, but Earliest will send every message.
         // This could be a linkdef tunable value in the future
-        let join = spawn(
-            StreamConsumerBuilder::new(partition_client, StartOffset::Latest)
-                .with_max_wait_ms(100)
-                .build()
-                .try_filter_map(
-                    |(
-                        RecordAndOffset {
-                            record: Record { value, .. },
-                            ..
-                        },
-                        _water_mark,
-                    )| async { Ok(value) },
-                )
-                .try_for_each({
-                    let source_id = Arc::clone(&source_id);
-                    move |message| {
-                        let wrpc = get_connection().get_wrpc_client(&source_id);
+        let task = spawn(async move {
+            let wrpc = get_connection().get_wrpc_client(&component_id);
+
+            // Listen to messages forever until we're instructed to stop
+            loop {
+                tokio::select! {
+                    // Handle listening to calls to stop
+                    _ = &mut stop_listener_rx => {
+                        if let Err(()) = inner_stop_tx.send(()) {
+                            bail!("failed to send stop consumer");
+                        }
+                        return Ok(());
+                    },
+
+                    // Listen to the next messages in the stream
+                    //
+                    // This stream will essentially never stop producing values.
+                    Some(msg) = stream.next() => {
+                        let component_id = Arc::clone(&component_id);
+                        let wrpc = wrpc.clone();
                         let subject = Arc::clone(&subject);
-                        async move {
+                        tokio::spawn(async move {
                             if let Err(e) = bindings::wasmcloud::messaging::handler::handle_message(
                                 &wrpc,
                                 None,
                                 &BrokerMessage {
-                                    body: message.into(),
+                                    body: msg.value.into(),
                                     // By default, we always append '.reply' for reply topics
                                     reply_to: Some(format!("{subject}.reply")),
                                     subject: subject.to_string(),
                                 },
                             )
-                            .await
+                                .await
                             {
-                                eprintln!("Unable to send subscription: {e:?}");
+                                warn!(
+                                    subject = subject.to_string(),
+                                    component_id = component_id.to_string(),
+                                    "unable to send subscription: {e:?}",
+                                );
                             }
-                            Ok(())
-                        }
+                        });
                     }
-                }),
-        );
+                }
+            }
+        });
 
-        let mut connections = self.connections.write().unwrap();
+        // Save the newly task that constantly listens for messages to the provider
+        let mut connections = self.connections.write().await;
         connections.insert(
             source_id.to_string(),
             KafkaConnection {
-                consumer_handle: Arc::new(join),
-                connection_hosts: hosts,
+                client,
+                consumer: task,
+                consumer_stop_tx: stop_listener_tx,
+                hosts,
+                consumer_partitions,
+                producer_partitions,
+                consumer_group,
             },
         );
 
@@ -200,31 +315,53 @@ impl Provider for KafkaMessagingProvider {
 
     /// Handle notification that a link is dropped: close the connection
     #[instrument(skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    async fn delete_link(&self, source_id: &str) -> Result<()> {
         debug!("deleting link for component {}", source_id);
 
-        let mut connections = self.connections.write().unwrap();
-        if let Some(KafkaConnection {
-            consumer_handle: handle,
+        // Find the connection and remove it from the HashMap
+        let mut connections = self.connections.write().await;
+        let Some(KafkaConnection {
+            consumer,
+            consumer_stop_tx,
             ..
         }) = connections.remove(source_id)
-        {
-            handle.abort();
-        } else {
+        else {
             debug!("Linkdef deleted for non-existent consumer, ignoring");
+            return Ok(());
+        };
+
+        // Signal the consumer to stop, then wait for it to close out
+        if let Err(()) = consumer_stop_tx.send(()) {
+            bail!("failed to send stop consumer");
         }
+        let _ = tokio::time::timeout(Duration::from_secs(CONSUMER_STOP_TIMEOUT_SECS), consumer)
+            .await
+            .context("consumer task did not exit cleanly")?;
+
         Ok(())
     }
 
     /// Handle shutdown request with any cleanup necessary
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.connections
-            .write()
-            .expect("failed to write connections")
-            .drain()
-            .for_each(|(_source_id, connection)| {
-                connection.consumer_handle.abort();
-            });
+    async fn shutdown(&self) -> Result<()> {
+        let mut connections = self.connections.write().await;
+        for (
+            _source_id,
+            KafkaConnection {
+                consumer,
+                consumer_stop_tx,
+                ..
+            },
+        ) in connections.drain()
+        {
+            consumer_stop_tx
+                .send(())
+                .map_err(|_| anyhow::anyhow!("failed to send consumer stop"))?;
+            if let Err(err) =
+                tokio::try_join!(consumer).context("consumer task did not exit cleanly")
+            {
+                error!(?err, "failed to stop consumer task cleanly");
+            };
+        }
         Ok(())
     }
 }
@@ -241,7 +378,7 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
         &self,
         ctx: Option<Context>,
         msg: BrokerMessage,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> Result<std::result::Result<(), String>> {
         // Extract tracing information from invocation context, if present
         let trace_ctx = match ctx {
             Some(Context { ref tracing, .. }) if !tracing.is_empty() => tracing
@@ -257,100 +394,63 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
         wasmcloud_tracing::context::attach_span_context(&trace_ctx);
         debug!(?msg, "publishing message");
 
-        let hosts = {
-            let connections = match self.connections.read() {
-                Ok(connections) => connections,
-                Err(e) => {
-                    error!(error = %e, "failed to read connections");
-                    return Ok(Err(format!("failed to read connections: {e}")));
+        let ctx = ctx.as_ref().context("unexpectedly missing context")?;
+        let Some(component_id) = ctx.component.as_ref() else {
+            bail!("context unexpectedly missing component ID");
+        };
+
+        // Retrieve a usable Kafka client from the kafka connection for our component
+        let connections = self.connections.read().await;
+        let Some(KafkaConnection {
+            hosts,
+            producer_partitions,
+            ..
+        }) = connections.get(component_id)
+        else {
+            warn!(component_id, "failed to get connection for component");
+            return Ok(Err(format!(
+                "failed to get connection for component [{component_id}]"
+            )));
+        };
+
+        // Create a producer we'll use to send
+        let mut producer = Producer::from_hosts(hosts.clone())
+            .create()
+            .context("failed to build kafka producer")?;
+
+        // For every partition we're listening on, send out a record
+        // if we're listening on *no* partitions, then use the unspecified partition
+        debug!(subject = msg.subject, "sending message");
+        match producer_partitions[..] {
+            // Send to the default ("unspecified") partition
+            [] => {
+                producer
+                    .send(&Record::<(), Vec<u8>>::from_key_value(
+                        &msg.subject,
+                        (),
+                        msg.body.to_vec(),
+                    ))
+                    .context("failed to send record")?;
+            }
+            // If there are multiple partitions to publish to, then publish to each of them
+            _ => {
+                for partition in producer_partitions {
+                    producer
+                        .send(
+                            &Record::<(), Vec<u8>>::from_key_value(
+                                &msg.subject,
+                                (),
+                                msg.body.to_vec(),
+                            )
+                            .with_partition(*partition),
+                        )
+                        .with_context(|| {
+                            format!("failed to send record to partition [{partition}]")
+                        })?;
                 }
-            };
-
-            let ctx = ctx.as_ref().context("context missing")?;
-            let config = match connections.get(&ctx.component.clone().unwrap()) {
-                Some(config) => config,
-                None => {
-                    error!("no component config for connection");
-                    return Ok(Err("no component config for connection".to_string()));
-                }
-            };
-
-            config.connection_hosts.clone()
-        };
-
-        // TODO: pool & reuse client(s)
-        // Retrieve Kafka client
-        let client = match ClientBuilder::new(hosts).build().await {
-            Ok(client) => client,
-            Err(e) => {
-                error!(error = %e, "failed to build client");
-                return Ok(Err(format!("failed to build client: {e}")));
-            }
-        };
-        let controller_client = match client.controller_client() {
-            Ok(controller_client) => controller_client,
-            Err(e) => {
-                error!(error = %e, "failed to build controller client");
-                return Ok(Err(format!("failed to build controller client: {e}")));
-            }
-        };
-
-        // Get the list of known topics
-        let topics = match client.list_topics().await {
-            Ok(topics) => topics,
-            Err(e) => {
-                error!(error = %e, "failed to list topics");
-                return Ok(Err(format!("failed to list topics: {e}")));
-            }
-        };
-
-        // Attempt to create the subject in question if not already present as a topic
-        // TODO: accept linkdef tunable values for these
-        if !topics.iter().any(|t| t.name == msg.subject) {
-            if let Err(e) = controller_client
-                .create_topic(
-                    msg.subject.to_owned(),
-                    1,     // partition
-                    1,     // replication factor
-                    1_000, // timeout (ms)
-                )
-                .await
-            {
-                warn!("could not create topic: {e:?}")
             }
         }
 
-        // Get a partition-bound client
-        let partition_client = match client
-            .partition_client(
-                msg.subject.clone(),
-                0, // partition
-                UnknownTopicHandling::Error,
-            )
-            .await
-        {
-            Ok(partition_client) => partition_client,
-            Err(e) => {
-                error!(error = %e, "failed to create partition client");
-                return Ok(Err(format!("failed to create partition client: {e}")));
-            }
-        };
-
-        // Produce some data
-        let records = vec![Record {
-            key: None,
-            value: Some(msg.body.to_vec()),
-            headers: BTreeMap::from([("source".to_owned(), b"wasm".to_vec())]),
-            timestamp: chrono::offset::Utc::now(),
-        }];
-
-        if let Err(e) = partition_client
-            .produce(records, Compression::default())
-            .await
-        {
-            error!(error = %e, "failed to produce record");
-            return Ok(Err(format!("failed to produce record: {e}")));
-        }
         Ok(Ok(()))
     }
 
@@ -361,7 +461,7 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
         _subject: String,
         _body: Bytes,
         _timeout_ms: u32,
-    ) -> anyhow::Result<Result<BrokerMessage, String>> {
+    ) -> Result<std::result::Result<BrokerMessage, String>> {
         // Extract tracing information from invocation context, if present
         let trace_ctx = match ctx {
             Some(Context { ref tracing, .. }) if !tracing.is_empty() => tracing
