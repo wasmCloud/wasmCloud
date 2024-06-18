@@ -12,10 +12,16 @@ It exposes publish and subscribe functionality to components to operate on Kafka
 
 ## Named Config Settings
 
-| Property | Description                                                                                                                                                                                                                                                                |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`  | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
-| `topic`  | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing                                                                                                                                                         |
+| Property              | Description                                                                                                                                                                                                                                                                |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hosts`               | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
+| `topic`               | The Kafka topic you wish to consume. Any messages on this topic will be forwarded to this component for processing                                                                                                                                                         |
+| `consumer_group`      | Consumer group to use when consuming messages                                                                                                                                                                                                                              |
+| `consumer_partitions` | Comma delimited list of partitions to use when subscribing to the topic specified by the link.                                                                                                                                                                             |
+| `producer_partitions` | Comma delimited list of partitions to use when handling `publish` calls from components (unrelated to the subscription topic)                                                                                                                                              |
+
+
+                                                                                                         |
 
 ## Limitations
 

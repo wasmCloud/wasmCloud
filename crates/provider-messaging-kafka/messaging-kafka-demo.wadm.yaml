@@ -13,8 +13,7 @@ spec:
     - name: echo
       type: component
       properties:
-        # NOTE: make sure to `wash build` the echo messaging example!
-        image: file://../../examples/rust/components/echo-messaging/build/echo_messaging_s.wasm
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
@@ -22,7 +21,7 @@ spec:
             replicas: 1
         - type: link
           properties:
-            target: nats
+            target: kafka
             namespace: wasmcloud
             package: messaging
             interfaces: [consumer]
@@ -30,9 +29,19 @@ spec:
               - name: simple-subscription
                 properties:
                   topic: wasmcloud.echo
+                  # consumer_group: "your-group-name-here"
+                  # consumer_partitions: "0,1,2,3"
+                  # producer_partitions: "0,1,2,3"
 
     # Add a capability provider that implements `wasmcloud:messaging` using KAFKA
     - name: kafka
       type: capability
       properties:
+        # To use the locally built version of this provider,
+        #
+        # - build it with (`cargo build`)
+        # - create a provider archive (`wash par create`)
+        # - uncomment the line below
+        #
+        # image: file://../../messaging-kafka-provider.par.gz
         image: ghcr.io/wasmcloud/messaging-kafka:canary
