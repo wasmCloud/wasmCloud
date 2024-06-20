@@ -1020,7 +1020,7 @@ mod tests {
         assert!(inventory.response.is_some());
         let host_inventory = inventory.response.unwrap();
         assert!(host_inventory.components.iter().all(|a| a.id == "echo"));
-        assert!(host_inventory.labels.get("idk").is_none());
+        assert!(!host_inventory.labels.contains_key("idk"));
         assert!(host_inventory
             .labels
             .get("foo")

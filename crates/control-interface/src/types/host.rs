@@ -1,8 +1,8 @@
 //! Data types used for managing hosts on a wasmCloud lattice
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::types::component::ComponentDescription;
 use crate::types::provider::ProviderDescription;
@@ -59,6 +59,7 @@ pub struct HostInventory {
     pub friendly_name: String,
     /// The host's labels
     #[serde(default)]
+    #[serde(serialize_with = "serialize_as_btreemap")]
     pub labels: HashMap<String, String>,
     /// The host version
     #[serde(default)]
@@ -69,6 +70,16 @@ pub struct HostInventory {
     /// The host uptime in seconds
     #[serde(default)]
     pub uptime_seconds: u64,
+}
+
+/// Serde Serializer that works for sorting maps on the fly
+fn serialize_as_btreemap<S, K, V>(value: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    K: Serialize + Ord,
+    V: Serialize,
+{
+    BTreeMap::from_iter(value.iter()).serialize(serializer)
 }
 
 /// A label on a given host (ex. "arch=amd64")
