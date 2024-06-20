@@ -350,8 +350,11 @@ impl Api {
                 None => continue,
             };
 
-            // TODO(#2344): assumptions about subject only containing a few .s
-            let parts: Vec<&str> = msg.subject.split('.').collect();
+            let parts: Vec<&str> = msg
+                .subject
+                .trim_start_matches(&self.subject_base)
+                .split('.')
+                .collect();
             if parts.len() < OPERATION_INDEX + 1 {
                 let _ = self.client.publish(reply, "invalid subject".into()).await;
                 continue;
