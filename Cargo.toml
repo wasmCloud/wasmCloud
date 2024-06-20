@@ -139,6 +139,7 @@ redis = { workspace = true, features = [
 ] }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 rmp-serde = { workspace = true }
+rustversion = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
@@ -253,6 +254,7 @@ rskafka = { version = "0.5", default-features = false }
 rustls = { version = "0.23", default-features = false }
 rustls-native-certs = { version = "0.7", default-features = false }
 rustls-pemfile = { version = "2", default-features = false }
+rustversion = { version = "1.0", default-features = false }
 sanitize-filename = { version = "0.4", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
