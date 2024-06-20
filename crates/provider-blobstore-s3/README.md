@@ -1,6 +1,6 @@
 # Blobstore-S3 Capability Provider
 
-This capability provider is an implementation of the `wasmcloud:blobstore` contract. 
+This capability provider is an implementation of the `wasmcloud:blobstore` contract.
 It provides a means to access buckets and files on AWS S3, and supports simultaneous S3 access
 from different components configured with different access roles and policies.
 
@@ -21,7 +21,7 @@ For example if we wanted to use the following S3 credentials:
 
 ```json
 {
-  "access_key_id": "XXX", 
+  "access_key_id": "XXX",
   "secret_access_key": "YYY",
   "bucket_region":"us-west-1",
 }
@@ -30,6 +30,24 @@ For example if we wanted to use the following S3 credentials:
 > ![NOTE]
 > `bucket_region` is optional -- by default buckets are created in `us-east-1`, but if you specify `bucket_region`, buckets can be created in other regions.
 
+<details>
+<summary>See all expected fields of the base64 JSON link configuration payload</summary>
+
+```rust
+pub struct StorageConfig {
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>, // AWS only
+    pub region: Option<String>,
+    pub max_attempts: Option<u32>,
+    pub sts_config: Option<StsAssumeRoleConfig>, // AWS only
+    pub endpoint: Option<String>,
+    pub aliases: HashMap<String, String>,
+    pub bucket_region: Option<String>,
+}
+```
+
+</details>
 
 First we need to convert the above JSON to Base64 -- you can do that with a command line tool like `base64`:
 
@@ -46,12 +64,14 @@ Then we can save a named configuration with `wash config put`:
 wash config put default-s3 config_b64=$ENCODED_CONFIG
 ```
 
-### Via environment variables/filesystem
+### Via environment variables/filesystem (AWS only)
 
 > ![WARN]
 > Process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
 >
-> To avoid this, use link-definition supplied config
+> Environment variables are also specific to the AWS SDK, so please ensure to use 'AWS_*' ENV variables.
+>
+> To avoid either of these limitations, use link-definition supplied config, which should work with any S3 compatible object storage.
 
 The standard variables are used for connecting to AWS services:
 
@@ -66,7 +86,7 @@ If the credentials are not found in the environment, the following locations are
 - from file named by the environment variable `AWS_WEB_IDENTITY_TOKEN_FILE`
 - ECS (IAM Roles for tasks)
 
-### STS Assumed Role Authentication
+### STS Assumed Role Authentication (AWS only)
 
 > ![WARN]
 > Process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
