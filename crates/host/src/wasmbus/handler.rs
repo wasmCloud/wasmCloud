@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::{stream, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::spawn;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, TryLockError};
 use tracing::{debug, error, instrument};
 use wasmcloud_core::LatticeTarget;
 use wasmcloud_runtime::capability::config::runtime::ConfigError;
@@ -107,64 +107,112 @@ impl Handler {
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let (ns, pkg, iface) = ("wasi", "blobstore", "blobstore");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "blobstore",
-                "blobstore",
+                ns, pkg, iface,
             )))
             .await
-            .context("unknown `wasi:blobstore/blobstore` target")?;
+            .with_context( || {
+                let mut msg = format!("failed to call interface `{ns}:{pkg}/{iface}`");
+                if let Ok(false) = self.try_link_exists_for_interface(ns, pkg, iface) {
+                    msg.push_str(&format!(" (failed to find a configured link from component [{}], please check your configuration)", self.component_id));
+                }
+                msg
+            })?;
         Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let (ns, pkg, iface) = ("wasi", "http", "outgoing-handler");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi",
-                "http",
-                "outgoing-handler",
+                ns, pkg, iface
             )))
             .await
-            .context("unknown `wasi:http/outgoing-handler` target")?;
+            .with_context(|| {
+                let mut msg = format!("failed to call interface `{ns}:{pkg}/{iface}`");
+                if let Ok(false) = self.try_link_exists_for_interface(ns, pkg, iface) {
+                    msg.push_str(&format!(" (failed to find a configured link from component [{}], please check your configuration)", self.component_id));
+                }
+                msg
+            })?;
         Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let (ns, pkg, iface) = ("wasi", "keyvalue", "atomics");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasi", "keyvalue", "atomics",
+                ns, pkg, iface,
             )))
             .await
-            .context("unknown `wasi:keyvalue/atomics` target")?;
+            .with_context(|| {
+                let mut msg = format!("failed to call interface `{ns}:{pkg}/{iface}`");
+                if let Ok(false) = self.try_link_exists_for_interface(ns, pkg, iface) {
+                    msg.push_str(&format!(" (failed to find a configured link from component [{}], please check your configuration)", self.component_id));
+                }
+                msg
+            })?;
         Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_store(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let (ns, pkg, iface) = ("wasi", "keyvalue", "store");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "store",
             )))
             .await
-            .context("unknown `wasi:keyvalue/store` target")?;
+            .with_context(|| {
+                let mut msg = format!("failed to call interface `{ns}:{pkg}/{iface}`");
+                if let Ok(false) = self.try_link_exists_for_interface(ns, pkg, iface) {
+                    msg.push_str(&format!(" (failed to find a configured link from component [{}], please check your configuration)", self.component_id));
+                }
+                msg
+            })?;
         Ok(self.wrpc_client(&lit))
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let (ns, pkg, iface) = ("wasmcloud", "messaging", "consumer");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
-                "wasmcloud",
-                "messaging",
-                "consumer",
+                ns, pkg, iface,
             )))
             .await
-            .context("unknown `wasmcloud:messaging/consumer` target")?;
-
+            .with_context(|| {
+                let mut msg = format!("failed to call interface `{ns}:{pkg}/{iface}`");
+                if let Ok(false) = self.try_link_exists_for_interface(ns, pkg, iface) {
+                    msg.push_str(&format!(" (failed to find a configured link from component [{}], please check your configuration)", self.component_id));
+                }
+                msg
+            })?;
         Ok(self.wrpc_client(&lit))
+    }
+
+    /// Try to find a link for a given interface on the current component
+    ///
+    /// While normally `interface_links` must be awaited, we use `try_read()` here and pass
+    /// along errors on any inability to read the actual value.
+    fn try_link_exists_for_interface(
+        &self,
+        ns: &str,
+        pkg: &str,
+        iface: &str,
+    ) -> Result<bool, TryLockError> {
+        let links = self.interface_links.try_read()?;
+        Ok(links
+            .iter()
+            .find_map(|(_k, v)| {
+                v.get(&format!("{ns}:{pkg}"))
+                    .map(|map| map.contains_key(iface))
+            })
+            .is_some())
     }
 }
 
@@ -545,7 +593,13 @@ impl Bus for Handler {
             tx.await.context("failed to transmit parameters")?;
             Ok(results)
         } else {
-            bail!("component attempted to invoke a function on an unknown target")
+            bail!(
+                "component [{}] attempted to invoke a function [{}/{}] on an unknown target [{}]",
+                self.component_id,
+                instance,
+                name,
+                target.lattice_id().unwrap_or("<unknown>"),
+            )
         }
     }
 }
