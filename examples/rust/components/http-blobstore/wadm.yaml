@@ -6,7 +6,6 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'HTTP Blobstore demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
-    experimental: 'true'
 spec:
   components:
     # Component that serves the blobstore-over-HTTP abstraction
