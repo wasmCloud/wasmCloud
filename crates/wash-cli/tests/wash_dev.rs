@@ -1,20 +1,20 @@
-mod common;
+#![cfg(target_family = "unix")]
 
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use tokio::{process::Command, sync::RwLock, time::Duration};
+
+mod common;
 use common::{
     find_open_port, init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
 };
 
-use std::sync::Arc;
-
-use anyhow::{anyhow, bail};
-#[cfg(target_family = "unix")]
-use anyhow::{Context, Result};
-use tokio::{process::Command, sync::RwLock, time::Duration};
-
 #[tokio::test]
 #[serial_test::serial]
-#[cfg(target_family = "unix")]
 async fn integration_dev_hello_component_serial() -> Result<()> {
+    use anyhow::{anyhow, bail};
+
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
