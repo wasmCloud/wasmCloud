@@ -238,6 +238,16 @@ pub enum TargetEntity {
     // the lattice.
 }
 
+impl TargetEntity {
+    /// Retrieve a reference by which the entity can be addressed on the lattice, if possible
+    #[must_use]
+    pub fn lattice_id(&self) -> Option<&str> {
+        match self {
+            TargetEntity::Lattice(lit) => Some(&lit.id),
+        }
+    }
+}
+
 /// Outgoing HTTP request
 pub struct OutgoingHttpRequest {
     /// Whether to use TLS
