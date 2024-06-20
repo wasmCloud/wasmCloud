@@ -598,7 +598,7 @@ impl Bus for Handler {
                 self.component_id,
                 instance,
                 name,
-                target.lattice_id().unwrap_or("<unknown>"),
+                target.id().unwrap_or("<unknown>"),
             )
         }
     }

@@ -241,7 +241,7 @@ pub enum TargetEntity {
 impl TargetEntity {
     /// Retrieve a reference by which the entity can be addressed on the lattice, if possible
     #[must_use]
-    pub fn lattice_id(&self) -> Option<&str> {
+    pub fn id(&self) -> Option<&str> {
         match self {
             TargetEntity::Lattice(lit) => Some(&lit.id),
         }
