@@ -1630,10 +1630,32 @@ impl Host {
     async fn handle_stop_host(
         &self,
         payload: impl AsRef<[u8]>,
-        _host_id: &str,
+        transport_host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize stop command")?;
+        // Allow an empty payload to be used for stopping hosts
+        let timeout = if payload.as_ref().is_empty() {
+            None
+        } else {
+            let StopHostCommand { timeout, host_id } =
+                serde_json::from_slice::<StopHostCommand>(payload.as_ref())
+                    .context("failed to deserialize stop command")?;
+
+            // If the Host ID was provided (i..e not the empty string, due to #[serde(default)]), then
+            // we should check it against the known transport-provided host_id, and this actual host's ID
+            if !host_id.is_empty() {
+                anyhow::ensure!(
+                    host_id == transport_host_id && host_id == self.host_key.public_key(),
+                    "invalid host_id [{host_id}]"
+                );
+            }
+            timeout
+        };
+
+        // It *should* be impossible for the transport-derived host ID to not match at this point
+        anyhow::ensure!(
+            transport_host_id == self.host_key.public_key(),
+            "invalid host_id [{transport_host_id}]"
+        );
 
         info!(?timeout, "handling stop host");
 
