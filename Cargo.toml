@@ -103,6 +103,7 @@ nkeys = { workspace = true }
 redis = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
+wascap = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-host = { workspace = true }
 wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
@@ -119,6 +120,7 @@ wasmcloud-provider-sqldb-postgres = { workspace = true, optional = true }
 wasmcloud-provider-sdk = { workspace = true, features = [
     "otel",
 ], optional = true }
+wasmcloud-secrets-types = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
@@ -323,6 +325,7 @@ wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-m
 wasmcloud-provider-sdk = { version = "^0.6.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0", path = "./crates/runtime", default-features = false }
+wasmcloud-secrets-client = { version = "*", path = "./crates/secrets-client", default-features = false }
 wasmcloud-secrets-types = { version = "*", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.3.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.5.0", path = "./crates/tracing", default-features = false }
