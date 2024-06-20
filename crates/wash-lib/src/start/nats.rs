@@ -455,7 +455,7 @@ mod test {
         assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n\nwebsocket {{\n    port: 4204\n    no_tls: true\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
         // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
         #[cfg(target_family = "windows")]
-        assert!(creds.to_string_lossy().contains("\\"));
+        assert!(creds.to_string_lossy().contains('\\'));
 
         let _ = remove_dir_all(install_dir).await;
         Ok(())

@@ -426,9 +426,11 @@ fn img_name_to_file_name(img: &str) -> String {
 }
 
 #[cfg(test)]
+#[cfg(not(target_family = "windows"))]
 mod test {
-    use anyhow::Result;
     use std::env;
+
+    use anyhow::Result;
 
     use crate::{
         config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE, WASH_DIR},
@@ -438,7 +440,6 @@ mod test {
     use super::CliConnectionOpts;
 
     #[tokio::test]
-    #[cfg(not(target_family = "windows"))]
     async fn test_lattice_name() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         env::set_current_dir(&tempdir)?;
