@@ -5,6 +5,16 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/http-hello-world/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/http-hello-world/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rusg/components/http-hello-world
+    wasmcloud.dev/categories:
+      - http
+      - http-server
+      - rust
+      - hello-world
+      - example
 spec:
   components:
     - name: http-component
@@ -25,8 +35,10 @@ spec:
       properties:
         image: ghcr.io/wasmcloud/http-server:0.21.0
       traits:
-        # Link the httpserver to the component, and configure the HTTP server
-        # to listen on port 8080 for incoming requests
+        # Establish a unidirectional link from this http server provider (the "source")
+        # to the `http-component` component (the "target") so the component can handle incoming HTTP requests,
+        #
+        # The source (this provider) is configured such that the HTTP server listens on 127.0.0.1:8080
         - type: link
           properties:
             target: http-component

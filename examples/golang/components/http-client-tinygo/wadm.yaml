@@ -5,6 +5,17 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'HTTP client world demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-client-tinygo/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-client-tinygo/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-client-tinygo
+    wasmcloud.dev/categories:
+      - http
+      - outgoing-http
+      - http-server
+      - tinygo
+      - golang
+      - example
 spec:
   components:
     - name: http-component
@@ -16,6 +27,9 @@ spec:
         - type: spreadscaler
           properties:
             replicas: 1
+        # Establish a unidirectional link to the outgoing-handler,
+        # so the `http-component` component can make use of outgoing handler functionality
+        # (i.e. making external web requests)
         - type: link
           properties:
             target: httpclient
@@ -31,6 +45,11 @@ spec:
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
+        #
+        # Since the HTTP server calls the `http-component` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `http-component` component (the "target"), so the server can invoke
+        # the component to handle a request.
         - type: link
           properties:
             target: http-component

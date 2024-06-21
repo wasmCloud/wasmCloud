@@ -7,6 +7,16 @@ metadata:
     version: v0.1.0
     description: |
       Demo WebAssembly component using the wasmCloud SQLDB Postgres provider via the wasmcloud:postgres WIT interface
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/sqldb-postgres-quer
+    wasmcloud.dev/categories:
+      - database
+      - sqldb
+      - postgres
+      - rust
+      - example
 spec:
   components:
     - name: querier
@@ -20,6 +30,9 @@ spec:
         - type: spreadscaler
           properties:
             replicas: 1
+        # Establish a unidirectional link to the `sqldb-postgres` provider (the sqldb provider),
+        # so the `querier` component can make use of sqldb functionality provided Postgres
+        # (i.e. reading/writing to a database)
         - type: link
           properties:
             target: sqldb-postgres
