@@ -344,8 +344,8 @@ wit-component = { version = "0.208", default-features = false }
 wit-parser = { version = "0.208", default-features = false }
 wrpc-interface-blobstore = { version = "0.16", default-features = false }
 wrpc-interface-http = { version = "0.22", default-features = false }
-wrpc-runtime-wasmtime = { path = "../../wrpc/wrpc/crates/runtime-wasmtime", default-features = false }
-wrpc-transport = { path = "../../wrpc/wrpc/crates/transport", default-features = false }
-wrpc-transport-nats = { path = "../../wrpc/wrpc/crates/transport-nats", default-features = false }
-wrpc-introspect = { path = "../../wrpc/wrpc/crates/introspect", default-features = false }
+wrpc-runtime-wasmtime = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
+wrpc-transport = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
+wrpc-transport-nats = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
+wrpc-introspect = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
 indexmap = "2.2.6"

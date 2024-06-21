@@ -444,7 +444,7 @@ where
                 let mut buf = BytesMut::default();
                 let mut deferred = vec![];
                 for (v, ref ty) in zip(&*params, param_types.clone()) {
-                    let mut enc: ValEncoder<Ctx, <Client as Invoke>::NestedOutgoing> =
+                    let mut enc: ValEncoder<Ctx, <Client as Invoke>::Outgoing> =
                         ValEncoder::new(store.as_context_mut(), ty);
                     if let Err(err) = enc
                         .encode(v, &mut buf)
@@ -911,7 +911,7 @@ impl Instance {
         let mut buf = BytesMut::default();
         let mut deferred = vec![];
         for (v, ty) in zip(results.iter_mut(), &*func.results(&mut self.store)) {
-            let mut enc: ValEncoder<Ctx, <Client as Invoke>::NestedOutgoing> =
+            let mut enc: ValEncoder<Ctx, <Client as Invoke>::Outgoing> =
                 ValEncoder::new(self.store.as_context_mut(), ty);
             enc.encode(v, &mut buf).context("failed to encode result")?;
             deferred.push(enc.deferred);

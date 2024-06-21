@@ -3334,9 +3334,9 @@ checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
 
 [[package]]
 name = "leb128-tokio"
-version = "0.1.4"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "689e979288e9d3bf03f15acc82d43558446eb873391f1ded3cbb30431ecd1ebc"
+checksum = "6a1f734b00871cae8f137d83d53cf4b5ee3f0d87224a87a4347dab4cde11a7a3"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -6393,9 +6393,9 @@ checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
 
 [[package]]
 name = "utf8-tokio"
-version = "0.1.1"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7792e7406e4fbad1f7c298d27ece7f25aab855c8270e5a4b428ebd2b0b95313"
+checksum = "692aa1d5479fe22dac6ce581e8c6e83a9f8d90238250c1036b0139019a783a87"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -6705,7 +6705,7 @@ dependencies = [
  "weld-codegen",
  "which",
  "wrpc-interface-http",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -6991,9 +6991,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-tokio"
-version = "0.4.2"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d00b72888bbefae356ef33cb72076b468c69b7b421689d329b9a7087c4b95f78"
+checksum = "452450b354461b52144e0f4920ce2d425446fb791c7dfb7a90bcefaccbe29a35"
 dependencies = [
  "leb128-tokio",
  "tokio",
@@ -7053,7 +7053,7 @@ dependencies = [
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.22.0",
 ]
 
@@ -7195,7 +7195,7 @@ dependencies = [
  "webpki-roots 0.26.2",
  "wit-parser 0.208.1",
  "wrpc-runtime-wasmtime",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.22.0",
 ]
 
@@ -7244,7 +7244,7 @@ dependencies = [
  "wit-parser 0.208.1",
  "wrpc-introspect",
  "wrpc-runtime-wasmtime",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.22.0",
 ]
 
@@ -7281,7 +7281,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -7299,7 +7299,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -7323,7 +7323,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -7343,7 +7343,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "webpki-roots 0.26.2",
  "wrpc-interface-http",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -7480,7 +7480,7 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.22.0",
 ]
 
@@ -7574,7 +7574,7 @@ dependencies = [
  "wit-parser 0.208.1",
  "wrpc-introspect",
  "wrpc-runtime-wasmtime",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.22.0",
 ]
 
@@ -8655,6 +8655,7 @@ dependencies = [
 [[package]]
 name = "wrpc-introspect"
 version = "0.2.0"
+source = "git+https://github.com/rvolosatovs/wrpc.git?branch=fix/transport-traits#8250e88080b501a6808d2400a636f1724ce8fbcf"
 dependencies = [
  "wit-parser 0.208.1",
 ]
@@ -8662,12 +8663,12 @@ dependencies = [
 [[package]]
 name = "wrpc-runtime-wasmtime"
 version = "0.17.0"
+source = "git+https://github.com/rvolosatovs/wrpc.git?branch=fix/transport-traits#8250e88080b501a6808d2400a636f1724ce8fbcf"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
  "futures",
- "leb128-tokio",
  "tokio",
  "tokio-util",
  "tracing",
@@ -8676,7 +8677,7 @@ dependencies = [
  "wasmtime-wasi",
  "wit-parser 0.208.1",
  "wrpc-introspect",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
@@ -8699,14 +8700,16 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.25.1"
+version = "0.26.0"
+source = "git+https://github.com/rvolosatovs/wrpc.git?branch=fix/transport-traits#8250e88080b501a6808d2400a636f1724ce8fbcf"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
  "futures",
- "leb128",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "wasm-tokio",
 ]
@@ -8730,6 +8733,7 @@ dependencies = [
 [[package]]
 name = "wrpc-transport-nats"
 version = "0.22.0"
+source = "git+https://github.com/rvolosatovs/wrpc.git?branch=fix/transport-traits#8250e88080b501a6808d2400a636f1724ce8fbcf"
 dependencies = [
  "anyhow",
  "async-nats 0.35.1",
@@ -8739,7 +8743,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasm-tokio",
- "wrpc-transport 0.25.1",
+ "wrpc-transport 0.26.0",
 ]
 
 [[package]]
