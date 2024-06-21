@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-core"
-version = "0.6.0"
+version = "0.7.0"
 description = "wasmCloud core functionality shared throughout the ecosystem"
 
 authors.workspace = true
@@ -45,6 +45,7 @@ tokio = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 webpki-roots = { workspace = true, optional = true }

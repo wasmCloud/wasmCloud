@@ -548,7 +548,7 @@ mod test {
     const RPC_PORT: &str = "4222";
     const DEFAULT_LATTICE: &str = "default";
 
-    const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
+    const COMPONENT_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
 
     #[derive(Debug, Parser)]
     struct Cmd {
@@ -570,7 +570,7 @@ mod test {
             RPC_PORT,
             "--rpc-timeout-ms",
             "0",
-            ACTOR_ID,
+            COMPONENT_ID,
             "wasmcloud:test/handle.operation",
         ])?;
         match call_all.command {
@@ -585,7 +585,7 @@ mod test {
                 assert_eq!(&opts.lattice.unwrap(), DEFAULT_LATTICE);
                 assert_eq!(opts.timeout_ms, 0);
                 assert_eq!(opts.context, Some("some-context".to_string()));
-                assert_eq!(component_id, ACTOR_ID);
+                assert_eq!(component_id, COMPONENT_ID);
                 assert_eq!(function, "wasmcloud:test/handle.operation");
             }
             #[allow(unreachable_patterns)]

@@ -40,6 +40,8 @@ on:
       - 'opentelemetry-nats-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
       - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-blobstore-azure-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+'
       - 'provider-blobstore-fs-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-blobstore-s3-v[0-9].[0-9]+.[0-9]+'
@@ -160,11 +162,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-latest-8-cores-shared-cache
-        if: ${{ !startswith(github.ref, format('refs/tags')) && github.ref != 'refs/heads/main' }}
+        if: ${{ !startswith(github.ref, format('refs/tags')) }}
 
       - run: cargo build --release -p wash-cli -p wasmcloud
       - run: mkdir "artifact/bin"
 
+      - run: move "target/release/blobstore-azure-provider.exe" "artifact/bin/blobstore-azure-provider.exe"
       - run: move "target/release/blobstore-fs-provider.exe" "artifact/bin/blobstore-fs-provider.exe"
       - run: move "target/release/blobstore-s3-provider.exe" "artifact/bin/blobstore-s3-provider.exe"
       - run: move "target/release/http-client-provider.exe" "artifact/bin/http-client-provider.exe"
@@ -285,6 +288,9 @@ jobs:
     strategy:
       matrix:
         include:
+          - name: blobstore-azure
+            subject: BLOBSTORE_AZURE_SUBJECT
+
           - name: blobstore-fs
             subject: BLOBSTORE_FS_SUBJECT
 

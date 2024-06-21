@@ -355,12 +355,14 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         ProviderInitError::Initialization(format!("failed to load host data: {e}"))
     })??;
 
-    if let Err(err) = wasmcloud_tracing::configure_observability(
+    let res = wasmcloud_tracing::configure_observability(
         name,
         otel_config,
         *structured_logging,
+        None::<&str>,
         log_level.as_ref(),
-    ) {
+    );
+    if let Err(err) = res {
         error!(?err, "failed to configure tracing");
     }
 

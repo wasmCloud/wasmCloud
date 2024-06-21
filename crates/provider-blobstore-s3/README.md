@@ -6,31 +6,90 @@ from different components configured with different access roles and policies.
 
 ## Configuration
 
-- The standard variables are used for connecting to AWS services:
-  - `AWS_ACCESS_KEY_ID` (required)
-  - `AWS_SECRET_ACCESS_KEY` (required)
-  - `AWS_SESSION_TOKEN` (optional)
-  - `AWS_REGION` (optional)
-  - `AWS_ENDPOINT` (optional, static endpoint to override for resolving s3. For local testing purposes only, should not be used in production)
+### Via Link Definition (config-json, `config_b64`)
 
-- If the credentials are not found in the environment, the following locations are searched:
-  - `~/.aws/config`, `~/.aws/credentials` (see [Configuration and credential file settings](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html))
-  - from file named by the environment variable `AWS_WEB_IDENTITY_TOKEN_FILE`
-  - ECS (IAM Roles for tasks)
+The primary means of configuring Blobstore-S3 to work on a per-link basis is with a Base64 encoded JSON value that is set as link configuration.
 
-- If you intend to use STS Assumed Role authentication, the user or role for the above credentials should have an IAM role that is allowed to AssumeRole
-  - `AWS_ROLE_ARN` - (required, if using STS AssumedRole Authentication) the role to assume, of the form  "arn:aws:iam::123456789012:role/example". This is the role that should have allowed policies for S3
-  - `AWS_ROLE_SESSION_NAME` - (optional) the session name for the assumed role. Default value is blobstore_s3_provider
-  - `AWS_ROLE_REGION` - (optional) the region that will be used for the assumed role (for using S3). Note that `AWS_REGION` is the region used for contacting STS
-  - `AWS_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
+This option, like the 'env' file, allows for settings to be specific to a link, however it is not as secure, because of the additional processing required to generate the encoded structure and pass it into either `wash`, or via a wadm application manfiest.
+
+> ![NOTE]
+> The field names in the JSON structure that is encoded are defined by `StorageConfig` in src/config.rs, they are different from the environment variable names in other sections.
+
+**Base64 encoded JSON settings take precedence over environment variables and 'env' file values.**
+
+For example if we wanted to use the following S3 credentials:
+
+```json
+{
+  "access_key_id": "XXX", 
+  "secret_access_key": "YYY",
+  "bucket_region":"us-west-1",
+}
+```
+
+> ![NOTE]
+> `bucket_region` is optional -- by default buckets are created in `us-east-1`, but if you specify `bucket_region`, buckets can be created in other regions.
 
 
-### with environment variables
+First we need to convert the above JSON to Base64 -- you can do that with a command line tool like `base64`:
+
+```console
+export ENCODED_CONFIG=$(echo '{"access_key_id":....}' | base64);
+```
+
+> [!WARN]
+> Base64 encoding is *not* encryption. Do not check base64 encoded values into source control.
+
+Then we can save a named configuration with `wash config put`:
+
+```console
+wash config put default-s3 config_b64=$ENCODED_CONFIG
+```
+
+### Via environment variables/filesystem
+
+> ![WARN]
+> Process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
+>
+> To avoid this, use link-definition supplied config
+
+The standard variables are used for connecting to AWS services:
+
+- `AWS_ACCESS_KEY_ID` (required)
+- `AWS_SECRET_ACCESS_KEY` (required)
+- `AWS_SESSION_TOKEN` (optional)
+- `AWS_REGION` (optional)
+- `AWS_ENDPOINT` (optional, static endpoint to override for resolving s3. For local testing purposes only, should not be used in production)
+
+If the credentials are not found in the environment, the following locations are searched:
+- `~/.aws/config`, `~/.aws/credentials` (see [Configuration and credential file settings](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html))
+- from file named by the environment variable `AWS_WEB_IDENTITY_TOKEN_FILE`
+- ECS (IAM Roles for tasks)
+
+### STS Assumed Role Authentication
+
+> ![WARN]
+> Process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
+>
+> To avoid this, use link-definition supplied config
+
+If you intend to use STS Assumed Role authentication, the user or role for the above credentials should have an IAM role that is allowed to AssumeRole.
+
+- `AWS_ROLE_ARN` - (required, if using STS AssumedRole Authentication) the role to assume, of the form  "arn:aws:iam::123456789012:role/example". This is the role that should have allowed policies for S3
+- `AWS_ROLE_SESSION_NAME` - (optional) the session name for the assumed role. Default value is blobstore_s3_provider
+- `AWS_ROLE_REGION` - (optional) the region that will be used for the assumed role (for using S3). Note that `AWS_REGION` is the region used for contacting STS
+- `AWS_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
+
+### ENV file
 
 Blobstore-s3 capability provider settings can be passed to the provider through an env file, as
 described above, or through environment variables in the provider's process. Configuring through environment variables
 is useful for testing from the command-line, or when the provider and wasmcloud host are running in a k8s container.
-Note that process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
+
+> ![WARN]
+> Process environment variables apply to all linked components, unless they are overridden by an 'env' file for that link.
+>
+> To avoid this, use link-definition supplied config
 
 The blobstore-S3 can maintain simultaneous connections for different components using different access roles and policies,
 but only if credentials are specified with link parameters (the 'env' file described above,
@@ -40,18 +99,6 @@ access roles, environment variables should only be used for non-secret settings 
 that may apply to multiple components.
 
 For any settings defined both in an 'env' file and the environment, the value from the 'env' file takes precedence.
-
-### with config-json (link definition)
-
-A third means of setting Blobstore-S3 configuration is with a json file, base-64 encoded,
-and passed as the link value `config_b64`. This option, like the 'env' file, allows for settings
-to be specific to a link, however it is not as secure, because of the additional processing
-required to generate the encoded structure and pass it into either `wash` or the web dashboard.
-Note that the field names in the json structure, defined by `StorageConfig` in src/config.rs,
-are different from the environment variable names.
-
-Json settings take precedence over environment variables and 'env' file values.
-
 
 ## Aliases
 

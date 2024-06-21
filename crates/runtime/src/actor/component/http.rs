@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use tokio::sync::{oneshot, Mutex};
+use tracing::instrument;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
@@ -102,6 +103,7 @@ impl Instance {
 
 #[async_trait]
 impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
+    #[instrument(skip_all)]
     async fn handle(
         &self,
         request: http::Request<HyperIncomingBody>,

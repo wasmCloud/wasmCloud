@@ -194,8 +194,8 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
     );
 
     assert_eq!(
-        assert_increment(&http_client, http_port, "/foo?bar=baz").await?,
-        "Counter /foo?bar=baz: 1\n"
+        assert_increment(&http_client, http_port, "/foo").await?,
+        "Counter /foo: 1\n"
     );
 
     assert_eq!(

@@ -52,7 +52,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval_at, timeout, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
@@ -304,12 +304,21 @@ impl Component {
             KeyValue::new("host", self.metrics.host_id.clone()),
         ];
 
+        // Associate the current context with the span
+        let injector = TraceContextInjector::default_with_span();
+        let trace_context = injector
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        self.handler.set_trace_context(trace_context).await;
+
         let start_at = Instant::now();
 
         match invoke_type {
             InvocationType::Custom { .. } => {
                 let call = component
                     .call::<Client>(&interface, &function, incoming, outgoing)
+                    .instrument(tracing::trace_span!("call_component"))
                     .await
                     .context("failed to call component");
 
@@ -1497,6 +1506,7 @@ impl Host {
             lattice: self.host_config.lattice.clone(),
             component_id: component_id.clone(),
             targets: Arc::default(),
+            trace_ctx: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfills: Arc::clone(component.polyfills()),
             exports: Arc::clone(component.exports()),
@@ -2467,7 +2477,7 @@ impl Host {
         Ok(CtlResponse::ok(inventory))
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_claims(&self) -> anyhow::Result<CtlResponse<Vec<HashMap<String, String>>>> {
         trace!("handling claims");
 
@@ -2485,9 +2495,9 @@ impl Host {
         ))
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_links(&self) -> anyhow::Result<Vec<u8>> {
-        debug!("handling links");
+        trace!("handling links");
 
         let links = self.links.read().await;
         let links: Vec<&InterfaceLinkDefinition> = links.values().flatten().collect();

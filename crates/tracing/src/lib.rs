@@ -6,6 +6,7 @@ pub use opentelemetry::{
     metrics::{Counter, Histogram, Meter, Unit},
     KeyValue,
 };
+use std::path::Path;
 use wasmcloud_core::logging::Level;
 use wasmcloud_core::OtelConfig;
 
@@ -21,11 +22,18 @@ pub fn configure_observability(
     _: &str,
     _: &OtelConfig,
     use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<traces::FlushGuard> {
     // if OTEL is not enabled, explicitly do not emit observability
     let otel_config = OtelConfig::default();
-    traces::configure_tracing("", &otel_config, use_structured_logging, log_level_override)
+    traces::configure_tracing(
+        "",
+        &otel_config,
+        use_structured_logging,
+        flame_graph,
+        log_level_override,
+    )
 }
 
 /// Configures observability for each type of signal
@@ -34,8 +42,9 @@ pub fn configure_observability(
     service_name: &str,
     otel_config: &OtelConfig,
     use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<traces::FlushGuard> {
     let normalized_service_name = service_name.to_kebab_case();
 
     if otel_config.metrics_enabled() {
@@ -46,6 +55,7 @@ pub fn configure_observability(
         &normalized_service_name,
         otel_config,
         use_structured_logging,
+        flame_graph,
         log_level_override,
     )
 }

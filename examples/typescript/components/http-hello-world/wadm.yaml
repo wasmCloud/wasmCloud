@@ -5,7 +5,7 @@ metadata:
   name: typescript-hello-world
   annotations:
     version: v0.0.1
-    description: "Demo of Typescript HTTP hello world server"
+    description: 'Demo of Typescript HTTP hello world server'
 spec:
   components:
     # (Component) A test component that returns a string for any given HTTP request
@@ -23,7 +23,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.21.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests

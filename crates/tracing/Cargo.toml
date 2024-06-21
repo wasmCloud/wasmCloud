@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-tracing"
-version = "0.4.0"
+version = "0.5.0"
 description = "wasmCloud tracing functionality"
 
 authors.workspace = true
@@ -41,6 +41,8 @@ opentelemetry-otlp = { workspace = true, features = [
 ], optional = true }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-flame = { workspace = true }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = [

@@ -5,6 +5,8 @@
 //! can be used by actors on your lattice.
 //!
 
+use core::str::FromStr;
+
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
@@ -15,13 +17,15 @@ use aws_config::default_provider::region::DefaultRegionChain;
 use aws_config::retry::RetryConfig;
 use aws_config::sts::AssumeRoleProvider;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::create_bucket::{CreateBucketError, CreateBucketOutput};
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketError;
 use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectOutput};
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
-use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
+use aws_sdk_s3::types::{
+    BucketLocationConstraint, CreateBucketConfiguration, Delete, Object, ObjectIdentifier,
+};
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
@@ -60,6 +64,8 @@ pub struct StorageConfig {
     /// optional map of bucket aliases to names
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// Region in which buckets will be created
+    pub bucket_region: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -89,6 +95,11 @@ impl StorageConfig {
             StorageConfig::default()
         };
 
+        // If a top level BUCKET_REGION was specified config, use it
+        if let Some(region) = values.get("BUCKET_REGION") {
+            config.bucket_region = Some(region.into());
+        }
+
         if let Ok(arn) = env::var("AWS_ROLE_ARN") {
             let mut sts_config = config.sts_config.unwrap_or_default();
             sts_config.role = arn;
@@ -117,6 +128,8 @@ impl StorageConfig {
 pub struct StorageClient {
     s3_client: aws_sdk_s3::Client,
     aliases: Arc<HashMap<String, String>>,
+    /// Preferred region for bucket creation
+    bucket_region: Option<BucketLocationConstraint>,
 }
 
 impl StorageClient {
@@ -130,6 +143,7 @@ impl StorageClient {
             sts_config,
             endpoint,
             mut aliases,
+            bucket_region,
         }: StorageConfig,
         config_values: &HashMap<String, String>,
     ) -> Self {
@@ -223,9 +237,11 @@ impl StorageClient {
                 }
             }
         }
+
         StorageClient {
             s3_client,
             aliases: Arc::new(aliases),
+            bucket_region: bucket_region.and_then(|v| BucketLocationConstraint::from_str(&v).ok()),
         }
     }
 
@@ -254,7 +270,7 @@ impl StorageClient {
             Err(se) => match se.into_service_error() {
                 HeadBucketError::NotFound(_) => Ok(false),
                 err => {
-                    error!(?err, "Unable to head bucket");
+                    error!(?err, code = err.code(), "Unable to head bucket");
                     bail!(anyhow!(err).context("failed to `head` bucket"))
                 }
             },
@@ -264,7 +280,19 @@ impl StorageClient {
     /// Create a bucket
     #[instrument(level = "debug", skip(self))]
     pub async fn create_container(&self, bucket: &str) -> anyhow::Result<()> {
-        match self.s3_client.create_bucket().bucket(bucket).send().await {
+        // Build bucket config, using location constraint if necessary
+        let bucket_config = CreateBucketConfiguration::builder()
+            .set_location_constraint(self.bucket_region.clone())
+            .build();
+
+        match self
+            .s3_client
+            .create_bucket()
+            .create_bucket_configuration(bucket_config)
+            .bucket(bucket)
+            .send()
+            .await
+        {
             Ok(CreateBucketOutput { location, .. }) => {
                 debug!(?location, "bucket created");
                 Ok(())
@@ -272,7 +300,7 @@ impl StorageClient {
             Err(se) => match se.into_service_error() {
                 CreateBucketError::BucketAlreadyOwnedByYou(..) => Ok(()),
                 err => {
-                    error!(?err, "failed to create bucket");
+                    error!(?err, code = err.code(), "failed to create bucket");
                     bail!(anyhow!(err).context("failed to create bucket"))
                 }
             },
@@ -295,9 +323,9 @@ impl StorageClient {
                     error!("bucket [{bucket}] not found");
                     bail!("bucket [{bucket}] not found")
                 }
-                e => {
-                    error!("unexpected error: {e}");
-                    bail!("unexpected error: {e}");
+                err => {
+                    error!(?err, code = err.code(), "unexpected error");
+                    bail!(anyhow!(err).context("unexpected error"));
                 }
             },
         }
@@ -330,7 +358,7 @@ impl StorageClient {
                 bail!(anyhow!("{err:?}").context("service error"))
             }
             Err(err) => {
-                error!(%err, "unexpected error");
+                error!(%err, code = err.code(), "unexpected error");
                 bail!(anyhow!("{err:?}").context("unexpected error"))
             }
         }
@@ -409,7 +437,7 @@ impl StorageClient {
                 bail!("{err:?}")
             }
             Err(err) => {
-                error!(%err, "unexpected error");
+                error!(%err, code = err.code(), "unexpected error");
                 bail!(err)
             }
         }
@@ -432,6 +460,7 @@ impl StorageClient {
                 err => {
                     error!(
                         %err,
+                        code = err.code(),
                         "unexpected error for object_exists"
                     );
                     bail!(anyhow!(err).context("unexpected error for object_exists"))
@@ -470,7 +499,11 @@ impl StorageClient {
                     bail!("object [{bucket}/{key}] not found")
                 }
                 err => {
-                    error!("get_object_metadata failed for object [{bucket}/{key}]: {err}",);
+                    error!(
+                        ?err,
+                        code = err.code(),
+                        "get_object_metadata failed for object [{bucket}/{key}]"
+                    );
                     bail!(anyhow!(err).context(format!(
                         "get_object_metadata failed for object [{bucket}/{key}]"
                     )))

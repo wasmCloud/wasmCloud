@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use wasmcloud_control_interface::HostInventory;
 
 use crate::{
-    actor::update_actor,
     common::{boxed_err_to_anyhow, get_all_inventories},
+    component::update_component,
     config::WashConnectionOptions,
 };
 
@@ -38,7 +39,7 @@ pub struct UpdateComponentCommand {
     pub new_component_ref: String,
 }
 
-pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
+pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
@@ -53,17 +54,36 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
                 host_id
             ))?
     } else {
-        let inventories = get_all_inventories(&client).await?;
-        inventories
+        let mut inventories = get_all_inventories(&client)
+            .await?
             .into_iter()
-            .find(|inv| {
+            .filter(|inv| {
                 inv.components
                     .iter()
                     .any(|component| component.id == cmd.component_id)
             })
-            .ok_or_else(|| {
-                anyhow::anyhow!("No host found running component [{}]", cmd.component_id)
-            })?
+            .collect::<Vec<HostInventory>>();
+
+        match inventories[..] {
+            // No hosts
+            [] => {
+                bail!("No host found running component [{}]", cmd.component_id)
+            }
+            // Single host
+            [_] => inventories.remove(0),
+            // Multiple hosts
+            _ => {
+                bail!(
+                    "Component [{}] cannot be updated because multiple hosts are running it: [{}]",
+                    cmd.component_id,
+                    inventories
+                        .iter()
+                        .map(|h| h.host_id.to_string())
+                        .collect::<Vec<String>>()
+                        .join(","),
+                );
+            }
+        }
     };
 
     let Some((host_id, component_ref)) = inventory
@@ -89,7 +109,8 @@ pub async fn handle_update_actor(cmd: UpdateComponentCommand) -> Result<CommandO
         ));
     }
 
-    let ack = update_actor(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
+    let ack =
+        update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
     if !ack.success {
         bail!("Operation failed on host [{}]: {}", host_id, ack.message);
     }

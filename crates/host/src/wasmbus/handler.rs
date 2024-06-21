@@ -36,11 +36,15 @@ pub struct Handler {
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     pub config_data: Arc<RwLock<ConfigBundle>>,
+    /// The lattice this handler will use for RPC
     pub lattice: String,
     /// The identifier of the component that this handler is associated with
     pub component_id: String,
     /// The current link targets. `instance:interface` -> `link-name`
     pub targets: Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    /// The current trace context of the handler, required to propagate trace context
+    /// when crossing the Wasm guest/host boundary
+    pub trace_ctx: Arc<RwLock<Vec<(String, String)>>>,
 
     /// Map of link names -> WIT ns & package -> WIT interface -> Target
     ///
@@ -80,6 +84,7 @@ impl Handler {
             lattice: self.lattice.clone(),
             component_id: self.component_id.clone(),
             targets: Arc::default(),
+            trace_ctx: Arc::default(),
             interface_links: self.interface_links.clone(),
             polyfills: self.polyfills.clone(),
             invocation_timeout: self.invocation_timeout,
@@ -89,15 +94,19 @@ impl Handler {
     }
 
     /// Produces a wrpc builder that can build wrpc clients
-    pub fn wrpc_builder(&self, target: &str) -> crate::wrpc::ClientBuilder {
+    pub fn wrpc_builder(
+        &self,
+        LatticeInterfaceTarget { id, link_name, .. }: &LatticeInterfaceTarget,
+    ) -> crate::wrpc::ClientBuilder {
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
         headers.insert("source-id", self.component_id.as_str());
-        crate::wrpc::ClientBuilder::new(Arc::clone(&self.nats), &self.lattice, target)
+        headers.insert("link-name", link_name.as_str());
+        crate::wrpc::ClientBuilder::new(Arc::clone(&self.nats), &self.lattice, &id)
     }
 
-    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<crate::wrpc::ClientBuilder> {
-        let LatticeInterfaceTarget { id, .. } = self
+    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "blobstore",
@@ -105,11 +114,12 @@ impl Handler {
             )))
             .await
             .context("unknown `wasi:blobstore/blobstore` target")?;
-        Ok(self.wrpc_builder(&id))
+        Ok(self.wrpc_builder(&lit))
     }
 
-    async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<crate::wrpc::ClientBuilder> {
-        let LatticeInterfaceTarget { id, .. } = self
+    #[instrument(level = "trace", skip(self))]
+    async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi",
                 "http",
@@ -117,31 +127,33 @@ impl Handler {
             )))
             .await
             .context("unknown `wasi:http/outgoing-handler` target")?;
-        Ok(self.wrpc_builder(&id))
+        Ok(self.wrpc_builder(&lit))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<crate::wrpc::ClientBuilder> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "atomics",
             )))
             .await
             .context("unknown `wasi:keyvalue/atomics` target")?;
-        Ok(self.wrpc_builder(&id))
+        Ok(self.wrpc_builder(&lit))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn wrpc_keyvalue_store(&self) -> anyhow::Result<crate::wrpc::ClientBuilder> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasi", "keyvalue", "store",
             )))
             .await
             .context("unknown `wasi:keyvalue/store` target")?;
-        Ok(self.wrpc_builder(&id))
+        Ok(self.wrpc_builder(&lit))
     }
 
     async fn wrpc_messaging_consumer(&self) -> anyhow::Result<crate::wrpc::ClientBuilder> {
-        let LatticeInterfaceTarget { id, .. } = self
+        let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
                 "wasmcloud",
                 "messaging",
@@ -149,7 +161,7 @@ impl Handler {
             )))
             .await
             .context("unknown `wasmcloud:messaging/consumer` target")?;
-        Ok(self.wrpc_builder(&id))
+        Ok(self.wrpc_client(&lit))
     }
 }
 
@@ -571,50 +583,17 @@ impl Bus for Handler {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: BytesMut,
-        func_paths: Vec<Vec<Option<usize>>>,
-    ) -> anyhow::Result<
-        Invocation<ParamWriter, Reader, wrpc_transport_nats::Session<ClientErrorWriter>>,
-    > {
+        params: Vec<wrpc_transport::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
         if let TargetEntity::Lattice(LatticeInterfaceTarget { id, .. }) = target {
             let injector = TraceContextInjector::default_with_span();
             let mut headers = injector_to_headers(&injector);
             headers.insert("source-id", self.component_id.as_str());
-            let builder = self.wrpc_builder(&id);
+            let builder = self.wrpc_builder(&lit);
             let client = builder.build();
-            // let func_paths = self
-            //     .func_paths_map
-            //     .get(&(Arc::new(instance.to_string()), Arc::new(name.to_string())))
-            //     .ok_or_else(|| {
-            //         anyhow::anyhow!(
-            //             "Function paths not found for instance: {} and name: {}",
-            //             instance,
-            //             name
-            //         )
-            //     })?;
-            // // Encode sync params and gather deferred asyncs
-            // let mut buf = BytesMut::default();
-            // let mut deferred = vec![];
-            // for (v, ref ty) in zip(&params, result_ty) {
-            //     let mut enc = ValEncoder::new(&mut **ctx, ty);
-            //     enc.encode(v, &mut buf)
-            //         .context("failed to encode parameter")?;
-            //     deferred.push(enc.deferred);
-            // }
 
-            // Invoke via wRPC
-            // let Invocation {
-            //     outgoing,
-            //     incoming,
-            //     session,
             let invocation = client
-                .invoke(
-                    Some(headers),
-                    instance.to_string(),
-                    name.to_string(),
-                    params.freeze(),
-                    func_paths,
-                )
+                .invoke(Some(headers), instance, name, params.freeze(), func_paths)
                 .await
                 .map_err(anyhow::Error::from)
                 .with_context(|| {
@@ -622,42 +601,6 @@ impl Bus for Handler {
                 })?;
 
             Ok(invocation)
-            // try_join!(
-            //     // Stream async params
-            //     async {
-            //         try_join_all(
-            //             zip(0.., deferred)
-            //                 .filter_map(|(i, f)| f.map(|f| (outgoing.index(&[i]), f)))
-            //                 .map(|(w, f)| async move {
-            //                     let w = w.map_err(Into::into)?;
-            //                     f(w).await
-            //                 }),
-            //         )
-            //         .await
-            //         .context("failed to write asynchronous parameters")?;
-            //         pin!(outgoing)
-            //             .shutdown()
-            //             .await
-            //             .context("failed to shutdown outgoing stream")
-            //     },
-            //     // Receive returns
-            //     async {
-            //         let mut incoming = pin!(incoming);
-            //         let mut results = Vec::with_capacity(result_ty.len());
-            //         for (i, ty) in result_ty.iter().enumerate() {
-            //             let mut val = Val::default();
-            //             read_value(ctx, &mut incoming, &mut val, ty, &[i])
-            //                 .await
-            //                 .context("failed to decode result value")?;
-            //             results.push(val);
-            //         }
-            //         Ok(results)
-            //     },
-            // )?;
-            // match session.finish(Ok(())).await.map_err(Into::into)? {
-            //     Ok(_) => Ok(results),
-            //     Err(err) => bail!(anyhow!("{err}").context("session failed")),
-            // }
         } else {
             bail!("component attempted to invoke a function on an unknown target")
         }

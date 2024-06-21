@@ -4,7 +4,7 @@ metadata:
   name: composed-pong
   annotations:
     version: v0.0.1
-    description: "Composed pong demo"
+    description: 'Composed pong demo'
 spec:
   components:
     - name: http-component
@@ -21,7 +21,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.1
+        image: ghcr.io/wasmcloud/http-server:0.21.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests

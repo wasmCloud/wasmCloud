@@ -1,4 +1,6 @@
-//! Core reusable functionality related to [WebAssembly Interface types ("WIT")](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md)
+//! Reusable functionality related to [WebAssembly Interface types ("WIT")][wit]
+//!
+//! [wit]: <https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md>
 
 use std::collections::HashMap;
 
@@ -7,8 +9,6 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{WitFunction, WitInterface, WitNamespace, WitPackage};
-
-// I don't know if these would be generated or if we'd just include them in the library and then use them in the generated code, but they work around the lack of a map type in wit
 
 /// Representation of maps (AKA associative arrays) that are usable from WIT
 ///
@@ -59,7 +59,7 @@ impl CallTargetInterface {
         (&self.namespace, &self.package, &self.interface)
     }
 
-    /// Build a [`TargetInterface`] from constituent parts
+    /// Build a [`CallTargetInterface`] from constituent parts
     #[must_use]
     pub fn from_parts((ns, pkg, iface): (&str, &str, &str)) -> Self {
         Self {
@@ -84,7 +84,7 @@ impl CallTargetInterface {
 ///
 /// # Errors
 ///
-/// Returns `Err` if the operation is not of the form "<package>:<ns>/<interface>.<function>"
+/// Returns `Err` if the operation is not of the form "&lt;package&gt;:&lt;ns&gt;/&lt;interface&gt;.&lt;function&gt;"
 ///
 /// # Example
 ///

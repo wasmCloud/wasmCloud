@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.1.0"
+version = "0.2.0"
 description = """
 wasmCloud SQL database provider for Postgres
 """

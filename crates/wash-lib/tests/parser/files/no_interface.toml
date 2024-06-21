@@ -1,6 +1,6 @@
 language = "rust"
 type = "interface"
-name = "testactor"
+name = "testcomponent"
 version = "0.1.0"
 
 [provider]

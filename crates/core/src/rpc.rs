@@ -1,3 +1,12 @@
+//! Core reusable types related to performing [RPC calls on a wasmCloud lattice][docs-wasmcloud-rpc]
+//!
+//! Wasmbus is the name of the NATS-powered RPC transport mechanism primarily used by wasmCloud.
+//!
+//! Various wasmCloud workloads (capability providers, components) use Wasmbus (and thus NATS)
+//! to communicate and send RPCs -- often over well known topics (some of which are detailed in this module).
+//!
+//! [docs-wasmcloud-rpc]: <https://wasmcloud.com/docs/hosts/lattice-protocols/rpc>
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

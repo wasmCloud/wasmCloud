@@ -12,11 +12,15 @@ Prerequisites:
 1. [wit-bindgen-wrpc](https://github.com/wrpc/wit-bindgen-wrpc/tree/main) `cargo install wit-bindgen-wrpc-cli`
 1. [wash](https://wasmcloud.com/docs/installation)
 
-<!-- TODO: Build using wash build -->
-
 ```bash
 go generate ./...
 go build .
+```
+
+Alternatively, you can generate, build and package this provider in one step:
+
+```bash
+wash build
 ```
 
 You can build the included test component with `wash build -p ./component`.

@@ -1,6 +1,6 @@
 [package]
 name = "wash-lib"
-version = "0.21.1"
+version = "0.22.1"
 categories = ["wasm", "wasmcloud"]
 description = "wasmCloud Shell (wash) libraries"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]
@@ -87,6 +87,7 @@ url = { workspace = true }
 wadm-types = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
+wadm-client = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }

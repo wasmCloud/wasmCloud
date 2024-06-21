@@ -102,6 +102,7 @@
 
         test.allTargets = true;
         test.excludes = [
+          "secrets-nats-kv"
           "wash-cli"
           "wash-lib"
           "wasmcloud-provider-blobstore-s3" # TODO: Make the test self-contained and reenable

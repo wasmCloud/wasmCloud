@@ -1,55 +1,30 @@
 use std::env;
-use std::io::{IsTerminal, StderrLock, Write};
+use std::fs::File;
+use std::io::{BufWriter, IsTerminal};
+use std::path::Path;
+#[cfg(feature = "otel")]
+use std::sync::Arc;
 
-use anyhow::Context;
-use once_cell::sync::OnceCell;
+use anyhow::Context as _;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{LogExporterBuilder, SpanExporterBuilder, WithExportConfig};
 use tracing::{Event, Subscriber};
+use tracing_flame::FlameLayer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format, Full, Json, JsonFields, Writer};
 use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::{Layered, SubscriberExt};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::EnvFilter;
 use wasmcloud_core::logging::Level;
-use wasmcloud_core::{OtelConfig, OtelProtocol};
-
-struct LockedWriter<'a> {
-    stderr: StderrLock<'a>,
-}
-
-impl<'a> LockedWriter<'a> {
-    fn new() -> Self {
-        LockedWriter {
-            stderr: STDERR.get_or_init(std::io::stderr).lock(),
-        }
-    }
-}
-
-impl<'a> Write for LockedWriter<'a> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stderr.write(buf)
-    }
-
-    /// DIRTY HACK: when flushing, write a carriage return so the output is clean and then flush
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.stderr.write_all(&[13])?;
-        self.stderr.flush()
-    }
-}
-
-impl<'a> Drop for LockedWriter<'a> {
-    fn drop(&mut self) {
-        let _ = self.flush();
-    }
-}
-
-static STDERR: OnceCell<std::io::Stderr> = OnceCell::new();
+use wasmcloud_core::OtelConfig;
+#[cfg(feature = "otel")]
+use wasmcloud_core::OtelProtocol;
 
 #[cfg(feature = "otel")]
-static LOG_PROVIDER: OnceCell<opentelemetry_sdk::logs::LoggerProvider> = OnceCell::new();
+static LOG_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::logs::LoggerProvider> =
+    once_cell::sync::OnceCell::new();
 
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
 /// This is just so we avoid any sort of possible slow down in logging code
@@ -79,6 +54,11 @@ where
     }
 }
 
+pub struct FlushGuard {
+    _stderr: tracing_appender::non_blocking::WorkerGuard,
+    _flame: Option<tracing_flame::FlushGuard<BufWriter<File>>>,
+}
+
 /// Configures a global tracing subscriber, which includes:
 /// - A level filter, which forms the base and applies to all other layers
 /// - A local logging layer, which is either plaintext or structured (JSON)
@@ -91,27 +71,41 @@ where
 pub fn configure_tracing(
     _: &str,
     _: &OtelConfig,
-    structured_logging_enabled: bool,
+    use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
-    STDERR
-        .set(std::io::stderr())
-        .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
-
-    let base_reg = tracing_subscriber::Registry::default();
-    let level_filter = get_level_filter(log_level_override);
-
-    let res = if structured_logging_enabled {
-        let log_layer = get_json_log_layer()?;
-        let layered = base_reg.with(level_filter).with(log_layer);
-        tracing::subscriber::set_global_default(layered)
+) -> anyhow::Result<FlushGuard> {
+    let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
+    let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
+    let reg = tracing_subscriber::Registry::default()
+        .with(get_level_filter(log_level_override))
+        .with(flame);
+    let stderr = std::io::stderr();
+    let ansi = stderr.is_terminal();
+    let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    let fmt = tracing_subscriber::fmt::layer()
+        .with_writer(stderr)
+        .with_ansi(ansi);
+    if use_structured_logging {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Json(Format::default().json()))
+                    .fmt_fields(JsonFields::new()),
+            ),
+        )
     } else {
-        let log_layer = get_plaintext_log_layer()?;
-        let layered = base_reg.with(level_filter).with(log_layer);
-        tracing::subscriber::set_global_default(layered)
-    };
-
-    res.map_err(|e| anyhow::anyhow!(e).context("Logger was already created"))
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Not(Format::default()))
+                    .fmt_fields(DefaultFields::new()),
+            ),
+        )
+    }
+    .context("logger already configured")?;
+    Ok(FlushGuard {
+        _stderr: stderr_guard,
+        _flame: flame_guard,
+    })
 }
 
 /// Configures a global tracing subscriber, which includes:
@@ -128,111 +122,59 @@ pub fn configure_tracing(
     service_name: &str,
     otel_config: &OtelConfig,
     use_structured_logging: bool,
+    flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<()> {
-    STDERR
-        .set(std::io::stderr())
-        .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
+) -> anyhow::Result<FlushGuard> {
+    let service_name = Arc::from(service_name);
 
-    let base_reg = tracing_subscriber::Registry::default();
-
-    let level_filter = get_level_filter(log_level_override);
-
-    let normalized_service_name = service_name.to_string();
-
-    // NOTE: this logic would be simpler if we could conditionally/imperatively construct and add
-    // layers, but due to the dynamic types, this is not possible
-    let res = match (
-        otel_config.traces_enabled(),
-        otel_config.logs_enabled(),
-        use_structured_logging,
-    ) {
-        (true, true, true) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_json_log_layer()?)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (true, true, false) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_plaintext_log_layer()?)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (true, false, true) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_json_log_layer()?)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (true, false, false) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_plaintext_log_layer()?)
-                .with(get_otel_tracing_layer(
-                    normalized_service_name.clone(),
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (false, true, true) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_json_log_layer()?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (false, true, false) => {
-            let layered = base_reg
-                .with(level_filter)
-                .with(get_plaintext_log_layer()?)
-                .with(get_otel_logging_layer(
-                    normalized_service_name,
-                    otel_config,
-                )?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (false, false, true) => {
-            let layered = base_reg.with(level_filter).with(get_json_log_layer()?);
-            tracing::subscriber::set_global_default(layered)
-        }
-        (false, false, false) => {
-            let layered = base_reg.with(level_filter).with(get_plaintext_log_layer()?);
-            tracing::subscriber::set_global_default(layered)
-        }
-    };
-
-    res.map_err(|e| anyhow::anyhow!(e).context("Logger/tracer was already created"))
+    let traces = otel_config
+        .traces_enabled()
+        .then(|| get_otel_tracing_layer(Arc::clone(&service_name), otel_config))
+        .transpose()?;
+    let logs = otel_config
+        .logs_enabled()
+        .then(|| get_otel_logging_layer(Arc::clone(&service_name), otel_config))
+        .transpose()?;
+    let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
+    let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
+    let reg = tracing_subscriber::Registry::default()
+        .with(get_level_filter(log_level_override))
+        .with(traces)
+        .with(logs)
+        .with(flame);
+    let stderr = std::io::stderr();
+    let ansi = stderr.is_terminal();
+    let (stderr, stderr_guard) = tracing_appender::non_blocking(stderr);
+    let fmt = tracing_subscriber::fmt::layer()
+        .with_writer(stderr)
+        .with_ansi(ansi);
+    if use_structured_logging {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Json(Format::default().json()))
+                    .fmt_fields(JsonFields::new()),
+            ),
+        )
+    } else {
+        tracing::subscriber::set_global_default(
+            reg.with(
+                fmt.event_format(JsonOrNot::Not(Format::default()))
+                    .fmt_fields(DefaultFields::new()),
+            ),
+        )
+    }
+    .context("logger/tracer already configured")?;
+    Ok(FlushGuard {
+        _stderr: stderr_guard,
+        _flame: flame_guard,
+    })
 }
 
 #[cfg(feature = "otel")]
 fn get_otel_tracing_layer<S>(
-    service_name: String,
+    service_name: Arc<str>,
     otel_config: &OtelConfig,
-) -> anyhow::Result<impl Layer<S>>
+) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -271,9 +213,9 @@ where
 
 #[cfg(feature = "otel")]
 fn get_otel_logging_layer<S>(
-    service_name: String,
+    service_name: Arc<str>,
     otel_config: &OtelConfig,
-) -> anyhow::Result<impl Layer<S>>
+) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -312,28 +254,6 @@ where
     );
 
     Ok(log_layer)
-}
-
-fn get_plaintext_log_layer<S>() -> anyhow::Result<impl Layer<S>>
-where
-    S: Subscriber,
-    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    let stderr = STDERR.get().context("stderr not initialized")?;
-    Ok(tracing_subscriber::fmt::layer()
-        .with_writer(LockedWriter::new)
-        .with_ansi(stderr.is_terminal())
-        .event_format(JsonOrNot::Not(Format::default()))
-        .fmt_fields(DefaultFields::new()))
-}
-
-fn get_json_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
-    let stderr = STDERR.get().context("stderr not initialized")?;
-    Ok(tracing_subscriber::fmt::layer()
-        .with_writer(LockedWriter::new)
-        .with_ansi(stderr.is_terminal())
-        .event_format(JsonOrNot::Json(Format::default().json()))
-        .fmt_fields(JsonFields::new()))
 }
 
 fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {

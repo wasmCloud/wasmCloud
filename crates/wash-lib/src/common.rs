@@ -23,7 +23,7 @@ pub enum FindIdError {
     /// No matches were found
     #[error("No matches found with the provided search term")]
     NoMatches,
-    /// Multiple matches were found. The vector contains the list of actors or providers that
+    /// Multiple matches were found. The vector contains the list of components or providers that
     /// matched
     #[error("Multiple matches found with the provided search term: {0:?}")]
     MultipleMatches(Vec<Match>),
@@ -54,25 +54,25 @@ impl Debug for Match {
     }
 }
 
-/// Given a string, attempts to resolve an component ID. Returning the component ID and an optional friendly
+/// Given a string, attempts to resolve a component ID. Returning the component ID and an optional friendly
 /// name
 ///
 /// If the string is a valid component ID, it will be returned unchanged. If it is not an ID, it will
 /// attempt to resolve an ID in the following order:
 ///
-/// 1. The value matches the prefix of the ID of an component
-/// 2. The value is contained in the call alias of an component
-/// 3. The value is contained in the name field of an component
+/// 1. The value matches the prefix of the ID of a component
+/// 2. The value is contained in the call alias of a component
+/// 3. The value is contained in the name field of a component
 ///
 /// If more than one matches, then an error will be returned indicating the options to choose from
-pub async fn find_actor_id(
+pub async fn find_component_id(
     value: &str,
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<(ModuleId, Option<String>), FindIdError> {
     find_id_matches(value, ctl_client).await
 }
 
-/// Given a string, attempts to resolve an provider ID. Returning the provider ID and an optional
+/// Given a string, attempts to resolve a provider ID. Returning the provider ID and an optional
 /// friendly name
 ///
 /// If the string is a valid provider ID, it will be returned unchanged. If it is not an ID, it will

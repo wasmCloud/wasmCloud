@@ -43,6 +43,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common",
+ "generic-array",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -274,6 +284,39 @@ dependencies = [
  "tokio-retry",
  "tokio-rustls 0.24.1",
  "tracing",
+ "url",
+]
+
+[[package]]
+name = "async-nats"
+version = "0.35.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8df97cb8fc4a884af29ab383e9292ea0939cfcdd7d2a17179086dc6c427e7f"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "memchr",
+ "nkeys 0.4.1",
+ "nuid 0.5.0",
+ "once_cell",
+ "portable-atomic",
+ "rand 0.8.5",
+ "regex",
+ "ring",
+ "rustls-native-certs 0.7.0",
+ "rustls-pemfile 2.1.2",
+ "rustls-webpki 0.102.4",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-rustls 0.26.0",
+ "tracing",
+ "tryhard",
  "url",
 ]
 
@@ -941,6 +984,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "backoff"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
+dependencies = [
+ "futures-core",
+ "getrandom 0.2.15",
+ "instant",
+ "pin-project-lite",
+ "rand 0.8.5",
+ "tokio",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1344,6 +1401,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d18b093eba54c9aaa1e3784d4361eb2ba944cf7d0a932a830132238f483e8d8"
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+ "zeroize",
+]
+
+[[package]]
 name = "claims"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1694,7 +1762,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
+]
+
+[[package]]
+name = "crypto_box"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16182b4f39a82ec8a6851155cc4c0cda3065bb1db33651726a29e1951de0f009"
+dependencies = [
+ "aead",
+ "crypto_secretbox",
+ "curve25519-dalek",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead",
+ "cipher",
+ "generic-array",
+ "poly1305",
+ "salsa20",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1721,6 +1819,7 @@ dependencies = [
  "platforms",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -2396,6 +2495,7 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+ "zeroize",
 ]
 
 [[package]]
@@ -3162,6 +3262,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0c10553d664a4d0bcff9f4215d0aac67a639cc68ef660840afe309b807bc9f5"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3575,6 +3684,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc522a19199a0795776406619aa6aa78e1e55690fbeb3181b8db5265fd0e89ce"
 dependencies = [
+ "crypto_box",
  "data-encoding",
  "ed25519",
  "ed25519-dalek",
@@ -3867,6 +3977,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
 name = "openssl-probe"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3932,7 +4048,7 @@ dependencies = [
 name = "opentelemetry-nats"
 version = "0.1.0"
 dependencies = [
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "opentelemetry 0.23.0",
  "opentelemetry_sdk 0.23.0",
  "tracing",
@@ -4310,6 +4426,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db23d408679286588f4d4644f965003d056e3dd5abcaaa938116871d7ce2fee7"
 
 [[package]]
+name = "poly1305"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
+dependencies = [
+ "cpufeatures",
+ "opaque-debug",
+ "universal-hash",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4460,7 +4587,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "async-compression",
  "data-encoding",
@@ -5068,6 +5195,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
+name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5115,6 +5251,29 @@ checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
  "untrusted",
+]
+
+[[package]]
+name = "secrets-nats-kv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats 0.35.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait",
+ "backoff",
+ "bytes",
+ "clap",
+ "futures",
+ "nkeys 0.4.1",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wascap 0.15.0",
+ "wasmcloud-secrets-types",
 ]
 
 [[package]]
@@ -6169,6 +6328,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-appender"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3566e8ce28cc0a3fe42519fc80e6b4c943cc4c8cef275620eb8dac2d3d4e06cf"
+dependencies = [
+ "crossbeam-channel",
+ "thiserror",
+ "time",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-attributes"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6190,6 +6361,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-flame"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bae117ee14789185e129aaee5d93750abe67fdc5a9a62650452bfe4e122a3a9"
+dependencies = [
+ "lazy_static",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-futures"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6197,6 +6379,17 @@ checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
  "pin-project",
  "tracing",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
 ]
 
 [[package]]
@@ -6254,9 +6447,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sharded-slab",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
+ "tracing-log",
  "tracing-serde",
 ]
 
@@ -6354,6 +6549,16 @@ name = "unicode-xid"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
+
+[[package]]
+name = "universal-hash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+dependencies = [
+ "crypto-common",
+ "subtle",
+]
 
 [[package]]
 name = "unsafe-libyaml"
@@ -6467,41 +6672,6 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
-
-[[package]]
-name = "wadm"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e84553b11da0c24f4f20798587d446c1f496816eee05908846ef9974b94e09a"
-dependencies = [
- "anyhow",
- "async-nats 0.33.0",
- "async-trait",
- "base64 0.21.7",
- "bytes",
- "chrono",
- "cloudevents-sdk",
- "futures",
- "indexmap 2.2.6",
- "jsonschema",
- "lazy_static",
- "nkeys 0.3.2",
- "rand 0.8.5",
- "regex",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-futures",
- "ulid",
- "uuid 1.8.0",
- "wadm-types",
- "wasmcloud-control-interface 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
 
 [[package]]
 name = "wadm-client"
@@ -6647,12 +6817,12 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.28.1"
+version = "0.29.2"
 dependencies = [
  "anyhow",
  "assert-json-diff",
  "async-compression",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "bytes",
  "clap",
  "clap_complete",
@@ -6695,12 +6865,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wadm-client",
  "wadm-types",
  "warp",
  "wascap 0.15.0",
  "wash-lib",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmcloud-provider-sdk",
  "weld-codegen",
  "which",
@@ -6710,11 +6881,11 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.21.1"
+version = "0.22.1"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
@@ -6761,13 +6932,14 @@ dependencies = [
  "toml 0.8.14",
  "tracing",
  "url",
+ "wadm-client",
  "wadm-types",
  "walkdir",
  "wascap 0.15.0",
  "wasm-encoder 0.208.1",
  "wasmcloud-component-adapters",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmparser 0.202.0",
  "wasmtime",
  "wasmtime-wasi",
@@ -7006,7 +7178,7 @@ name = "wasmcloud"
 version = "1.0.2"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "base64 0.22.1",
  "bytes",
  "clap",
@@ -7035,7 +7207,7 @@ dependencies = [
  "vaultrs",
  "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
@@ -7049,7 +7221,6 @@ dependencies = [
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-sqldb-postgres",
- "wasmcloud-provider-wadm",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
@@ -7095,7 +7266,7 @@ name = "wasmcloud-control-interface"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "async-trait",
  "bytes",
  "cloudevents-sdk",
@@ -7108,7 +7279,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry 0.24.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
 ]
 
 [[package]]
@@ -7164,10 +7335,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "async-trait",
  "bytes",
  "futures",
@@ -7188,6 +7359,7 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+ "url",
  "uuid 1.8.0",
  "wascap 0.15.0",
  "wasmtime",
@@ -7204,7 +7376,7 @@ name = "wasmcloud-host"
 version = "0.82.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -7235,7 +7407,7 @@ dependencies = [
  "uuid 1.8.0",
  "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
  "wasmtime",
@@ -7260,10 +7432,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-azure"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "async-trait",
  "azure_core",
  "azure_storage",
@@ -7286,7 +7458,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7304,7 +7476,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -7328,7 +7500,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-client"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -7348,10 +7520,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-http-server"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "axum 0.7.5",
  "axum-server",
  "base64 0.22.1",
@@ -7372,10 +7544,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "futures",
  "redis",
  "tempfile",
@@ -7391,7 +7563,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-vault"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7408,7 +7580,7 @@ name = "wasmcloud-provider-lattice-controller"
 version = "0.13.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "tokio",
  "tracing",
  "wascap 0.15.0",
@@ -7417,7 +7589,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7432,10 +7604,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-messaging-nats"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "bytes",
  "futures",
  "opentelemetry 0.23.0",
@@ -7454,10 +7626,10 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "base64 0.22.1",
  "bytes",
  "futures",
@@ -7476,7 +7648,7 @@ dependencies = [
  "tracing-opentelemetry 0.24.0",
  "ulid",
  "uuid 1.8.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmcloud-tracing",
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
@@ -7486,7 +7658,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bigdecimal 0.4.3",
@@ -7508,32 +7680,6 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid 1.8.0",
- "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc",
-]
-
-[[package]]
-name = "wasmcloud-provider-wadm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-nats 0.35.1",
- "bytes",
- "futures",
- "opentelemetry 0.23.0",
- "opentelemetry-nats",
- "rustls-pemfile 2.1.2",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-futures",
- "tracing-opentelemetry 0.24.0",
- "wadm",
- "wadm-client",
- "wadm-types",
- "wascap 0.15.0",
- "wash-lib",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]
@@ -7565,7 +7711,7 @@ dependencies = [
  "wascap 0.15.0",
  "wasmcloud-component",
  "wasmcloud-component-adapters",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmparser 0.202.0",
  "wasmtime",
  "wasmtime-wasi",
@@ -7579,11 +7725,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-test-util"
-version = "0.2.0"
+name = "wasmcloud-secrets-types"
+version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-trait",
+ "bytes",
+ "nkeys 0.4.1",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wascap 0.15.0",
+]
+
+[[package]]
+name = "wasmcloud-test-util"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "cloudevents-sdk",
  "nkeys 0.4.1",
  "rmp-serde",
@@ -7596,13 +7756,13 @@ dependencies = [
  "url",
  "wascap 0.15.0",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
  "wasmcloud-host",
 ]
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -7613,10 +7773,12 @@ dependencies = [
  "opentelemetry_sdk 0.23.0",
  "serde",
  "tracing",
+ "tracing-appender",
+ "tracing-flame",
  "tracing-futures",
  "tracing-opentelemetry 0.24.0",
  "tracing-subscriber",
- "wasmcloud-core 0.6.0",
+ "wasmcloud-core 0.7.0",
 ]
 
 [[package]]
@@ -8736,7 +8898,7 @@ version = "0.22.0"
 source = "git+https://github.com/rvolosatovs/wrpc.git?branch=fix/transport-traits#8250e88080b501a6808d2400a636f1724ce8fbcf"
 dependencies = [
  "anyhow",
- "async-nats 0.35.1",
+ "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",
  "bytes",
  "futures",
  "tokio",

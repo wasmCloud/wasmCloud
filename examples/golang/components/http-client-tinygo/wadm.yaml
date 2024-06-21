@@ -4,7 +4,7 @@ metadata:
   name: http-client-tinygo
   annotations:
     version: v0.0.1
-    description: "HTTP client world demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+    description: 'HTTP client world demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
 spec:
   components:
     - name: http-component
@@ -21,13 +21,13 @@ spec:
             target: httpclient
             namespace: wasi
             package: http
-            interfaces: [ outgoing-handler ]
+            interfaces: [outgoing-handler]
 
     # Add a capability provider that enables HTTP access
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.20.0
+        image: ghcr.io/wasmcloud/http-server:0.21.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
@@ -45,4 +45,4 @@ spec:
     - name: httpclient
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-client:0.9.0
+        image: ghcr.io/wasmcloud/http-client:0.11.0
