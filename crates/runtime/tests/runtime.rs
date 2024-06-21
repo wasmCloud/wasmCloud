@@ -49,7 +49,7 @@ struct Handler {
     blobstore: Arc<MemoryBlobstore>,
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-    outgoing_http: Arc<Mutex<Vec<wasmtime_wasi_http::types::OutgoingRequest>>>,
+    outgoing_http: Arc<Mutex<Vec<hyper::Request<HyperOutgoingBody>>>>,
 }
 
 #[async_trait]

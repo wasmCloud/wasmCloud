@@ -18,6 +18,9 @@ pub mod registry;
 /// Provider archive functionality
 mod par;
 
+/// wrpc functionality
+mod wrpc;
+
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 

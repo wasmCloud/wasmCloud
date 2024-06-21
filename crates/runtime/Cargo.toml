@@ -28,6 +28,7 @@ http-body-util = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
@@ -41,7 +42,10 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }
-wrpc-types = { workspace = true }
+wrpc-transport-nats = { workspace = true }
+wrpc-introspect = { workspace = true }
+indexmap = { workspace = true }
+hyper = {workspace = true}
 
 [dev-dependencies]
 once_cell = { workspace = true }

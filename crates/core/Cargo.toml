@@ -50,3 +50,8 @@ wascap = { workspace = true }
 webpki-roots = { workspace = true, optional = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+wrpc-runtime-wasmtime = { workspace = true }
+wit-parser = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+http = { workspace = true }

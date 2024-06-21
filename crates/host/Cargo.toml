@@ -58,13 +58,12 @@ wasmcloud-core = { workspace = true, features = [
 ] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+wasmtime = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
-wrpc-interface-blobstore = { workspace = true }
-wrpc-interface-http = { workspace = true, features = [
-    "http",
-    "wasmtime-wasi-http",
-] }
+tokio-util = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
-wrpc-types = { workspace = true }
+wrpc-runtime-wasmtime = { workspace = true }
+wit-parser = { workspace = true }
+wrpc-introspect = { workspace = true }

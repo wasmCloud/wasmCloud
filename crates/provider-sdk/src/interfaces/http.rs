@@ -6,7 +6,6 @@ use futures::StreamExt as _;
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, warn};
 use wrpc_interface_http::{IncomingRequestHttp, RequestOptions};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
 
 use crate::{get_connection, run_provider, Context, Provider};
 

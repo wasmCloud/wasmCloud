@@ -80,7 +80,6 @@ weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
 wrpc-interface-http = { workspace = true }
 wrpc-transport = { workspace = true }
-wrpc-types = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true, features = ["macos_fsevent"] }

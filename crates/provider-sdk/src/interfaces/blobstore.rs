@@ -114,7 +114,7 @@ pub async fn serve_blobstore(
             mut has_object,
             mut move_object,
             mut write_container_data,
-        } = wrpc_interface_blobstore::serve_blobstore(&wrpc).await?;
+        } = wrpc_interface_blobstore::serve_blobstore(&wrpc.0).await?;
         loop {
             select! {
                 invocation = clear_container.next() => {

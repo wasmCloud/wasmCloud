@@ -1,7 +1,4 @@
-use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
-    OutgoingHttp,
-};
+use crate::capability::{builtin, Bus, IncomingHttp, Logging, Messaging, OutgoingHttp};
 use crate::ComponentConfig;
 
 use core::fmt;
@@ -64,15 +61,6 @@ impl RuntimeBuilder {
         }
     }
 
-    /// Set a [`Blobstore`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn blobstore(self, blobstore: Arc<impl Blobstore + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.blobstore(blobstore),
-            ..self
-        }
-    }
-
     /// Set a [`Bus`] handler to use for all component instances unless overriden for the instance
     #[must_use]
     pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
@@ -99,30 +87,6 @@ impl RuntimeBuilder {
     ) -> Self {
         Self {
             handler: self.handler.incoming_http(incoming_http),
-            ..self
-        }
-    }
-
-    /// Set a [`KeyValueAtomics`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn keyvalue_atomics(
-        self,
-        keyvalue_atomics: Arc<impl KeyValueAtomics + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.keyvalue_atomics(keyvalue_atomics),
-            ..self
-        }
-    }
-
-    /// Set a [`KeyValueStore`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn keyvalue_store(
-        self,
-        keyvalue_store: Arc<impl KeyValueStore + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.keyvalue_store(keyvalue_store),
             ..self
         }
     }

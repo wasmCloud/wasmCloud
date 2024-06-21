@@ -4,9 +4,12 @@ mod handler;
 pub mod config;
 /// wasmCloud host configuration
 pub mod host_config;
+use core::iter::zip;
+use std::marker::PhantomData;
 
 pub use self::host_config::Host as HostConfig;
 
+use async_nats::HeaderMap;
 use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
@@ -20,6 +23,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use wasmcloud_runtime::capability::IncomingHttp as _;
+use wasmcloud_runtime::capability::MessagingHandler;
+use wasmtime_wasi_http::body::HyperOutgoingBody;
+use wit_parser::{Function, Type};
+use wrpc_introspect::rpc_func_name;
+use wrpc_runtime_wasmtime::read_value;
+use wrpc_transport::Index;
+use wrpc_transport::Invoke;
+use wrpc_transport::Session;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv::{Entry as KvEntry, Operation, Store};
@@ -27,13 +40,13 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
-use futures::future::Either;
-use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
+use futures::future::{try_join_all, Either};
+use futures::stream::{select_all, unfold, AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
+use tokio::io::{stderr, AsyncRead, AsyncWrite};
 use tokio::sync::{oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, timeout, timeout_at, Instant};
@@ -50,14 +63,14 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{ComponentId, HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::{messaging, IncomingHttp as _, MessagingHandler as _};
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
-use wasmtime_wasi_http::body::HyperOutgoingBody;
-use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
+use wrpc_transport::Invocation;
+use wrpc_transport::Serve;
+use wrpc_transport_nats::{Client, ParamWriter, Reader, SubjectWriter};
 
-use crate::bindings::wasmcloud;
+use crate::wrpc::{AcceptedInvocation, ClientBuilder, InvocationType};
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType,
@@ -65,7 +78,6 @@ use crate::{
 
 use self::config::{BundleGenerator, ConfigBundle};
 use self::handler::Handler;
-
 #[derive(Debug)]
 struct Queue {
     all_streams: SelectAll<async_nats::Subscriber>,
@@ -200,60 +212,33 @@ impl Deref for Component {
     }
 }
 
-// This enum is used to differentiate between component export invocations
-enum InvocationParams {
-    Custom {
-        instance: Arc<String>,
-        name: Arc<String>,
-        params: Vec<wrpc_transport::Value>,
-    },
-    IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
-    MessagingHandleMessage(wasmcloud::messaging::types::BrokerMessage),
-}
-
-impl std::fmt::Debug for InvocationParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InvocationParams::Custom { instance, name, .. } => f
-                .debug_struct("Custom")
-                .field("interface", instance)
-                .field("function", name)
-                .finish(),
-            InvocationParams::IncomingHttpHandle(_) => f.debug_tuple("IncomingHttpHandle").finish(),
-            InvocationParams::MessagingHandleMessage(_) => {
-                f.debug_tuple("MessagingHandleMessage").finish()
-            }
-        }
-    }
-}
-
 impl Component {
     /// Handle an incoming wRPC request to invoke an export on this component instance.
     #[instrument(
         level = "info",
-        skip(self, context, result_subject, transmitter),
+        skip(self, incoming, outgoing),
         fields(
             component_id = self.id.as_str(),
             component_ref = self.image_reference.as_str())
     )]
     async fn handle_invocation(
         &self,
-        context: Option<async_nats::HeaderMap>,
-        params: InvocationParams,
-        result_subject: wrpc_transport_nats::Subject,
-        transmitter: &wasmcloud_core::wrpc::TransmitterWithHeaders,
+        invoke_type: &InvocationType,
+        context: Option<HeaderMap>,
+        incoming: Reader,
+        outgoing: SubjectWriter,
     ) -> anyhow::Result<()> {
-        let (interface, function) = match params {
-            InvocationParams::Custom {
+        let (interface, function) = match invoke_type {
+            InvocationType::Custom {
                 ref instance,
                 ref name,
                 ..
             } => (instance.to_string(), name.to_string()),
-            InvocationParams::IncomingHttpHandle(_) => (
+            InvocationType::IncomingHttpHandle(_) => (
                 "wasi:http/incoming-handler".to_string(),
                 "handle".to_string(),
             ),
-            InvocationParams::MessagingHandleMessage(_) => (
+            InvocationType::MessagingHandleMessage(_) => (
                 "wasmcloud:messaging/handler".to_string(),
                 "handle-message".to_string(),
             ),
@@ -269,8 +254,8 @@ impl Component {
                 &self.image_reference,
                 &self.annotations,
                 self.claims(),
-                interface,
-                function,
+                interface.clone(),
+                function.clone(),
             )
             .await?;
         ensure!(
@@ -298,6 +283,7 @@ impl Component {
         let mut component = self
             .instantiate()
             .context("failed to instantiate component")?;
+
         component
             .stderr(stderr())
             .await
@@ -319,102 +305,98 @@ impl Component {
         ];
 
         let start_at = Instant::now();
-        match params {
-            InvocationParams::Custom {
-                instance,
-                name,
-                params,
-            } => {
-                let res = component
-                    .call(&instance, &name, params)
+
+        match invoke_type {
+            InvocationType::Custom { .. } => {
+                let call = component
+                    .call::<Client>(&interface, &function, incoming, outgoing)
                     .await
                     .context("failed to call component");
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-                attributes.push(KeyValue::new("operation", format!("{instance}/{name}")));
-                self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                let results = res?;
-                transmitter
-                    .transmit_tuple_dynamic(result_subject, results)
-                    .await
-            }
-            InvocationParams::IncomingHttpHandle(request) => {
-                let component = component
-                    .into_incoming_http()
-                    .await
-                    .context("failed to instantiate `wasi:http/incoming-handler`")?;
-                let (response_tx, response_rx) = oneshot::channel::<
-                    Result<
-                        http::Response<HyperOutgoingBody>,
-                        wasmtime_wasi_http::bindings::http::types::ErrorCode,
-                    >,
-                >();
-                let res = try_join!(
-                    async {
-                        component
-                            .handle(request, response_tx)
-                            .await
-                            .context("failed to call `wasi:http/incoming-handler.handle`")
-                    },
-                    async {
-                        let res = match response_rx.await.context("failed to receive response")? {
-                            Ok(resp) => {
-                                let (resp, errors) =
-                                    wrpc_interface_http::try_http_to_outgoing_response(resp)
-                                        .context("failed to convert response")?;
-                                // TODO: Handle body errors better
-                                spawn(errors.for_each(|err| async move {
-                                    error!(?err, "body error encountered");
-                                }));
-                                Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
-                            }
-                            Err(err) => Err(err.into()),
-                        };
-                        transmitter
-                            .transmit_static(result_subject, res)
-                            .await
-                            .context("failed to transmit response")
-                    }
-                );
+
                 let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
                 attributes.push(KeyValue::new(
                     "operation",
-                    "wrpc:http/incoming-handler.handle",
+                    format!("{interface}/{function}"),
                 ));
                 self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                res?;
+                    .record_component_invocation(elapsed, &attributes, call.is_err());
+                call?;
+
                 Ok(())
             }
-            InvocationParams::MessagingHandleMessage(
-                wasmcloud::messaging::types::BrokerMessage {
-                    subject,
-                    body,
-                    reply_to,
-                },
-            ) => {
-                let component = component
-                    .into_messaging_handler()
-                    .await
-                    .context("failed to instantiate `wasmcloud:messaging/handler`")?;
-                let res = component
-                    .handle_message(&messaging::types::BrokerMessage {
-                        subject,
-                        body,
-                        reply_to,
-                    })
-                    .await
-                    .context("failed to call `wasmcloud:messaging/handler.handle-message`");
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-                attributes.push(KeyValue::new(
-                    "operation",
-                    "wasmcloud:messaging/handler.handle-message",
-                ));
-                self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                let res = res?;
-                transmitter.transmit_static(result_subject, res).await
-            }
+            // TODO - How are these specific cases going to be served
+            // over wrpc with the new serve function? What needs to change?
+            _ => todo!(), // InvocationType::IncomingHttpHandle(request) => {
+                          //     let component = component
+                          //         .into_incoming_http()
+                          //         .await
+                          //         .context("failed to instantiate `wasi:http/incoming-handler`")?;
+                          //     let (response_tx, response_rx) = oneshot::channel::<
+                          //         Result<
+                          //             http::Response<HyperOutgoingBody>,
+                          //             wasmtime_wasi_http::bindings::http::types::ErrorCode,
+                          //         >,
+                          //     >();
+                          //     let res = try_join!(
+                          //         async {
+                          //             component
+                          //                 .handle(*request, response_tx)
+                          //                 .await
+                          //                 .context("failed to call `wasi:http/incoming-handler.handle`")
+                          //         },
+                          //         async {
+                          //             let res = match response_rx.await.context("failed to receive response")? {
+                          //                 Ok(resp) => {
+                          //                     // Handle the response directly
+                          //                     Ok(resp)
+                          //                 }
+                          //                 Err(err) => Err(err.into()),
+                          //             };
+                          //             // transmitter
+                          //             //     .transmit_static(result_subject, res)
+                          //             //     .await
+                          //             //     .context("failed to transmit response")
+                          //         }
+                          //     );
+                          //     let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+                          //     attributes.push(KeyValue::new(
+                          //         "operation",
+                          //         "wasi:http/incoming-handler.handle",
+                          //     ));
+                          //     self.metrics
+                          //         .record_component_invocation(elapsed, &attributes, res.is_err());
+                          //     res?;
+                          //     Ok(())
+                          // }
+                          // InvocationType::MessagingHandleMessage(
+                          //     wasmcloud::messaging::types::BrokerMessage {
+                          //         subject,
+                          //         body,
+                          //         reply_to,
+                          //     },
+                          // ) => {
+                          //     let component = component
+                          //         .into_messaging_handler()
+                          //         .await
+                          //         .context("failed to instantiate `wasmcloud:messaging/handler`")?;
+                          //     let res = component
+                          //         .handle_message(&messaging::types::BrokerMessage {
+                          //             subject,
+                          //             body,
+                          //             reply_to,
+                          //         })
+                          //         .await
+                          //         .context("failed to call `wasmcloud:messaging/handler.handle-message`");
+                          //     let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
+                          //     attributes.push(KeyValue::new(
+                          //         "operation",
+                          //         "wasmcloud:messaging/handler.handle-message",
+                          //     ));
+                          //     self.metrics
+                          //         .record_component_invocation(elapsed, &attributes, res.is_err());
+                          //     let res = res?;
+                          //     transmitter.transmit_static(result_subject, res).await
+                          // }
         }
     }
 }
@@ -1211,7 +1193,7 @@ impl Host {
         .await
     }
 
-    /// Instantiate an component
+    /// Instantiate a component
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
     #[instrument(level = "debug", skip_all)]
     async fn instantiate_component(
@@ -1224,109 +1206,130 @@ impl Host {
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
         trace!(
-            component_ref = image_reference,
-            max_instances,
+            component_ref = %image_reference,
+            max_instances = %max_instances,
             "instantiating component"
         );
 
-        let wrpc = wasmcloud_core::wrpc::Client::new(
-            self.rpc_nats.clone(),
-            &self.host_config.lattice,
-            &id,
-            // NOTE(brooksmtownsend): We only use this client for serving functions,
-            // and the headers will be set by the incoming invocation.
-            async_nats::HeaderMap::new(),
-            Duration::default(), // this client should not invoke anything
-        );
-        let mut exports: Vec<Pin<Box<dyn Stream<Item = _> + Send>>> = Vec::new();
-        for (instance, functions) in component.exports().iter() {
-            match instance.as_str() {
-                "wasi:http/incoming-handler@0.2.0" => {
-                    use wrpc_interface_http::IncomingHandler;
+        let mut names_map: HashMap<String, Arc<String>> = HashMap::new();
+        let mut instances_map: HashMap<String, Arc<String>> = HashMap::new();
+        let func_paths_map = Arc::clone(&handler.func_paths_map);
 
-                    let invocations = wrpc
-                        .serve_handle_wasmtime()
-                        .await
-                        .context("failed to serve `wrpc:http/incoming-handler.handle`")?;
-                    exports.push(Box::pin(invocations.map(move |invocation| {
-                        invocation.map(
-                            |AcceptedInvocation {
-                                 context,
-                                 params,
-                                 result_subject,
-                                 error_subject,
-                                 transmitter,
-                             }| AcceptedInvocation {
-                                context,
-                                params: InvocationParams::IncomingHttpHandle(params.0),
-                                result_subject,
-                                error_subject,
-                                transmitter,
-                            },
-                        )
-                    })));
-                }
-                "wasmcloud:messaging/handler@0.2.0" => {
-                    let invocations = wrpc
-                        .serve_static(instance, "handle-message")
-                        .await
-                        .context("failed to serve `wasmcloud:messaging/handler.handle-message`")?;
-                    exports.push(Box::pin(invocations.map(move |invocation| {
-                        invocation.map(
-                            |AcceptedInvocation {
-                                 context,
-                                 params,
-                                 result_subject,
-                                 error_subject,
-                                 transmitter,
-                             }| AcceptedInvocation {
-                                context,
-                                params: InvocationParams::MessagingHandleMessage(params),
-                                result_subject,
-                                error_subject,
-                                transmitter,
-                            },
-                        )
-                    })));
-                }
-                _ => {
-                    let instance = Arc::new(instance.to_string());
-                    for (name, function) in functions {
-                        if let wrpc_types::DynamicFunction::Static { params, .. } = function {
-                            // TODO(#1220): In order to implement invocation signing and response verification, we can override the
-                            // wrpc_transport::Invocation and wrpc_transport::Client trait in order to wrap the invocation with necessary
-                            // logic to verify the incoming invocations and sign the outgoing responses.
-                            trace!(?instance, name, "serving wrpc function export");
-                            let invocations = wrpc
-                                .serve_dynamic(&instance, name, params.clone())
-                                .await
-                                .context("failed to serve custom function export")?;
-                            let name = Arc::new(name.to_string());
-                            let instance = Arc::clone(&instance);
-                            exports.push(Box::pin(invocations.map(move |invocation| {
-                                invocation.map(
-                                    |AcceptedInvocation {
-                                         context,
-                                         params,
-                                         result_subject,
-                                         error_subject,
-                                         transmitter,
-                                     }| AcceptedInvocation {
-                                        context,
-                                        params: InvocationParams::Custom {
-                                            instance: Arc::clone(&instance),
-                                            name: Arc::clone(&name),
-                                            params,
+        let mut func_paths_refs_holder: Vec<Arc<[Option<usize>]>> = Vec::new();
+        let mut temp_func_paths_refs_map: HashMap<
+            (Arc<String>, Arc<String>),
+            Vec<Arc<[Option<usize>]>>,
+        > = HashMap::new();
+
+        for (instance, functions) in component.exports().iter() {
+            let instance_arc = Arc::new(instance.clone());
+            instances_map.insert(instance.clone(), Arc::clone(&instance_arc));
+            for (name, _) in functions {
+                let name_arc = Arc::new(name.clone());
+                names_map.insert(name.clone(), Arc::clone(&name_arc));
+
+                let func_paths = func_paths_map
+                    .get(&(Arc::clone(&instance_arc), Arc::clone(&name_arc)))
+                    .unwrap()
+                    .clone();
+
+                let new_paths: Vec<_> = func_paths.iter().cloned().collect();
+                func_paths_refs_holder.extend(new_paths.iter().cloned());
+
+                temp_func_paths_refs_map.insert(
+                    (Arc::clone(&instance_arc), Arc::clone(&name_arc)),
+                    new_paths,
+                );
+            }
+        }
+
+        let func_paths_refs_map: HashMap<
+            (Arc<String>, Arc<String>),
+            Arc<Vec<Arc<[Option<usize>]>>>,
+        > = temp_func_paths_refs_map
+            .into_iter()
+            .map(|(key, value)| (key, Arc::new(value)))
+            .collect();
+
+        let client_builder =
+            ClientBuilder::new(self.rpc_nats.clone(), &self.host_config.lattice, &id);
+        let wrpc = client_builder.build();
+
+        let mut exports: Vec<
+            Pin<
+                Box<
+                    dyn Stream<
+                            Item = Result<
+                                AcceptedInvocation<
+                                    SubjectWriter,
+                                    wrpc_transport_nats::Reader,
+                                    wrpc_transport_nats::Session<SubjectWriter>,
+                                    SubjectWriter,
+                                    wrpc_transport_nats::Reader,
+                                >,
+                                anyhow::Error,
+                            >,
+                        > + Send,
+                >,
+            >,
+        > = Vec::new();
+
+        for (instance, instance_arc) in instances_map.iter() {
+            let functions = component.exports().get(instance.as_str()).unwrap();
+            for name in functions.keys() {
+                let name_arc = names_map.get(name).unwrap();
+                let func_paths_refs = func_paths_refs_map
+                    .get(&(Arc::clone(&instance_arc), Arc::clone(&name_arc)))
+                    .unwrap();
+
+                let func_paths_refs_vec: Vec<Vec<Option<usize>>> =
+                    func_paths_refs.iter().map(|arc| arc.to_vec()).collect();
+
+                let invocations = wrpc
+                    .clone()
+                    .serve(
+                        instance_arc.to_string(),
+                        name_arc.to_string(),
+                        func_paths_refs_vec,
+                    )
+                    .await
+                    .context(format!("failed to serve `{}`", name))?;
+
+                exports.push(Box::pin(invocations.filter_map({
+                    let instance_arc = Arc::clone(&instance_arc);
+                    let name_arc = Arc::clone(&name_arc);
+
+                    move |invocation| {
+                        let instance_arc = Arc::clone(&instance_arc);
+                        let name_arc = Arc::clone(&name_arc);
+
+                        async move {
+                            match invocation {
+                                Ok((context, invke)) => Some(Ok(AcceptedInvocation::new(
+                                    context,
+                                    match instance_arc.as_str() {
+                                        // TODO - change once wrpc support is fully finalized
+                                        // "wasi:http/incoming-handler@0.2.0" => {
+                                        //     InvocationType::IncomingHttpHandle
+                                        // }
+                                        // "wasmcloud:messaging/handler@0.2.0" => {
+                                        //     InvocationType::MessagingHandleMessage()
+                                        // }
+                                        _ => InvocationType::Custom {
+                                            instance: Arc::clone(&instance_arc),
+                                            name: Arc::clone(&name_arc),
                                         },
-                                        result_subject,
-                                        error_subject,
-                                        transmitter,
                                     },
-                                )
-                            })));
+                                    invke,
+                                ))),
+                                Err(err) => {
+                                    error!(?err, "failed to accept invocation");
+                                    None
+                                }
+                            }
                         }
                     }
-                }
+                })));
             }
         }
 
@@ -1337,90 +1340,94 @@ impl Host {
             component,
             id,
             calls: calls_abort,
-            handler,
+            handler: handler,
             annotations: annotations.clone(),
             max_instances,
             image_reference,
             metrics: Arc::clone(&self.metrics),
             policy_manager: Arc::clone(&self.policy_manager),
         });
+        let component_clone = Arc::clone(&component);
         spawn({
-            let component = Arc::clone(&component);
+            let component = Arc::clone(&component_clone);
             Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
                 max_instances.get(),
                 move |invocation| {
                     let component = Arc::clone(&component);
                     async move {
-                        let AcceptedInvocation {
-                            context,
-                            params,
-                            result_subject,
-                            error_subject,
-                            transmitter,
-                        } = match invocation {
+                        let invocation = match invocation {
                             Ok(invocation) => invocation,
                             Err(err) => {
-                                error!(?err, "failed to accept invocation");
+                                error!(err = ?&err as &dyn std::fmt::Debug, "failed to accept invocation");
                                 return;
                             }
                         };
+
+                        let AcceptedInvocation {
+                            context,
+                            invoke_type,
+                            invocation,
+                            ..
+                        } = invocation;
+                        let Invocation {
+                            outgoing,
+                            incoming,
+                            session,
+                        } = invocation;
+
                         match timeout(
                             max_execution_time,
                             tokio::spawn({
-                                let transmitter = transmitter.clone();
+                                let component = Arc::clone(&component);
                                 async move {
                                     component
                                         .handle_invocation(
+                                            &invoke_type,
                                             context,
-                                            params,
-                                            result_subject,
-                                            &transmitter,
+                                            incoming,
+                                            outgoing,
                                         )
                                         .await
+                                        .map_err(|e| {
+                                            Box::<dyn std::error::Error + Send + Sync>::from(e)
+                                        })
                                 }
                             }),
                         )
                         .await
                         {
                             Err(err) => {
-                                // Tokio task did not complete within `max_execution_time`
-                                // This is most likely a bug in the runtime, but may occasionally
-                                // happen if the wasmtime epoch interrupt is too slow in shutting
-                                // down the component.
                                 error!(?err, "invocation handling timed out");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
+                                if let Err(err) = session
+                                    .finish(Err("invocation handling timed out".to_string()))
                                     .await
                                 {
-                                    error!(?err, "failed to transmit invocation task timeout error to invoker");
-                                }
-                            },
-                            Ok(Err(err)) => {
-                                // Tokio task panicked. This is most definitely a bug.
-                                error!(?err, "invocation task panicked");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit invocation task panic error to invoker");
-                                }
-                            },
-                            Ok(Ok(Err(err))) => {
-                                // Component invocation failed - this is the error returned by
-                                // `handle_invocation`.
-                                // This could happen for a variety of reasons, for example:
-                                // - if the component failed to instantiate
-                                // - if the invocation exceeded `max_execution_time`
-                                // - etc...
-                                error!(?err, "failed to handle invocation");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit error to invoker");
+                                    error!(?err, "failed to finish session with timeout error");
                                 }
                             }
-                            Ok(Ok(Ok(()))) => {}
+                            Ok(Err(err)) => {
+                                error!(?err, "invocation task panicked");
+                                if let Err(err) = session
+                                    .finish(Err("invocation task panicked".to_string()))
+                                    .await
+                                {
+                                    error!(?err, "failed to finish session with panic error");
+                                }
+                            }
+                            Ok(Ok(Err(err))) => {
+                                error!(?err, "failed to handle invocation");
+                                if let Err(err) = session
+                                    .finish(Err(format!("failed to handle invocation: {err}")))
+                                    .await
+                                {
+                                    error!(?err, "failed to finish session with invocation error");
+                                }
+                            }
+                            Ok(Ok(Ok(()))) => {
+                                if let Err(err) = session.finish(Ok(())).await {
+                                    error!(?err, "failed to finish session successfully");
+                                }
+                            }
                         }
                     }
                 },
@@ -1458,6 +1465,31 @@ impl Host {
         self.store_component_spec(&component_id, &component_spec)
             .await?;
 
+        let mut func_paths_map: HashMap<
+            (Arc<String>, Arc<String>),
+            Arc<Vec<Arc<[Option<usize>]>>>,
+        > = HashMap::new();
+
+        for (instance, functions) in component.exports().iter() {
+            let instance = Arc::new(instance.clone());
+            for (name, _) in functions {
+                let name_arc = Arc::new(name.clone());
+                let paths = component
+                    .paths()
+                    .get(name)
+                    .context(format!("Unable to find function: {}", name))?;
+                func_paths_map.insert(
+                    (Arc::clone(&instance), Arc::clone(&name_arc)),
+                    Arc::new(
+                        paths
+                            .iter()
+                            .map(|p| Arc::from(p.as_slice()))
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+            }
+        }
+
         // Map the imports to pull out the result types of the functions for lookup when invoking them
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
@@ -1467,7 +1499,9 @@ impl Host {
             targets: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             polyfills: Arc::clone(component.polyfills()),
+            exports: Arc::clone(component.exports()),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
+            func_paths_map: Arc::new(func_paths_map),
         };
 
         let component = self
@@ -1477,24 +1511,10 @@ impl Host {
                 component_id.clone(),
                 max_instances,
                 component,
-                handler.clone(),
+                handler,
             )
             .await
             .context("failed to instantiate component")?;
-
-        info!(component_ref, "component started");
-        self.publish_event(
-            "component_scaled",
-            event::component_scaled(
-                claims.as_ref(),
-                &annotations,
-                &self.host_key.public_key(),
-                max_instances,
-                &component_ref,
-                &component_id,
-            ),
-        )
-        .await?;
 
         Ok(entry.insert(component))
     }
@@ -3570,6 +3590,103 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
         .collect()
 }
 
+// async fn gather_streams(
+//     component: &wasmcloud_runtime::Component,
+//     instances_map: Arc<HashMap<String, Arc<String>>>,
+//     names_map: Arc<HashMap<String, Arc<String>>>,
+//     func_paths_refs_map: Arc<HashMap<(Arc<String>, Arc<String>), &[&[Option<usize>]]>>,
+//     wrpc: Arc<Client>,
+// ) -> anyhow::Result<
+//     Vec<
+//         Pin<
+//             Box<
+//                 dyn Stream<
+//                         Item = Result<
+//                             AcceptedInvocation<
+//                                 SubjectWriter,
+//                                 wrpc_transport_nats::Reader,
+//                                 wrpc_transport_nats::Session<SubjectWriter>,
+//                                 SubjectWriter,
+//                                 wrpc_transport_nats::Reader,
+//                             >,
+//                             anyhow::Error,
+//                         >,
+//                     > + Send,
+//             >,
+//         >,
+//     >,
+// > {
+//     let mut exports: Vec<
+//         Pin<
+//             Box<
+//                 dyn Stream<
+//                         Item = Result<
+//                             AcceptedInvocation<
+//                                 SubjectWriter,
+//                                 wrpc_transport_nats::Reader,
+//                                 wrpc_transport_nats::Session<SubjectWriter>,
+//                                 SubjectWriter,
+//                                 wrpc_transport_nats::Reader,
+//                             >,
+//                             anyhow::Error,
+//                         >,
+//                     > + Send,
+//             >,
+//         >,
+//     > = Vec::new();
+
+//     for (instance, instance_arc) in instances_map.iter() {
+//         let functions = component.exports().get(instance.as_str()).unwrap();
+//         for (name, _) in functions {
+//             let name_arc = Arc::clone(names_map.get(name).unwrap());
+//             let func_paths_refs = func_paths_refs_map
+//                 .get(&(Arc::clone(&instance_arc), Arc::clone(&name_arc)))
+//                 .unwrap();
+
+//             let invocations = wrpc
+//                 .serve(instance_arc, &name_arc, func_paths_refs)
+//                 .await
+//                 .context(format!("failed to serve `{}`", name))?;
+
+//             exports.push(Box::pin(invocations.filter_map({
+//                 let instance_arc = Arc::clone(instance_arc);
+//                 let name_arc = Arc::clone(&name_arc);
+
+//                 move |invocation| {
+//                     let instance_arc = Arc::clone(&instance_arc);
+//                     let name_arc = Arc::clone(&name_arc);
+
+//                     async move {
+//                         match invocation {
+//                             Ok((context, invke)) => Some(Ok(AcceptedInvocation::new(
+//                                 context,
+//                                 match instance_arc.as_str() {
+//                                     "wasi:http/incoming-handler@0.2.0" => {
+//                                         InvocationType::IncomingHttpHandle
+//                                     }
+//                                     "wasmcloud:messaging/handler@0.2.0" => {
+//                                         InvocationType::MessagingHandleMessage
+//                                     }
+//                                     _ => InvocationType::Custom {
+//                                         instance: Arc::clone(&instance_arc),
+//                                         name: name_arc,
+//                                     },
+//                                 },
+//                                 invke,
+//                             ))),
+//                             Err(err) => {
+//                                 error!(?err, "failed to accept invocation");
+//                                 None
+//                             }
+//                         }
+//                     }
+//                 }
+//             })));
+//         }
+//     }
+
+//     Ok(exports)
+// }
 #[cfg(test)]
 mod test {
     // Ensure that the helper function to translate a list of links into a map of imports works as expected

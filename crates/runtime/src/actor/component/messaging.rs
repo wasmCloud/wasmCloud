@@ -15,6 +15,7 @@ pub mod messaging_handler_bindings {
     wasmtime::component::bindgen!({
         world: "messaging-handler",
         async: true,
+        trappable_imports: true,
         with: {
            "wasmcloud:messaging/types": crate::capability::messaging::types,
         },

@@ -1,5 +1,5 @@
 use super::logging::logging;
-use super::{blobstore, config, format_opt, keyvalue, messaging};
+use super::{config, format_opt, messaging};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
@@ -12,15 +12,22 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
 use tokio::sync::oneshot;
 use tracing::{error, instrument, trace};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
-use wrpc_transport::IncomingInputStream;
 
 use wasmcloud_core::CallTargetInterface;
+use wasmtime_wasi_http::types::OutgoingRequestConfig;
+use wrpc_transport::Invocation;
+use wrpc_transport_nats::{ClientErrorWriter, ParamWriter, Reader};
+
+pub type IncomingInputStream = Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin>;
+
+use crate::capability::bindgen::wasi::{blobstore, keyvalue};
 
 #[derive(Clone, Default)]
 pub struct Handler {
@@ -380,8 +387,14 @@ pub trait Bus {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>>;
+        params: BytesMut,
+        func_paths: Vec<Vec<Option<usize>>>,
+    ) -> anyhow::Result<
+        Invocation<ParamWriter, Reader, wrpc_transport_nats::Session<ClientErrorWriter>>,
+    >;
+
+    /// Get function paths for a given instance and name
+    fn get_func_paths(&self, instance: &str, name: &str) -> Option<Arc<Vec<Arc<[Option<usize>]>>>>;
 }
 
 #[async_trait]
@@ -497,7 +510,8 @@ pub trait OutgoingHttp {
     /// Handle `wasi:http/outgoing-handler`
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
@@ -666,11 +680,24 @@ impl Bus for Handler {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: BytesMut,
+        paths: Vec<Vec<Option<usize>>>,
+    ) -> anyhow::Result<
+        Invocation<ParamWriter, Reader, wrpc_transport_nats::Session<ClientErrorWriter>>,
+    > {
         self.proxy_bus("wasmcloud:bus/host.call")?
-            .call(target, instance, name, params)
+            .call(target, instance, name, params, paths)
             .await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    fn get_func_paths(&self, instance: &str, name: &str) -> Option<Arc<Vec<Arc<[Option<usize>]>>>> {
+        if let Some(ref bus) = self.bus {
+            bus.get_func_paths(instance, name)
+        } else {
+            error!("host cannot identify the function call paths");
+            None
+        }
     }
 }
 
@@ -839,7 +866,8 @@ impl OutgoingHttp for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        options: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
@@ -851,7 +879,7 @@ impl OutgoingHttp for Handler {
             "OutgoingHttp",
             "wasi:http/outgoing-handler.handle",
         )?
-        .handle(request)
+        .handle(request, options)
         .await
     }
 }
