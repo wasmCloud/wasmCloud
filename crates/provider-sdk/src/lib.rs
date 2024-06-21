@@ -104,6 +104,24 @@ pub struct Context {
     pub tracing: HashMap<String, String>,
 }
 
+impl Context {
+    /// Get link name from the request.
+    ///
+    /// While link name should in theory *always* be present, it is not natively included in [`Context`] yet,
+    /// so we must retrieve it from headers on the request.
+    ///
+    /// Note that in certain (older) versions of wasmCloud it is possible for the link name to be missing
+    /// though incredibly unlikely (basically, due to a bug). In the event that the link name was *not*
+    /// properly stored on the context 'default' (the default link name) is returned as the link name.
+    #[must_use]
+    pub fn link_name(&self) -> &str {
+        self.tracing
+            .get("link-name")
+            .map(String::as_str)
+            .unwrap_or("default")
+    }
+}
+
 /// Configuration of a link that is passed to a provider
 #[non_exhaustive]
 pub struct LinkConfig<'a> {
