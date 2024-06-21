@@ -1,5 +1,5 @@
-use crate::actor::claims;
 use crate::capability::{builtin, Bus, Interfaces};
+use crate::component::claims;
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
