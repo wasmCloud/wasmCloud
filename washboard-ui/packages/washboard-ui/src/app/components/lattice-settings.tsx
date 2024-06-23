@@ -22,7 +22,7 @@ const formSchema = z.object({
     ),
   latticeId: z.string(),
   ctlTopicPrefix: z.string(),
-  retryCount: z.number().min(0),
+  retryCount: z.number().or(z.string()).pipe(z.coerce.number().min(0)),
 });
 
 type LatticeFormInput = z.input<typeof formSchema>;
