@@ -47,7 +47,7 @@ pub struct HostData {
     /// Merged named configuration set for this provider at runtime
     #[serde(default)]
     pub config: HashMap<String, String>,
-    /// Merged named configuration set for this provider at runtime
+    /// Secrets given to this provider at runtime
     #[serde(default)]
     pub secrets: HashMap<String, SecretValue>,
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.

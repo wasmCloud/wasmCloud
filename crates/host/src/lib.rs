@@ -147,7 +147,7 @@ pub async fn fetch_provider(
     host_id: impl AsRef<str>,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
-) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
+) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
     match ResourceRef::try_from(provider_ref.as_ref())? {
         ResourceRef::File(provider_path) => {
             ensure!(
