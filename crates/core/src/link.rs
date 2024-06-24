@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
+use crate::{
+    secrets::SecretValue, ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage,
+};
 
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
@@ -15,7 +17,7 @@ pub type LinkName = String;
 /// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct InterfaceLinkDefinition {
     /// Source identifier for the link
     pub source_id: ComponentId,
@@ -36,6 +38,12 @@ pub struct InterfaceLinkDefinition {
     /// The configuration to give to the target for this link
     #[serde(default)]
     pub target_config: HashMap<String, String>,
+    /// The secrets to give to the source of this link
+    #[serde(default)]
+    pub source_secrets: HashMap<String, SecretValue>,
+    /// The secrets to give to the target of this link
+    #[serde(default)]
+    pub target_secrets: HashMap<String, SecretValue>,
 }
 
 /// Helper function to provide a default link name
