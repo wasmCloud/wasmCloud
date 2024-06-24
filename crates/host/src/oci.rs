@@ -248,7 +248,7 @@ impl Fetcher {
         &self,
         oci_ref: impl AsRef<str>,
         host_id: impl AsRef<str>,
-    ) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
+    ) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
         let path = self
             .fetch_path(
                 oci_ref.as_ref(),
