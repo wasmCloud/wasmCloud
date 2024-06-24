@@ -347,24 +347,11 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         link_definitions,
         config,
         default_rpc_timeout_ms: _,
-        structured_logging,
-        log_level,
-        otel_config,
         link_name: _link_name,
+        ..
     } = spawn_blocking(load_host_data).await.map_err(|e| {
         ProviderInitError::Initialization(format!("failed to load host data: {e}"))
     })??;
-
-    let res = wasmcloud_tracing::configure_observability(
-        name,
-        otel_config,
-        *structured_logging,
-        None::<&str>,
-        log_level.as_ref(),
-    );
-    if let Err(err) = res {
-        error!(?err, "failed to configure tracing");
-    }
 
     let (quit_tx, quit_rx) = broadcast::channel(1);
 
