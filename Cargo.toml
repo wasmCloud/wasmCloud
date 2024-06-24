@@ -103,6 +103,7 @@ nkeys = { workspace = true }
 redis = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
+tracing-subscriber = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-host = { workspace = true }
 wasmcloud-provider-blobstore-azure = { workspace = true, optional = true }
