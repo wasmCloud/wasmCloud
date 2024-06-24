@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::link::InterfaceLinkDefinition;
 use crate::logging::Level;
 use crate::otel::OtelConfig;
+use crate::secrets::SecretValue;
 use crate::wit::{deserialize_wit_map, serialize_wit_map, WitMap};
 
 /// Environment settings for initializing a capability provider
@@ -46,6 +47,9 @@ pub struct HostData {
     /// Merged named configuration set for this provider at runtime
     #[serde(default)]
     pub config: HashMap<String, String>,
+    /// Merged named configuration set for this provider at runtime
+    #[serde(default)]
+    pub secrets: HashMap<String, SecretValue>,
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_rpc_timeout_ms: Option<u64>,
@@ -55,5 +59,6 @@ pub struct HostData {
     /// The log level providers should log at
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<Level>,
+    #[serde(default)]
     pub otel_config: OtelConfig,
 }
