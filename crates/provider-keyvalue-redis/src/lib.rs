@@ -18,7 +18,9 @@ use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 
+use tracing_subscriber::util::SubscriberInitExt as _;
 use wasmcloud_provider_sdk::core::HostData;
+use wasmcloud_provider_sdk::wasmcloud_tracing::configure_observability;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
     Provider,
@@ -56,10 +58,38 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 impl KvRedisProvider {
+    pub fn name() -> &'static str {
+        "keyvalue-redis-provider"
+    }
+
     pub async fn run() -> anyhow::Result<()> {
-        let HostData { config, .. } = load_host_data().context("failed to load host data")?;
+        let HostData {
+            config,
+            otel_config,
+            structured_logging,
+            log_level,
+            ..
+        } = load_host_data().context("failed to load host data")?;
+
+        // Init logging
+        //
+        // NOTE: this *must* be done on the provider binary side, to avoid
+        // colliding with the in-process observability setup that happens in the host.
+        let (dispatch, _guard) = configure_observability(
+            KvRedisProvider::name(),
+            otel_config,
+            *structured_logging,
+            std::env::var_os("PROVIDER_KV_REDIS_FLAMEGRAPH_PATH"),
+            log_level.as_ref(),
+        )
+        .context("failed to configure observability")?;
+        dispatch
+            .try_init()
+            .context("failed to init tracing for kv-redis provider")?;
+
         let provider = KvRedisProvider::new(config.clone());
-        let shutdown = run_provider(provider.clone(), "keyvalue-redis-provider")
+
+        let shutdown = run_provider(provider.clone(), KvRedisProvider::name())
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
@@ -351,6 +381,7 @@ impl Provider for KvRedisProvider {
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> anyhow::Result<()> {
+        info!("shutting down");
         let mut aw = self.sources.write().await;
         // empty the component link data and stop all servers
         for (_, conn) in aw.drain() {
