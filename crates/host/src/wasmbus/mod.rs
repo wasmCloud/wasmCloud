@@ -1,6 +1,5 @@
 mod event;
 mod handler;
-mod secrets;
 
 pub mod config;
 /// wasmCloud host configuration
@@ -33,7 +32,6 @@ use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use secrecy::Secret;
-use secrets::fetch_secrets;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
@@ -65,7 +63,7 @@ use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
 use crate::bindings::wasmcloud;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
-    RegistryAuth, RegistryConfig, RegistryType,
+    RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
 };
 
 use self::config::{BundleGenerator, ConfigBundle};
@@ -468,6 +466,7 @@ pub struct Host {
     config_data: Store,
     config_generator: BundleGenerator,
     policy_manager: Arc<PolicyManager>,
+    secrets_manager: Arc<SecretsManager>,
     /// The provider map is a map of provider component ID to provider
     providers: RwLock<HashMap<String, Provider>>,
     registry_config: RwLock<HashMap<String, RegistryConfig>>,
@@ -928,6 +927,12 @@ impl Host {
         )
         .await?;
 
+        let secrets_manager = Arc::new(SecretsManager::new(
+            &config_data,
+            config.secrets_topic_prefix.as_ref(),
+            &ctl_nats,
+        ));
+
         let meter = global::meter_with_version(
             "wasmcloud-host",
             Some(config.version.clone()),
@@ -962,6 +967,7 @@ impl Host {
             config_data: config_data.clone(),
             config_generator,
             policy_manager,
+            secrets_manager,
             providers: RwLock::default(),
             registry_config,
             runtime,
@@ -1789,17 +1795,16 @@ impl Host {
                     .await
                     .context("Unable to fetch requested config")?;
 
-                let secrets = fetch_secrets(
-                    &self.config_data,
-                    secret_names,
-                    self.host_config.secrets_topic_prefix.as_ref(),
-                    &self.ctl_nats,
-                    component.jwt().expect("to get secrets must have this"),
-                    &self.host_token.jwt,
-                    // TODO(#2344): fetch type from wadm crate if we already depend on it
-                    annotations.get("wasmcloud.dev/appspec"),
-                )
-                .await?;
+                let secrets = self
+                    .secrets_manager
+                    .fetch_secrets(
+                        secret_names,
+                        component.jwt(),
+                        &self.host_token.jwt,
+                        // TODO(#2344): fetch const from wadm crate if we already depend on it
+                        annotations.get("wasmcloud.dev/appspec"),
+                    )
+                    .await?;
 
                 if let Err(e) = self
                     .start_component(
