@@ -73,11 +73,11 @@ pub async fn read(
     path: impl AsRef<Path>,
     host_id: impl AsRef<str>,
     provider_ref: impl AsRef<str>,
-) -> anyhow::Result<(PathBuf, Option<jwt::Claims<jwt::CapabilityProvider>>)> {
+) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
     let par = ProviderArchive::try_load_target_from_file(path, &native_target())
         .await
         .map_err(|e| anyhow!(e).context("failed to load provider archive"))?;
-    let claims = par.claims();
+    let claims = par.claims_token();
 
     let exe = cache_path(host_id, provider_ref);
     // Only write the file if it doesn't exist

@@ -27,7 +27,9 @@ pub struct Handler {
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
     pub config_data: Arc<RwLock<ConfigBundle>>,
-    /// Secreeeeeets
+    /// Secrets are cached per-[`Handler`] so they can be used at runtime without consulting the secrets
+    /// backend for each request. The [`SecretValue`] is wrapped in the [`Secret`] type from the `secrecy`
+    /// crate to ensure that it is not accidentally logged or exposed in error messages.
     pub secrets: Arc<RwLock<HashMap<String, Secret<SecretValue>>>>,
     /// The lattice this handler will use for RPC
     pub lattice: Arc<str>,
@@ -298,8 +300,7 @@ impl Secrets for Handler {
         secret: secrets::store::Secret,
     ) -> anyhow::Result<secrets::store::SecretValue> {
         let read_lock = self.secrets.read().await;
-        // TODO(#2344): If I undo the change in using the secret key isntead of the name, do I need to add secret_ as a prefix?
-        let Some(secret_val) = read_lock.get(&format!("{secret}")) else {
+        let Some(secret_val) = read_lock.get(secret.as_str()) else {
             // NOTE(brooksmtownsend): This error case should never happen, since we check for existence during `get` and
             // fail to start the component if the secret is missing. We might hit this during wRPC testing with resources.
             let error_msg = "secret not found to reveal, ensure the secret is declared and associated with this component at startup";

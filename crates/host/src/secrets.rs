@@ -14,19 +14,8 @@ use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
 use wasmcloud_secrets_types::{Application, Context, Secret as WasmcloudSecret, SecretRequest};
 
-// TODO(#2344): Copied from wadm, we should have this in secret-types maybe
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-struct SecretProperty {
-    /// The name of the secret. This is used by a reference by the component or capability to
-    /// get the secret value as a resource.
-    pub name: String,
-    /// The source of the secret. This indicates how to retrieve the secret value from a secrets
-    /// backend and which backend to actually query.
-    pub source: SecretSourceProperty,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-struct SecretSourceProperty {
+struct SecretReference {
     /// The backend to use for retrieving the secret.
     pub backend: String,
     /// The key to use for retrieving the secret from the backend.
@@ -138,11 +127,11 @@ impl Manager {
             // Fetch the secret reference from the config store
             .then(|secret_name| async move {
                 match self.config_store.get(secret_name).await {
-                    Ok(Some(secret)) => serde_json::from_slice::<SecretSourceProperty>(&secret)
-                        .map_err(|e| anyhow::anyhow!(e)),
-                    Ok(None) => Err(anyhow::anyhow!(format!(
+                    Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
+                        .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
+                    Ok(None) => Err(anyhow::anyhow!(
                         "Secret reference {secret_name} not found in config store"
-                    ))),
+                    )),
                     Err(e) => Err(anyhow::anyhow!(e)),
                 }
             })
@@ -156,8 +145,6 @@ impl Manager {
                     version: secret_ref.version.clone(),
                     context: Context {
                         entity_jwt: entity_jwt.to_string(),
-                        // TODO(#2344): It's convenient, but we should consider minting this JWT each
-                        // request
                         host_jwt: host_jwt.to_string(),
                         application: application.cloned().map(|name| Application { name }),
                     },
@@ -190,7 +177,7 @@ impl Manager {
                         string_secret: None,
                         binary_secret: None,
                         ..
-                    } => return Err(anyhow::anyhow!("secret {} did not contain a value", name)),
+                    } => return Err(anyhow::anyhow!("secret {name} did not contain a value")),
                 };
                 Ok(secrets)
             })
