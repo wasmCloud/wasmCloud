@@ -139,10 +139,10 @@ impl Manager {
             .then(|secret_name| async move {
                 match self.config_store.get(secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretSourceProperty>(&secret)
-                        .map_err(|e| anyhow::anyhow!(e)),
-                    Ok(None) => Err(anyhow::anyhow!(format!(
+                        .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
+                    Ok(None) => Err(anyhow::anyhow!(
                         "Secret reference {secret_name} not found in config store"
-                    ))),
+                    )),
                     Err(e) => Err(anyhow::anyhow!(e)),
                 }
             })
