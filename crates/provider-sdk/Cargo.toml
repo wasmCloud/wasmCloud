@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["std"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 ulid = { workspace = true }
