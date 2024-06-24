@@ -17,7 +17,7 @@ use tokio::{
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
 use wascap::{
-    jwt::{CapabilityProvider, Claims},
+    jwt::{CapabilityProvider, Claims, Token},
     prelude::KeyPair,
 };
 
@@ -34,7 +34,7 @@ pub struct ProviderArchive {
     vendor: String,
     rev: Option<i32>,
     ver: Option<String>,
-    claims: Option<Claims<CapabilityProvider>>,
+    token: Option<Token<CapabilityProvider>>,
     json_schema: Option<serde_json::Value>,
 }
 
@@ -48,7 +48,7 @@ impl ProviderArchive {
             vendor: vendor.to_string(),
             rev,
             ver,
-            claims: None,
+            token: None,
             json_schema: None,
         }
     }
@@ -86,7 +86,13 @@ impl ProviderArchive {
     /// or if the archive was loaded from an existing file
     #[must_use]
     pub fn claims(&self) -> Option<Claims<CapabilityProvider>> {
-        self.claims.clone()
+        self.token.as_ref().map(|t| t.claims.clone())
+    }
+
+    /// Returns the embedded claims token associated with this archive.
+    #[must_use]
+    pub fn claims_token(&self) -> Option<Token<CapabilityProvider>> {
+        self.token.clone()
     }
 
     /// Obtains the JSON schema if one was either set explicitly on the structure or loaded from
@@ -209,7 +215,7 @@ impl ProviderArchive {
             Box::new(input) as Box<dyn AsyncRead + Unpin + Sync + Send>
         });
 
-        let mut c: Option<Claims<CapabilityProvider>> = None;
+        let mut token: Option<Token<CapabilityProvider>> = None;
 
         let mut entries = par.entries()?;
 
@@ -224,9 +230,12 @@ impl ProviderArchive {
                 .to_string();
             if file_target == "claims" {
                 tokio::io::copy(&mut entry, &mut bytes).await?;
-                c = Some(Claims::<CapabilityProvider>::decode(std::str::from_utf8(
-                    &bytes,
-                )?)?);
+                let jwt = std::str::from_utf8(&bytes)?;
+                let claims = Some(Claims::<CapabilityProvider>::decode(jwt)?);
+                token = claims.map(|claims| Token {
+                    jwt: jwt.to_string(),
+                    claims,
+                });
             } else if let Some(t) = target {
                 // If loading only a specific target, only copy in bytes if it is the target. We still
                 // need to iterate through the rest so we can be sure to find the claims
@@ -241,7 +250,7 @@ impl ProviderArchive {
             }
         }
 
-        if c.is_none() || libraries.is_empty() {
+        if token.is_none() || libraries.is_empty() {
             // we need at least claims.jwt and one plugin binary
             libraries.clear();
             return Err(
@@ -249,7 +258,8 @@ impl ProviderArchive {
             );
         }
 
-        if let Some(ref cl) = c {
+        if let Some(ref claims_token) = token {
+            let cl = &claims_token.claims;
             let metadata = cl.metadata.as_ref().unwrap();
             let name = cl.name();
             let vendor = metadata.vendor.to_string();
@@ -257,7 +267,7 @@ impl ProviderArchive {
             let ver = metadata.ver.clone();
             let json_schema = metadata.config_schema.clone();
 
-            validate_hashes(&libraries, c.as_ref().unwrap())?;
+            validate_hashes(&libraries, cl)?;
 
             Ok(ProviderArchive {
                 libraries,
@@ -265,7 +275,7 @@ impl ProviderArchive {
                 vendor,
                 rev,
                 ver,
-                claims: c,
+                token,
                 json_schema,
             })
         } else {
@@ -315,15 +325,18 @@ impl ProviderArchive {
         if let Some(schema) = self.json_schema.clone() {
             claims.metadata.as_mut().unwrap().config_schema = Some(schema);
         }
-        self.claims = Some(claims.clone());
 
-        let claims_file = claims.encode(issuer)?;
+        let claims_jwt = claims.encode(issuer)?;
+        self.token = Some(Token {
+            jwt: claims_jwt.clone(),
+            claims,
+        });
 
         let mut header = tokio_tar::Header::new_gnu();
         header.set_path(CLAIMS_JWT_FILE)?;
-        header.set_size(claims_file.as_bytes().len() as u64);
+        header.set_size(claims_jwt.as_bytes().len() as u64);
         header.set_cksum();
-        par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_file))
+        par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_jwt))
             .await?;
 
         for (tgt, lib) in &self.libraries {
