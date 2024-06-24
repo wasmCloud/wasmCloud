@@ -7,6 +7,7 @@ use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
 use provider::ProviderInitState;
 use tracing::{error, info, warn};
+use wasmcloud_core::secrets::SecretValue;
 
 pub mod error;
 pub mod provider;
@@ -138,6 +139,9 @@ pub struct LinkConfig<'a> {
     /// Configuration provided to the provider (either as the target or the source)
     pub config: &'a HashMap<String, String>,
 
+    /// Secrets provided to the provider (either as the target or the source)
+    pub secrets: &'a HashMap<String, SecretValue>,
+
     /// WIT metadata for the link
     pub wit_metadata: (&'a WitNamespace, &'a WitPackage, &'a Vec<WitInterface>),
 }
@@ -157,6 +161,12 @@ pub trait ProviderInitConfig: Send + Sync {
     /// This normally consists of named configuration that were set for the provider,
     /// merged, and received from the host *before* the provider has started initialization.
     fn get_config(&self) -> &HashMap<String, String>;
+
+    /// Retrieve the secrets for the provider available at initialization time.
+    ///
+    /// The return value is a map of secret names to their values and should be treated as
+    /// sensitive information, avoiding logging.
+    fn get_secrets(&self) -> &HashMap<String, SecretValue>;
 }
 
 impl ProviderInitConfig for &ProviderInitState {
@@ -166,6 +176,10 @@ impl ProviderInitConfig for &ProviderInitState {
 
     fn get_config(&self) -> &HashMap<String, String> {
         &self.config
+    }
+
+    fn get_secrets(&self) -> &HashMap<String, SecretValue> {
+        &self.secrets
     }
 }
 
