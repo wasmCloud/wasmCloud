@@ -14,20 +14,28 @@ use crate::wit::WitMap;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct OtelConfig {
     /// Determine whether observability should be enabled.
+    #[serde(default)]
     pub enable_observability: bool,
     /// Determine whether traces should be enabled.
+    #[serde(default)]
     pub enable_traces: Option<bool>,
     /// Determine whether metrics should be enabled.
+    #[serde(default)]
     pub enable_metrics: Option<bool>,
     /// Determine whether logs should be enabled.
+    #[serde(default)]
     pub enable_logs: Option<bool>,
     /// Overrides the OpenTelemetry endpoint for all signals.
+    #[serde(default)]
     pub observability_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for traces.
+    #[serde(default)]
     pub traces_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for metrics.
+    #[serde(default)]
     pub metrics_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for logs.
+    #[serde(default)]
     pub logs_endpoint: Option<String>,
     /// Determines whether http or grpc will be used for exporting the telemetry.
     #[serde(default)]
