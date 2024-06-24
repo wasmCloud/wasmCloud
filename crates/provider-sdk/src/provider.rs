@@ -22,6 +22,7 @@ use tokio::{select, spawn, try_join};
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::rpc::{health_subject, link_del_subject, link_put_subject, shutdown_subject};
+use wasmcloud_core::secrets::SecretValue;
 use wasmcloud_core::{
     HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, LatticeTarget,
 };
@@ -331,6 +332,7 @@ pub(crate) struct ProviderInitState {
     pub link_definitions: Vec<InterfaceLinkDefinition>,
     pub commands: ProviderCommandReceivers,
     pub config: HashMap<String, String>,
+    pub secrets: HashMap<String, SecretValue>,
 }
 
 #[instrument]
@@ -347,6 +349,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         instance_id,
         link_definitions,
         config,
+        secrets,
         default_rpc_timeout_ms: _,
         link_name: _link_name,
         ..
@@ -417,6 +420,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         provider_key: provider_key.clone(),
         link_definitions: link_definitions.clone(),
         config: config.clone(),
+        secrets: secrets.clone(),
         commands: ProviderCommandReceivers {
             health,
             shutdown,
@@ -442,6 +446,7 @@ where
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.source_config,
+                secrets: &ld.source_secrets,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
@@ -452,6 +457,7 @@ where
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.target_config,
+                secrets: &ld.target_secrets,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
@@ -625,6 +631,7 @@ pub async fn run_provider(
         link_definitions,
         commands,
         config,
+        secrets: _secrets,
     } = init_state;
 
     let connection = ProviderConnection::new(
