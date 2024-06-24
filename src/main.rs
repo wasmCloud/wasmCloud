@@ -9,6 +9,7 @@ use nkeys::KeyPair;
 use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
 use tracing::{warn, Level as TracingLogLevel};
+use tracing_subscriber::util::SubscriberInitExt as _;
 use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::{OtelConfig, OtelProtocol};
 use wasmcloud_host::oci::Config as OciConfig;
@@ -275,15 +276,23 @@ async fn main() -> anyhow::Result<()> {
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
-    let res = configure_observability(
+    let _guard = match configure_observability(
         "wasmcloud-host",
         &otel_config,
         args.enable_structured_logging,
         args.flame_graph,
         Some(&log_level),
-    );
-    if let Err(e) = res {
-        eprintln!("Failed to configure observability: {e}");
+    ) {
+        Ok((dispatch, guard)) => {
+            dispatch
+                .try_init()
+                .context("failed to init observability for host")?;
+            Some(guard)
+        }
+        Err(e) => {
+            eprintln!("Failed to configure observability: {e}");
+            None
+        }
     };
 
     let ctl_nats_url = Url::parse(&format!(
