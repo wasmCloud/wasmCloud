@@ -410,9 +410,9 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
     let mut map = HashMap::new();
     map.insert("deleted".to_string(), json!(deleted));
     let message = if deleted {
-        format!("Deleted application version: {model_name}")
+        format!("Deleted application: {model_name}")
     } else {
-        format!("Already deleted application version: {model_name}")
+        format!("Already deleted application: {model_name}")
     };
     Ok(CommandOutput::new(message, map))
 }

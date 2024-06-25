@@ -19,7 +19,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
 };
-use tracing::{error, warn};
+use tracing::warn;
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::{
@@ -613,32 +613,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     )
     .await?;
 
-    if !cmd.detached {
-        run_wasmcloud_interactive(
-            &mut wasmcloud_child,
-            cmd.wadm_opts.wadm_manifest,
-            client,
-            lattice,
-            host_started.clone(),
-            output_kind,
-        )
-        .await?;
-
-        let spinner = Spinner::new(&output_kind)?;
-        spinner.update_spinner_message(
-            // wadm and NATS both exit immediately when sent SIGINT
-            "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
-        );
-        stop_wasmcloud(wasmcloud_child).await?;
-        tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
-
-        if wadm_process.is_some() {
-            // remove wadm pidfile, the process is stopped automatically by CTRL+c
-            remove_wadm_pidfile(&install_dir).await?;
-        }
-
-        spinner.finish_and_clear();
-    } else {
+    // If we're running in detached mode, then we can print out some logs, build output and return early.
+    if cmd.detached {
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
@@ -654,8 +630,32 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             wasmcloud_log_path.to_string_lossy()
         );
         let _ = write!(out_text, "\n\n⬇️  To stop wasmCloud, run \"wash down\"");
+        return Ok(CommandOutput::new(out_text, out_json));
     }
 
+    // If we're running in interactive mode, let's start the host
+    run_wasmcloud_interactive(
+        &mut wasmcloud_child,
+        cmd.wadm_opts.wadm_manifest,
+        host_started.clone(),
+        output_kind,
+    )
+    .await?;
+
+    let spinner = Spinner::new(&output_kind)?;
+    spinner.update_spinner_message(
+        // wadm and NATS both exit immediately when sent SIGINT
+        "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
+    );
+    stop_wasmcloud(wasmcloud_child).await?;
+    tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+
+    if wadm_process.is_some() {
+        // remove wadm pidfile, the process is stopped automatically by CTRL+c
+        remove_wadm_pidfile(&install_dir).await?;
+    }
+
+    spinner.finish_and_clear();
     Ok(CommandOutput::new(out_text, out_json))
 }
 
@@ -823,8 +823,6 @@ async fn start_nats(
 async fn run_wasmcloud_interactive(
     wasmcloud_child: &mut Child,
     wadm_manifest: Option<PathBuf>,
-    client: async_nats::Client,
-    lattice: String,
     host_started: Arc<AtomicBool>,
     output_kind: OutputKind,
 ) -> Result<()> {
@@ -837,6 +835,7 @@ async fn run_wasmcloud_interactive(
         tokio::signal::ctrl_c()
             .await
             .context("failed to wait for ctrl_c signal")?;
+        // Set the host as not running
         if running.load(Ordering::SeqCst) {
             running.store(false, Ordering::SeqCst);
             let _ = running_sender.send(true);
@@ -876,34 +875,6 @@ async fn run_wasmcloud_interactive(
 
     // Wait for the user to send Ctrl+C in a thread where blocking is acceptable
     let _ = running_receiver.recv();
-
-    // If a WADM application was specified when we started, shut it down on exit
-    // optimistically, without preventing shutdown of the host itself
-    if let Some(ref manifest_path) = wadm_manifest {
-        // Attempt to load the manifest again
-        match load_app_manifest(AppManifestSource::File(manifest_path.clone()))
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to load manifest from path [{}] during cleanup, manual cleanup is required",
-                        manifest_path.display()
-                    )
-                }) {
-                    // If we successfully loaded the manifest, attempt to undeploy the existing model
-                    Ok(manifest) => {
-                        if let Some(model_name) = manifest.name() {
-                            if let Err(e) = wash_lib::app::undeploy_model(&client, Some(lattice), model_name).await {
-                                error!("failed to complete undeploy operation during cleanup: {}", e.to_string());
-                                eprintln!("🟨 Failed to undeploy manifest during cleanup");
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        error!("failed to load manifest during cleanup: {e}");
-                        eprintln!("🟨 Error while loading manifest during cleanup");
-                    },
-                }
-    }
 
     // Prevent extraneous messages from the host getting printed as the host shuts down
     if let Some(handle) = handle {
