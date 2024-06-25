@@ -21,7 +21,10 @@ func main() {
 
 func run() error {
 	// Initialize the provider with callbacks to track linked components
-	providerHandler := Handler{}
+	providerHandler := Handler{
+		linkedFrom: make(map[string]map[string]string),
+		linkedTo:   make(map[string]map[string]string),
+	}
 	p, err := provider.New(
 		provider.SourceLinkPut(func(link provider.InterfaceLinkDefinition) error {
 			return handleNewSourceLink(&providerHandler, link)
