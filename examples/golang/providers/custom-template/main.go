@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -82,36 +83,36 @@ func run() error {
 }
 
 func handleNewSourceLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling new source link", "link", link)
+	fmt.Println("Handling new source link", "link", link)
 	handler.linkedTo[link.SourceID] = link.SourceConfig
 	return nil
 }
 
 func handleNewTargetLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling new target link", "link", link)
+	fmt.Println("Handling new target link", "link", link)
 	handler.linkedFrom[link.Target] = link.TargetConfig
 	return nil
 }
 
 func handleDelSourceLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling del source link", "link", link)
+	fmt.Println("Handling del source link", "link", link)
 	delete(handler.linkedTo, link.SourceID)
 	return nil
 }
 
 func handleDelTargetLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling del target link", "link", link)
+	fmt.Println("Handling del target link", "link", link)
 	delete(handler.linkedFrom, link.Target)
 	return nil
 }
 
-func handleHealthCheck(handler *Handler) string {
-	handler.provider.Logger.Info("Handling health check")
+func handleHealthCheck(_ *Handler) string {
+	fmt.Println("Handling health check")
 	return "provider healthy"
 }
 
 func handleShutdown(handler *Handler) error {
-	handler.provider.Logger.Info("Handling shutdown")
+	fmt.Println("Handling shutdown")
 	clear(handler.linkedFrom)
 	clear(handler.linkedTo)
 	return nil
