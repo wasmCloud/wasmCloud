@@ -1659,6 +1659,7 @@ impl Host {
             annotations,
             max_instances,
             config,
+            allow_update,
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize component scale command")?;
@@ -1673,18 +1674,41 @@ impl Host {
 
         // Basic validation to ensure that the component is running and that the image reference matches
         // If it doesn't match, we can still successfully scale, but we won't be updating the image reference
-        let message = match self.components.read().await.get(&component_id) {
-            Some(entry) if entry.image_reference != component_ref => {
+        let (original_ref, ref_changed) = {
+            self.components
+                .read()
+                .await
+                .get(&component_id)
+                .map(|v| {
+                    (
+                        Some(v.image_reference.clone()),
+                        v.image_reference != component_ref,
+                    )
+                })
+                .unwrap_or_else(|| (None, false))
+        };
+
+        let mut perform_post_update: bool = false;
+        let message = match (allow_update, original_ref, ref_changed) {
+            // Updates are not allowed, original ref changed
+            (false, Some(original_ref), true) => {
                 let msg = format!(
-                    "Requested to scale existing component to a different image reference: {} != {}. The component will be scaled but the image reference will not be updated. If you meant to update this component to a new image ref, use the update command.",
-                    entry.image_reference, component_ref,
+                    "Requested to scale existing component to a different image reference: {original_ref} != {component_ref}. The component will be scaled but the image reference will not be updated. If you meant to update this component to a new image ref, use the update command."
                 );
                 warn!(msg);
                 msg
             }
+            // Updates are allowed, ref changed and we'll do an update later
+            (true, Some(original_ref), true) => {
+                perform_post_update = true;
+                format!(
+                    "Requested to scale existing component, with a changed image reference: {original_ref} != {component_ref}. The component will be scaled, and the image reference will be updated afterwards."
+                )
+            }
             _ => String::with_capacity(0),
         };
 
+        // Spawn a task to perform  the scaling and possibly an update of the component afterwards
         spawn(async move {
             if let Err(e) = self
                 .handle_scale_component_task(
@@ -1698,8 +1722,19 @@ impl Host {
                 .await
             {
                 error!(%component_ref, %component_id, err = ?e, "failed to scale component");
+                return;
+            }
+
+            if perform_post_update {
+                if let Err(e) = self
+                    .handle_update_component_task(&component_id, &component_ref, &host_id, None)
+                    .await
+                {
+                    error!(%component_ref, %component_id, err = ?e, "failed to update component after scale");
+                }
             }
         });
+
         Ok(CtlResponse {
             success: true,
             message,
