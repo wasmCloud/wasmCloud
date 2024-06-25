@@ -255,6 +255,8 @@ impl Client {
     /// `component_ref`: The OCI reference of the component to scale
     /// `max_instances`: The maximum number of instances this component can run concurrently. Specifying `0` will stop the component.
     /// `annotations`: Optional annotations to apply to the component
+    /// `config`: List of named configuration to use for the component
+    /// `allow_update`: Whether to perform allow updates to the component (triggering a separate update)
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_component(
         &self,
@@ -279,6 +281,7 @@ impl Client {
             host_id,
             annotations,
             config,
+            ..Default::default()
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),

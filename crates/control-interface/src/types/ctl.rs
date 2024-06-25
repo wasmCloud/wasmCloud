@@ -80,6 +80,13 @@ pub struct ScaleComponentCommand {
     /// 6}
     #[serde(default)]
     pub config: Vec<String>,
+    #[serde(default)]
+    /// Whether to perform an update if the details of the component (ex. component ID) change as
+    /// part of the scale request.
+    ///
+    /// Normally this is implemented by the receiver (ex. wasmcloud host) as a *separate* update component call
+    /// being made shortly after this command (scale) is processed.
+    pub allow_update: bool,
 }
 
 /// A command sent to a host requesting a capability provider be started with the
