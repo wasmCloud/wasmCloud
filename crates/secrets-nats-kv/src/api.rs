@@ -15,7 +15,7 @@ use futures::StreamExt;
 use nkeys::XKey;
 use std::{collections::HashSet, time::Duration};
 use tracing::{error, info, warn};
-use wascap::jwt::Host;
+use wascap::jwt::{CapabilityProvider, Host};
 use wascap::prelude::{validate_token, Claims, Component};
 use wasmcloud_secrets_types::*;
 
@@ -591,9 +591,16 @@ impl SecretsServer for Api {
 
         // Now that we have established both JWTs are valid, we can go ahead and retrieve the
         // secret
-        let claims: Claims<Component> = Claims::decode(&request.context.entity_jwt)
-            .map_err(|e| GetSecretError::InvalidEntityJWT(e.to_string()))?;
-        let subject = claims.subject;
+        // TODO: Would be great to do this without two separate calls to decode, especially since we may send back the wrong error
+        let component_claims: wascap::Result<Claims<Component>> =
+            Claims::decode(&request.context.entity_jwt);
+        let provider_claims: wascap::Result<Claims<CapabilityProvider>> =
+            Claims::decode(&request.context.entity_jwt);
+        let subject = match (component_claims, provider_claims) {
+            (Ok(c), _) => c.subject,
+            (_, Ok(p)) => p.subject,
+            (Err(e), _) => return Err(GetSecretError::InvalidEntityJWT(e.to_string())),
+        };
 
         let store = self
             .state_bucket()
