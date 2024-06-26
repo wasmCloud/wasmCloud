@@ -9,11 +9,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/python/http-hello-world/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/python/http-hello-world/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/python/http-hello-world
-    wasmcloud.dev/categories:
-      - http
-      - http-server
-      - python
-      - example
+    wasmcloud.dev/categories: |
+      http,http-server,python,example
 spec:
   components:
     - name: http-component

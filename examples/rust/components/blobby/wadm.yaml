@@ -15,13 +15,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/blobby
-    wasmcloud.dev/categories:
-      - http
-      - http-server
-      - rust
-      - object-storage
-      - blobstore
-      - example
+    wasmcloud.dev/categories: |
+      http,http-server,rust,object-storage,blobstore,example
 spec:
   components:
     - name: blobby

@@ -9,13 +9,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-keyvalue-counter/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-keyvalue-counter/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-keyvalue-counter
-    wasmcloud.dev/categories:
-      - http
-      - http-server
-      - keyvalue
-      - interactive
-      - rust
-      - example
+    wasmcloud.dev/categories: |
+      http,http-server,keyvalue,interactive,rust,example
 spec:
   components:
     - name: counter

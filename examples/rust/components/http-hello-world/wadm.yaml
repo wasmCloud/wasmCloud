@@ -9,12 +9,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/http-hello-world/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/http-hello-world/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rusg/components/http-hello-world
-    wasmcloud.dev/categories:
-      - http
-      - http-server
-      - rust
-      - hello-world
-      - example
+    wasmcloud.dev/categories: |
+      http,http-server,rust,hello-world,example
 spec:
   components:
     - name: http-component
