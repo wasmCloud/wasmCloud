@@ -9,13 +9,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-hello-world/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-hello-world/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-hello-world
-    wasmcloud.dev/categories:
-      - http
-      - outgoing-http
-      - http-server
-      - tinygo
-      - golang
-      - example
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,tinygo,golang,example
 spec:
   components:
     - name: http-component

@@ -10,12 +10,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/dog-fetcher/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/dog-fetcher/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/dog-fetcher
-    wasmcloud.dev/categories:
-      - http
-      - outgoing-http
-      - http-server
-      - rust
-      - example
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,rust,example
 spec:
   components:
     - name: http-component

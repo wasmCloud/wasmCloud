@@ -20,14 +20,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-echo-tinygo/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-echo-tinygo
-    wasmcloud.dev/categories:
-      - http
-      - outgoing-http
-      - http-server
-      - golang
-      - tinygo
-      - example
-      - golang
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,golang,tinygo,example,golang
 spec:
   components:
     - name: http-echo-tinygo

@@ -11,12 +11,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/sqldb-postgres-quer
-    wasmcloud.dev/categories:
-      - database
-      - sqldb
-      - postgres
-      - rust
-      - example
+    wasmcloud.dev/categories: |
+      database,sqldb,postgres,rust,example
 spec:
   components:
     - name: querier

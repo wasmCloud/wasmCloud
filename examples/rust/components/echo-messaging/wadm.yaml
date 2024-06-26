@@ -9,12 +9,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/echo-messaging/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/echo-messaging/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/echo-messaging
-    wasmcloud.dev/categories:
-      - messaging
-      - echo
-      - nats
-      - rust
-      - example
+    wasmcloud.dev/categories: |
+      messaging,echo,nats,rust,example
 spec:
   components:
     - name: echo
