@@ -81,8 +81,6 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          # TODO: Use this once 0.27.0 is released
-          # - 0.26.0
           - current
         template:
           - hello-world-rust
