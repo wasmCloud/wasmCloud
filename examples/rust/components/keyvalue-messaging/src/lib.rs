@@ -31,7 +31,10 @@ impl NatsKvDemoGuest for NatsKvDemo {
         log(
             Level::Info,
             "kv-demo",
-            &format!("First Bucket ID: '{}'", link_name1.clone().unwrap_or_default()),
+            &format!(
+                "First Bucket ID: '{}'",
+                link_name1.clone().unwrap_or_default()
+            ),
         );
 
         // 1.2) Get the second bucket id as configuration data, or set to None
@@ -42,7 +45,10 @@ impl NatsKvDemoGuest for NatsKvDemo {
         log(
             Level::Info,
             "kv-demo",
-            &format!("Second Bucket ID: '{}'", link_name2.clone().unwrap_or_default()),
+            &format!(
+                "Second Bucket ID: '{}'",
+                link_name2.clone().unwrap_or_default()
+            ),
         );
 
         // 1.3) Get the subject to publish to as a configuration data
@@ -189,7 +195,10 @@ impl NatsKvDemo {
                         log(
                             Level::Info,
                             "kv-demo",
-                            &format!("Key '{}' not found in bucket with id '{}'", &key, &bucket_id),
+                            &format!(
+                                "Key '{}' not found in bucket with id '{}'",
+                                &key, &bucket_id
+                            ),
                         );
                         Ok(None)
                     }
@@ -272,7 +281,10 @@ impl NatsKvDemo {
                         log(
                             Level::Info,
                             "kv-demo",
-                            &format!("Deleted key '{}' from bucket with id '{}'", &key, &bucket_id),
+                            &format!(
+                                "Deleted key '{}' from bucket with id '{}'",
+                                &key, &bucket_id
+                            ),
                         );
                         Ok(())
                     }
@@ -404,7 +416,10 @@ impl NatsKvDemo {
         log(
             Level::Info,
             "kv-demo",
-            &format!("Published message: '{}', to subject '{}'", msg_string, pub_subject),
+            &format!(
+                "Published message: '{}', to subject '{}'",
+                msg_string, pub_subject
+            ),
         );
         Ok(())
     }

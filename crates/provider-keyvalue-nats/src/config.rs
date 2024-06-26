@@ -107,7 +107,10 @@ impl NatsConnectionConfig {
         if let Some(bucket) = values.get(CONFIG_NATS_KV_STORE) {
             config.bucket = bucket.clone();
         } else {
-            bail!("missing required configuration item: {}", CONFIG_NATS_KV_STORE);
+            bail!(
+                "missing required configuration item: {}",
+                CONFIG_NATS_KV_STORE
+            );
         }
         if let Some(jwt) = values.get(CONFIG_NATS_CLIENT_JWT) {
             config.auth_jwt = Some(jwt.clone());
