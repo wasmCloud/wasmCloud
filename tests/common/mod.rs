@@ -19,6 +19,7 @@ pub mod minio;
 pub mod nats;
 pub mod providers;
 pub mod redis;
+pub mod secrets;
 pub mod vault;
 
 /// Create a temporary directory
