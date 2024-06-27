@@ -19,14 +19,6 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      # # Retrieve the failing pr number
-      # - uses: actions/download-artifact@v4
-      #   with:
-      #     name: meta
-      # - run: |
-      #     echo -e "failing-pr-num=$(cat failing-pr-num)" >> $GITHUB_OUTPUT
-      #     echo -e "outcome=$(cat outcome)" >> $GITHUB_OUTPUT
-
       - name: Explain conventional commits in comment
         uses: marocchino/sticky-pull-request-comment@5ec44f8ee5ecf07ea2e7410866738fb7890eb756
         with:
