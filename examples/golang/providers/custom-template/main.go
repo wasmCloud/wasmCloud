@@ -87,13 +87,13 @@ func run() error {
 
 func handleNewSourceLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
 	fmt.Println("Handling new source link", "link", link)
-	handler.linkedTo[link.SourceID] = link.SourceConfig
+	handler.linkedTo[link.Target] = link.SourceConfig
 	return nil
 }
 
 func handleNewTargetLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
 	fmt.Println("Handling new target link", "link", link)
-	handler.linkedFrom[link.Target] = link.TargetConfig
+	handler.linkedFrom[link.SourceID] = link.TargetConfig
 	return nil
 }
 
