@@ -927,10 +927,15 @@ impl Host {
         )
         .await?;
 
+        // TODO(#2344): may want to be able to supply this
+        // TODO(#2344): Store with the host to hand to providers
+        let encryption_key = Arc::new(nkeys::XKey::new());
+
         let secrets_manager = Arc::new(SecretsManager::new(
             &config_data,
             config.secrets_topic_prefix.as_ref(),
             &ctl_nats,
+            encryption_key,
         ));
 
         let meter = global::meter_with_version(
@@ -1791,7 +1796,7 @@ impl Host {
                         component.jwt(),
                         annotations.get("wasmcloud.dev/appspec"),
                     )
-                    .await?;
+                    .await;
 
                 if let Err(e) = self
                     .start_component(
@@ -1801,8 +1806,8 @@ impl Host {
                         component_id.to_string(),
                         max,
                         annotations.clone(),
-                        config,
-                        secrets,
+                        config?,
+                        secrets?,
                     )
                     .await
                 {
@@ -1877,9 +1882,9 @@ impl Host {
                                 component.jwt(),
                                 annotations.get("wasmcloud.dev/appspec"),
                             )
-                            .await?;
-                        *handler.config_data.write().await = config;
-                        *handler.secrets.write().await = secrets;
+                            .await;
+                        *handler.config_data.write().await = config?;
+                        *handler.secrets.write().await = secrets?;
                     }
                     let instance = self
                         .instantiate_component(
@@ -2194,7 +2199,7 @@ impl Host {
                 claims_token.as_ref().map(|t| &t.jwt),
                 annotations.get("wasmcloud.dev/appspec"),
             )
-            .await?;
+            .await;
 
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
@@ -2228,10 +2233,31 @@ impl Host {
             // or target of a link, we need to iterate over all links to find the ones that involve the provider.
             let link_definitions = stream::iter(self.links.read().await.values().flatten())
                 .filter_map(|link| async {
-                    if link.source_id == provider_id || link.target == provider_id {
+                    if link.source_id == provider_id {
                         if let Ok(provider_link) = self
                             .resolve_link_config(
                                 link.clone(),
+                                claims_token.as_ref().map(|t| &t.jwt),
+                                None,
+                                annotations.get("wasmcloud.dev/appspec"),
+                            )
+                            .await
+                        {
+                            Some(provider_link)
+                        } else {
+                            error!(
+                                provider_id,
+                                source_id = link.source_id,
+                                target = link.target,
+                                "failed to resolve link config, skipping link"
+                            );
+                            None
+                        }
+                    } else if link.target == provider_id {
+                        if let Ok(provider_link) = self
+                            .resolve_link_config(
+                                link.clone(),
+                                None,
                                 claims_token.as_ref().map(|t| &t.jwt),
                                 annotations.get("wasmcloud.dev/appspec"),
                             )
@@ -2258,7 +2284,7 @@ impl Host {
                 // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
                 // values when we need them.
                 use secrecy::ExposeSecret;
-                secrets
+                secrets?
                     .iter()
                     .map(|(k, v)| match v.expose_secret() {
                         SecretValue::String(s) => (
@@ -2283,7 +2309,7 @@ impl Host {
                 instance_id: Uuid::new_v4().to_string(),
                 provider_key: provider_id.to_string(),
                 link_definitions,
-                config: config.get_config().await.clone(),
+                config: config?.get_config().await.clone(),
                 secrets,
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
@@ -2669,10 +2695,7 @@ impl Host {
 
         // Before we store the link, we need to ensure the configuration is resolvable
         let provider_link = self
-            // TODO(#2344): This is going to fail every time if a secret is defined in a link.
-            // Since links can be created before the component/provider we need some ability to
-            // just check config
-            .resolve_link_config(interface_link_definition.clone(), None, None)
+            .resolve_link_config(interface_link_definition.clone(), None, None, None)
             .await
             .context("failed to resolve link config for provider")?;
 
@@ -3336,7 +3359,10 @@ impl Host {
         config_names: &[String],
         entity_jwt: Option<&String>,
         application: Option<&String>,
-    ) -> anyhow::Result<(ConfigBundle, HashMap<String, Secret<SecretValue>>)> {
+    ) -> (
+        anyhow::Result<ConfigBundle>,
+        anyhow::Result<HashMap<String, Secret<SecretValue>>>,
+    ) {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())
@@ -3346,15 +3372,15 @@ impl Host {
             .config_generator
             .generate(config_names)
             .await
-            .context("Unable to fetch requested config")?;
+            .context("Unable to fetch requested config");
 
         let secrets = self
             .secrets_manager
             .fetch_secrets(secret_names, entity_jwt, &self.host_token.jwt, application)
             .await
-            .context("Unable to fetch requested secrets")?;
+            .context("Unable to fetch requested secrets");
 
-        Ok((config, secrets))
+        (config, secrets)
     }
 
     /// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
@@ -3362,18 +3388,29 @@ impl Host {
     async fn resolve_link_config(
         &self,
         link: wasmcloud_control_interface::InterfaceLinkDefinition,
-        entity_jwt: Option<&String>,
+        source_jwt: Option<&String>,
+        target_jwt: Option<&String>,
         application: Option<&String>,
     ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
-        let (source_bundle, source_secrets) = self
-            .fetch_config_and_secrets(&link.source_config, entity_jwt, application)
-            .await?;
-        let (target_bundle, target_secrets) = self
-            .fetch_config_and_secrets(&link.target_config, entity_jwt, application)
-            .await?;
+        let (source_bundle_res, source_secrets) = self
+            .fetch_config_and_secrets(&link.source_config, source_jwt, application)
+            .await;
+        let (target_bundle_res, target_secrets) = self
+            .fetch_config_and_secrets(&link.target_config, target_jwt, application)
+            .await;
 
+        let source_bundle = source_bundle_res?;
+        let target_bundle = target_bundle_res?;
         let source_config = source_bundle.get_config().await;
         let target_config = target_bundle.get_config().await;
+
+        // TODO(#2344): Currently using a warning here as a placeholder for a better link secret strategy
+        if let Err(ref e) = source_secrets {
+            warn!(?e, "Failed to fetch source secrets for link");
+        }
+        if let Err(ref e) = target_secrets {
+            warn!(?e, "Failed to fetch target for link");
+        }
 
         // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
         // values when we need them.
@@ -3388,6 +3425,7 @@ impl Host {
             source_config: source_config.clone(),
             target_config: target_config.clone(),
             source_secrets: source_secrets
+                .unwrap_or_default()
                 .iter()
                 .map(|(k, v)| match v.expose_secret() {
                     SecretValue::String(s) => (
@@ -3401,6 +3439,7 @@ impl Host {
                 })
                 .collect(),
             target_secrets: target_secrets
+                .unwrap_or_default()
                 .iter()
                 .map(|(k, v)| match v.expose_secret() {
                     SecretValue::String(s) => (

@@ -1,5 +1,6 @@
 //! Module with structs for use in managing and accessing secrets in a wasmCloud lattice
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use anyhow::ensure;
@@ -43,6 +44,7 @@ pub struct Manager {
     secret_store_topic: Option<String>,
     nats_client: Client,
     backend_clients: Arc<RwLock<HashMap<String, Arc<WasmcloudSecretsClient>>>>,
+    encryption_key: Arc<nkeys::XKey>,
 }
 
 impl Manager {
@@ -55,12 +57,14 @@ impl Manager {
         config_store: &Store,
         secret_store_topic: Option<&String>,
         nats_client: &Client,
+        encryption_key: Arc<nkeys::XKey>,
     ) -> Self {
         Self {
             config_store: config_store.clone(),
             secret_store_topic: secret_store_topic.cloned(),
             nats_client: nats_client.clone(),
             backend_clients: Arc::new(RwLock::new(HashMap::new())),
+            encryption_key,
         }
     }
 
@@ -197,5 +201,36 @@ impl Manager {
             .await?;
 
         Ok(secrets)
+    }
+
+    /// Given a map of secrets, expose and transform the secrets into [`wasmcloud_core::secrets::SecretValue`] values
+    /// and encrypt the entire map for sending to a provider.
+    ///
+    /// The [`Self::encryption_key`] is used to encrypt the secrets map, which also should be given to the provider
+    /// for decryption at runtime.
+    pub fn encrypt_secrets_for_provider(
+        &self,
+        secrets: HashMap<String, Secret<SecretValue>>,
+    ) -> anyhow::Result<Vec<u8>> {
+        use secrecy::ExposeSecret;
+        let serializable: HashMap<String, wasmcloud_core::secrets::SecretValue> = secrets
+            .into_iter()
+            .map(|(key, secret)| match secret.expose_secret() {
+                SecretValue::String(s) => (
+                    key.clone(),
+                    wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                ),
+                SecretValue::Bytes(b) => (
+                    key.clone(),
+                    wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                ),
+            })
+            .collect();
+        let serialized = serde_json::to_vec(&serializable)?;
+        let request_xkey = nkeys::XKey::new();
+
+        request_xkey
+            .seal(&serialized, &self.encryption_key)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 }
