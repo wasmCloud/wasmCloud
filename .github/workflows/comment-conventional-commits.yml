@@ -1,0 +1,60 @@
+#
+# Commenting on a conventional commit lint failure is done in a separate workflow
+# to fix the permission issues with workflows run from forks.
+#
+# One security concern here is that people will modify existing workflows, and
+# put incorrect/malicious PR numbers in the workflows, but this is a fairly minor concern
+#
+#
+name: comment-conventional-commits
+
+on:
+  workflow_run:
+    workflows:
+      - lint-conventional-commits
+    types:
+      - completed
+
+# Leave a comment on PRs that fail conventional commits
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # Retrieve the failing pr number
+      - uses: actions/download-artifact@v4
+        with:
+          name: meta
+      - run: |
+          echo -e "failing-pr-num=$(cat failing-pr-num)" >> $GITHUB_OUTPUT
+          echo -e "outcome=$(cat outcome)" >> $GITHUB_OUTPUT
+
+      - name: Explain conventional commits in comment
+        uses: marocchino/sticky-pull-request-comment@5ec44f8ee5ecf07ea2e7410866738fb7890eb756
+        with:
+          number: ${{ github.event.workflow_run.pull_requests[0].id }}
+          header: tip-conventional-commits
+          delete: ${{ github.event.workflow_run.conclusion == 'success' }}
+          recreate: ${{ steps.ctx.outputs.outcome != 'success' }}
+          message: |
+            <h3>
+
+            :warning: It looks like your commit is not formatted in line with [Conventional Commits][cc]
+
+            </h3>
+
+            The [wasmCloud][wasmcloud] project uses Conventional Commits to enable automation and ensure consistent commit messages across the project.
+
+            If you're feeling adventurous, amend/interactively rebase your commits to match the conventional commit standard.
+
+            For example, if you added a feature to the wasmCloud host:
+
+            ```console
+            git amend -m "feat(host): your awesome new feature title here"
+            ```
+
+            If you don't feel comfortable doing this, don't worry -- a project maintainer will help correct this for you, before merging.
+
+            [cc]: https://www.conventionalcommits.org/en/v1.0.0
+            [wasmcloud]: https://github.com/wasmCloud

@@ -36,33 +36,16 @@ jobs:
         run: |
           commitsar -v -s=false
 
-      - name: Explain conventional commits in comment
-        uses: marocchino/sticky-pull-request-comment@5ec44f8ee5ecf07ea2e7410866738fb7890eb756
+      # Save the failing pr number for the commenting action to later use
+      - name: Save PR metadata
+        run: |
+          mkdir -p meta
+          echo ${{ github.event.number }} > meta/failing-pr-num
+          echo ${{ steps.cc-lint.outcome }} > meta/outcome
+      - uses: actions/upload-artifact@v4
         with:
-          header: tip-conventional-commits
-          delete: ${{ steps.cc-lint.outcome == 'success' }}
-          recreate: ${{ steps.cc-lint.outcome != 'success' }}
-          message: |
-            <h3>
-
-            :warning: It looks like your commit is not formatted in line with [Conventional Commits][cc]
-
-            </h3>
-
-            The [wasmCloud][wasmcloud] project uses Conventional Commits to enable automation and ensure consistent commit messages across the project.
-
-            If you're feeling adventurous, amend/interactively rebase your commits to match the conventional commit standard.
-
-            For example, if you added a feature to the wasmCloud host:
-
-            ```console
-            git amend -m "feat(host): your awesome new feature title here"
-            ```
-
-            If you don't feel comfortable doing this, don't worry -- a project maintainer will help correct this for you, before merging.
-
-            [cc]: https://www.conventionalcommits.org/en/v1.0.0
-            [wasmcloud]: https://github.com/wasmCloud
+          name: meta
+          path: meta/*
 
       - name: Propagate lint failure
         if: ${{ steps.cc-lint.outcome != 'success' }}
