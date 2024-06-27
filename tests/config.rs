@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
 use async_nats::jetstream;
-use async_nats::HeaderMap;
+use common::secrets::NatsKvSecretsBackend;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use test_components::{
@@ -18,6 +18,7 @@ use tracing::instrument;
 use tracing_subscriber::prelude::*;
 use wasmcloud_host::wasmbus::config::BundleGenerator;
 use wasmcloud_test_util::lattice::config::assert_config_put;
+use wasmcloud_test_util::lattice::config::assert_put_secret_reference;
 use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
     lattice::link::assert_advertise_link,
@@ -162,80 +163,24 @@ async fn config_e2e() -> anyhow::Result<()> {
     .await
     .context("failed to start test host")?;
 
-    // TODO: abstract to function
-    std::env::set_current_dir("crates/secrets-nats-kv")?;
-    tokio::process::Command::new("cargo")
-        .arg("build")
-        .output()
+    let nats_kv_secrets_backend = NatsKvSecretsBackend::new(
+        "wasmcloud.secrets".to_string(),
+        "TEST_SECRET_default".to_string(),
+        nats_url.to_string(),
+    )
+    .await?;
+
+    nats_kv_secrets_backend.ensure_build().await?;
+    let secrets_backend_server = nats_kv_secrets_backend.start().await?;
+    nats_kv_secrets_backend
+        .put_secret(wasmcloud_secrets_types::Secret {
+            name: "ponger".to_string(),
+            string_secret: Some("sup3rs3cr3t-v4lu3".to_string()),
+            ..Default::default()
+        })
         .await?;
-    std::env::set_current_dir("../../")?;
-    tokio::process::Command::new("./target/debug/secrets-nats-kv")
-        .args([
-            "--encryption-xkey-seed",
-            "SXAH5XWC6R6W52FLRWAQLK5C3VHXWBDYHKSROSJJBUS4T5HTW56FUCGECQ",
-            "--transit-xkey-seed",
-            "SXANK7TF7TNLYRQU2OOL6PZB6IGRX5PH75U55CIA4NWOBDPI3APXDGH7VY",
-            "--subject-base",
-            "wasmcloud.secrets",
-            "--secrets-bucket",
-            "TEST_SECRET_default",
-            "--nats-address",
-            nats_url.as_ref(),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-
-    // loop until request to wasmcloud.secrets.v0.nats-kv.server-xkey is successful
-    // TODO: something more robust yadda yadda
-    for _ in 0..10 {
-        let resp = nats_client
-            .request("wasmcloud.secrets.v0.nats-kv.server_xkey", "".into())
-            .await
-            .map_err(|e| {
-                tracing::error!(?e);
-                anyhow!("Request for server xkey failed")
-            });
-        if resp.map(|r| r.payload.len()).unwrap_or(0) > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-    }
-
-    // put secret in secret store
-    let request_xkey = nkeys::XKey::new();
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        wasmcloud_secrets_types::WASMCLOUD_HOST_XKEY,
-        request_xkey
-            .public_key()
-            .parse::<async_nats::HeaderValue>()
-            .unwrap(),
-    );
-    let secret = wasmcloud_secrets_types::Secret {
-        name: "ponger".to_string(),
-        string_secret: Some("sup3rs3cr3t-v4lu3".to_string()),
-        ..Default::default()
-    };
-    // TODO(#2344): we only really need this xkey to put the secret here but whatevs
-    let transit_xkey =
-        nkeys::XKey::from_seed("SXANK7TF7TNLYRQU2OOL6PZB6IGRX5PH75U55CIA4NWOBDPI3APXDGH7VY")
-            .expect("valid");
-    let transit_xkey_pub = nkeys::XKey::from_public_key(&transit_xkey.public_key()).expect("valid");
-    let value = serde_json::to_string(&secret)?;
-    let v = request_xkey
-        .seal(value.as_bytes(), &transit_xkey_pub)
-        .unwrap();
-    let resp = nats_client
-        .request_with_headers("wasmcloud.secrets.v0.nats-kv.put_secret", headers, v.into())
-        .await?;
-
-    eprintln!("resp: {:?}", String::from_utf8_lossy(&resp.payload));
-    let put_resp: serde_json::Value = serde_json::from_slice(&resp.payload).unwrap();
-    assert_eq!(put_resp["revision"], 1);
 
     // Add mapping to allow the component to access the secrets
-    // TODO: need to allow specifying host key?
     use tokio::io::AsyncReadExt;
     let mut component_bytes = vec![];
     let mut component = tokio::fs::File::open(RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED).await?;
@@ -244,21 +189,12 @@ async fn config_e2e() -> anyhow::Result<()> {
         wascap::wasm::extract_claims(&component_bytes)?.expect("claims to be valid");
     let component_key = nkeys::KeyPair::from_public_key(&component_token.claims.subject)?;
 
-    let mut v: std::collections::HashSet<String> = std::collections::HashSet::new();
-    v.insert("ponger".to_string());
+    let mut secrets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    secrets.insert("ponger".to_string());
 
-    let payload = serde_json::to_string(&v).unwrap();
-    let response = nats_client
-        .request(
-            format!(
-                "wasmcloud.secrets.v0.nats-kv.add_mapping.{}",
-                component_key.public_key()
-            ),
-            payload.into(),
-        )
+    nats_kv_secrets_backend
+        .add_mapping(&component_key.public_key(), secrets)
         .await?;
-    println!("{:?}", response);
-    assert_eq!(response.payload.to_vec(), b"ok");
 
     // Put configs for first component
     assert_config_put(
@@ -297,18 +233,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     )
     .await?;
     // Put secret for second component
-    assert_config_put(
-        &ctl_client,
-        // NOTE: this follows the convention from https://github.com/wasmCloud/wadm/pull/307/files
-        // Instead I'll create a helper function to make this better
-        "secret_ponger",
-        [
-            ("key".to_string(), "ponger".to_string()),
-            ("backend".to_string(), "nats-kv".to_string()),
-            // ("version".to_string(), "v1".to_string()),
-        ],
-    )
-    .await?;
+    assert_put_secret_reference(&ctl_client, "ponger", "ponger", "nats-kv", None).await?;
     // Scale ponger
     assert_scale_component(
         &ctl_client,
@@ -338,6 +263,11 @@ async fn config_e2e() -> anyhow::Result<()> {
     .expect("should advertise link");
 
     assert_incoming_http(&wrpc_client).await?;
+
+    secrets_backend_server
+        .stop()
+        .await
+        .expect("should be able to stop secrets backend");
 
     nats_server
         .stop()
