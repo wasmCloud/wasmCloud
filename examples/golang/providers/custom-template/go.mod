@@ -3,7 +3,7 @@ module github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template
 go 1.22.3
 
 require (
-	github.com/wasmCloud/provider-sdk-go v0.0.0-20240605180317-5423f4b7b591
+	github.com/wasmCloud/provider-sdk-go v0.0.0-20240626135506-00b1fb3dec9e
 	github.com/wrpc/wrpc/go v0.0.0-20240613112243-134a38a3526e
 )
 
