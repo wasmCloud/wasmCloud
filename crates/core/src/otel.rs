@@ -8,7 +8,7 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::wit::WitMap;
+use crate::{logging::Level, wit::WitMap};
 
 /// Configuration values for OpenTelemetry
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -43,6 +43,13 @@ pub struct OtelConfig {
     /// Additional CAs to include in the OpenTelemetry client configuration
     #[serde(default)]
     pub additional_ca_paths: Vec<PathBuf>,
+    /// The level of tracing to enable.
+    #[serde(default = "default_trace_level")]
+    pub trace_level: Level,
+}
+
+fn default_trace_level() -> Level {
+    Level::Debug
 }
 
 impl OtelConfig {
