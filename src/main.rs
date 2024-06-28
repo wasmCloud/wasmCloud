@@ -23,6 +23,9 @@ use wasmcloud_tracing::configure_observability;
 #[allow(clippy::struct_excessive_bools)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Controls the verbosity of traces emitted from the wasmCloud host
+    #[clap(long = "trace-level", default_value_t = TracingLogLevel::DEBUG, env = "WASMCLOUD_TRACE_LEVEL")]
+    pub trace_level: TracingLogLevel,
     /// Controls the verbosity of logs from the wasmCloud host
     #[clap(long = "log-level", alias = "structured-log-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
     pub log_level: TracingLogLevel,
@@ -276,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
         ensure_certs_for_paths(tls_ca_paths)?;
     }
 
+    let trace_level = WasmcloudLogLevel::from(args.trace_level);
     let otel_config = OtelConfig {
         enable_observability: args.enable_observability,
         enable_traces: args.enable_traces,
@@ -287,6 +291,7 @@ async fn main() -> anyhow::Result<()> {
         logs_endpoint: args.logs_endpoint,
         protocol: args.observability_protocol.unwrap_or_default(),
         additional_ca_paths: args.tls_ca_paths.clone().unwrap_or_default(),
+        trace_level,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
@@ -296,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
         args.enable_structured_logging,
         args.flame_graph,
         Some(&log_level),
+        Some(&otel_config.trace_level),
     ) {
         Ok((dispatch, guard)) => {
             dispatch
