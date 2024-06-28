@@ -2074,6 +2074,7 @@ impl Host {
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
                 protocol: self.host_config.otel_config.protocol,
                 additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
+                trace_level: self.host_config.otel_config.trace_level.clone(),
             };
 
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
@@ -2140,6 +2141,7 @@ impl Host {
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
                 log_level: Some(self.host_config.log_level.clone()),
+                trace_level: Some(self.host_config.otel_config.trace_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
             };
