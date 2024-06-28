@@ -26,7 +26,7 @@ const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 
 /// Additional options for pulling an OCI artifact
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct OciPullOptions {
     /// The digest of the content you expect to receive. This is used for validation purposes only
     pub digest: Option<String>,

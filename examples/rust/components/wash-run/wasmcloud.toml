@@ -1,0 +1,7 @@
+name = "wash-run"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "wash-run"
+wasm_target = "wasm32-wasi-preview2"

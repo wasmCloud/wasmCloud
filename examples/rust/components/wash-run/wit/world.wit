@@ -1,0 +1,7 @@
+package wasmcloud:test;
+
+world wash-run {
+  include wasi:cli/imports@0.2.0;
+
+  export wasi:cli/run@0.2.0;
+}
