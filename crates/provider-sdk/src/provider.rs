@@ -349,6 +349,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         default_rpc_timeout_ms: _,
         structured_logging,
         log_level,
+        trace_level,
         otel_config,
         link_name: _link_name,
     } = spawn_blocking(load_host_data).await.map_err(|e| {
@@ -361,6 +362,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         *structured_logging,
         None::<&str>,
         log_level.as_ref(),
+        trace_level.as_ref(),
     );
     if let Err(err) = res {
         error!(?err, "failed to configure tracing");
