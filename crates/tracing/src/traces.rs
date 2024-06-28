@@ -17,6 +17,7 @@ use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 use wasmcloud_core::logging::Level;
 use wasmcloud_core::OtelConfig;
 #[cfg(feature = "otel")]
@@ -79,7 +80,7 @@ pub fn configure_tracing(
     let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
     let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
     let reg = tracing_subscriber::Registry::default()
-        .with(get_level_filter(log_level_override))
+        .with(get_log_level_filter(log_level_override))
         .with(flame);
     let stderr = std::io::stderr();
     let ansi = stderr.is_terminal();
@@ -129,21 +130,36 @@ pub fn configure_tracing(
     use_structured_logging: bool,
     flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
+    trace_level_override: Option<&Level>,
 ) -> anyhow::Result<(tracing::Dispatch, FlushGuard)> {
     let service_name = Arc::from(service_name);
 
+    let log_level_filter = get_log_level_filter(log_level_override);
     let traces = otel_config
         .traces_enabled()
-        .then(|| get_otel_tracing_layer(Arc::clone(&service_name), otel_config))
+        .then(|| {
+            get_otel_tracing_layer(
+                Arc::clone(&service_name),
+                otel_config,
+                get_trace_level_filter(trace_level_override),
+            )
+        })
         .transpose()?;
     let logs = otel_config
         .logs_enabled()
-        .then(|| get_otel_logging_layer(Arc::clone(&service_name), otel_config))
+        .then(|| get_otel_logging_layer(Arc::clone(&service_name), otel_config, log_level_override))
         .transpose()?;
     let flame = flame_graph.map(FlameLayer::with_file).transpose()?;
-    let (flame, flame_guard) = flame.map(|(l, g)| (Some(l), Some(g))).unwrap_or_default();
+    let (flame, flame_guard) = flame
+        .map(|(l, g)| {
+            (
+                Some(l.with_filter(get_trace_level_filter(trace_level_override))),
+                Some(g),
+            )
+        })
+        .unwrap_or_default();
     let registry = tracing_subscriber::Registry::default()
-        .with(get_level_filter(log_level_override))
+        .with(get_log_level_filter(log_level_override))
         .with(traces)
         .with(logs)
         .with(flame);
@@ -158,14 +174,14 @@ pub fn configure_tracing(
         registry
             .with(
                 fmt.event_format(JsonOrNot::Json(Format::default().json()))
-                    .fmt_fields(JsonFields::new()),
-            )
-            .into()
+                    .fmt_fields(JsonFields::new())
+                    .with_filter(log_level_filter),
+            ).into()
     } else {
         registry
             .with(
                 fmt.event_format(JsonOrNot::Not(Format::default()))
-                    .fmt_fields(DefaultFields::new()),
+                    .fmt_fields(DefaultFields::new()).with_filter(log_level_filter),
             )
             .into()
     };
@@ -183,11 +199,14 @@ pub fn configure_tracing(
 fn get_otel_tracing_layer<S>(
     service_name: Arc<str>,
     otel_config: &OtelConfig,
+    trace_level_filter: EnvFilter,
 ) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
+    use tracing_opentelemetry::OpenTelemetryLayer;
+
     let builder: SpanExporterBuilder = match otel_config.protocol {
         OtelProtocol::Http => {
             let client = crate::get_http_client(otel_config)
@@ -225,13 +244,14 @@ where
         .install_batch(opentelemetry_sdk::runtime::Tokio)
         .context("failed to create OTEL tracer")?;
 
-    Ok(tracing_opentelemetry::layer().with_tracer(tracer))
+    Ok(OpenTelemetryLayer::new(tracer).with_filter(trace_level_filter))
 }
 
 #[cfg(feature = "otel")]
 fn get_otel_logging_layer<S>(
     service_name: Arc<str>,
     otel_config: &OtelConfig,
+    log_level_override: Option<&Level>,
 ) -> anyhow::Result<impl tracing_subscriber::Layer<S>>
 where
     S: Subscriber,
@@ -276,12 +296,22 @@ where
 
     let log_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
         LOG_PROVIDER.get().unwrap(),
-    );
+    )
+    .with_filter(get_log_level_filter(log_level_override));
 
     Ok(log_layer)
 }
 
-fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
+fn get_trace_level_filter(trace_level_override: Option<&Level>) -> EnvFilter {
+    if let Some(trace_level) = trace_level_override {
+        let level = wasi_level_to_tracing_level(trace_level);
+        EnvFilter::default().add_directive(level.into())
+    } else {
+        EnvFilter::default().add_directive(LevelFilter::DEBUG.into())
+    }
+}
+
+fn get_log_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
     if let Some(log_level) = log_level_override {
         let level = wasi_level_to_tracing_level(log_level);
         // SAFETY: We can unwrap here because we control all inputs

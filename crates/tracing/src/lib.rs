@@ -48,6 +48,7 @@ pub fn configure_observability(
     use_structured_logging: bool,
     flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
+    trace_level_override: Option<&Level>,
 ) -> anyhow::Result<(tracing::Dispatch, traces::FlushGuard)> {
     let normalized_service_name = service_name.to_kebab_case();
 
@@ -61,6 +62,7 @@ pub fn configure_observability(
         use_structured_logging,
         flame_graph,
         log_level_override,
+        trace_level_override,
     )
 }
 

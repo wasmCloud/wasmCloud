@@ -42,7 +42,7 @@ macro_rules! propagate_trace_for_ctx {
 #[macro_export]
 macro_rules! initialize_observability {
     ($provider_name:expr, $maybe_flamegraphs_path:expr) => {
-        let __observability__guard = {
+        let __observability_guard = {
             use $crate::anyhow::Context as _;
             use $crate::tracing_subscriber::util::SubscriberInitExt as _;
             let $crate::HostData {
@@ -50,6 +50,7 @@ macro_rules! initialize_observability {
                 otel_config,
                 structured_logging,
                 log_level,
+                trace_level,
                 ..
             } = $crate::provider::load_host_data().context("failed to load host data")?;
 
@@ -63,6 +64,7 @@ macro_rules! initialize_observability {
                 *structured_logging,
                 $maybe_flamegraphs_path,
                 log_level.as_ref(),
+                trace_level.as_ref(),
             )
             .context("failed to configure observability")?;
             dispatch
