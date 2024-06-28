@@ -28,3 +28,9 @@ impl From<tracing::Level> for Level {
         }
     }
 }
+
+impl Default for Level {
+    fn default() -> Self {
+        Self::Info
+    }
+}
