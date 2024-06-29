@@ -104,23 +104,17 @@ impl KvRedisProvider {
 
     #[instrument(level = "debug", skip(self))]
     async fn invocation_conn(&self, context: Option<Context>) -> anyhow::Result<ConnectionManager> {
-        let Some(Context {
-            component: Some(source_id),
-            tracing,
-        }) = context
-        else {
+        let ctx = context.context("unexpectedly missing context")?;
+
+        let Some(ref source_id) = ctx.component else {
             return self.get_default_connection().await.map_err(|err| {
                 error!(error = ?err, "failed to get default connection for invocation");
                 err
             });
         };
 
-        let Some(link_name) = tracing.get("link-name") else {
-            bail!("unexpectedly missing link name on context for invocation");
-        };
-
         let sources = self.sources.read().await;
-        let Some(conn) = sources.get(&(source_id.to_string(), link_name.to_string())) else {
+        let Some(conn) = sources.get(&(source_id.into(), ctx.link_name().into())) else {
             error!(source_id, "no Redis connection found for component");
             bail!("No Redis connection found for component [{source_id}]. Please ensure the URL supplied in the link definition is a valid Redis URL")
         };

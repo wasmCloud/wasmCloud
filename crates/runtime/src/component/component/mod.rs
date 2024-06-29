@@ -1,6 +1,6 @@
-use crate::actor::claims;
 use crate::capability::builtin::{LatticeInterfaceTarget, TargetEntity};
 use crate::capability::{builtin, Interfaces};
+use crate::component::claims;
 use crate::wrpc::{from_wrpc_value, to_wrpc_value};
 use crate::Runtime;
 

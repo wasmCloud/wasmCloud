@@ -164,3 +164,54 @@ async fn integration_get_claims_serial() -> Result<()> {
 
     Ok(())
 }
+
+/// Ensure that labels on host inventories are sorted
+#[tokio::test]
+#[serial]
+async fn integration_get_host_inventory_labels_sorted_serial() -> Result<()> {
+    let wash_instance = TestWashInstance::create_with_extra_args(vec![
+        "--label", "three=3", "--label", "two=2", "--label", "one=1",
+    ])
+    .await?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "get",
+            "inventory",
+            &wash_instance.host_id,
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .context("failed to execute get inventory")?;
+
+    if !output.status.success() {
+        bail!(
+            "failed to execute `wash get inventory`, stdout: {} \nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Since it's very likely that the output itself will contain lines that
+    // have our JSON key, we search for each expected key individually and make sure they came out in an expected (lexicographical order)
+    let one_idx = stdout
+        .find(r#""one": "1""#)
+        .context("missing JSON list entry for one")?;
+    let two_idx = stdout
+        .find(r#""three": "3""#)
+        .context("missing JSON list entry for two")?;
+    let three_idx = stdout
+        .find(r#""two": "2""#)
+        .context("missing JSON list entry for three")?;
+    assert!(
+        one_idx < two_idx && two_idx < three_idx,
+        "one before two before three "
+    );
+    Ok(())
+}

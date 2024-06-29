@@ -80,7 +80,6 @@ Iterate:
 Publish:
   pull         Pull an artifact from an OCI compliant registry
   push         Push an artifact to an OCI compliant registry
-  reg          Perform operations on an OCI registry
 
 Configure:
   completions  Generate shell completions for wash

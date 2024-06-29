@@ -6,6 +6,12 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'Demo of Typescript HTTP hello world server'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/typescript/components/http-hello-world/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/typescript/components/http-hello-world/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/typescript/components/http-hello-world
+    wasmcloud.dev/categories: |
+      http,http-server,typescript,example
 spec:
   components:
     # (Component) A test component that returns a string for any given HTTP request
@@ -27,6 +33,11 @@ spec:
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
+        #
+        # Since this HTTP server provider calls the `http-component` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `http-component` component (the "target"), so the server can invoke
+        # the component to handle a request.
         - type: link
           properties:
             target: http-component

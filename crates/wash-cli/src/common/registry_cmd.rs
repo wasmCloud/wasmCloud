@@ -230,18 +230,18 @@ mod tests {
 
     #[test]
     /// Enumerates multiple options of the `pull` command to ensure API doesn't
-    /// change between versions. This test will fail if `wash reg pull`
+    /// change between versions. This test will fail if `wash pull`
     /// changes syntax, ordering of required elements, or flags.
     fn test_pull_comprehensive() -> Result<()> {
         // test basic `wash reg pull`
         let pull_basic: Cmd = Parser::try_parse_from(["wash", "pull", ECHO_WASM])
-            .context("failed to perform reg pull")?;
+            .context("failed to perform wash pull")?;
         ensure!(matches!(
             pull_basic.sub,
             RegistryCommand::Pull(RegistryPullCommand { url, .. }) if url == ECHO_WASM,
         ));
 
-        // test `wash reg pull`
+        // test `wash pull`
         let pull_all_flags: Cmd =
             Parser::try_parse_from(["wash", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
                 .context("failed to pull with all flags")?;
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     /// Enumerates multiple options of the `push` command to ensure API doesn't
-    /// change between versions. This test will fail if `wash reg push`
+    /// change between versions. This test will fail if `wash push`
     /// changes syntax, ordering of required elements, or flags.
     fn test_push_comprehensive() {
         // Not explicitly used, just a placeholder for a directory
@@ -317,7 +317,7 @@ mod tests {
                 assert_eq!(artifact, format!("{TESTDIR}/echopush.wasm"));
                 assert!(opts.insecure);
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
 
         // Push logging.par.gz and pull from local registry
@@ -344,7 +344,7 @@ mod tests {
                 assert!(opts.insecure);
                 assert!(allow_latest);
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
 
         // Push logging.par.gz to different tag and pull to confirm successful push
@@ -384,7 +384,7 @@ mod tests {
                 assert_eq!(opts.user.unwrap(), "localuser");
                 assert_eq!(opts.password.unwrap(), "supers3cr3t");
             }
-            _ => panic!("`reg push` constructed incorrect command"),
+            _ => panic!("`wash push` constructed incorrect command"),
         };
     }
 }

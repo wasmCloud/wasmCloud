@@ -476,7 +476,7 @@ async fn wrpc_invoke_simple(
 
     match result {
         Ok((values, _tx)) => {
-            if let Some(wrpc_transport::Value::String(result)) = values.first() {
+            if let Some(wrpc_transport_legacy::Value::String(result)) = values.first() {
                 Ok(CommandOutput::new(result.to_string(), HashMap::from([("result".to_string(), json!(result))])))
             } else {
                 bail!("Response from a component was not a String, ensure the function {instance}.{function_name} returns a String.")

@@ -22,7 +22,6 @@ use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::rpc::{health_subject, link_del_subject, link_put_subject, shutdown_subject};
 use wasmcloud_core::{
     HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, LatticeTarget,
-    LegacyClient,
 };
 
 #[cfg(feature = "otel")]
@@ -31,7 +30,9 @@ use wasmcloud_core::TraceContext;
 use wasmcloud_tracing::context::attach_span_context;
 
 use crate::error::{ProviderInitError, ProviderInitResult};
-use crate::{with_connection_event_logging, Context, LinkConfig, Provider, DEFAULT_NATS_ADDR};
+use crate::{
+    with_connection_event_logging, Context, LinkConfig, Provider, WrpcClient, DEFAULT_NATS_ADDR,
+};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -745,7 +746,7 @@ impl ProviderConnection {
     ///
     /// * `target` - Target ID to which invocations will be sent
     #[must_use]
-    pub fn get_wrpc_client(&self, target: &str) -> LegacyClient {
+    pub fn get_wrpc_client(&self, target: &str) -> WrpcClient {
         self.get_wrpc_client_custom(target, None, None)
     }
 
@@ -763,7 +764,7 @@ impl ProviderConnection {
         target: &str,
         headers: Option<HashMap<String, String>>,
         timeout: Option<Duration>,
-    ) -> LegacyClient {
+    ) -> WrpcClient {
         let mut hmap = HeaderMap::new();
         if let Some(values) = headers {
             for (k, v) in &values {
@@ -772,13 +773,13 @@ impl ProviderConnection {
         }
         hmap.insert("source-id", self.provider_id.as_str());
         hmap.insert("target-id", target);
-        wasmcloud_core::wrpc::LegacyClient::new(
+        WrpcClient(wasmcloud_core::wrpc::LegacyClient::new(
             Arc::clone(&self.nats),
             &self.lattice,
             target,
             hmap,
             timeout.unwrap_or_else(|| Duration::from_secs(10)),
-        )
+        ))
     }
 
     /// Get the provider key that was assigned to this host at startup

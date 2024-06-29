@@ -101,15 +101,15 @@ impl capability::Bus for Handler {
         target: capability::TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
         match (target, instance, name) {
             (capability::TargetEntity::Lattice(LatticeInterfaceTarget { id: target_id, .. }), "test-components:foobar/foobar", "foobar") if target_id == "foobar-component-command-preview2" => {
                 let mut params = params.into_iter();
                 match (params.next(), params.next()) {
-                    (Some(wrpc_transport::Value::String(s)), None) => {
+                    (Some(wrpc_transport_legacy::Value::String(s)), None) => {
                         assert_eq!(s, "foo");
-                        Ok(vec![wrpc_transport::Value::String("foobar".into())])
+                        Ok(vec![wrpc_transport_legacy::Value::String("foobar".into())])
                     },
                     _ => bail!("invalid parameters received"),
                 }

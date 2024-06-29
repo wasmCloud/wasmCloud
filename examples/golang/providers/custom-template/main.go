@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -20,7 +21,10 @@ func main() {
 
 func run() error {
 	// Initialize the provider with callbacks to track linked components
-	providerHandler := Handler{}
+	providerHandler := Handler{
+		linkedFrom: make(map[string]map[string]string),
+		linkedTo:   make(map[string]map[string]string),
+	}
 	p, err := provider.New(
 		provider.SourceLinkPut(func(link provider.InterfaceLinkDefinition) error {
 			return handleNewSourceLink(&providerHandler, link)
@@ -82,36 +86,36 @@ func run() error {
 }
 
 func handleNewSourceLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling new source link", "link", link)
-	handler.linkedTo[link.SourceID] = link.SourceConfig
+	fmt.Println("Handling new source link", "link", link)
+	handler.linkedTo[link.Target] = link.SourceConfig
 	return nil
 }
 
 func handleNewTargetLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling new target link", "link", link)
-	handler.linkedFrom[link.Target] = link.TargetConfig
+	fmt.Println("Handling new target link", "link", link)
+	handler.linkedFrom[link.SourceID] = link.TargetConfig
 	return nil
 }
 
 func handleDelSourceLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling del source link", "link", link)
+	fmt.Println("Handling del source link", "link", link)
 	delete(handler.linkedTo, link.SourceID)
 	return nil
 }
 
 func handleDelTargetLink(handler *Handler, link provider.InterfaceLinkDefinition) error {
-	handler.provider.Logger.Info("Handling del target link", "link", link)
+	fmt.Println("Handling del target link", "link", link)
 	delete(handler.linkedFrom, link.Target)
 	return nil
 }
 
-func handleHealthCheck(handler *Handler) string {
-	handler.provider.Logger.Info("Handling health check")
+func handleHealthCheck(_ *Handler) string {
+	fmt.Println("Handling health check")
 	return "provider healthy"
 }
 
 func handleShutdown(handler *Handler) error {
-	handler.provider.Logger.Info("Handling shutdown")
+	fmt.Println("Handling shutdown")
 	clear(handler.linkedFrom)
 	clear(handler.linkedTo)
 	return nil

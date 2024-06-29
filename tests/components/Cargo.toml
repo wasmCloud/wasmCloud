@@ -14,6 +14,7 @@ features = ["docs"]
 [build-dependencies]
 anyhow = { workspace = true, features = ["std"] }
 futures = { workspace = true, features = ["alloc", "async-await"] }
+heck = { workspace = true }
 nkeys = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
@@ -26,3 +27,6 @@ tokio = { workspace = true, features = [
 wascap = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wit-component = { workspace = true }
+rustversion = { workspace = true }
+semver = { workspace = true, features = [ "serde" ] }
+url = { workspace = true, features = [ "serde" ] }

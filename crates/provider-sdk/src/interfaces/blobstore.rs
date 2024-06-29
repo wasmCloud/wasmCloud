@@ -7,7 +7,7 @@ use futures::{Stream, StreamExt as _};
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, warn};
 use wrpc_interface_blobstore::{BlobstoreInvocations, ObjectId};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 
 use crate::{get_connection, run_provider, Context, Provider};
 
@@ -114,7 +114,7 @@ pub async fn serve_blobstore(
             mut has_object,
             mut move_object,
             mut write_container_data,
-        } = wrpc_interface_blobstore::serve_blobstore(&wrpc.0).await?;
+        } = wrpc_interface_blobstore::serve_blobstore(&wrpc).await?;
         loop {
             select! {
                 invocation = clear_container.next() => {

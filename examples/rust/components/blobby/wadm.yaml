@@ -11,6 +11,12 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'wasmCloud Blobby Example'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/blobby/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/blobby
+    wasmcloud.dev/categories: |
+      http,http-server,rust,object-storage,blobstore,example
 spec:
   components:
     - name: blobby
@@ -21,6 +27,9 @@ spec:
         - type: spreadscaler
           properties:
             replicas: 1
+        # Establish a unidirectional link to the blobstore,
+        # so the `blobby` component can make use of blobstore functionality
+        # (i.e. reading/writing data blobs)
         - type: link
           properties:
             target: blobstore
@@ -33,13 +42,18 @@ spec:
                   root: '/tmp'
 
     # Capability Providers
-    - name: httpserver
+    - name: http
       type: capability
       properties:
         image: ghcr.io/wasmcloud/http-server:0.21.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
+        #
+        # Since the HTTP server calls the `blobby` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `blobby` component (the "target"), so the server can invoke
+        # the component to handle a request.
         - type: link
           properties:
             target: blobby

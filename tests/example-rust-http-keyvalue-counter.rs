@@ -6,7 +6,6 @@ use core::time::Duration;
 use std::net::Ipv4Addr;
 
 use anyhow::Context as _;
-use test_components::RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER;
 use tokio::time::sleep;
 use tokio::{join, try_join};
 use tracing_subscriber::prelude::*;
@@ -17,6 +16,8 @@ use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
     lattice::link::assert_advertise_link,
 };
+
+use test_components::RUST_HTTP_KEYVALUE_COUNTER;
 
 pub mod common;
 use common::free_port;
@@ -129,7 +130,7 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
             assert_scale_component(
                 &ctl_client,
                 &host.host_key(),
-                format!("file://{RUST_EXAMPLE_HTTP_KEYVALUE_COUNTER}"),
+                format!("file://{RUST_HTTP_KEYVALUE_COUNTER}"),
                 COMPONENT_ID,
                 None,
                 5,

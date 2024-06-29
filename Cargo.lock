@@ -460,9 +460,9 @@ checksum = "0c4b4d0bd25bd0b74681c0ad21497610ce1b7c91b1022cd21c80c6fbdd9476b0"
 
 [[package]]
 name = "aws-config"
-version = "1.5.1"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ac9889352d632214df943e26740c46a0f3da6e329fbd28164fe7ae1b061da7b"
+checksum = "2368fb843e9eec932f7789d64d0e05850f4a79067188c657e572f1f5a7589df0"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -522,9 +522,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.34.0"
+version = "1.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "724119d8fd2d2638b9979673f3b5c2979fa388c9ca27815e3cb5ad6234fac3f5"
+checksum = "2ecec5514e9d9c76c5e9489ca65ab9055ae0b3c49da3a1afd452c57cb68734fb"
 dependencies = [
  "ahash",
  "aws-credential-types",
@@ -557,9 +557,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.29.0"
+version = "1.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "458f1031e094b1411b59b49b19e4118f069e1fe13a9c5b8888e933daaf7ffdd6"
+checksum = "c820248cb02e4ea83630ad2e43d0721cdbccedba5ac902cd0b6fb84d7271f205"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -687,9 +687,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.5.5"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0d3965f6417a92a6d1009c5958a67042f57e46342afb37ca58f9ad26744ec73"
+checksum = "db83b08939838d18e33b5dbaf1a0f048f28c10bd28071ab7ce6f245451855414"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -701,6 +701,7 @@ dependencies = [
  "http 0.2.12",
  "http-body 0.4.6",
  "http-body 1.0.0",
+ "httparse",
  "hyper 0.14.29",
  "hyper-rustls 0.24.2",
  "once_cell",
@@ -2814,9 +2815,9 @@ dependencies = [
 
 [[package]]
 name = "httparse"
-version = "1.9.4"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fcc0b4a115bf80b728eb8ea024ad5bd707b615bfed49e0665b6e0f86fd082d9"
+checksum = "d897f394bad6a705d5f4104762e116a75639e470d80901eed05a860a95cb1904"
 
 [[package]]
 name = "httpdate"
@@ -5781,10 +5782,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
+ "heck 0.5.0",
  "nkeys 0.4.1",
+ "rustversion",
+ "semver",
  "serde",
  "serde_json",
  "tokio",
+ "url",
  "wascap 0.15.0",
  "wasmcloud-component-adapters",
  "wit-component 0.208.1",
@@ -7063,6 +7068,7 @@ dependencies = [
  "redis",
  "reqwest 0.12.5",
  "rmp-serde",
+ "rustversion",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -7353,7 +7359,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wrpc-interface-blobstore",
- "wrpc-transport 0.26.0",
+ "wrpc-transport-legacy",
 ]
 
 [[package]]
@@ -7397,7 +7403,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "webpki-roots 0.26.3",
  "wrpc-interface-http",
- "wrpc-transport 0.26.0",
+ "wrpc-transport-legacy",
 ]
 
 [[package]]
@@ -7426,7 +7432,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-keyvalue-redis"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "async-nats 0.35.1 (git+https://github.com/rvolosatovs/nats.rs?branch=feat/command-sender)",

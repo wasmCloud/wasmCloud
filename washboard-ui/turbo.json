@@ -1,36 +1,72 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["**/.env.*local"],
-  "pipeline": {
+  "globalDependencies": [
+    "**/.env.*local"
+  ],
+  "tasks": {
     "lint": {
-      "dependsOn": ["^lint", "^build"]
+      "dependsOn": [
+        "^lint",
+        "^build"
+      ]
     },
     "lint:fix": {
-      "dependsOn": ["^lint:fix"]
+      "dependsOn": [
+        "^lint:fix"
+      ]
     },
     "format": {
-      "dependsOn": ["^format"]
+      "dependsOn": [
+        "^format"
+      ]
     },
     "format:fix": {
-      "dependsOn": ["^format:fix"]
+      "dependsOn": [
+        "^format:fix"
+      ]
     },
     "test:e2e": {
-      "outputs": ["playwright-report", "test-results"]
+      "outputs": [
+        "playwright-report",
+        "test-results"
+      ]
     },
     "test:unit": {},
     "test": {
-      "dependsOn": ["test:unit", "test:e2e"]
+      "dependsOn": [
+        "test:unit",
+        "test:e2e"
+      ]
     },
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**", "build/**"],
-      "dotEnv": [".env.production.local", ".env.local", ".env.production", ".env"],
-      "env": ["NODE_ENV"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**",
+        "build/**"
+      ],
+      "env": [
+        "NODE_ENV"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env.production.local",
+        ".env.local",
+        ".env.production",
+        ".env"
+      ]
     },
     "dev": {
       "cache": false,
       "persistent": true,
-      "dotEnv": [".env.development.local", ".env.local", ".env.development", ".env"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env.development.local",
+        ".env.local",
+        ".env.development",
+        ".env"
+      ]
     }
   }
 }

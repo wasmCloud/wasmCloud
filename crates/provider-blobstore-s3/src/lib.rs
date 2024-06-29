@@ -43,8 +43,12 @@ use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 const ALIAS_PREFIX: &str = "alias_";
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
 
-/// Configuration for connecting to S3.
+/// Configuration for connecting to S3-compatible storage
 ///
+/// This value is meant to be parsed from link configuration, and can
+/// represent any S3-compatible storage (excluding AWS-specific things like STS)
+///
+/// NOTE that when storage config is provided via link configuration
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct StorageConfig {
     /// AWS_ACCESS_KEY_ID, can be specified from environment

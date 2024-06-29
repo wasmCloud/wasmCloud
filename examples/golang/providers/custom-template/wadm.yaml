@@ -5,6 +5,12 @@ metadata:
   annotations:
     version: v0.0.1
     description: 'An application with a provider and component built for extending wasmCloud with custom capabilities'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/providers/custom-template/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/providers/custom-template/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/providers/custom-template
+    wasmcloud.dev/categories: |
+      capability-provider,provider,template,http-server,tinygo,golang,example
 spec:
   components:
     - name: test-component
@@ -16,6 +22,10 @@ spec:
           properties:
             replicas: 1
         # Link the component to the provider on wasmcloud:example/system-info
+        # 
+        # Establish a unidirectional link to the custom-template provider, over the 
+        # WIT namespace wasmcloud:example/system-info, so the `test-component` component
+        # can make use of outgoing handler functionality (i.e. calling functions in the system-info interface)            
         - type: link
           properties:
             target: custom-template
@@ -34,6 +44,10 @@ spec:
               foo: bar
       traits:
         # Link the provider to the component on wasmcloud:example/process-data
+        #
+        # Create a uni-directional link from the custom-template provider (the "source") to 
+        # the `test-component` component (the "target"), so that the provider can call functions in the
+        # wasmcloud:example/process-data interface on `test-component`.
         - type: link
           properties:
             target: test-component
