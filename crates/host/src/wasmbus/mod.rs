@@ -1581,7 +1581,7 @@ impl Host {
                     Arc::new(
                         paths
                             .iter()
-                            .map(|p| Arc::from(p.as_slice()))
+                            .map(|p| Arc::from(p.as_ref().iter().cloned().collect::<Vec<_>>()))
                             .collect::<Vec<_>>(),
                     ),
                 );

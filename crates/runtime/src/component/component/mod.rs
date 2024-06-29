@@ -287,7 +287,7 @@ pub struct Component {
     component_id: String,
     client: Arc<async_nats::Client>,
     // A map of function names to their respective paths for wrpc params
-    paths: Arc<HashMap<String, Vec<Vec<Option<usize>>>>>,
+    paths: Arc<HashMap<String, Arc<[Arc<[Option<usize>]>]>>>,
 }
 
 impl Debug for Component {
@@ -570,35 +570,35 @@ impl Component {
         // TODO: Record the substituted type exports, not parser exports
 
         // Gather paths for wrpc transport for each exported function
-        let mut paths: HashMap<String, Vec<Vec<Option<usize>>>> = HashMap::new();
+        let mut paths: HashMap<String, Arc<[Arc<[Option<usize>]>]>> = HashMap::new();
         for (_, world_item) in exports {
             if let WorldItem::Function(func) = world_item {
-                let mut func_paths = Vec::new();
-                for (_, ty) in func.params.iter() {
-                    let (nested, _is_fut) = wrpc_introspect::async_paths_ty(&resolve, ty);
-                    for path in nested {
-                        func_paths.push(
-                            path.into_iter()
-                                .map(|opt| opt.map(|x| x as usize))
-                                .collect(),
-                        );
-                    }
-                }
+                let func_paths: Arc<[Arc<[Option<usize>]>]> = func
+                    .params
+                    .iter()
+                    .map(|(_, ty)| {
+                        let (nested, _is_fut) = wrpc_introspect::async_paths_ty(&resolve, ty);
+                        nested
+                            .into_iter()
+                            .flat_map(|path| path.into_iter().map(|x| x.map(|y| y as usize)))
+                            .collect()
+                    })
+                    .collect();
                 paths.insert(func.name.clone(), func_paths);
             }
             if let WorldItem::Interface(id) = world_item {
                 for func in resolve.interfaces[*id].functions.values() {
-                    let mut func_paths = Vec::new();
-                    for (_, ty) in func.params.iter() {
-                        let (nested, _is_fut) = wrpc_introspect::async_paths_ty(&resolve, ty);
-                        for path in nested {
-                            func_paths.push(
-                                path.into_iter()
-                                    .map(|opt| opt.map(|x| x as usize))
-                                    .collect(),
-                            );
-                        }
-                    }
+                    let func_paths: Arc<[Arc<[Option<usize>]>]> = func
+                        .params
+                        .iter()
+                        .map(|(_, ty)| {
+                            let (nested, _is_fut) = wrpc_introspect::async_paths_ty(&resolve, ty);
+                            nested
+                                .into_iter()
+                                .flat_map(|path| path.into_iter().map(|x| x.map(|y| y as usize)))
+                                .collect()
+                        })
+                        .collect();
                     paths.insert(func.name.clone(), func_paths);
                 }
             }
@@ -698,7 +698,7 @@ impl Component {
     }
 
     /// Returns the paths required for wrpc transport for a specific function name.
-    pub fn paths(&self) -> &Arc<HashMap<String, Vec<Vec<Option<usize>>>>> {
+    pub fn paths(&self) -> &Arc<HashMap<String, Arc<[Arc<[Option<usize>]>]>>> {
         &self.paths
     }
 
