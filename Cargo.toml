@@ -166,6 +166,7 @@ wasmcloud-test-util = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["hyper"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+wrpc-types = { workspace = true }
 
 [workspace]
 members = ["crates/*"]
@@ -336,13 +337,16 @@ which = { version = "4", default-features = false }
 wit-bindgen = { version = "0.25", default-features = false }
 wit-bindgen-core = { version = "0.25", default-features = false }
 wit-bindgen-go = { version = "0.24", default-features = false }
-wit-bindgen-wrpc = { version = "0.3.7", default-features = false }
+wit-bindgen-wrpc = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
 wit-component = { version = "0.208", default-features = false }
 wit-parser = { version = "0.208", default-features = false }
-wrpc-interface-blobstore = { version = "0.16", default-features = false }
-wrpc-interface-http = { version = "0.22", default-features = false }
-wrpc-runtime-wasmtime = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
-wrpc-transport = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
-wrpc-transport-nats = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
-wrpc-introspect = { git = "https://github.com/rvolosatovs/wrpc.git", branch = "fix/transport-traits", default-features = false }
+wrpc-runtime-wasmtime = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-transport = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-transport-legacy = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-transport-nats-legacy = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-transport-nats = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-introspect = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-read-value", default-features = false }
+wrpc-interface-blobstore = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-wrpc-http-update", default-features = false }
+wrpc-interface-http = { git = "https://github.com/LUK3ARK/wrpc.git", branch = "wasmcloud-wrpc-http-update", default-features = false, features = ["http-body", "wasmtime-wasi-http", "hyper"] }
+wrpc-types = { version = "0.6", default-features = false }
 indexmap = "2.2.6"

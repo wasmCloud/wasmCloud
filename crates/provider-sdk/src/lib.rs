@@ -5,9 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::Context as _;
 use async_nats::{ConnectOptions, Event};
-use provider::invocation_context;
 use provider::ProviderInitState;
-use tower::ServiceExt;
 use tracing::{error, info, warn};
 
 pub mod error;

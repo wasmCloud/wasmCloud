@@ -1,5 +1,7 @@
 use crate::actor::claims;
-use crate::capability::{builtin, Bus, Interfaces};
+use crate::capability::builtin::{LatticeInterfaceTarget, TargetEntity};
+use crate::capability::{builtin, Interfaces};
+use crate::wrpc::{from_wrpc_value, to_wrpc_value};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -11,19 +13,19 @@ use core::time::Duration;
 use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use futures::future::try_join_all;
-use futures::try_join;
+use futures::executor::block_on;
 use indexmap::IndexMap;
-use std::collections::{hash_map, HashMap};
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
-use tokio::sync::Mutex;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Encoder;
-use tracing::{error, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 use wascap::jwt;
 use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
-use wasmcloud_core::CallTargetInterface;
+use wasmcloud_core::{CallTargetInterface, LatticeTarget};
+use wasmcloud_tracing::context::TraceContextInjector;
 use wasmtime::component::{
     self, types, InstancePre, Linker, ResourceTable, ResourceTableError, Val,
 };
@@ -35,11 +37,8 @@ use wasmtime_wasi::{
 };
 use wasmtime_wasi_http::WasiHttpCtx;
 use wit_parser::{Function, Resolve, WorldItem, WorldKey};
-use wrpc_runtime_wasmtime::read_value;
-use wrpc_runtime_wasmtime::ValEncoder;
-use wrpc_transport::Index;
-use wrpc_transport::Session;
-use wrpc_transport::{Invocation, Invoke};
+use wrpc_runtime_wasmtime::{read_value, ValEncoder, WrpcView};
+use wrpc_transport::Invoke;
 use wrpc_transport_nats::{Client, Reader, SubjectWriter};
 
 mod blobstore;
@@ -245,11 +244,18 @@ impl StdoutStream for StdioStream<Box<dyn HostOutputStream>> {
 
 /// Context used for running executions
 pub struct Ctx {
+    client: Arc<wrpc_transport_nats::Client>,
     wasi: WasiCtx,
     http: WasiHttpCtx,
     table: ResourceTable,
     handler: builtin::Handler,
     stderr: StdioStream<Box<dyn HostOutputStream>>,
+}
+
+impl WrpcView<wrpc_transport_nats::Client> for Ctx {
+    fn client(&self) -> &wrpc_transport_nats::Client {
+        &self.client
+    }
 }
 
 impl WasiView for Ctx {
@@ -274,46 +280,48 @@ pub struct Component {
     engine: wasmtime::Engine,
     claims: Option<jwt::Claims<jwt::Component>>,
     handler: builtin::HandlerBuilder,
-    polyfills: Arc<HashMap<String, HashMap<String, Function>>>,
     exports: Arc<HashMap<String, HashMap<String, Function>>>,
     ty: types::Component,
     instance_pre: wasmtime::component::InstancePre<Ctx>,
     max_execution_time: Duration,
-    // A map of function names to their respective paths for params
+    component_id: String,
+    client: Arc<async_nats::Client>,
+    // A map of function names to their respective paths for wrpc params
     paths: Arc<HashMap<String, Vec<Vec<Option<usize>>>>>,
 }
 
 impl Debug for Component {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO - add new fields
         f.debug_struct("Component")
             .field("claims", &self.claims)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
-            .field("polyfills", &self.polyfills)
             .field("exports", &self.exports)
             .field("ty", &self.ty)
             .field("max_execution_time", &self.max_execution_time)
             .field("paths", &self.paths)
+            .field("client", &self.client)
             .finish_non_exhaustive()
     }
 }
 
 /// Polyfills all missing imports and returns instance -> function -> type map for each polyfill
 #[instrument(level = "trace", skip_all)]
-fn polyfill<'a, T>(
+async fn polyfill<'a, T>(
     resolve: &wit_parser::Resolve,
     imports: T,
     engine: &wasmtime::Engine,
     comp_ty: &types::Component,
     linker: &mut Linker<Ctx>,
-) -> HashMap<String, HashMap<String, Function>>
+    component_id: &str,
+    interface_links: &Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>>,
+    targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+) -> ()
 where
     T: IntoIterator<Item = (&'a wit_parser::WorldKey, &'a wit_parser::WorldItem)>,
     T::IntoIter: ExactSizeIterator,
 {
     let imports = imports.into_iter();
-    let mut polyfills = HashMap::with_capacity(imports.len());
     for (wk, item) in imports {
         let instance_name = resolve.name_world_key(wk);
         // Avoid polyfilling instances, for which static bindings are linked
@@ -323,7 +331,6 @@ where
         };
         let Some(wit_parser::Interface {
             name: interface_name,
-            functions,
             package,
             ..
         }) = resolve.interfaces.get(*interface)
@@ -353,12 +360,13 @@ where
             );
             continue;
         };
-        let target = Arc::new(CallTargetInterface {
+        let target = CallTargetInterface {
             namespace: package_name.namespace.to_string(),
             package: package_name.name.to_string(),
             interface: interface_name.to_string(),
-        });
-        let Some(types::ComponentItem::ComponentInstance(_instance)) =
+        };
+
+        let Some(types::ComponentItem::ComponentInstance(instance)) =
             comp_ty.get_import(engine, &instance_name)
         else {
             trace!(
@@ -379,169 +387,31 @@ where
                 continue;
             }
         };
-        let hash_map::Entry::Vacant(instance_import) = polyfills.entry(instance_name.to_string())
-        else {
-            error!("duplicate instance import");
-            continue;
-        };
-        let mut function_imports = HashMap::with_capacity(functions.len());
-        let instance_name = Arc::new(instance_name);
-        for (func_name, ty) in functions {
-            trace!(
-                ?instance_name,
-                func_name,
-                "polyfill component function import"
-            );
 
-            let hash_map::Entry::Vacant(func_import) =
-                function_imports.entry(func_name.to_string())
-            else {
-                error!("duplicate function import");
-                continue;
-            };
-
-            let instance_name = Arc::clone(&instance_name);
-            let func_name = Arc::new(func_name.to_string());
-            let target = Arc::clone(&target);
-            let rpc_name = wrpc_introspect::rpc_func_name(ty);
-            let (param_types, result_types) = match comp_ty.get_import(engine, &ty.name) {
-                Some(types::ComponentItem::ComponentFunc(i)) => (
-                    i.params().collect::<Vec<_>>().into_iter(),
-                    i.results().collect::<Vec<_>>().into_iter(),
-                ),
-                Some(_) | None => {
-                    error!(
-                        "Function param types not found for instance: {} and name: {}",
-                        instance_name, func_name
-                    );
+        let LatticeInterfaceTarget { link_name, .. } =
+            match identify_wrpc_target(interface_links, targets, &target, component_id).await {
+                Some(target) => target,
+                None => {
+                    error!(?instance_name, "failed to identify wrpc target");
                     continue;
                 }
             };
+        let injector = TraceContextInjector::default_with_span();
+        let mut headers = injector_to_headers(&injector);
+        headers.insert("source-id", component_id.as_ref());
+        headers.insert("link-name", link_name.as_str());
 
-            let result_types_vec: Vec<_> = result_types.collect();
-            let result_types_arc = Arc::new(result_types_vec);
-
-            if let Err(err) = linker.func_new_async(rpc_name, move |mut store, params, results| {
-                let instance_name = Arc::clone(&instance_name);
-                let func_name = Arc::clone(&func_name);
-                let target = Arc::clone(&target);
-                let result_types_arc = Arc::clone(&result_types_arc);
-
-                let handler = store.data().handler.clone();
-
-                let func_paths = match handler.get_func_paths(&instance_name, &func_name) {
-                    Some(func_paths) => func_paths,
-                    None => {
-                        error!(
-                            "Function paths not found for instance: {} and name: {}",
-                            instance_name, func_name
-                        );
-                        return Box::new(async { Ok::<(), anyhow::Error>(()) });
-                    }
-                };
-
-                // Encode sync params and gather deferred asyncs
-                let mut buf = BytesMut::default();
-                let mut deferred = vec![];
-                for (v, ref ty) in zip(&*params, param_types.clone()) {
-                    let mut enc: ValEncoder<Ctx, <Client as Invoke>::Outgoing> =
-                        ValEncoder::new(store.as_context_mut(), ty);
-                    if let Err(err) = enc
-                        .encode(v, &mut buf)
-                        .context("failed to encode parameter")
-                    {
-                        error!(?err, "failed to encode parameter");
-                        return Box::new(async { Ok::<(), anyhow::Error>(()) });
-                    }
-                    deferred.push(enc.deferred);
-                }
-
-                Box::new(async move {
-                    let target = match handler.identify_interface_target(&target).await {
-                        Some(target) => target,
-                        None => {
-                            error!("failed to identify interface target");
-                            return Ok::<(), anyhow::Error>(());
-                        }
-                    };
-
-                    let Invocation {
-                        outgoing,
-                        incoming,
-                        session,
-                    } = handler
-                        .call(
-                            target,
-                            &instance_name,
-                            &func_name,
-                            buf,
-                            func_paths
-                                .iter()
-                                .map(|v| v.iter().map(|a| a.as_ref().map(|&x| x)).collect())
-                                .collect(),
-                        )
-                        .await
-                        .context("failed to call target interface")?;
-
-                    let results_incoming = try_join!(
-                        // Stream async params
-                        async {
-                            try_join_all(
-                                zip(0.., deferred)
-                                    .filter_map(|(i, f)| f.map(|f| (outgoing.index(&[i]), f)))
-                                    .map(|(w, f)| async move {
-                                        let w = w.map_err(Into::<anyhow::Error>::into)?;
-                                        f(w).await
-                                    }),
-                            )
-                            .await
-                            .context("failed to write asynchronous parameters")?;
-                            pin!(outgoing)
-                                .shutdown()
-                                .await
-                                .context("failed to shutdown outgoing stream")
-                        },
-                        // Receive returns
-                        async {
-                            let mut incoming = pin!(incoming);
-                            let mut results_incoming = Vec::with_capacity(result_types_arc.len());
-                            for (i, ty) in result_types_arc.iter().enumerate() {
-                                let mut val = Val::Bool(false);
-                                read_value(
-                                    &mut store.as_context_mut(),
-                                    &mut incoming,
-                                    &mut val,
-                                    &ty,
-                                    &[i],
-                                )
-                                .await
-                                .context("failed to decode result value")?;
-                                results_incoming.push(val);
-                            }
-                            Ok(results_incoming)
-                        },
-                    )?
-                    .1;
-
-                    session
-                        .finish(Ok(()))
-                        .await
-                        .map_err(|err| anyhow!(err).context("session failed"))?;
-
-                    // Ensure the result values are properly set
-                    for (result, value) in results.iter_mut().zip(results_incoming) {
-                        *result = value;
-                    }
-                    Ok::<(), anyhow::Error>(())
-                })
-            }) {
-                error!(?err, "failed to polyfill component function import");
-            }
-            func_import.insert(ty.clone());
+        if let Err(err) = wrpc_runtime_wasmtime::link_instance(
+            engine,
+            &mut linker,
+            instance,
+            instance_name.as_ref(),
+            Some(headers),
+        ) {
+            trace!(?err, ?instance_name, "failed to link instance");
+            continue;
         }
-        instance_import.insert(function_imports);
     }
-    polyfills
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -551,6 +421,9 @@ fn instantiate(
     ty: types::Component,
     instance_pre: InstancePre<Ctx>,
     max_execution_time: Duration,
+    client: Arc<async_nats::Client>,
+    lattice: &str,
+    component_id: &str,
 ) -> anyhow::Result<Instance> {
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
@@ -587,8 +460,14 @@ fn instantiate(
         }
     }
 
+    let client = wrpc_transport_nats::Client::new(
+        Arc::clone(&client),
+        format!("{}.{}", lattice, component_id),
+    );
+
     let handler = handler.into();
     let ctx = Ctx {
+        client: Arc::new(client),
         wasi,
         http: WasiHttpCtx::new(),
         table,
@@ -607,7 +486,17 @@ impl Component {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
     /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
-    pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
+    pub async fn new(
+        rt: &Runtime,
+        wasm: impl AsRef<[u8]>,
+        component_id: String,
+        lattice: &str,
+        interface_links: &Arc<
+            RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>,
+        >,
+        targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+        client: Arc<async_nats::Client>,
+    ) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         if wasmparser::Parser::is_core_wasm(wasm) {
             let wasm = wit_component::ComponentEncoder::default()
@@ -620,7 +509,16 @@ impl Component {
                 .context("failed to add WASI preview1 adapter")?
                 .encode()
                 .context("failed to encode a component from module")?;
-            return Self::new(rt, wasm);
+            return Box::pin(Self::new(
+                rt,
+                wasm,
+                component_id,
+                lattice,
+                interface_links,
+                targets,
+                client,
+            ))
+            .await;
         }
         let engine = rt.engine.clone();
         let claims = claims(wasm)?;
@@ -657,7 +555,17 @@ impl Component {
             .context("component world missing")?;
 
         let ty = component.component_type();
-        let polyfills = Arc::new(polyfill(&resolve, imports, &engine, &ty, &mut linker));
+        polyfill(
+            &resolve,
+            imports,
+            &engine,
+            &ty,
+            &mut linker,
+            &component_id,
+            interface_links,
+            targets,
+        )
+        .await;
         let instance_pre = linker.instantiate_pre(&component)?;
         // TODO: Record the substituted type exports, not parser exports
 
@@ -700,12 +608,13 @@ impl Component {
             engine,
             claims,
             handler: rt.handler.clone(),
-            polyfills,
             exports: Arc::new(function_exports(&resolve, exports)),
             ty,
             instance_pre,
             max_execution_time: rt.max_execution_time,
+            client,
             paths: Arc::new(paths),
+            component_id,
         })
     }
 
@@ -723,12 +632,31 @@ impl Component {
     ///
     /// Fails if either reading `wasm` fails or [Self::new] fails
     #[instrument(skip(wasm))]
-    pub async fn read(rt: &Runtime, mut wasm: impl AsyncRead + Unpin) -> anyhow::Result<Self> {
+    pub async fn read(
+        rt: &Runtime,
+        mut wasm: impl AsyncRead + Unpin,
+        component_id: &str,
+        lattice: &str,
+        client: Arc<async_nats::Client>,
+        interface_links: &Arc<
+            RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>,
+        >,
+        targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    ) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf)
             .await
             .context("failed to read Wasm")?;
-        Self::new(rt, buf)
+        Self::new(
+            rt,
+            buf,
+            component_id.to_string(),
+            lattice,
+            interface_links,
+            targets,
+            client,
+        )
+        .await
     }
 
     /// Reads the WebAssembly binary synchronously and calls [Component::new].
@@ -737,10 +665,28 @@ impl Component {
     ///
     /// Fails if either reading `wasm` fails or [Self::new] fails
     #[instrument(skip(wasm))]
-    pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
+    pub fn read_sync(
+        rt: &Runtime,
+        mut wasm: impl std::io::Read,
+        component_id: &str,
+        lattice: &str,
+        client: Arc<async_nats::Client>,
+        interface_links: &Arc<
+            RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>,
+        >,
+        targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    ) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
-        Self::new(rt, buf)
+        block_on(Self::new(
+            rt,
+            buf,
+            component_id.to_string(),
+            lattice,
+            interface_links,
+            targets,
+            client,
+        ))
     }
 
     /// Returns a map of dynamic function export types.
@@ -756,14 +702,6 @@ impl Component {
         &self.paths
     }
 
-    /// Returns a map of dynamic polyfilled function import types.
-    /// Top level map is keyed by the instance name.
-    /// Inner map is keyed by exported function name.
-    #[must_use]
-    pub fn polyfills(&self) -> &Arc<HashMap<String, HashMap<String, Function>>> {
-        &self.polyfills
-    }
-
     /// [Claims](jwt::Claims) associated with this [Component].
     #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Component>> {
@@ -772,14 +710,15 @@ impl Component {
 
     /// Like [Self::instantiate], but moves the [Component].
     #[instrument]
-    pub fn into_instance(self) -> anyhow::Result<Instance> {
-        self.instantiate()
+    pub fn into_instance(self, lattice: &str) -> anyhow::Result<Instance> {
+        self.instantiate(lattice)
     }
 
     /// Like [Self::instantiate], but moves the [Component] and returns the associated [jwt::Claims].
     #[instrument]
     pub fn into_instance_claims(
         self,
+        lattice: &str,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Component>>)> {
         let instance = instantiate(
             &self.engine,
@@ -787,19 +726,26 @@ impl Component {
             self.ty,
             self.instance_pre,
             self.max_execution_time,
+            self.client,
+            lattice,
+            &self.component_id,
         )?;
         Ok((instance, self.claims))
     }
 
-    /// Instantiates a [Component] and returns the resulting [Instance].
+    /// Instantiates a [Component] for the specified lattice
+    /// and returns the resulting [Instance].
     #[instrument(level = "debug", skip(self))]
-    pub fn instantiate(&self) -> anyhow::Result<Instance> {
+    pub fn instantiate(&self, lattice: &str) -> anyhow::Result<Instance> {
         instantiate(
             &self.engine,
             self.handler.clone(),
             self.ty.clone(),
             self.instance_pre.clone(),
             self.max_execution_time,
+            Arc::clone(&self.client),
+            lattice,
+            &self.component_id,
         )
     }
 }
@@ -932,6 +878,49 @@ impl Instance {
 
         Ok(())
     }
+
+    /// Invoke an operation on an [Instance] producing a result, using legacy api.
+    #[instrument(level = "debug", skip(self, params, instance, name), fields(interface = instance, function = name))]
+    pub async fn call_legacy(
+        &mut self,
+        instance: &str,
+        name: &str,
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
+        let component = self
+            .instance_pre
+            .instantiate_async(&mut self.store)
+            .await
+            .context("failed to instantiate component")?;
+        let func = {
+            let mut exports = component.exports(&mut self.store);
+            if instance.is_empty() {
+                exports.root()
+            } else {
+                exports
+                    .instance(instance)
+                    .with_context(|| format!("instance of `{instance}` not found"))?
+            }
+            .func(name)
+            .with_context(|| format!("function `{name}` not found"))?
+        };
+        let params: Vec<_> = zip(params, func.params(&self.store).iter())
+            .map(|(val, ty)| from_wrpc_value(&mut self.store, val, ty))
+            .collect::<anyhow::Result<_>>()
+            .context("failed to convert wasmtime values to wRPC values")?;
+        let results_ty = func.results(&self.store);
+        let mut results = vec![Val::Bool(false); results_ty.len()];
+        func.call_async(&mut self.store, &params, &mut results)
+            .await
+            .context("failed to call function")?;
+        func.post_return_async(&mut self.store)
+            .await
+            .context("failed to perform post-return cleanup")?;
+        zip(results, results_ty.iter())
+            .map(|(val, ty)| to_wrpc_value(&mut self.store, &val, ty))
+            .collect::<anyhow::Result<_>>()
+            .context("failed to convert wasmtime values to wRPC values")
+    }
 }
 
 /// Instance of a guest interface `T`
@@ -959,4 +948,72 @@ pub fn function_exports(
     }
 
     result
+}
+
+fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::HeaderMap {
+    injector
+        .iter()
+        .filter_map(|(k, v)| {
+            // There's not really anything we can do about headers that don't parse
+            let name = async_nats::header::HeaderName::from_str(k.as_str()).ok()?;
+            let value = async_nats::header::HeaderValue::from_str(v.as_str()).ok()?;
+            Some((name, value))
+        })
+        .collect()
+}
+
+#[instrument(level = "trace")]
+async fn identify_interface_target(
+    interface_links: &Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>>,
+    targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    target_interface: &CallTargetInterface,
+    component_id: &str,
+) -> Option<TargetEntity> {
+    let links = interface_links.read().await;
+    let targets = targets.read().await;
+    let link_name = targets
+        .get(target_interface)
+        .map_or("default", String::as_str);
+    let (namespace, package, interface) = target_interface.as_parts();
+
+    // Determine the lattice target ID we should be sending to
+    let lattice_target_id = links
+        .get(link_name)
+        .and_then(|packages| packages.get(&format!("{namespace}:{package}")))
+        .and_then(|interfaces| interfaces.get(interface));
+
+    // If we managed to find a target ID, convert it into an entity
+    let target_entity = lattice_target_id.map(|id| {
+        TargetEntity::Lattice(LatticeInterfaceTarget {
+            id: id.clone(),
+            interface: target_interface.clone(),
+            link_name: link_name.to_string(),
+        })
+    });
+
+    if target_entity.is_none() {
+        debug!(
+            ?links,
+            interface,
+            namespace,
+            package,
+            component_id,
+            "component is not linked to a lattice target for the given interface"
+        );
+    }
+    target_entity
+}
+
+async fn identify_wrpc_target(
+    interface_links: &Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>>,
+    targets: &Arc<RwLock<HashMap<CallTargetInterface, String>>>,
+    target_interface: &CallTargetInterface,
+    component_id: &str,
+) -> Option<LatticeInterfaceTarget> {
+    let target =
+        identify_interface_target(interface_links, targets, target_interface, component_id).await;
+    let Some(TargetEntity::Lattice(lattice_target)) = target else {
+        return None;
+    };
+    Some(lattice_target)
 }

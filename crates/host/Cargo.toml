@@ -63,7 +63,14 @@ wasmtime-wasi-http = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 tokio-util = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-transport-legacy = { workspace = true }
 wrpc-transport-nats = { workspace = true }
+wrpc-transport-nats-legacy = { workspace = true }
 wrpc-runtime-wasmtime = { workspace = true }
 wit-parser = { workspace = true }
 wrpc-introspect = { workspace = true }
+wrpc-interface-blobstore = { workspace = true }
+wrpc-types = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["hyper"] }
+tower = { workspace = true }
+hyper = { workspace = true }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
@@ -22,8 +22,6 @@ use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 
 use wasmcloud_core::CallTargetInterface;
 use wasmtime_wasi_http::types::OutgoingRequestConfig;
-use wrpc_transport::Invocation;
-use wrpc_transport_nats::{ClientErrorWriter, ParamWriter, Reader};
 
 pub type IncomingInputStream = Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send + Sync + Unpin>;
 
@@ -379,22 +377,6 @@ pub trait Bus {
         target: String,
         interfaces: Vec<CallTargetInterface>,
     ) -> anyhow::Result<()>;
-
-    // TODO: Remove
-    /// Handle `wasmcloud:bus/host.call` without streaming
-    async fn call(
-        &self,
-        target: TargetEntity,
-        instance: &str,
-        name: &str,
-        params: BytesMut,
-        func_paths: Vec<Vec<Option<usize>>>,
-    ) -> anyhow::Result<
-        Invocation<ParamWriter, Reader, wrpc_transport_nats::Session<ClientErrorWriter>>,
-    >;
-
-    /// Get function paths for a given instance and name
-    fn get_func_paths(&self, instance: &str, name: &str) -> Option<Arc<Vec<Arc<[Option<usize>]>>>>;
 }
 
 #[async_trait]
@@ -672,32 +654,6 @@ impl Bus for Handler {
         self.proxy_bus("wasmcloud:bus/lattice.set-link-name")?
             .set_link_name(link_name, interfaces)
             .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    async fn call(
-        &self,
-        target: TargetEntity,
-        instance: &str,
-        name: &str,
-        params: BytesMut,
-        paths: Vec<Vec<Option<usize>>>,
-    ) -> anyhow::Result<
-        Invocation<ParamWriter, Reader, wrpc_transport_nats::Session<ClientErrorWriter>>,
-    > {
-        self.proxy_bus("wasmcloud:bus/host.call")?
-            .call(target, instance, name, params, paths)
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    fn get_func_paths(&self, instance: &str, name: &str) -> Option<Arc<Vec<Arc<[Option<usize>]>>>> {
-        if let Some(ref bus) = self.bus {
-            bus.get_func_paths(instance, name)
-        } else {
-            error!("host cannot identify the function call paths");
-            None
-        }
     }
 }
 

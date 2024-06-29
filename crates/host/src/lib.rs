@@ -2,7 +2,6 @@
 
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
-
 /// wasmbus host
 pub mod wasmbus;
 
@@ -18,15 +17,16 @@ pub mod registry;
 /// Provider archive functionality
 mod par;
 
-/// wrpc functionality
-mod wrpc;
-
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 
 /// wRPC interface bindings
 mod bindings {
-    wit_bindgen_wrpc::generate!();
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wasmcloud:messaging/types@0.2.0": wasmcloud_core::wrpc::wasmcloud::messaging::types,
+        }
+    });
 }
 
 pub use metrics::HostMetrics;

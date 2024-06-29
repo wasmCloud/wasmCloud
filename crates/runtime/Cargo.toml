@@ -20,6 +20,7 @@ log = [
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
+async-nats = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
@@ -42,10 +43,13 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-transport-legacy = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 wrpc-introspect = { workspace = true }
+wrpc-types = { workspace = true }
 indexmap = { workspace = true }
 hyper = {workspace = true}
+wasmcloud-tracing = { workspace = true }
 
 [dev-dependencies]
 once_cell = { workspace = true }

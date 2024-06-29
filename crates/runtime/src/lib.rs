@@ -17,6 +17,9 @@ pub mod runtime;
 /// wasmCloud I/O functionality
 pub mod io;
 
+/// Wrpc functionality
+pub mod wrpc;
+
 #[deprecated(
     since = "0.3.1",
     note = "ActorConfig has been renamed to ComponentConfig"
