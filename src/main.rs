@@ -203,11 +203,7 @@ struct Args {
     oci_password: Option<String>,
 
     /// Determines whether observability should be enabled.
-    #[clap(
-        long = "enable-observability",
-        env = "WASMCLOUD_OBSERVABILITY_ENABLED",
-        conflicts_with_all = ["enable_traces", "enable_metrics", "enable_logs"]
-    )]
+    #[clap(long = "enable-observability", env = "WASMCLOUD_OBSERVABILITY_ENABLED")]
     enable_observability: bool,
 
     /// Determines whether traces should be enabled.
