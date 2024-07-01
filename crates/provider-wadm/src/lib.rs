@@ -5,16 +5,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::exports::wasmcloud::wadm::client::ModelSummary;
+use crate::exports::wasmcloud::wadm::client::OamManifest;
+use crate::exports::wasmcloud::wadm::client::Status;
+use crate::exports::wasmcloud::wadm::client::VersionInfo;
 use anyhow::{anyhow, bail, Context as _};
+use futures::stream::AbortHandle;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument as _;
 use wadm_client::{Client, ClientConnectOptions};
-use wadm_types::wasmcloud::oam::types::OamManifest;
-use wadm_types::wasmcloud::wadm::client::ModelSummary;
-use wadm_types::wasmcloud::wadm::client::Status;
-use wadm_types::wasmcloud::wadm::types::VersionInfo;
 use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
@@ -36,10 +37,9 @@ wit_bindgen_wrpc::generate!({
         serde::Serialize,
         serde::Deserialize,
     ],
-    with: {
-        "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types,
-        "wasmcloud:oam/types@0.1.0": wadm_types::wasmcloud::oam::types,
-    }
+    // with: {
+        // "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types
+    // }
 });
 
 pub async fn run() -> anyhow::Result<()> {
@@ -48,7 +48,7 @@ pub async fn run() -> anyhow::Result<()> {
 
 struct WadmClientBundle {
     pub client: Client,
-    pub sub_handles: Vec<(String, JoinHandle<()>)>,
+    pub sub_handles: Vec<(String, AbortHandle)>,
 }
 
 impl Drop for WadmClientBundle {
@@ -524,7 +524,6 @@ impl exports::wasmcloud::wadm::client::Handler<Option<Context>> for WadmProvider
         ctx: Option<Context>,
         model_name: String,
         version: Option<String>,
-        delete_all: bool,
         lattice: Option<String>,
     ) -> anyhow::Result<Result<bool, String>> {
         let client = self.get_client(ctx).await?;
