@@ -54,31 +54,31 @@ impl NatsConnectionConfig {
         // also provides a URI, the assumption is to replace/override rather than combine
         // the two into a potentially incompatible set of URIs
         if extra.cluster_uri.is_some() {
-            out.cluster_uri = extra.cluster_uri.clone();
+            out.cluster_uri.clone_from(&extra.cluster_uri);
         }
         if extra.js_domain.is_some() {
-            out.js_domain = extra.js_domain.clone();
+            out.js_domain.clone_from(&extra.js_domain);
         }
         if !extra.bucket.is_empty() {
-            out.bucket = extra.bucket.clone();
+            out.bucket.clone_from(&extra.bucket);
         }
         if extra.auth_jwt.is_some() {
-            out.auth_jwt = extra.auth_jwt.clone();
+            out.auth_jwt.clone_from(&extra.auth_jwt);
         }
         if extra.auth_seed.is_some() {
-            out.auth_seed = extra.auth_seed.clone();
+            out.auth_seed.clone_from(&extra.auth_seed);
         }
         if extra.tls_ca.is_some() {
-            out.tls_ca = extra.tls_ca.clone();
+            out.tls_ca.clone_from(&extra.tls_ca);
         }
         if extra.tls_ca_file.is_some() {
-            out.tls_ca_file = extra.tls_ca_file.clone();
+            out.tls_ca_file.clone_from(&extra.tls_ca_file);
         }
         out
     }
 }
 
-///
+/// Default implementation for [`NatsConnectionConfig`]
 impl Default for NatsConnectionConfig {
     fn default() -> NatsConnectionConfig {
         NatsConnectionConfig {
@@ -105,7 +105,7 @@ impl NatsConnectionConfig {
             config.js_domain = Some(domain.clone());
         }
         if let Some(bucket) = values.get(CONFIG_NATS_KV_STORE) {
-            config.bucket = bucket.clone();
+            config.bucket.clone_from(bucket);
         } else {
             bail!(
                 "missing required configuration item: {}",
