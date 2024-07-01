@@ -155,9 +155,9 @@ impl KvNatsProvider {
                 ))
             })
         } else {
-            return Err(keyvalue::store::Error::Other(format!(
-                "no consumer component in the request"
-            )));
+            Err(keyvalue::store::Error::Other(
+                "no consumer component in the request".to_string(),
+            ))
         }
     }
 
