@@ -1,11 +1,11 @@
 package wasmcloud:wadm@0.1.0;
 
 interface client {
-    use wasmcloud:oam/types@0.1.0.{oam-manifest};
     use types.{
         version-info,
         status,
-        model-summary
+        model-summary,
+        oam-manifest
     };
 
     // Deploys a model to the WADM system.
@@ -33,7 +33,7 @@ interface client {
     get-model-details: func(model-name: string, version: option<string>, lattice: option<string>) -> result<oam-manifest, string>;
 
     // Deletes a model version from the WADM system.
-    delete-model-version: func(model-name: string, version: option<string>, delete-all: bool, lattice: option<string>) -> result<bool, string>;
+    delete-model-version: func(model-name: string, version: option<string>, lattice: option<string>) -> result<bool, string>;
 
     // Retrieves all application manifests.
     get-models: func(lattice: option<string>) -> result<list<model-summary>, string>;
