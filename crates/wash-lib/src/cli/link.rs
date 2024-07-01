@@ -50,7 +50,7 @@ pub struct LinkPutCommand {
     pub wit_package: String,
 
     /// The interface of the link, e.g. "incoming-handler" in "wasi:http/incoming-handler"
-    #[clap(long = "interface", required = true)]
+    #[clap(long = "interface", alias = "interfaces", required = true)]
     pub interfaces: Vec<String>,
 
     /// List of named configuration to make available to the source
