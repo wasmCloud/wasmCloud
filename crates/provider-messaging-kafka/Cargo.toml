@@ -21,6 +21,6 @@ futures = { workspace = true }
 rskafka = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = [ "otel" ] }
 wasmcloud-tracing = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }

@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use tokio::sync::RwLock;
-use tracing::error;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use wasmcloud_provider_sdk::{run_provider, Context, LinkConfig, Provider, ProviderInitConfig};
 
 use crate::config::ProviderConfig;
@@ -24,6 +23,10 @@ pub struct CustomTemplateProvider {
 /// This `impl` block is where you can implement additional methods for your provider. We've provided two examples
 /// to run and load [`HostData`], and when you have custom logic to implement, you can add it here.
 impl CustomTemplateProvider {
+    fn name() -> &'static str {
+        "custom-template-provider"
+    }
+
     /// Execute the provider, loading [`HostData`] from the host which includes the provider's configuration and
     /// information about the host. Once you use the passed configuration to construct a [`CustomTemplateProvider`],
     /// you can run the provider by calling `run_provider` and then serving the provider's exports on the proper
@@ -32,7 +35,7 @@ impl CustomTemplateProvider {
     /// This step is essentially the same for every provider, and you shouldn't need to modify this function.
     pub async fn run() -> anyhow::Result<()> {
         let provider = Self::default();
-        let shutdown = run_provider(provider.clone(), "custom-template-provider")
+        let shutdown = run_provider(provider.clone(), CustomTemplateProvider::name())
             .await
             .context("failed to run provider")?;
 

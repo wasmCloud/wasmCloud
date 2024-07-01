@@ -18,12 +18,14 @@ pub mod provider;
 #[cfg(feature = "otel")]
 pub mod otel;
 
+pub use anyhow;
 pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
+pub use tracing_subscriber;
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]
 pub use wasmcloud_core::{
-    HealthCheckRequest, HealthCheckResponse, InterfaceLinkDefinition, WitFunction, WitInterface,
-    WitNamespace, WitPackage,
+    HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, WitFunction,
+    WitInterface, WitNamespace, WitPackage,
 };
 pub use wasmcloud_tracing;
 
