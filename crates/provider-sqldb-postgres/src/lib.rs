@@ -16,6 +16,7 @@ use tokio_postgres::Statement;
 use tracing::{error, instrument, warn};
 use ulid::Ulid;
 
+use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{
     get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, Provider,
 };
@@ -32,29 +33,37 @@ use config::{parse_prefixed_config_from_map, ConnectionCreateOptions};
 use wasmcloud_provider_sdk::Context;
 
 #[derive(Clone, Default)]
-struct PostgresProvider {
+pub struct PostgresProvider {
     /// Database connections indexed by source ID name
     connections: Arc<RwLock<HashMap<String, Pool>>>,
     /// Lookup of prepared statements to the statement and the source ID that prepared them
     prepared_statements: Arc<RwLock<HashMap<PreparedStatementToken, (Statement, String)>>>,
 }
 
-/// Run [`PostgresProvider`] as a wasmCloud provider
-pub async fn run() -> anyhow::Result<()> {
-    let provider = PostgresProvider::default();
-    let shutdown = run_provider(provider.clone(), "sqldb-postgres-provider")
-        .await
-        .context("failed to run provider")?;
-    let connection = get_connection();
-    serve(
-        &connection.get_wrpc_client(connection.provider_key()),
-        provider,
-        shutdown,
-    )
-    .await
-}
-
 impl PostgresProvider {
+    fn name() -> &'static str {
+        "sqldb-postgres-provider"
+    }
+
+    /// Run [`PostgresProvider`] as a wasmCloud provider
+    pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            PostgresProvider::name(),
+            std::env::var_os("PROVIDER_SQLDB_POSTGRES_FLAMEGRAPH_PATH")
+        );
+        let provider = PostgresProvider::default();
+        let shutdown = run_provider(provider.clone(), PostgresProvider::name())
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        serve(
+            &connection.get_wrpc_client(connection.provider_key()),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+
     /// Create and store a connection pool, if not already present
     async fn ensure_pool(
         &self,
