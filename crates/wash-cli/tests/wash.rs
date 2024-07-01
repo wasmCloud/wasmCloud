@@ -9,6 +9,7 @@ fn integration_help_subcommand_check() {
         .args(["--help"])
         .output()
         .expect("failed to display help text");
+    eprintln!("HELP OUTPUT: {help_output:?}");
     let output = output_to_string(help_output).unwrap();
     eprintln!("OUTPUT: {output:?}");
     assert!(output.contains("new"));
