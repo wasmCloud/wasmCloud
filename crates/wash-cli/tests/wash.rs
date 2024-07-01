@@ -10,7 +10,7 @@ fn integration_help_subcommand_check() {
         .output()
         .expect("failed to display help text");
     let output = output_to_string(help_output).unwrap();
-
+    eprintln!("OUTPUT: {output:?}");
     assert!(output.contains("new"));
     assert!(output.contains("build"));
     assert!(output.contains("dev"));

@@ -86,6 +86,8 @@ async fn integration_build_rust_component_signed_with_signing_keys_directory_con
         .await
         .context("test command failed to run and complete")?;
 
+    eprintln!("OUTPUT? {output:?}");
+
     assert!(output.status.success());
 
     // Ensure that the key was generated in the default directory
