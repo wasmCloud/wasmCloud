@@ -1,4 +1,4 @@
-import {execa, ExecaChildProcess} from 'execa';
+import {execa, ResultPromise} from 'execa';
 import getPort from 'get-port';
 import {v1 as uuidv1} from 'uuid';
 
@@ -91,7 +91,7 @@ export type ProcessExtra = {
 /** Process along with it's metadata */
 type ProcessAndMeta = {
   stopped: boolean;
-  process?: ExecaChildProcess;
+  process?: ResultPromise;
   abort?: AbortController;
   extra?: ProcessExtra;
 };
@@ -110,7 +110,7 @@ enum WashProcessType {
  */
 export class WasmCloudInstance {
   /** Options with which the wasmCloud instance should be created */
-  #opts: WasmCloudInstanceOptions;
+  opts: WasmCloudInstanceOptions;
 
   /** Unique ID of this wash instance */
   #_uuid: string;
@@ -120,13 +120,13 @@ export class WasmCloudInstance {
 
   constructor(options?: WasmCloudInstanceOptions) {
     this.opts = options ?? WasmCloudInstanceOptions.default();
-    this._uuid = uuidv1();
-    this.processes = new Map();
+    this.#_uuid = uuidv1();
+    this.#processes = new Map();
   }
 
   /** Return the UUID for this instance */
   uuid(): string {
-    return this._uuid;
+    return this.#_uuid;
   }
 
   /**
@@ -149,7 +149,7 @@ export class WasmCloudInstance {
 
   /** Base URL for the the running wash UI instance */
   uiBaseURL(): string {
-    const existing = this.processes.get(WashProcessType.UI);
+    const existing = this.#processes.get(WashProcessType.UI);
     const port = existing ? existing.extra?.port : this.opts.washUI?.port ?? DEFAULT_WASH_UI_PORT;
     return `http://localhost:${port}`;
   }
@@ -215,19 +215,20 @@ export class WasmCloudInstance {
     args: string[],
     extra: ProcessExtra,
   ): Promise<ProcessAndMeta> {
-    const existing = this.processes.get(processType);
+    const existing = this.#processes.get(processType);
     if (existing && existing.process && !existing.stopped) {
       throw new Error('wash process is already running');
     }
     const abort = new AbortController();
     const child = execa(binPath, args, {
+      reject: false,
       forceKillAfterDelay: FORCE_KILL_WAIT_MS,
       cancelSignal: abort.signal,
       stdout: this.opts.debug ? process.stdout : 'pipe',
       stderr: this.opts.debug ? process.stderr : 'pipe',
     });
-    this.processes.set(processType, {process: child, abort, stopped: false, extra});
-    const pam = this.processes.get(processType);
+    this.#processes.set(processType, {process: child, abort, stopped: false, extra});
+    const pam = this.#processes.get(processType);
     if (!pam) {
       throw new Error('unexpectedly missing created process & metadata');
     }
@@ -280,7 +281,7 @@ export class WasmCloudInstance {
 
   /** Generically stop an internal child process */
   protected async stopProcess(processType: WashProcessType): Promise<void> {
-    const existing = this.processes.get(processType);
+    const existing = this.#processes.get(processType);
     if (!existing) {
       return;
     }
