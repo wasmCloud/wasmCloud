@@ -7551,14 +7551,21 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "ulid",
+<<<<<<< HEAD
  "uuid 1.12.1",
  "wadm-types",
  "wasmcloud-control-interface 2.3.0",
  "wasmcloud-secrets-types 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+=======
+ "uuid 1.8.0",
+ "wadm-types 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmcloud-control-interface 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+>>>>>>> 26bbc9e6 (Finalized subscription)
 ]
 
 [[package]]
 name = "wadm-client"
+<<<<<<< HEAD
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6a888ed0f5c7bb1b6c253ef3efb806f533e965861abd7eb7d86de5c6f896deb"
@@ -7567,11 +7574,59 @@ dependencies = [
  "async-nats",
  "futures",
  "nkeys",
+=======
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "bytes",
+ "futures",
+ "nkeys 0.3.2",
+ "serde",
+>>>>>>> 26bbc9e6 (Finalized subscription)
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.11",
  "tokio",
+<<<<<<< HEAD
  "wadm-types",
+=======
+ "tracing",
+ "tracing-futures",
+ "wadm-types 0.1.0",
+]
+
+[[package]]
+name = "wadm-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "base64 0.21.7",
+ "bytes",
+ "chrono",
+ "cloudevents-sdk",
+ "indexmap 2.2.6",
+ "jsonschema",
+ "lazy_static",
+ "nkeys 0.3.2",
+ "rand 0.8.5",
+ "regex",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "ulid",
+ "uuid 1.8.0",
+ "wasmcloud-control-interface 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-bindgen-wrpc",
+>>>>>>> 26bbc9e6 (Finalized subscription)
 ]
 
 [[package]]
@@ -7867,9 +7922,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+<<<<<<< HEAD
  "wadm-client",
  "wadm-types",
  "walkdir",
+=======
+ "url",
+ "wadm-types 0.1.0",
+>>>>>>> 26bbc9e6 (Finalized subscription)
  "warp",
  "wash-lib",
  "wasm-pkg-client",
@@ -7940,8 +8000,12 @@ dependencies = [
  "toml 0.8.19",
  "tracing",
  "url",
+<<<<<<< HEAD
  "wadm-client",
  "wadm-types",
+=======
+ "wadm-types 0.1.0",
+>>>>>>> 26bbc9e6 (Finalized subscription)
  "walkdir",
  "wascap 0.15.2",
  "wasi-preview1-component-adapter-provider",
@@ -8795,7 +8859,13 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry",
  "wadm",
+<<<<<<< HEAD
  "wascap 0.15.2",
+=======
+ "wadm-client",
+ "wadm-types 0.1.0",
+ "wascap 0.15.0",
+>>>>>>> 26bbc9e6 (Finalized subscription)
  "wash-lib",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",

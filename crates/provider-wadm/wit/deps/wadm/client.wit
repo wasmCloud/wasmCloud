@@ -1,5 +1,6 @@
 package wasmcloud:wadm@0.1.0;
 
+/// A Wadm client which interacts with the wadm api
 interface client {
     use types.{
         version-info,
@@ -37,4 +38,11 @@ interface client {
 
     // Retrieves all application manifests.
     get-models: func(lattice: option<string>) -> result<list<model-summary>, string>;
+}
+
+interface handler {
+    use types.{status-update};
+
+    // Callback handled to invoke a function when an update is received from a app status subscription
+    handle-status-update: func(msg: status-update) -> result<_, string>;
 }
