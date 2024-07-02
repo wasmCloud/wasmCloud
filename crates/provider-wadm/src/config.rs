@@ -22,7 +22,7 @@ fn default_lattice() -> String {
 
 /// Configuration for interacting with WADM over NATS.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WadmConfig {
+pub(crate) struct WadmConfig {
     /// Lattice to subscribe to
     #[serde(default = "default_lattice")]
     pub lattice: String,
