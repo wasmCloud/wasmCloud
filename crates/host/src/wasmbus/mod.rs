@@ -31,6 +31,7 @@ use futures::future::Either;
 use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
+use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
@@ -50,7 +51,9 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{ComponentId, HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::{messaging, IncomingHttp as _, MessagingHandler as _};
+use wasmcloud_runtime::capability::{
+    messaging, secrets::store::SecretValue, IncomingHttp as _, MessagingHandler as _,
+};
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
@@ -60,7 +63,7 @@ use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
 use crate::bindings::wasmcloud;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
-    RegistryAuth, RegistryConfig, RegistryType,
+    RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
 };
 
 use self::config::{BundleGenerator, ConfigBundle};
@@ -309,6 +312,7 @@ impl Component {
             .keyvalue_store(Arc::new(self.handler.clone()))
             .logging(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()))
+            .secrets(Arc::new(self.handler.clone()))
             .outgoing_http(Arc::new(self.handler.clone()));
 
         // TODO(metrics): insert information about the source once we have concrete context data
@@ -449,6 +453,7 @@ pub struct Host {
     heartbeat: AbortHandle,
     host_config: HostConfig,
     host_key: Arc<KeyPair>,
+    host_token: Arc<jwt::Token<jwt::Host>>,
     labels: RwLock<HashMap<String, String>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
@@ -461,6 +466,7 @@ pub struct Host {
     config_data: Store,
     config_generator: BundleGenerator,
     policy_manager: Arc<PolicyManager>,
+    secrets_manager: Arc<SecretsManager>,
     /// The provider map is a map of provider component ID to provider
     providers: RwLock<HashMap<String, Provider>>,
     registry_config: RwLock<HashMap<String, RegistryConfig>>,
@@ -803,6 +809,21 @@ impl Host {
         let friendly_name =
             Self::generate_friendly_name().context("failed to generate friendly name")?;
 
+        let host_issuer = Arc::new(KeyPair::new_account());
+        let claims = jwt::Claims::<jwt::Host>::new(
+            friendly_name.clone(),
+            host_issuer.public_key(),
+            host_key.public_key().clone(),
+            Some(HashMap::from_iter([(
+                "self_signed".to_string(),
+                "true".to_string(),
+            )])),
+        );
+        let jwt = claims
+            .encode(&host_issuer)
+            .context("failed to encode host claims")?;
+        let host_token = Arc::new(jwt::Token { jwt, claims });
+
         let start_evt = json!({
             "friendly_name": friendly_name,
             "labels": labels,
@@ -906,6 +927,12 @@ impl Host {
         )
         .await?;
 
+        let secrets_manager = Arc::new(SecretsManager::new(
+            &config_data,
+            config.secrets_topic_prefix.as_ref(),
+            &ctl_nats,
+        ));
+
         let meter = global::meter_with_version(
             "wasmcloud-host",
             Some(config.version.clone()),
@@ -930,6 +957,7 @@ impl Host {
             heartbeat: heartbeat_abort.clone(),
             ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
+            host_token,
             labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
@@ -939,6 +967,7 @@ impl Host {
             config_data: config_data.clone(),
             config_generator,
             policy_manager,
+            secrets_manager,
             providers: RwLock::default(),
             registry_config,
             runtime,
@@ -1454,6 +1483,7 @@ impl Host {
         max_instances: NonZeroUsize,
         annotations: impl Into<Annotations>,
         config: ConfigBundle,
+        secrets: HashMap<String, Secret<SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(component_ref, ?max_instances, "starting new component");
 
@@ -1476,6 +1506,7 @@ impl Host {
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
+            secrets: Arc::new(RwLock::new(secrets)),
             lattice: self.host_config.lattice.clone(),
             component_id: component_id.clone(),
             targets: Arc::default(),
@@ -1810,11 +1841,14 @@ impl Host {
             (hash_map::Entry::Vacant(_), None) => {}
             // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
-                let config = self
-                    .config_generator
-                    .generate(config)
-                    .await
-                    .context("Unable to fetch requested config")?;
+                let (config, secrets) = self
+                    .fetch_config_and_secrets(
+                        &config,
+                        component.jwt(),
+                        annotations.get("wasmcloud.dev/appspec"),
+                    )
+                    .await?;
+
                 if let Err(e) = self
                     .start_component(
                         entry,
@@ -1824,6 +1858,7 @@ impl Host {
                         max,
                         annotations.clone(),
                         config,
+                        secrets,
                     )
                     .await
                 {
@@ -1892,8 +1927,15 @@ impl Host {
                     // We must partially clone the handler as we can't be sharing the targets between components
                     let handler = component.handler.copy_for_new();
                     if config_changed {
-                        let mut conf = handler.config_data.write().await;
-                        *conf = self.config_generator.generate(config).await?;
+                        let (config, secrets) = self
+                            .fetch_config_and_secrets(
+                                &config,
+                                component.jwt(),
+                                annotations.get("wasmcloud.dev/appspec"),
+                            )
+                            .await?;
+                        *handler.config_data.write().await = config;
+                        *handler.secrets.write().await = secrets;
                     }
                     let instance = self
                         .instantiate_component(
@@ -2123,18 +2165,11 @@ impl Host {
 
         info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
 
-        let config = self
-            .config_generator
-            .generate(config)
-            .await
-            .context("Unable to fetch requested config")?;
-        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
-
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
                 .handle_start_provider_task(
-                    config,
+                    &config,
                     &provider_id,
                     &provider_ref,
                     annotations.unwrap_or_default(),
@@ -2160,7 +2195,7 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_start_provider_task(
         &self,
-        config: ConfigBundle,
+        config: &[String],
         provider_id: &str,
         provider_ref: &str,
         annotations: HashMap<String, String>,
@@ -2169,7 +2204,7 @@ impl Host {
         trace!(provider_ref, provider_id, "start provider task");
 
         let registry_config = self.registry_config.read().await;
-        let (path, claims) = crate::fetch_provider(
+        let (path, claims_token) = crate::fetch_provider(
             provider_ref,
             host_id,
             self.host_config.allow_file_load,
@@ -2177,6 +2212,8 @@ impl Host {
         )
         .await
         .context("failed to fetch provider")?;
+        let claims = claims_token.as_ref().map(|t| t.claims.clone());
+
         if let Some(claims) = claims.clone() {
             self.store_claims(Claims::Provider(claims))
                 .await
@@ -2206,6 +2243,15 @@ impl Host {
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
 
+        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
+        let (config, secrets) = self
+            .fetch_config_and_secrets(
+                config,
+                claims_token.as_ref().map(|t| &t.jwt),
+                annotations.get("wasmcloud.dev/appspec"),
+            )
+            .await?;
+
         let mut providers = self.providers.write().await;
         if let hash_map::Entry::Vacant(entry) = providers.entry(provider_id.into()) {
             let lattice_rpc_user_seed = self
@@ -2233,15 +2279,19 @@ impl Host {
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
                 protocol: self.host_config.otel_config.protocol,
             };
-            let config_generator = self.config_generator.clone();
 
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
             // or target of a link, we need to iterate over all links to find the ones that involve the provider.
             let link_definitions = stream::iter(self.links.read().await.values().flatten())
                 .filter_map(|link| async {
                     if link.source_id == provider_id || link.target == provider_id {
-                        if let Ok(provider_link) =
-                            resolve_link_config(&config_generator, link.clone()).await
+                        if let Ok(provider_link) = self
+                            .resolve_link_config(
+                                link.clone(),
+                                claims_token.as_ref().map(|t| &t.jwt),
+                                annotations.get("wasmcloud.dev/appspec"),
+                            )
+                            .await
                         {
                             Some(provider_link)
                         } else {
@@ -2260,6 +2310,24 @@ impl Host {
                 .collect::<Vec<wasmcloud_core::InterfaceLinkDefinition>>()
                 .await;
 
+            let secrets = {
+                // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
+                // values when we need them.
+                use secrecy::ExposeSecret;
+                secrets
+                    .iter()
+                    .map(|(k, v)| match v.expose_secret() {
+                        SecretValue::String(s) => (
+                            k.clone(),
+                            wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                        ),
+                        SecretValue::Bytes(b) => (
+                            k.clone(),
+                            wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                        ),
+                    })
+                    .collect()
+            };
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice.clone(),
@@ -2272,6 +2340,7 @@ impl Host {
                 provider_key: provider_id.to_string(),
                 link_definitions,
                 config: config.get_config().await.clone(),
+                secrets,
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
                 log_level: Some(self.host_config.log_level.clone()),
@@ -2655,10 +2724,13 @@ impl Host {
         );
 
         // Before we store the link, we need to ensure the configuration is resolvable
-        let provider_link =
-            resolve_link_config(&self.config_generator, interface_link_definition.clone())
-                .await
-                .context("failed to resolve link config for provider")?;
+        let provider_link = self
+            // TODO(#2407): This is going to fail every time if a secret is defined in a link.
+            // Since links can be created before the component/provider we need some ability to
+            // just check config
+            .resolve_link_config(interface_link_definition.clone(), None, None)
+            .await
+            .context("failed to resolve link config for provider")?;
 
         // Note here that unwrapping to a default is intentional. If the component spec doesn't exist, we want to create it
         // so that when that component does start it can use pre-existing links.
@@ -3314,29 +3386,92 @@ impl Host {
             error!(key, ?operation, ?error, "failed to process KV bucket entry");
         }
     }
-}
 
-/// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
-/// by generating the source and target config for the link
-async fn resolve_link_config(
-    config_generator: &BundleGenerator,
-    link: wasmcloud_control_interface::InterfaceLinkDefinition,
-) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
-    let source_bundle = config_generator.generate(link.source_config).await?;
-    let target_bundle = config_generator.generate(link.target_config).await?;
+    async fn fetch_config_and_secrets(
+        &self,
+        config_names: &[String],
+        entity_jwt: Option<&String>,
+        application: Option<&String>,
+    ) -> anyhow::Result<(ConfigBundle, HashMap<String, Secret<SecretValue>>)> {
+        let (secret_names, config_names) = config_names
+            .iter()
+            .map(|s| s.to_string())
+            .partition(|name| name.starts_with("secret_"));
 
-    let source_config = source_bundle.get_config().await;
-    let target_config = target_bundle.get_config().await;
-    Ok(wasmcloud_core::InterfaceLinkDefinition {
-        source_id: link.source_id,
-        target: link.target,
-        name: link.name,
-        wit_namespace: link.wit_namespace,
-        wit_package: link.wit_package,
-        interfaces: link.interfaces,
-        source_config: source_config.clone(),
-        target_config: target_config.clone(),
-    })
+        let config = self
+            .config_generator
+            .generate(config_names)
+            .await
+            .context("Unable to fetch requested config")?;
+
+        let secrets = self
+            .secrets_manager
+            .fetch_secrets(secret_names, entity_jwt, &self.host_token.jwt, application)
+            .await
+            .context("Unable to fetch requested secrets")?;
+
+        Ok((config, secrets))
+    }
+
+    /// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
+    /// by generating the source and target config for the link
+    async fn resolve_link_config(
+        &self,
+        link: wasmcloud_control_interface::InterfaceLinkDefinition,
+        entity_jwt: Option<&String>,
+        application: Option<&String>,
+    ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
+        let (source_bundle, source_secrets) = self
+            .fetch_config_and_secrets(&link.source_config, entity_jwt, application)
+            .await?;
+        let (target_bundle, target_secrets) = self
+            .fetch_config_and_secrets(&link.target_config, entity_jwt, application)
+            .await?;
+
+        let source_config = source_bundle.get_config().await;
+        let target_config = target_bundle.get_config().await;
+
+        // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
+        // values when we need them.
+        use secrecy::ExposeSecret;
+        Ok(wasmcloud_core::InterfaceLinkDefinition {
+            source_id: link.source_id,
+            target: link.target,
+            name: link.name,
+            wit_namespace: link.wit_namespace,
+            wit_package: link.wit_package,
+            interfaces: link.interfaces,
+            source_config: source_config.clone(),
+            target_config: target_config.clone(),
+            // TODO(#2407): We should be encrypting and decrypting these, especially when sent over the lattice
+            source_secrets: source_secrets
+                .iter()
+                .map(|(k, v)| match v.expose_secret() {
+                    SecretValue::String(s) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                    ),
+                    SecretValue::Bytes(b) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                    ),
+                })
+                .collect(),
+            target_secrets: target_secrets
+                .iter()
+                .map(|(k, v)| match v.expose_secret() {
+                    SecretValue::String(s) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                    ),
+                    SecretValue::Bytes(b) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                    ),
+                })
+                .collect(),
+        })
+    }
 }
 
 /// Helper function to transform a Vec of [`InterfaceLinkDefinition`]s into the structure components expect to be able

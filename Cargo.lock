@@ -5063,10 +5063,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd1c54ea06cfd2f6b63219704de0b9b4f72dcc2b8fdef820be6cd799780e91e"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "secrets-nats-kv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats 0.33.0",
  "async-nats 0.35.1",
  "async-trait",
  "backoff",
@@ -5082,6 +5092,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wascap 0.15.0",
+ "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
 ]
 
@@ -6953,6 +6964,7 @@ dependencies = [
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-sqldb-postgres",
+ "wasmcloud-secrets-types",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
@@ -7121,6 +7133,7 @@ dependencies = [
  "opentelemetry-nats",
  "provider-archive",
  "rmp-serde",
+ "secrecy",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -7136,6 +7149,8 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.7.0",
  "wasmcloud-runtime",
+ "wasmcloud-secrets-client",
+ "wasmcloud-secrets-types",
  "wasmcloud-tracing",
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
@@ -7425,6 +7440,7 @@ dependencies = [
  "nkeys 0.4.1",
  "once_cell",
  "rand 0.8.5",
+ "secrecy",
  "serde",
  "serde_json",
  "test-components",
@@ -7445,6 +7461,16 @@ dependencies = [
  "wrpc-runtime-wasmtime",
  "wrpc-transport",
  "wrpc-types",
+]
+
+[[package]]
+name = "wasmcloud-secrets-client"
+version = "0.1.0"
+dependencies = [
+ "async-nats 0.33.0",
+ "nkeys 0.4.1",
+ "serde_json",
+ "wasmcloud-secrets-types",
 ]
 
 [[package]]
@@ -8555,9 +8581,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.7.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525b4ec142c6b68a2d10f01f7bbf6755599ca3f81ea53b8431b7dd348f5fdb2d"
+checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
 dependencies = [
  "zeroize_derive",
 ]

@@ -6,7 +6,7 @@ pub mod provider;
 pub use builtin::{
     Blobstore, Bus, ComponentIdentifier, Config, IncomingHttp, KeyValueAtomics, KeyValueStore,
     LatticeInterfaceTarget, Logging, Messaging, MessagingHandler, OutgoingHttp,
-    OutgoingHttpRequest, TargetEntity,
+    OutgoingHttpRequest, Secrets, TargetEntity,
 };
 pub use wasmcloud_core::CallTargetInterface;
 
@@ -22,6 +22,26 @@ mod bindgen {
         pub type IncomingValue = wrpc_transport::IncomingInputStream;
         pub type OutgoingValue = crate::io::AsyncVec;
         pub type StreamObjectNames = crate::io::BufferedIncomingStream<String>;
+    }
+
+    mod secrets {
+        use super::wasmcloud::secrets::store::SecretValue;
+
+        pub type Secret = std::sync::Arc<String>;
+
+        impl secrecy::Zeroize for SecretValue {
+            fn zeroize(&mut self) {
+                match self {
+                    SecretValue::String(s) => s.zeroize(),
+                    SecretValue::Bytes(b) => b.zeroize(),
+                }
+            }
+        }
+
+        /// Permits cloning
+        impl secrecy::CloneableSecret for SecretValue {}
+        /// Provides a `Debug` impl (by default `[[REDACTED]]`)
+        impl secrecy::DebugSecret for SecretValue {}
     }
 
     wasmtime::component::bindgen!({
@@ -41,6 +61,7 @@ mod bindgen {
            "wasi:keyvalue/store/bucket": keyvalue::Bucket,
            "wasi:random": wasmtime_wasi::bindings::random,
            "wasi:sockets": wasmtime_wasi::bindings::sockets,
+           "wasmcloud:secrets/store/secret": secrets::Secret,
            "wasmcloud:bus/lattice/call-target-interface": wasmcloud_core::CallTargetInterface,
         },
     });
@@ -48,7 +69,7 @@ mod bindgen {
 
 pub use bindgen::wasi::{blobstore, config, keyvalue, logging};
 pub use bindgen::wasmcloud::bus;
-pub use bindgen::wasmcloud::messaging;
+pub use bindgen::wasmcloud::{messaging, secrets};
 pub use bindgen::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;
 

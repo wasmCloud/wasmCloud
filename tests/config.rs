@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
 use async_nats::jetstream;
+use common::secrets::NatsKvSecretsBackend;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use test_components::{
@@ -16,6 +17,7 @@ use tracing::info;
 use tracing_subscriber::prelude::*;
 use wasmcloud_host::wasmbus::config::BundleGenerator;
 use wasmcloud_test_util::lattice::config::assert_config_put;
+use wasmcloud_test_util::lattice::config::assert_put_secret_reference;
 use wasmcloud_test_util::{
     component::assert_scale_component, host::WasmCloudTestHost,
     lattice::link::assert_advertise_link,
@@ -134,6 +136,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     // Start NATS server
     let (nats_server, nats_url, nats_client) =
         start_nats().await.expect("should be able to start NATS");
+
     // Build client for interacting with the lattice
     let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
         .lattice(LATTICE.to_string())
@@ -144,9 +147,49 @@ async fn config_e2e() -> anyhow::Result<()> {
     );
     let wrpc_client = Arc::new(wrpc_client);
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, LATTICE)
-        .await
-        .context("failed to start test host")?;
+    let host = WasmCloudTestHost::start_custom(
+        &nats_url,
+        LATTICE,
+        None,
+        None,
+        None,
+        Some("wasmcloud.secrets".to_string()),
+    )
+    .await
+    .context("failed to start test host")?;
+
+    let nats_kv_secrets_backend = NatsKvSecretsBackend::new(
+        "wasmcloud.secrets".to_string(),
+        "TEST_SECRET_default".to_string(),
+        nats_url.to_string(),
+    )
+    .await?;
+
+    nats_kv_secrets_backend.ensure_build().await?;
+    let secrets_backend_server = nats_kv_secrets_backend.start().await?;
+    nats_kv_secrets_backend
+        .put_secret(wasmcloud_secrets_types::Secret {
+            name: "ponger".to_string(),
+            string_secret: Some("sup3rs3cr3t-v4lu3".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    // Add mapping to allow the component to access the secrets
+    use tokio::io::AsyncReadExt;
+    let mut component_bytes = vec![];
+    let mut component = tokio::fs::File::open(RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED).await?;
+    let _ = component.read_to_end(&mut component_bytes).await?;
+    let component_token =
+        wascap::wasm::extract_claims(&component_bytes)?.expect("claims to be valid");
+    let component_key = nkeys::KeyPair::from_public_key(&component_token.claims.subject)?;
+
+    let mut secrets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    secrets.insert("ponger".to_string());
+
+    nats_kv_secrets_backend
+        .add_mapping(&component_key.public_key(), secrets)
+        .await?;
 
     // Put configs for first component
     assert_config_put(
@@ -177,13 +220,15 @@ async fn config_e2e() -> anyhow::Result<()> {
     .await
     .expect("should've scaled pinger component");
 
-    // Put configs for second component
+    // Put config for second component
     assert_config_put(
         &ctl_client,
         "ponger",
         [("pong".to_string(), "config".to_string())],
     )
     .await?;
+    // Put secret for second component
+    assert_put_secret_reference(&ctl_client, "ponger", "ponger", "nats-kv", None).await?;
     // Scale ponger
     assert_scale_component(
         &ctl_client,
@@ -192,7 +237,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         PONGER_COMPONENT_ID,
         None,
         5,
-        vec!["ponger".to_string()],
+        vec!["ponger".to_string(), "secret_ponger".to_string()],
     )
     .await
     .expect("should've scaled component");
@@ -213,6 +258,11 @@ async fn config_e2e() -> anyhow::Result<()> {
     .expect("should advertise link");
 
     assert_incoming_http(&wrpc_client).await?;
+
+    secrets_backend_server
+        .stop()
+        .await
+        .expect("should be able to stop secrets backend");
 
     nats_server
         .stop()
@@ -272,13 +322,19 @@ async fn assert_incoming_http(
                 single_val: Option<String>,
                 multi_val: HashMap<String, String>,
                 pong: String,
+                pong_secret: String,
             }
             let Response {
                 single_val,
                 multi_val,
                 pong,
+                pong_secret,
             } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
             ensure!(pong == "config", "pong value was not correct");
+            ensure!(
+                pong_secret == "sup3rs3cr3t-v4lu3",
+                "pong_secret value was not correct"
+            );
             ensure!(
                 single_val == Some("baz".to_string()),
                 "single value was not correct"

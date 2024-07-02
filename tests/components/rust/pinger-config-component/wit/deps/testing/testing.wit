@@ -10,6 +10,9 @@ interface invoke {
 interface pingpong {
     /// Call ping, get a pong back
     ping: func() -> string;
+
+    /// Call ping, but quietly, and get a secret pong back
+    ping-secret: func() -> string;
 }
 
 /// A box of functions to demonstrate ability to transfer and receive types

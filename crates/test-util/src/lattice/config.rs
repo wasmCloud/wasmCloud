@@ -21,3 +21,21 @@ pub async fn assert_config_put(
 
     Ok(())
 }
+
+pub async fn assert_put_secret_reference(
+    client: impl Into<&WasmCloudCtlClient>,
+    name: impl AsRef<str>,
+    key: &str,
+    backend: &str,
+    version: Option<String>,
+) -> Result<()> {
+    let mut config = HashMap::from_iter([
+        ("key".to_string(), key.to_string()),
+        ("backend".to_string(), backend.to_string()),
+    ]);
+    if let Some(version) = version {
+        config.insert("version".to_string(), version.to_string());
+    }
+
+    assert_config_put(client, format!("secret_{}", name.as_ref()), config).await
+}
