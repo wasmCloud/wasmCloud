@@ -34,4 +34,11 @@ spec:
     - name: kafka
       type: capability
       properties:
+        # To use the locally built version of this provider,
+        #
+        # - build it with (`cargo build`)
+        # - create a provider archive (`wash par create`)
+        # - uncomment the line below
+        #
+        # image: file://../../messaging-kafka-provider.par.gz
         image: ghcr.io/wasmcloud/messaging-kafka:canary
