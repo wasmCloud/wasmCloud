@@ -1,3 +1,4 @@
+use crate::capability::builtin::IncomingInputStream;
 use crate::capability::{self, blobstore};
 
 use core::ops::RangeInclusive;
@@ -13,7 +14,6 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::join;
 use tokio::sync::RwLock;
 use tracing::instrument;
-use wrpc_transport::IncomingInputStream;
 
 #[derive(Clone, Debug)]
 /// In-memory [`Blobstore`] [`Container`] object

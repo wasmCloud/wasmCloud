@@ -530,12 +530,11 @@ fn add_tls_ca(
     let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
     let mut roots = async_nats::rustls::RootCertStore::empty();
     if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
-        roots.add_parsable_certificates(&[ca]);
+        roots.add_parsable_certificates(std::iter::once(ca.into_owned()));
     } else {
         bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
-    };
+    }
     let tls_client = async_nats::rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(roots)
         .with_no_client_auth();
     Ok(opts.tls_client_config(tls_client).require_tls(true))

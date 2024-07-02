@@ -18,6 +18,9 @@ pub mod runtime;
 /// wasmCloud I/O functionality
 pub mod io;
 
+/// Wrpc functionality
+pub mod wrpc;
+
 pub use component::{Component, ComponentInstance, Config as ComponentConfig};
 pub use runtime::*;
 

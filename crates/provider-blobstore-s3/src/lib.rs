@@ -38,7 +38,7 @@ use tracing::{debug, error, instrument};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
 use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 
 const ALIAS_PREFIX: &str = "alias_";
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
@@ -852,11 +852,11 @@ impl Blobstore for BlobstoreS3Provider {
                             // TODO: Remove the need for this wrapping
                             Ok(buf
                                 .into_iter()
-                                .map(wrpc_transport::Value::U8)
+                                .map(wrpc_transport_legacy::Value::U8)
                                 .map(Some)
                                 .collect())
                         });
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+                    anyhow::Ok(wrpc_transport_legacy::Value::Stream(Box::pin(data)))
                 }
                 .await,
             )

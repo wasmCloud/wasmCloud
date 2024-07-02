@@ -13,6 +13,7 @@ pub mod logging_bindings {
     wasmtime::component::bindgen!({
         world: "logging",
         async: true,
+        trappable_imports: true,
         with: {
            "wasi:logging/logging": crate::capability::logging,
         },

@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
 use futures::{stream, Stream};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -18,13 +18,16 @@ use wasmcloud_runtime::capability::{
     KeyValueStore, LatticeInterfaceTarget, Logging, Messaging, OutgoingHttp, TargetEntity,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
-use wasmtime_wasi_http::body::HyperIncomingBody;
-use wrpc_transport::{Client, DynamicTuple, IncomingInputStream};
-
-use crate::bindings::{wasmcloud, wrpc};
+use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
+use wasmtime_wasi_http::types::OutgoingRequestConfig;
+use wit_parser::Function;
+use wrpc_interface_http::{OutgoingHandler, RequestOptions};
+use wrpc_transport_legacy::IncomingInputStream;
 
 use super::config::ConfigBundle;
 use super::injector_to_headers;
+
+use wasmcloud_core::wrpc::wasmcloud;
 
 #[derive(Clone, Debug)]
 pub struct Handler {
@@ -60,9 +63,14 @@ pub struct Handler {
     /// When invoking a function that the component imports, this map is consulted to determine the
     /// result types of the function, which is required for the wRPC protocol to set up proper
     /// subscriptions for the return types.
-    pub polyfills: Arc<HashMap<String, HashMap<String, wrpc_types::DynamicFunction>>>,
+    // pub polyfills: Arc<HashMap<String, HashMap<String, wrpc_types::DynamicFunction>>>,
+    // pub polyfills: Arc<HashMap<String, HashMap<String, Function>>>,
+    pub exports: Arc<HashMap<String, HashMap<String, Function>>>,
 
+    /// Reference to store for collection of instances
+    // pub store:,
     pub invocation_timeout: Duration,
+    pub func_paths_map: Arc<HashMap<(Arc<String>, Arc<String>), Arc<Vec<Arc<[Option<usize>]>>>>>,
 }
 
 impl Handler {
@@ -77,24 +85,25 @@ impl Handler {
             targets: Arc::default(),
             trace_ctx: Arc::default(),
             interface_links: self.interface_links.clone(),
-            polyfills: self.polyfills.clone(),
             invocation_timeout: self.invocation_timeout,
+            exports: self.exports.clone(),
+            func_paths_map: self.func_paths_map.clone(),
         }
     }
 
-    #[instrument(level = "trace", skip(self))]
-    fn wrpc_client(
+    /// Produces a wrpc builder that can build wrpc clients
+    pub fn wrpc_client(
         &self,
         LatticeInterfaceTarget { id, link_name, .. }: &LatticeInterfaceTarget,
-    ) -> wasmcloud_core::wrpc::Client {
+    ) -> wasmcloud_core::LegacyClient {
         let injector = TraceContextInjector::default_with_span();
         let mut headers = injector_to_headers(&injector);
         headers.insert("source-id", self.component_id.as_str());
         headers.insert("link-name", link_name.as_str());
-        wasmcloud_core::wrpc::Client::new(
+        wasmcloud_core::LegacyClient::new(
             Arc::clone(&self.nats),
             &self.lattice,
-            id,
+            &id,
             headers,
             self.invocation_timeout,
         )
@@ -106,7 +115,7 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+    async fn wrpc_blobstore_blobstore(&self) -> anyhow::Result<wasmcloud_core::wrpc::LegacyClient> {
         let (ns, pkg, iface) = ("wasi", "blobstore", "blobstore");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -124,7 +133,9 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn wrpc_http_outgoing_handler(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+    async fn wrpc_http_outgoing_handler(
+        &self,
+    ) -> anyhow::Result<wasmcloud_core::wrpc::LegacyClient> {
         let (ns, pkg, iface) = ("wasi", "http", "outgoing-handler");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -142,7 +153,7 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+    async fn wrpc_keyvalue_atomics(&self) -> anyhow::Result<wasmcloud_core::wrpc::LegacyClient> {
         let (ns, pkg, iface) = ("wasi", "keyvalue", "atomics");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -160,7 +171,7 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn wrpc_keyvalue_store(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+    async fn wrpc_keyvalue_store(&self) -> anyhow::Result<wasmcloud_core::wrpc::LegacyClient> {
         let (ns, pkg, iface) = ("wasi", "keyvalue", "store");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -178,7 +189,7 @@ impl Handler {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::Client> {
+    async fn wrpc_messaging_consumer(&self) -> anyhow::Result<wasmcloud_core::wrpc::LegacyClient> {
         let (ns, pkg, iface) = ("wasmcloud", "messaging", "consumer");
         let lit = self
             .identify_wrpc_target(&CallTargetInterface::from_parts((
@@ -563,45 +574,6 @@ impl Bus for Handler {
         }
         Ok(())
     }
-
-    #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
-    async fn call(
-        &self,
-        target: TargetEntity,
-        instance: &str,
-        name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
-        if let TargetEntity::Lattice(lit) = target {
-            let result_ty = self
-                .polyfills
-                .get(instance)
-                .and_then(|functions| match functions.get(name) {
-                    Some(
-                        wrpc_types::DynamicFunction::Static { results, .. }
-                        | wrpc_types::DynamicFunction::Method { results, .. },
-                    ) => Some(results),
-                    None => None,
-                })
-                .with_context(|| {
-                    format!("export {instance}/{name} not found, could not determine result types")
-                })?;
-            let (results, tx) = self
-                .wrpc_client(&lit)
-                .invoke_dynamic(instance, name, DynamicTuple(params), result_ty)
-                .await?;
-            tx.await.context("failed to transmit parameters")?;
-            Ok(results)
-        } else {
-            bail!(
-                "component [{}] attempted to invoke a function [{}/{}] on an unknown target [{}]",
-                self.component_id,
-                instance,
-                name,
-                target.id().unwrap_or("<unknown>"),
-            )
-        }
-    }
 }
 
 #[async_trait]
@@ -628,11 +600,19 @@ impl Config for Handler {
     }
 }
 
-fn keyvalue_error_from_wrpc(err: wrpc::keyvalue::store::Error) -> keyvalue::store::Error {
+fn keyvalue_error_from_wrpc(
+    err: crate::bindings::wrpc::keyvalue::store::Error,
+) -> keyvalue::store::Error {
     match err {
-        wrpc::keyvalue::store::Error::NoSuchStore => keyvalue::store::Error::NoSuchStore,
-        wrpc::keyvalue::store::Error::AccessDenied => keyvalue::store::Error::AccessDenied,
-        wrpc::keyvalue::store::Error::Other(other) => keyvalue::store::Error::Other(other),
+        crate::bindings::wrpc::keyvalue::store::Error::NoSuchStore => {
+            keyvalue::store::Error::NoSuchStore
+        }
+        crate::bindings::wrpc::keyvalue::store::Error::AccessDenied => {
+            keyvalue::store::Error::AccessDenied
+        }
+        crate::bindings::wrpc::keyvalue::store::Error::Other(other) => {
+            keyvalue::store::Error::Other(other)
+        }
     }
 }
 
@@ -646,7 +626,7 @@ impl KeyValueAtomics for Handler {
         delta: u64,
     ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_atomics().await?;
-        let res = wrpc::keyvalue::atomics::increment(&wrpc, bucket, &key, delta)
+        let res = crate::bindings::wrpc::keyvalue::atomics::increment(&wrpc, bucket, &key, delta)
             .await
             .context("failed to invoke `wrpc:keyvalue/atomics.increment`")?;
         Ok(res.map_err(keyvalue_error_from_wrpc))
@@ -662,7 +642,7 @@ impl KeyValueStore for Handler {
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let res = wrpc::keyvalue::store::get(&wrpc, bucket, &key)
+        let res = crate::bindings::wrpc::keyvalue::store::get(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.get`")?;
         Ok(res.map_err(keyvalue_error_from_wrpc))
@@ -676,7 +656,7 @@ impl KeyValueStore for Handler {
         value: Vec<u8>,
     ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let res = wrpc::keyvalue::store::set(&wrpc, bucket, &key, &value)
+        let res = crate::bindings::wrpc::keyvalue::store::set(&wrpc, bucket, &key, &value)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.set`")?;
         Ok(res.map_err(keyvalue_error_from_wrpc))
@@ -689,7 +669,7 @@ impl KeyValueStore for Handler {
         key: String,
     ) -> anyhow::Result<Result<(), keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let res = wrpc::keyvalue::store::delete(&wrpc, bucket, &key)
+        let res = crate::bindings::wrpc::keyvalue::store::delete(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.delete`")?;
         Ok(res.map_err(keyvalue_error_from_wrpc))
@@ -702,7 +682,7 @@ impl KeyValueStore for Handler {
         key: String,
     ) -> anyhow::Result<Result<bool, keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_store().await?;
-        let res = wrpc::keyvalue::store::exists(&wrpc, bucket, &key)
+        let res = crate::bindings::wrpc::keyvalue::store::exists(&wrpc, bucket, &key)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.exists`")?;
         Ok(res.map_err(keyvalue_error_from_wrpc))
@@ -715,11 +695,11 @@ impl KeyValueStore for Handler {
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<keyvalue::store::KeyResponse, keyvalue::store::Error>> {
         let wrpc = self.wrpc_keyvalue_store().await?;
-        match wrpc::keyvalue::store::list_keys(&wrpc, bucket, cursor)
+        match crate::bindings::wrpc::keyvalue::store::list_keys(&wrpc, bucket, cursor)
             .await
             .context("failed to invoke `wrpc:keyvalue/store.list_keys`")?
         {
-            Ok(wrpc::keyvalue::store::KeyResponse { keys, cursor }) => {
+            Ok(crate::bindings::wrpc::keyvalue::store::KeyResponse { keys, cursor }) => {
                 Ok(Ok(keyvalue::store::KeyResponse { keys, cursor }))
             }
             Err(err) => Ok(Err(keyvalue_error_from_wrpc(err))),
@@ -854,27 +834,25 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        options: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
             wasmtime_wasi_http::bindings::http::types::ErrorCode,
         >,
     > {
-        use wrpc_interface_http::OutgoingHandler;
-        // Reading a trace context should _never_ block because writing happens once at the beginning of a component
-        // invocation. If it does block here, it's a bug in the runtime, and it's better to deal with a
-        // disconnected trace than to block on the invocation for an extended period of time.
-        if let Ok(trace_context) = self.trace_ctx.try_read() {
-            wasmcloud_tracing::context::attach_span_context(&trace_context);
-        }
-
+        let request_options = RequestOptions {
+            connect_timeout: Some(options.connect_timeout),
+            first_byte_timeout: Some(options.first_byte_timeout),
+            between_bytes_timeout: Some(options.between_bytes_timeout),
+        };
         let wrpc = self.wrpc_http_outgoing_handler().await?;
         let (res, body_errors, tx) = wrpc
-            .invoke_handle_wasmtime(request)
+            .invoke_handle_wasmtime(request, request_options)
             .await
             .context("failed to invoke `wrpc:http/outgoing-handler.handle`")?;
         spawn(async move {

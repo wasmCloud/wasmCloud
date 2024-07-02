@@ -760,7 +760,7 @@ impl ProviderConnection {
         }
         hmap.insert("source-id", self.provider_id.as_str());
         hmap.insert("target-id", target);
-        WrpcClient(wasmcloud_core::wrpc::Client::new(
+        WrpcClient(wasmcloud_core::wrpc::LegacyClient::new(
             Arc::clone(&self.nats),
             &self.lattice,
             target,

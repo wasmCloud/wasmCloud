@@ -7,7 +7,8 @@ use std::sync::{Arc, MutexGuard};
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
-use wrpc_transport::IncomingInputStream;
+
+use crate::capability::builtin::IncomingInputStream;
 
 /// wasmCloud I/O functionality
 

@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{error, instrument};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
 use wasmcloud_provider_sdk::{Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 
 use config::StorageConfig;
 
@@ -304,7 +304,9 @@ impl Blobstore for BlobstoreAzblobProvider {
                                     .blobs
                                     .blobs()
                                     .map(|blob| {
-                                        Some(wrpc_transport::Value::String(blob.name.clone()))
+                                        Some(wrpc_transport_legacy::Value::String(
+                                            blob.name.clone(),
+                                        ))
                                     })
                                     .collect::<Vec<_>>()
                             })
@@ -317,7 +319,9 @@ impl Blobstore for BlobstoreAzblobProvider {
                                 .unwrap_or(usize::MAX),
                         );
 
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(container_names)))
+                    anyhow::Ok(wrpc_transport_legacy::Value::Stream(Box::pin(
+                        container_names,
+                    )))
                 }
                 .await,
             )
@@ -488,18 +492,21 @@ impl Blobstore for BlobstoreAzblobProvider {
                     let data = stream
                         .map_err(|e| anyhow::anyhow!(e))
                         .and_then(|res| async {
-                            Ok(vec![Some(wrpc_transport::Value::List(
+                            Ok(vec![Some(wrpc_transport_legacy::Value::List(
                                 res.data
                                     .collect()
                                     .await
                                     .map(|bytes| {
-                                        bytes.into_iter().map(wrpc_transport::Value::U8).collect()
+                                        bytes
+                                            .into_iter()
+                                            .map(wrpc_transport_legacy::Value::U8)
+                                            .collect()
                                     })
                                     .map_err(|e| anyhow::anyhow!(e))?,
                             ))])
                         });
 
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+                    anyhow::Ok(wrpc_transport_legacy::Value::Stream(Box::pin(data)))
                 }
                 .await,
             )
