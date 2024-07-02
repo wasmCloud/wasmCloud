@@ -1,26 +1,23 @@
-// Stops warning from wrpc
-#![recursion_limit = "256"]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::exports::wasmcloud::wadm::client::ModelSummary;
-use crate::exports::wasmcloud::wadm::client::OamManifest;
-use crate::exports::wasmcloud::wadm::client::Status;
-use crate::exports::wasmcloud::wadm::client::VersionInfo;
 use anyhow::{anyhow, bail, Context as _};
-use futures::stream::AbortHandle;
+use futures::stream::{AbortHandle, Abortable};
+use futures::StreamExt;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
-use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument as _;
 use wadm_client::{Client, ClientConnectOptions};
-use wasmcloud::messaging::types::BrokerMessage;
-use wasmcloud_provider_sdk::core::HostData;
-use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+use wadm_types::{
+    api::{StatusResponse, StatusResult},
+    wasmcloud::wadm::handler::StatusUpdate,
 };
+use wasmcloud_provider_sdk::{
+    core::HostData, get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+};
+
+use crate::exports::wasmcloud::wadm::client::{ModelSummary, OamManifest, Status, VersionInfo};
 
 mod config;
 
@@ -37,9 +34,9 @@ wit_bindgen_wrpc::generate!({
         serde::Serialize,
         serde::Deserialize,
     ],
-    // with: {
-        // "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types
-    // }
+    with: {
+        "wasmcloud:wadm/types@0.1.0": wadm_types::wasmcloud::wadm::types
+    }
 });
 
 pub async fn run() -> anyhow::Result<()> {
@@ -124,15 +121,16 @@ impl WadmProvider {
             ca_path,
         };
 
-        // Create the Wadm Client from the NATS client using the async function
+        // Create the Wadm Client from the NATS client
         let client = Client::new(&cfg.lattice, None, client_opts).await?;
+        // let client_arc = Arc::new(client);
 
         let mut sub_handles = Vec::new();
         if make_status_sub {
-            let join_handle = self
+            let handle = self
                 .handle_status(&client, component_id, &cfg.app_name)
                 .await?;
-            sub_handles.push(("wadm.status".into(), join_handle));
+            sub_handles.push(("wadm.status".into(), handle));
         }
 
         Ok(WadmClientBundle {
@@ -148,50 +146,74 @@ impl WadmProvider {
         client: &Client,
         component_id: &str,
         app_name: &str,
-    ) -> anyhow::Result<JoinHandle<()>> {
+    ) -> anyhow::Result<AbortHandle> {
         debug!(?component_id, "spawning listener for component");
+        let mut subscriber = client
+            .subscribe_to_status(app_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to subscribe to status: {}", e))?;
 
         let component_id = Arc::new(component_id.to_string());
         let app_name = Arc::new(app_name.to_string());
-        let client = Arc::new(client.clone());
 
-        // Spawn a thread that listens for messages coming from NATS
-        // this thread is expected to run for the full duration that the provider is available
-        let join_handle = tokio::spawn(async move {
-            let semaphore = Arc::new(Semaphore::new(75));
-
-            // Connect to status API
-            match client.subscribe_to_status(&app_name).await {
-                Ok(mut message_stream) => {
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        tokio::task::spawn(Abortable::new(
+            {
+                let semaphore = Arc::new(Semaphore::new(75));
+                async move {
                     // Listen for NATS message(s)
-                    while let Some(msg) = message_stream.recv().await {
-                        // Here, dispatch the message based on your logic
-                        debug!(?msg, ?component_id, "received message");
+                    while let Some(msg) = subscriber.next().await {
+                        // Parse the message into a StatusResponse
+                        match serde_json::from_slice::<StatusResponse>(&msg.payload) {
+                            Ok(status_response) => match status_response.result {
+                                StatusResult::Error => {
+                                    warn!("Received error status: {}", status_response.message);
+                                }
+                                StatusResult::NotFound => {
+                                    warn!("Status not found for: {}", app_name.clone());
+                                }
+                                StatusResult::Ok => {
+                                    if let Some(status) = status_response.status {
+                                        debug!(?status, ?component_id, "received status");
 
-                        let span = tracing::debug_span!("handle_message", ?component_id);
-                        let permit = match semaphore.clone().acquire_owned().await {
-                            Ok(p) => p,
-                            Err(_) => {
-                                warn!("Work pool has been closed, exiting queue subscribe");
-                                break;
+                                        let span =
+                                            tracing::debug_span!("handle_message", ?component_id);
+                                        let permit = match semaphore.clone().acquire_owned().await {
+                                            Ok(p) => p,
+                                            Err(_) => {
+                                                warn!("Work pool has been closed, exiting queue subscribe");
+                                                break;
+                                            }
+                                        };
+
+                                        let component_id = Arc::clone(&component_id);
+                                        let app_name = Arc::clone(&app_name);
+                                        tokio::spawn(async move {
+                                            dispatch_status_update(
+                                                component_id.as_str(),
+                                                &app_name,
+                                                status.into(),
+                                                permit,
+                                            )
+                                            .instrument(span)
+                                            .await;
+                                        });
+                                    } else {
+                                        warn!("Received status OK but no status provided");
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                warn!("Failed to deserialize message: {}", e);
                             }
                         };
-                        let component_id = Arc::clone(&component_id);
-                        tokio::spawn(async move {
-                            dispatch_msg(component_id.as_str(), msg, permit)
-                                .instrument(span)
-                                .await;
-                        });
                     }
                 }
-                Err(err) => {
-                    // Handle error - log it
-                    eprintln!("Error subscribing to status: {:?}", err);
-                }
-            }
-        });
+            },
+            abort_registration,
+        ));
 
-        Ok(join_handle)
+        Ok(abort_handle)
     }
 
     /// Helper function to get the NATS client from the context
@@ -216,26 +238,25 @@ impl WadmProvider {
     }
 }
 
-#[instrument(level = "debug", skip_all, fields(component_id = %component_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
-async fn dispatch_msg(
+#[instrument(level = "debug", skip_all, fields(component_id = %component_id, app_name = %app))]
+async fn dispatch_status_update(
     component_id: &str,
-    nats_msg: async_nats::Message,
+    app: &str,
+    status: Status,
     _permit: OwnedSemaphorePermit,
 ) {
-    let msg = BrokerMessage {
-        body: nats_msg.payload.into(),
-        reply_to: nats_msg.reply.map(|s| s.to_string()),
-        subject: nats_msg.subject.to_string(),
+    let update = StatusUpdate {
+        app: app.to_string(),
+        status,
     };
     debug!(
-        subject = msg.subject,
-        reply_to = ?msg.reply_to,
+        app = app,
         component_id = component_id,
-        "sending message to actor",
+        "sending status to component",
     );
-    if let Err(e) = wasmcloud::messaging::handler::handle_message(
+    if let Err(e) = wasmcloud::wadm::handler::handle_status_update(
         &get_connection().get_wrpc_client(component_id),
-        &msg,
+        &update,
     )
     .await
     {
