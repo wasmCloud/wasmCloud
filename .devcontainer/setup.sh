@@ -3,9 +3,9 @@ set -xe
 
 nix profile install --inputs-from . \
     'nixpkgs#nix-direnv' \
-    'nixpkgs#rnix-lsp' \
+    'nixpkgs#nixd' \
     'nixpkgs#rust-analyzer' \
-    'nixpkgs#stdenv.cc.cc' \
+    'nixpkgs#gcc' \
     '.#rust'
 
 echo 'source "$HOME/.nix-profile/share/nix-direnv/direnvrc"' > "$HOME/.direnvrc"

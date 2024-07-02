@@ -1,7 +1,6 @@
 /target/
 target/
 
-.devcontainer
 .envrc
 .github
 .gitignore
