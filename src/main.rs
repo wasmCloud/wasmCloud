@@ -21,6 +21,9 @@ use wasmcloud_tracing::configure_observability;
 #[allow(clippy::struct_excessive_bools)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Controls the verbosity of traces emitted from the wasmCloud host
+    #[clap(long = "trace-level", default_value_t = TracingLogLevel::DEBUG, env = "WASMCLOUD_TRACE_LEVEL")]
+    pub trace_level: TracingLogLevel,
     /// Controls the verbosity of logs from the wasmCloud host
     #[clap(long = "log-level", alias = "structured-log-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
     pub log_level: TracingLogLevel,
@@ -262,6 +265,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
+    let trace_level = WasmcloudLogLevel::from(args.trace_level);
     let otel_config = OtelConfig {
         enable_observability: args.enable_observability,
         enable_traces: args.enable_traces,
@@ -272,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         metrics_endpoint: args.metrics_endpoint,
         logs_endpoint: args.logs_endpoint,
         protocol: args.observability_protocol.unwrap_or_default(),
+        trace_level,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
@@ -281,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
         args.enable_structured_logging,
         args.flame_graph,
         Some(&log_level),
+        Some(&otel_config.trace_level),
     );
     if let Err(e) = res {
         eprintln!("Failed to configure observability: {e}");

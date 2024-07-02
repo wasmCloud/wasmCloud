@@ -8,7 +8,7 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::wit::WitMap;
+use crate::{logging::Level, wit::WitMap};
 
 /// Configuration values for OpenTelemetry
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -32,6 +32,13 @@ pub struct OtelConfig {
     /// Determines whether http or grpc will be used for exporting the telemetry.
     #[serde(default)]
     pub protocol: OtelProtocol,
+    /// The level of tracing to enable.
+    #[serde(default = "default_trace_level")]
+    pub trace_level: Level,
+}
+
+fn default_trace_level() -> Level {
+    Level::Debug
 }
 
 impl OtelConfig {

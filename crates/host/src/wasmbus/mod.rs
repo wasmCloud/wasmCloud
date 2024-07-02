@@ -2232,6 +2232,7 @@ impl Host {
                 metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
                 protocol: self.host_config.otel_config.protocol,
+                trace_level: self.host_config.otel_config.trace_level.clone(),
             };
             let config_generator = self.config_generator.clone();
 
@@ -2275,6 +2276,7 @@ impl Host {
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
                 log_level: Some(self.host_config.log_level.clone()),
+                trace_level: Some(self.host_config.otel_config.trace_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
             };
