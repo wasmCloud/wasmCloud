@@ -3835,7 +3835,7 @@ dependencies = [
 name = "opentelemetry-nats"
 version = "0.1.0"
 dependencies = [
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "opentelemetry 0.23.0",
  "opentelemetry_sdk 0.23.0",
  "tracing",
@@ -6589,7 +6589,7 @@ dependencies = [
  "anyhow",
  "assert-json-diff",
  "async-compression",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "bytes",
  "clap",
  "clap_complete",
@@ -6653,7 +6653,7 @@ version = "0.22.1"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
@@ -6909,7 +6909,7 @@ name = "wasmcloud"
 version = "1.0.2"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "base64 0.22.1",
  "bytes",
  "clap",
@@ -7000,7 +7000,7 @@ name = "wasmcloud-control-interface"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "async-trait",
  "bytes",
  "cloudevents-sdk",
@@ -7072,7 +7072,7 @@ name = "wasmcloud-core"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "async-trait",
  "bytes",
  "futures",
@@ -7105,7 +7105,7 @@ name = "wasmcloud-host"
 version = "0.82.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -7162,7 +7162,7 @@ name = "wasmcloud-provider-blobstore-azure"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "async-trait",
  "azure_core",
  "azure_storage",
@@ -7250,7 +7250,7 @@ name = "wasmcloud-provider-http-server"
 version = "0.21.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "axum 0.7.5",
  "axum-server",
  "base64 0.22.1",
@@ -7274,14 +7274,15 @@ name = "wasmcloud-provider-keyvalue-nats"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.35.1",
  "bytes",
  "futures",
  "rustls-pemfile 2.1.2",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]
@@ -7291,7 +7292,7 @@ name = "wasmcloud-provider-keyvalue-redis"
 version = "0.26.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "futures",
  "redis",
  "tempfile",
@@ -7325,7 +7326,7 @@ name = "wasmcloud-provider-lattice-controller"
 version = "0.13.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "tokio",
  "tracing",
  "wascap 0.15.0",
@@ -7352,7 +7353,7 @@ name = "wasmcloud-provider-messaging-nats"
 version = "0.21.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "bytes",
  "futures",
  "opentelemetry 0.23.0",
@@ -7374,7 +7375,7 @@ name = "wasmcloud-provider-sdk"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "base64 0.22.1",
  "bytes",
  "futures",
@@ -7486,7 +7487,7 @@ name = "wasmcloud-test-util"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "async-nats 0.33.0",
+ "async-nats 0.35.1",
  "cloudevents-sdk",
  "nkeys 0.4.1",
  "rmp-serde",
