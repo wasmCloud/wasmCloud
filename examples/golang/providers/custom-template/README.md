@@ -57,6 +57,13 @@ wash call custom-template wasmcloud:example/system-info.call
 You can deploy this provider, along with a [prebuilt component](../component/) for testing, by deploying the [wadm.yaml](./wadm.yaml) application.
 
 ```bash
+# Build the component
+cd component
+wash build
+
+# Return to the provider directory
+cd ..
+
 # Launch wasmCloud in the background
 wash up -d
 # Deploy the application
