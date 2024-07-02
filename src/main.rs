@@ -178,7 +178,7 @@ struct Args {
     )]
     policy_timeout_ms: Option<Duration>,
 
-    /// If provided, enables interfacing with a secrets backend for secret retrieval
+    /// If provided, enables interfacing with a secrets backend for secret retrieval over the given topic prefix. Must not be empty.
     #[clap(long = "secrets-topic", env = "WASMCLOUD_SECRETS_TOPIC")]
     secrets_topic_prefix: Option<String>,
 
