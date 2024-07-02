@@ -194,7 +194,7 @@ shutdown_lifetime 1 seconds
             .await
             .unwrap();
 
-        let container = GenericImage::new("chainguard/squid-proxy", "latest")
+        let container = GenericImage::new("cgr.dev/chainguard/squid-proxy", "latest")
             .with_exposed_port(3128)
             .with_mount(Mount::bind_mount(
                 squid_config_path.to_string_lossy().to_string(),
