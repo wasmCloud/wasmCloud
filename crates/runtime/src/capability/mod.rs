@@ -19,7 +19,7 @@ mod bindgen {
 
     mod blobstore {
         pub type Container = std::sync::Arc<String>;
-        pub type IncomingValue = wrpc_transport::IncomingInputStream;
+        pub type IncomingValue = wrpc_transport_legacy::IncomingInputStream;
         pub type OutgoingValue = crate::io::AsyncVec;
         pub type StreamObjectNames = crate::io::BufferedIncomingStream<String>;
     }

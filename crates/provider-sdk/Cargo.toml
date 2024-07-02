@@ -43,6 +43,6 @@ wasmcloud-core = { workspace = true, features = [
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
 wrpc-interface-blobstore = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
-wrpc-transport = { workspace = true }
-wrpc-transport-nats = { workspace = true }
+wrpc-transport-legacy = { workspace = true }
+wrpc-transport-nats-legacy = { workspace = true }
 wrpc-types = { workspace = true }

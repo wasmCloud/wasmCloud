@@ -9,7 +9,7 @@ use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::interfaces::http::OutgoingHandler;
 use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, Provider};
 use wrpc_interface_http::try_http_to_outgoing_response;
-use wrpc_transport::AcceptedInvocation;
+use wrpc_transport_legacy::AcceptedInvocation;
 
 /// HTTP client capability provider implementation struct
 #[derive(Clone)]
@@ -17,7 +17,7 @@ pub struct HttpClientProvider {
     client: hyper_util::client::legacy::Client<
         hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
         wrpc_interface_http::IncomingBody<
-            wrpc_transport::IncomingInputStream,
+            wrpc_transport_legacy::IncomingInputStream,
             wrpc_interface_http::IncomingFields,
         >,
     >,
@@ -91,7 +91,7 @@ impl HttpClientProvider {
 
 impl OutgoingHandler for HttpClientProvider {
     #[instrument(level = "debug", skip_all)]
-    async fn serve_handle<Tx: wrpc_transport::Transmitter>(
+    async fn serve_handle<Tx: wrpc_transport_legacy::Transmitter>(
         &self,
         AcceptedInvocation {
             context,

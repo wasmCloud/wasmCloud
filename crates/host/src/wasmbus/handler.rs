@@ -19,7 +19,7 @@ use wasmcloud_runtime::capability::{
 };
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmtime_wasi_http::body::HyperIncomingBody;
-use wrpc_transport::{Client, DynamicTuple, IncomingInputStream};
+use wrpc_transport_legacy::{Client, DynamicTuple, IncomingInputStream};
 
 use crate::bindings::{wasmcloud, wrpc};
 
@@ -570,8 +570,8 @@ impl Bus for Handler {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
         if let TargetEntity::Lattice(lit) = target {
             let result_ty = self
                 .polyfills

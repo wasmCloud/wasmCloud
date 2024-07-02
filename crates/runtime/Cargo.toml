@@ -41,6 +41,8 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }
+wrpc-transport-legacy = { workspace = true }
+wrpc-transport-nats = { workspace = true }
 wrpc-types = { workspace = true }
 
 [dev-dependencies]

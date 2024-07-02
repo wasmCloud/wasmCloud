@@ -18,7 +18,7 @@ use tokio::io::AsyncRead;
 use tokio::sync::oneshot;
 use tracing::{error, instrument, trace};
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
-use wrpc_transport::IncomingInputStream;
+use wrpc_transport_legacy::IncomingInputStream;
 
 use wasmcloud_core::CallTargetInterface;
 
@@ -390,8 +390,8 @@ pub trait Bus {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>>;
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>>;
 }
 
 #[async_trait]
@@ -676,8 +676,8 @@ impl Bus for Handler {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
         self.proxy_bus("wasmcloud:bus/host.call")?
             .call(target, instance, name, params)
             .await

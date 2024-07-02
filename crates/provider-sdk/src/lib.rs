@@ -9,7 +9,7 @@ use provider::invocation_context;
 use provider::ProviderInitState;
 use tower::ServiceExt;
 use tracing::{error, info, warn};
-use wrpc_transport::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
+use wrpc_transport_legacy::{AcceptedInvocation, IncomingInvocation, OutgoingInvocation};
 
 pub mod error;
 pub mod interfaces;
@@ -262,15 +262,20 @@ pub trait Provider<E = anyhow::Error>: Sync {
 #[derive(Clone, Debug)]
 pub struct WrpcClient(pub wasmcloud_core::wrpc::Client);
 
-impl wrpc_transport::Client for WrpcClient {
+impl wrpc_transport_legacy::Client for WrpcClient {
     type Context = Option<Context>;
-    type Subject = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subject;
-    type Subscriber = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Subscriber;
-    type Transmission = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Transmission;
-    type Acceptor = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Acceptor;
-    type Invocation = <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::Invocation;
-    type InvocationStream<Ctx, T, Tx: wrpc_transport::Transmitter> =
-        <wasmcloud_core::wrpc::Client as wrpc_transport::Client>::InvocationStream<Ctx, T, Tx>;
+    type Subject = <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::Subject;
+    type Subscriber = <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::Subscriber;
+    type Transmission =
+        <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::Transmission;
+    type Acceptor = <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::Acceptor;
+    type Invocation = <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::Invocation;
+    type InvocationStream<Ctx, T, Tx: wrpc_transport_legacy::Transmitter> =
+        <wasmcloud_core::wrpc::Client as wrpc_transport_legacy::Client>::InvocationStream<
+            Ctx,
+            T,
+            Tx,
+        >;
 
     fn serve<Ctx, T, Tx, S, Fut>(
         &self,
@@ -279,7 +284,7 @@ impl wrpc_transport::Client for WrpcClient {
         svc: S,
     ) -> impl Future<Output = anyhow::Result<Self::InvocationStream<Ctx, T, Tx>>>
     where
-        Tx: wrpc_transport::Transmitter,
+        Tx: wrpc_transport_legacy::Transmitter,
         S: tower::Service<
                 IncomingInvocation<Self::Context, Self::Subscriber, Self::Acceptor>,
                 Future = Fut,

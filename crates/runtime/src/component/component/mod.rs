@@ -667,8 +667,8 @@ impl Component {
         &self,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
         self.instantiate()
             .context("failed to instantiate component")?
             .call(instance, name, params)
@@ -735,8 +735,8 @@ impl Instance {
         &mut self,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport::Value>> {
+        params: Vec<wrpc_transport_legacy::Value>,
+    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
         let component = self
             .instance_pre
             .instantiate_async(&mut self.store)

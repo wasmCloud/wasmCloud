@@ -11,6 +11,9 @@
 //!
 //! [wrpc-transport]: https://docs.rs/wrpc-transport
 
+extern crate wrpc_transport_legacy as wrpc_transport;
+extern crate wrpc_transport_nats_legacy as wrpc_transport_nats;
+
 use core::future::Future;
 use core::time::Duration;
 

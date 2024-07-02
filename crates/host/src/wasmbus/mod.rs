@@ -55,7 +55,7 @@ use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
-use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
+use wrpc_transport_legacy::{AcceptedInvocation, Client, Transmitter as _};
 
 use crate::bindings::wasmcloud;
 use crate::{
@@ -205,7 +205,7 @@ enum InvocationParams {
     Custom {
         instance: Arc<String>,
         name: Arc<String>,
-        params: Vec<wrpc_transport::Value>,
+        params: Vec<wrpc_transport_legacy::Value>,
     },
     IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
     MessagingHandleMessage(wasmcloud::messaging::types::BrokerMessage),
@@ -240,7 +240,7 @@ impl Component {
         &self,
         context: Option<async_nats::HeaderMap>,
         params: InvocationParams,
-        result_subject: wrpc_transport_nats::Subject,
+        result_subject: wrpc_transport_nats_legacy::Subject,
         transmitter: &wasmcloud_core::wrpc::TransmitterWithHeaders,
     ) -> anyhow::Result<()> {
         let (interface, function) = match params {

@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::join;
 use tokio::sync::RwLock;
 use tracing::instrument;
-use wrpc_transport::IncomingInputStream;
+use wrpc_transport_legacy::IncomingInputStream;
 
 #[derive(Clone, Debug)]
 /// In-memory [`Blobstore`] [`Container`] object

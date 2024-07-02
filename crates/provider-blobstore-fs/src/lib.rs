@@ -20,7 +20,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
 use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 
 #[derive(Default, Debug, Clone)]
 struct FsProviderConfig {
@@ -319,10 +319,10 @@ impl Blobstore for FsProvider {
                                 let name = entry.file_name().to_string_lossy().to_string();
                                 trace!(name, "list file name");
                                 // TODO: Remove the need for this wrapping
-                                Ok(vec![Some(wrpc_transport::Value::String(name))])
+                                Ok(vec![Some(wrpc_transport_legacy::Value::String(name))])
                             },
                         );
-                        anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(names)))
+                        anyhow::Ok(wrpc_transport_legacy::Value::Stream(Box::pin(names)))
                     }
                     .await,
                 )
@@ -487,11 +487,11 @@ impl Blobstore for FsProvider {
                         // TODO: Remove the need for this wrapping
                         Ok(buf
                             .into_iter()
-                            .map(wrpc_transport::Value::U8)
+                            .map(wrpc_transport_legacy::Value::U8)
                             .map(Some)
                             .collect())
                     });
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+                    anyhow::Ok(wrpc_transport_legacy::Value::Stream(Box::pin(data)))
                 }
                 .await,
             )

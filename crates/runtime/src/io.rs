@@ -7,10 +7,8 @@ use std::sync::{Arc, MutexGuard};
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
-use wrpc_transport::IncomingInputStream;
-
+use wrpc_transport_legacy::IncomingInputStream;
 /// wasmCloud I/O functionality
-
 #[derive(Clone, Default)]
 pub struct AsyncVec(Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
 

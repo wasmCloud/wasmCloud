@@ -34,4 +34,4 @@ tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-blobstore = { workspace = true }
-wrpc-transport = { workspace = true }
+wrpc-transport-legacy = { workspace = true }

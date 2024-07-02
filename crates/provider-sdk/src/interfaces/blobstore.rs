@@ -7,7 +7,7 @@ use futures::{Stream, StreamExt as _};
 use tokio::{select, spawn};
 use tracing::{debug, error, instrument, warn};
 use wrpc_interface_blobstore::{BlobstoreInvocations, ObjectId};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wrpc_transport_legacy::{AcceptedInvocation, Transmitter};
 
 use crate::{get_connection, run_provider, Context, Provider};
 
