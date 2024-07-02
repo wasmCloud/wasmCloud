@@ -29,7 +29,7 @@ pub async fn assert_put_secret_reference(
     backend: &str,
     version: Option<String>,
 ) -> Result<()> {
-    let mut config = HashMap::from_iter([
+    let mut config = HashMap::from([
         ("key".to_string(), key.to_string()),
         ("backend".to_string(), backend.to_string()),
     ]);

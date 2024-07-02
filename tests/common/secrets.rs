@@ -122,13 +122,12 @@ impl NatsKvSecretsBackend {
                     anyhow::anyhow!("Request for server xkey failed")
                 });
 
-            eprintln!("{:?}", resp);
             if resp.map(|r| r.payload.len()).unwrap_or(0) > 0 {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
-        Err(anyhow::anyhow!("NATS KV secrets backend did not start"))
+        anyhow::bail!("NATS KV secrets backend did not start, timed out waiting for server_xkey topic request")
     }
 
     fn topic(&self, operation: &str) -> String {

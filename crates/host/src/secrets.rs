@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::ensure;
+use anyhow::{bail, ensure, Context as _};
 use async_nats::{jetstream::kv::Store, Client};
 use futures::stream;
 use futures::stream::{StreamExt, TryStreamExt};
@@ -29,8 +29,10 @@ struct SecretReference {
 /// A manager for fetching secrets from a secret store, caching secrets clients for efficiency.
 pub struct Manager {
     config_store: Store,
+    /// The topic to use for configuring clients to fetch secrets from the secret store.
     secret_store_topic: Option<String>,
     nats_client: Client,
+    /// A map of backend names, e.g. nats-kv or vault, to secrets clients, used to cache clients for efficiency.
     backend_clients: Arc<RwLock<HashMap<String, Arc<WasmcloudSecretsClient>>>>,
 }
 
@@ -67,15 +69,22 @@ impl Manager {
         };
 
         // If we already have a client for this backend, return it
-        if let Some(client) = self.backend_clients.read().await.get(backend) {
-            return Ok(client.clone());
-        }
+        // NOTE(brooksmtownsend): This is block scoped to ensure we drop the read lock
+        let client = {
+            match self.backend_clients.read().await.get(backend) {
+                Some(existing) => return Ok(existing.clone()),
+                None => Arc::new(
+                    WasmcloudSecretsClient::new(
+                        backend,
+                        secret_store_topic,
+                        self.nats_client.clone(),
+                    )
+                    .await
+                    .context("failed to create secrets client")?,
+                ),
+            }
+        };
 
-        // NOTE(brooksmtownsend): This isn't an `else` clause to ensure we drop the read lock
-        let client = Arc::new(
-            WasmcloudSecretsClient::new(backend, secret_store_topic, self.nats_client.clone())
-                .await?,
-        );
         self.backend_clients
             .write()
             .await
@@ -118,9 +127,9 @@ impl Manager {
 
         // If we don't have an entity JWT, we can't provide its identity to the secrets backend
         let Some(entity_jwt) = entity_jwt else {
-            return Err(anyhow::anyhow!(
-                "component JWT not provided, required to fetch secrets. Ensure this entity was signed during build"
-            ));
+            bail!(
+                "entity did not have an embedded JWT, required to fetch secrets (was this entity signed during build?)"
+            );
         };
 
         let secrets = stream::iter(secret_names.iter())
@@ -129,10 +138,10 @@ impl Manager {
                 match self.config_store.get(secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
                         .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
-                    Ok(None) => Err(anyhow::anyhow!(
+                    Ok(None) => bail!(
                         "Secret reference {secret_name} not found in config store"
-                    )),
-                    Err(e) => Err(anyhow::anyhow!(e)),
+                    ),
+                    Err(e) => bail!(e),
                 }
             })
             // Retrieve the actual secret from the secrets backend
