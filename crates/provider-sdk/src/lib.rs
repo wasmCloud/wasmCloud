@@ -170,6 +170,45 @@ impl ProviderInitConfig for &ProviderInitState {
     }
 }
 
+/// Present information related to a link delete, normally used as part of the [`Provider`] interface,
+/// for providers that must process a link deletion in some way.
+pub trait LinkDeleteInfo: Send + Sync {
+    /// Retrieve the source of the link
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the target, then this is
+    /// the workload that was invoking the provider (most often a component)
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the source, then this is
+    /// the ID of the provider itself.
+    fn get_source_id(&self) -> &str;
+
+    /// Retrieve the target of the link
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the target, then this is the ID of the provider itself.
+    ///
+    /// If the provider receiving this LinkDeleteInfo is the source (ex. a HTTP server provider which
+    /// must invoke other components/providers), then the target in this case is the thing *being invoked*,
+    /// likely a component.
+    fn get_target_id(&self) -> &str;
+
+    /// Retrieve the link name
+    fn get_link_name(&self) -> &str;
+}
+
+impl LinkDeleteInfo for &InterfaceLinkDefinition {
+    fn get_source_id(&self) -> &str {
+        &self.source_id
+    }
+
+    fn get_target_id(&self) -> &str {
+        &self.target
+    }
+
+    fn get_link_name(&self) -> &str {
+        &self.name
+    }
+}
+
 /// Capability Provider handling of messages from host
 pub trait Provider<E = anyhow::Error>: Sync {
     /// Initialize the provider
@@ -216,26 +255,56 @@ pub trait Provider<E = anyhow::Error>: Sync {
     }
 
     /// Notify the provider that the link is dropped
+    #[deprecated(
+        since = "0.6.1",
+        note = "prefer delete_configured_link_as_target() or delete_configured_link_as_source()"
+    )]
     fn delete_link(&self, component_id: &str) -> impl Future<Output = Result<(), E>> + Send {
         let _ = component_id;
         async { Ok(()) }
     }
 
     /// Notify the provider that the link is dropped where the provider is the target
+    #[deprecated(
+        since = "0.6.1",
+        note = "prefer delete_configured_link_as_target() instead. In a future release this method will be replaced with the implementation of delete_configured_link_as_target()"
+    )]
     fn delete_link_as_target(
         &self,
-        component_id: &str,
+        _component_id: &str,
     ) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = component_id;
+        async { Ok(()) }
+    }
+
+    /// Notify the provider that the link is dropped where the provider is the target
+    ///
+    /// Unlike [`delete_link_as_target`], metadata like link name are available to be inspected.
+    fn delete_configured_link_as_target(
+        &self,
+        _info: impl LinkDeleteInfo,
+    ) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
     }
 
     /// Notify the provider that the link is dropped where the provider is the source
+    #[deprecated(
+        since = "0.6.0",
+        note = "prefer delete_configured_link_as_source() instead. In a future release this method will be replaced with the implementation of delete_configured_link_as_source()"
+    )]
     fn delete_link_as_source(
         &self,
-        component_id: &str,
+        _component_id: &str,
     ) -> impl Future<Output = Result<(), E>> + Send {
-        let _ = component_id;
+        async { Ok(()) }
+    }
+
+    /// Notify the provider that the link is dropped where the provider is the source
+    ///
+    /// Unlike [`delete_link_as_source`], metadata like link name are available to be inspected.
+    fn delete_configured_link_as_source(
+        &self,
+        _info: impl LinkDeleteInfo,
+    ) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
     }
 

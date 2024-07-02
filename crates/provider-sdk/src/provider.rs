@@ -487,14 +487,15 @@ where
     P: Provider,
 {
     if ld.source_id == connection.provider_id {
-        if let Err(e) = provider.delete_link_as_source(&ld.target).await {
+        if let Err(e) = provider.delete_configured_link_as_source(&ld).await {
             error!(error = %e, target = &ld.target, "failed to delete link to component");
         }
     } else if ld.target == connection.provider_id {
-        if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
+        if let Err(e) = provider.delete_configured_link_as_target(&ld).await {
             error!(error = %e, source = &ld.source_id, "failed to delete link from component");
         }
     }
+    warn!("delete_link() is deprecated, consider using delete_configured_link_*() variants. In a future release delete_link() will be removed.");
     connection.delete_link(&ld.source_id, &ld.target).await;
     Ok(())
 }
