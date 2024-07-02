@@ -16,6 +16,11 @@ interface types {
         deployed: bool
     }
 
+    record status-update {
+        app: string,
+        status: status
+    }
+
     record status {
         version: string,
         info: status-info,
