@@ -806,6 +806,14 @@ impl Host {
         )
         .await?;
 
+        ensure!(
+            config
+                .secrets_topic_prefix
+                .as_ref()
+                .is_some_and(|topic| !topic.is_empty()),
+            "secrets topic prefix must be non-empty"
+        );
+
         let secrets_manager = Arc::new(SecretsManager::new(
             &config_data,
             config.secrets_topic_prefix.as_ref(),
