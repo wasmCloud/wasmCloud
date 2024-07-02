@@ -30,4 +30,4 @@ wash-lib = { workspace = true, features = ["nats"] }
 wadm = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 wadm-client = { workspace = true }
-wadm-types = { workspace = true }
+wadm-types = { workspace = true, features = ["wit"] }
