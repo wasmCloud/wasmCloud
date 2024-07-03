@@ -1,3 +1,7 @@
+use anyhow::{anyhow, bail, Context, Result};
+use async_nats::Client;
+use clap::Parser;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
@@ -7,13 +11,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-
-use anyhow::{anyhow, bail, Context, Result};
-use async_nats::Client;
-use clap::Parser;
-use serde_json::{json, Value};
 use sysinfo::{System, SystemExt};
-
 use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -272,6 +270,10 @@ pub struct WasmcloudOpts {
     /// If enabled, allows starting additional wasmCloud hosts on this machine
     #[clap(long = "multi-local")]
     pub multi_local: bool,
+
+    /// Defines the Max Execution time (in ms) that the host runtime will execute for
+    #[clap(long = "max-execution-time-ms", alias = "max-time-ms", env = WASMCLOUD_MAX_EXECUTION_TIME_MS, default_value = DEFAULT_MAX_EXECUTION_TIME_MS)]
+    pub max_execution_time: u64,
 }
 
 impl WasmcloudOpts {
@@ -355,11 +357,9 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let ctx = ContextDir::new()?
         .load_default_context()
         .context("failed to load context")?;
-
     // falling back to the context's ctl_ connection won't always be right, but we have to pick one, since the context values are not optional
     let nats_host = cmd.nats_opts.nats_host.clone().unwrap_or(ctx.ctl_host);
     let nats_port = cmd.nats_opts.nats_port.unwrap_or(ctx.ctl_port);
-
     let wasmcloud_opts = WasmcloudOpts {
         lattice: Some(cmd.wasmcloud_opts.lattice.unwrap_or(ctx.lattice)),
         ctl_host: Some(cmd.wasmcloud_opts.ctl_host.unwrap_or(nats_host.clone())),
@@ -373,6 +373,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         rpc_jwt: cmd.wasmcloud_opts.rpc_jwt.or(ctx.rpc_jwt),
         rpc_seed: cmd.wasmcloud_opts.rpc_seed.or(ctx.rpc_seed),
         rpc_credsfile: cmd.wasmcloud_opts.rpc_credsfile.or(ctx.rpc_credsfile),
+        max_execution_time: cmd.wasmcloud_opts.max_execution_time,
         cluster_seed: cmd
             .wasmcloud_opts
             .cluster_seed

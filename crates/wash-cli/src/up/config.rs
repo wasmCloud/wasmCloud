@@ -21,6 +21,8 @@ pub const WASMCLOUD_JS_DOMAIN: &str = "WASMCLOUD_JS_DOMAIN";
 pub const WASMCLOUD_CLUSTER_ISSUERS: &str = "WASMCLOUD_CLUSTER_ISSUERS";
 pub const WASMCLOUD_CLUSTER_SEED: &str = "WASMCLOUD_CLUSTER_SEED";
 pub const WASMCLOUD_HOST_SEED: &str = "WASMCLOUD_HOST_SEED";
+pub const WASMCLOUD_MAX_EXECUTION_TIME_MS: &str = "WASMCLOUD_MAX_EXECUTION_TIME_MS";
+pub const DEFAULT_MAX_EXECUTION_TIME_MS: &str = "600000";
 // NATS RPC connection configuration
 pub const WASMCLOUD_RPC_HOST: &str = "WASMCLOUD_RPC_HOST";
 pub const WASMCLOUD_RPC_PORT: &str = "WASMCLOUD_RPC_PORT";
@@ -81,6 +83,10 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
             cluster_issuers.join(","),
         );
     }
+    host_config.insert(
+        WASMCLOUD_MAX_EXECUTION_TIME_MS.to_string(),
+        wasmcloud_opts.max_execution_time.to_string(),
+    );
 
     if wasmcloud_opts.allow_latest {
         host_config.insert(WASMCLOUD_OCI_ALLOW_LATEST.to_string(), "true".to_string());

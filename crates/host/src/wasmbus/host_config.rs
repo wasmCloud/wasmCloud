@@ -61,6 +61,8 @@ pub struct Host {
     /// The semver version of the host. This is used by a consumer of this crate to indicate the
     /// host version (which may differ from the crate version)
     pub version: String,
+    /// The Max Execution time for Host runtime
+    pub max_execution_time: Duration,
 }
 
 /// Configuration for wasmCloud policy service
@@ -103,6 +105,7 @@ impl Default for Host {
             policy_service_config: PolicyService::default(),
             secrets_topic_prefix: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            max_execution_time: Duration::from_millis(10 * 60 * 1000),
         }
     }
 }

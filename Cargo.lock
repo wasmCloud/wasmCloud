@@ -6683,6 +6683,7 @@ dependencies = [
  "dirs",
  "futures",
  "http 1.1.0",
+ "humantime",
  "indicatif",
  "nix",
  "nkeys 0.4.1",
