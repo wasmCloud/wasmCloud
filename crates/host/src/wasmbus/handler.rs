@@ -565,33 +565,96 @@ impl Bus for Handler {
     }
 
     #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
-    async fn call(
+    async fn call<T>(
         &self,
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport_legacy::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
+        params: Bytes,
+    ) -> anyhow::Result<(T::Outgoing, T::Incoming)> {
         if let TargetEntity::Lattice(lit) = target {
-            let result_ty = self
-                .polyfills
-                .get(instance)
-                .and_then(|functions| match functions.get(name) {
-                    Some(
-                        wrpc_types::DynamicFunction::Static { results, .. }
-                        | wrpc_types::DynamicFunction::Method { results, .. },
-                    ) => Some(results),
-                    None => None,
-                })
-                .with_context(|| {
-                    format!("export {instance}/{name} not found, could not determine result types")
-                })?;
-            let (results, tx) = self
-                .wrpc_client(&lit)
-                .invoke_dynamic(instance, name, DynamicTuple(params), result_ty)
-                .await?;
-            tx.await.context("failed to transmit parameters")?;
-            Ok(results)
+            let rx = Subject::from(self.nats.new_inbox());
+            let (result_rx, handshake_rx, nested) = try_join!(
+                async {
+                    self.nats
+                        .subscribe(Subject::from(result_subject(&rx)))
+                        .await
+                        .context("failed to subscribe on result subject")
+                },
+                async {
+                    self.nats
+                        .subscribe(rx.clone())
+                        .await
+                        .context("failed to subscribe on handshake subject")
+                },
+                futures::future::try_join_all(paths.iter().map(|path| async {
+                    self.nats
+                        .subscribe(Subject::from(subscribe_path(&rx, path.as_ref())))
+                        .await
+                        .context("failed to subscribe on nested result subject")
+                }))
+            )?;
+            let nested: SubscriberTree = zip(paths.iter(), nested).collect();
+            ensure!(
+                paths.is_empty() == nested.is_empty(),
+                "failed to construct subscription tree"
+            );
+            let ServerInfo {
+                mut max_payload, ..
+            } = self.nats.server_info();
+            max_payload = max_payload.saturating_sub(rx.len());
+            let param_tx = Subject::from(invocation_subject(&self.prefix, instance, func));
+            if let Some(headers) = cx {
+                // based on https://github.com/nats-io/nats.rs/blob/0942c473ce56163fdd1fbc62762f8164e3afa7bf/async-nats/src/header.rs#L215-L224
+                max_payload = max_payload
+                    .saturating_sub(b"NATS/1.0\r\n".len())
+                    .saturating_sub(b"\r\n".len());
+                for (k, vs) in headers.iter() {
+                    let k: &[u8] = k.as_ref();
+                    for v in vs {
+                        max_payload = max_payload
+                            .saturating_sub(k.len())
+                            .saturating_sub(b": ".len())
+                            .saturating_sub(v.as_str().len())
+                            .saturating_sub(b"\r\n".len());
+                    }
+                }
+                trace!("publishing handshake");
+                self.nats
+                    .publish_with_reply_and_headers(
+                        param_tx.clone(),
+                        rx,
+                        headers,
+                        params.split_to(max_payload.min(params.len())),
+                    )
+                    .await
+            } else {
+                trace!("publishing handshake");
+                self.nats
+                    .publish_with_reply(
+                        param_tx.clone(),
+                        rx,
+                        params.split_to(max_payload.min(params.len())),
+                    )
+                    .await
+            }
+            .context("failed to send handshake")?;
+            Ok((
+                ParamWriter::Root(RootParamWriter::new(
+                    SubjectWriter::new(
+                        Arc::clone(&self.nats),
+                        param_tx.clone(),
+                        self.nats.publish_sink(param_tx),
+                    ),
+                    handshake_rx,
+                    params,
+                )),
+                Reader {
+                    buffer: Bytes::default(),
+                    incoming: result_rx,
+                    nested: Arc::new(std::sync::Mutex::new(nested)),
+                },
+            ));
         } else {
             bail!(
                 "component [{}] attempted to invoke a function [{}/{}] on an unknown target [{}]",
@@ -885,5 +948,79 @@ impl OutgoingHttp for Handler {
         // TODO: Do not ignore outgoing body errors
         let _ = body_errors;
         Ok(res)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SubjectWriter {
+    nats: Arc<async_nats::Client>,
+    tx: Subject,
+    publisher: Publisher,
+}
+
+impl SubjectWriter {
+    fn new(nats: Arc<async_nats::Client>, tx: Subject, publisher: Publisher) -> Self {
+        Self {
+            nats,
+            tx,
+            publisher,
+        }
+    }
+}
+
+impl wrpc_transport::Index<Self> for SubjectWriter {
+    #[instrument(level = "trace", skip(self))]
+    fn index(&self, path: &[usize]) -> anyhow::Result<Self> {
+        Ok(Self {
+            nats: Arc::clone(&self.nats),
+            tx: index_path(self.tx.as_str(), path).into(),
+            publisher: self.publisher.clone(),
+        })
+    }
+}
+
+impl AsyncWrite for SubjectWriter {
+    #[instrument(level = "trace", skip_all, ret, fields(buf = format!("{buf:02x?}")))]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        trace!("polling for readiness");
+        match self.publisher.poll_ready_unpin(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(..)) => return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+            Poll::Ready(Ok(())) => {}
+        }
+        let ServerInfo { max_payload, .. } = self.nats.server_info();
+        if max_payload == 0 {
+            return Poll::Ready(Err(std::io::ErrorKind::WriteZero.into()));
+        }
+        if buf.len() > max_payload {
+            (buf, _) = buf.split_at(max_payload);
+        }
+        trace!("starting send");
+        match self.publisher.start_send_unpin(Bytes::copy_from_slice(buf)) {
+            Ok(()) => Poll::Ready(Ok(buf.len())),
+            Err(..) => Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        trace!("flushing");
+        self.publisher
+            .poll_flush_unpin(cx)
+            .map_err(|_| std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        trace!("writing empty buffer to shut down stream");
+        ready!(self.as_mut().poll_write(cx, &[]))?;
+        trace!("closing");
+        self.publisher
+            .poll_close_unpin(cx)
+            .map_err(|_| std::io::ErrorKind::BrokenPipe.into())
     }
 }

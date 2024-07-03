@@ -328,10 +328,10 @@ wasmcloud-secrets-types = { version = "*", path = "./crates/secrets-types", defa
 wasmcloud-test-util = { version = "^0.3.0", path = "./crates/test-util", default-features = false }
 wasmcloud-tracing = { version = "^0.5.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.202", default-features = false }
-wasmtime = { version = "20", default-features = false }
-wasmtime-wasi = { version = "20", default-features = false }
-wasmtime-wasi-http = { version = "20", default-features = false }
-wasmtime-wit-bindgen = { version = "20", default-features = false }
+wasmtime = { version = "22", default-features = false }
+wasmtime-wasi = { version = "22", default-features = false }
+wasmtime-wasi-http = { version = "22", default-features = false }
+wasmtime-wit-bindgen = { version = "22", default-features = false }
 wat = { version = "1", default-features = false }
 webpki-roots = { version = "0.26", default-features = false }
 weld-codegen = { version = "0.7", default-features = false }
@@ -344,9 +344,10 @@ wit-component = { version = "0.202", default-features = false }
 wit-parser = { version = "0.202", default-features = false }
 wrpc-interface-blobstore = { version = "0.16", default-features = false }
 wrpc-interface-http = { version = "0.22", default-features = false }
-wrpc-runtime-wasmtime = { version = "0.16", default-features = false }
+wrpc-runtime-wasmtime = { git = "https://github.com/bytecodealliance/wrpc.git", default-features = false }
 wrpc-transport = { git = "https://github.com/bytecodealliance/wrpc.git", default-features = false }
 wrpc-transport-legacy = { version = "=0.24.3", package = "wrpc-transport", default-features = false }
 wrpc-transport-nats = { git = "https://github.com/bytecodealliance/wrpc.git", default-features = false }
 wrpc-transport-nats-legacy = { version = "0.21", package = "wrpc-transport-nats", default-features = false }
 wrpc-types = { version = "0.6", default-features = false }
+wasm-tokio = { version = "0.5.16", default-features = false }

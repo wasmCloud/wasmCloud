@@ -1,5 +1,6 @@
 use super::{Ctx, Instance, TableResult};
 
+use crate::capability::builtin::WrpcBus;
 use crate::capability::bus::lattice;
 use crate::capability::Bus;
 
@@ -12,7 +13,7 @@ use wasmtime::component::Resource;
 
 impl Instance {
     /// Set [`Bus`] handler for this [Instance].
-    pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
+    pub fn bus(&mut self, bus: Arc<dyn WrpcBus + Send + Sync>) -> &mut Self {
         self.handler_mut().replace_bus(bus);
         self
     }

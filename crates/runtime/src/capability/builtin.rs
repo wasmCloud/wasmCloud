@@ -12,20 +12,54 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::Stream;
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::AsyncRead;
 use tokio::sync::oneshot;
 use tracing::{error, instrument, trace};
-use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
-use wrpc_transport_legacy::IncomingInputStream;
-
 use wasmcloud_core::CallTargetInterface;
+use wasmtime_wasi_http::{
+    body::{HyperIncomingBody, HyperOutgoingBody},
+    types::OutgoingRequestConfig,
+};
+use wrpc_transport_legacy::IncomingInputStream;
+use wrpc_transport_nats::{ParamWriter, Reader};
+
+impl wrpc_transport::Invoke for Handler {
+    type Context = CallTargetInterface;
+    type Outgoing = ParamWriter;
+    type Incoming = Reader;
+
+    async fn invoke(
+        &self,
+        cx: CallTargetInterface,
+        instance: &str,
+        func: &str,
+        params: Bytes,
+        paths: &[impl AsRef<[Option<usize>]> + Send + Sync],
+    ) -> anyhow::Result<(Self::Outgoing, Self::Incoming)> {
+        let target = self
+            .identify_interface_target(&cx)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Failed to identify interface target"))?;
+
+        self.proxy_bus("wasmcloud:bus/host.call")?
+            .call(
+                target,
+                instance,
+                func,
+                params,
+                &paths.iter().map(|p| p.as_ref()).collect::<Vec<_>>(),
+            )
+            .await
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
-    bus: Option<Arc<dyn Bus + Sync + Send>>,
+    bus: Option<Arc<dyn WrpcBus + Sync + Send>>,
     config: Option<Arc<dyn Config + Send + Sync>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
@@ -63,7 +97,7 @@ fn proxy<'a, T: ?Sized>(
 }
 
 impl Handler {
-    fn proxy_bus(&self, method: &str) -> anyhow::Result<&Arc<dyn Bus + Sync + Send>> {
+    fn proxy_bus(&self, method: &str) -> anyhow::Result<&Arc<dyn WrpcBus + Sync + Send>> {
         proxy(&self.bus, "Bus", method)
     }
 
@@ -112,8 +146,8 @@ impl Handler {
     /// Replace [`Bus`] handler returning the old one, if such was set
     pub fn replace_bus(
         &mut self,
-        bus: Arc<dyn Bus + Send + Sync>,
-    ) -> Option<Arc<dyn Bus + Send + Sync>> {
+        bus: Arc<dyn WrpcBus + Send + Sync>,
+    ) -> Option<Arc<dyn WrpcBus + Send + Sync>> {
         self.bus.replace(bus)
     }
 
@@ -355,9 +389,17 @@ pub trait Config {
     ) -> anyhow::Result<Result<Vec<(String, String)>, config::runtime::ConfigError>>;
 }
 
+pub trait WrpcBus: Bus<Outgoing = ParamWriter, Incoming = Reader> + Sync + Send {}
+impl<T> WrpcBus for T where T: Bus<Outgoing = ParamWriter, Incoming = Reader> + Sync + Send {}
+
 #[async_trait]
 /// `wasmcloud:bus/host` implementation
 pub trait Bus {
+    /// Outgoing
+    type Outgoing;
+    /// Incoming
+    type Incoming;
+
     /// Identify the target of component interface invocation
     async fn identify_interface_target(
         &self,
@@ -390,8 +432,9 @@ pub trait Bus {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport_legacy::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>>;
+        params: Bytes,
+        paths: &[&[Option<usize>]],
+    ) -> anyhow::Result<(Self::Outgoing, Self::Incoming)>;
 }
 
 #[async_trait]
@@ -507,7 +550,8 @@ pub trait OutgoingHttp {
     /// Handle `wasi:http/outgoing-handler`
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
@@ -645,6 +689,9 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
+    type Outgoing = ParamWriter;
+    type Incoming = Reader;
+
     #[instrument(level = "trace", skip_all)]
     async fn identify_interface_target(
         &self,
@@ -676,10 +723,11 @@ impl Bus for Handler {
         target: TargetEntity,
         instance: &str,
         name: &str,
-        params: Vec<wrpc_transport_legacy::Value>,
-    ) -> anyhow::Result<Vec<wrpc_transport_legacy::Value>> {
+        params: Bytes,
+        paths: &[&[std::option::Option<usize>]],
+    ) -> anyhow::Result<(Self::Outgoing, Self::Incoming)> {
         self.proxy_bus("wasmcloud:bus/host.call")?
-            .call(target, instance, name, params)
+            .call(target, instance, name, params, paths)
             .await
     }
 }
@@ -849,7 +897,8 @@ impl OutgoingHttp for Handler {
     #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        options: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
@@ -861,7 +910,7 @@ impl OutgoingHttp for Handler {
             "OutgoingHttp",
             "wasi:http/outgoing-handler.handle",
         )?
-        .handle(request)
+        .handle(request, options)
         .await
     }
 }
@@ -872,7 +921,7 @@ pub(crate) struct HandlerBuilder {
     /// [`Blobstore`] handler
     pub blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     /// [`Bus`] handler
-    pub bus: Option<Arc<dyn Bus + Sync + Send>>,
+    pub bus: Option<Arc<dyn WrpcBus + Sync + Send>>,
     /// [`Config`] handler
     pub config: Option<Arc<dyn Config + Sync + Send>>,
     /// [`IncomingHttp`] handler
@@ -899,7 +948,7 @@ impl HandlerBuilder {
     }
 
     /// Set [`Bus`] handler
-    pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
+    pub fn bus(self, bus: Arc<impl WrpcBus + Sync + Send + 'static>) -> Self {
         Self {
             bus: Some(bus),
             ..self

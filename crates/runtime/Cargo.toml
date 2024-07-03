@@ -19,17 +19,21 @@ log = [
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
+async-nats = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
+hyper = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+wasm-tokio = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wasmcloud-core = { workspace = true }

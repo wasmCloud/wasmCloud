@@ -1,5 +1,6 @@
+use crate::capability::builtin::WrpcBus;
 use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
+    builtin, Blobstore, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
     OutgoingHttp,
 };
 use crate::ComponentConfig;
@@ -75,7 +76,7 @@ impl RuntimeBuilder {
 
     /// Set a [`Bus`] handler to use for all component instances unless overriden for the instance
     #[must_use]
-    pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
+    pub fn bus(self, bus: Arc<impl WrpcBus + Sync + Send + 'static>) -> Self {
         Self {
             handler: self.handler.bus(bus),
             ..self
@@ -235,7 +236,7 @@ impl RuntimeBuilder {
             // This means the max host memory any single component can take is 2 GB. This would be a
             // lot, so we shouldn't need to tweak this for a while. We can always expose this option
             // later
-            .memory_pages(2 * GB / (64 * KB)) //64 KB is the wasm page size
+            .max_memory_size((2 * GB / (64 * KB)) as usize) //64 KB is the wasm page size
             // These numbers are set to avoid page faults when trying to claim new space on linux
             .linear_memory_keep_resident((10 * MB) as usize)
             .table_keep_resident((10 * MB) as usize);

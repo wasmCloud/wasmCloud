@@ -9,12 +9,12 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
-use wasmtime::component::{Resource, ResourceTable};
+use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
-    HostFutureIncomingResponse, IncomingResponseInternal, OutgoingRequest,
+    HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpError, HttpResult, WasiHttpCtx, WasiHttpView};
+use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 
 pub mod incoming_http_bindings {
     wasmtime::component::bindgen!({
@@ -37,30 +37,27 @@ impl WasiHttpView for Ctx {
 
     fn send_request(
         &mut self,
-        request: OutgoingRequest,
-    ) -> HttpResult<Resource<HostFutureIncomingResponse>>
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+    ) -> HttpResult<HostFutureIncomingResponse>
     where
         Self: Sized,
     {
         let handler = self.handler.clone();
-        let between_bytes_timeout = request.between_bytes_timeout;
-        let res = HostFutureIncomingResponse::new(wasmtime_wasi::runtime::spawn(async move {
-            match OutgoingHttp::handle(&handler, request).await {
-                Ok(Ok(resp)) => Ok(Ok(IncomingResponseInternal {
+        let between_bytes_timeout = config.between_bytes_timeout.clone();
+        let handle = wasmtime_wasi::runtime::spawn(async move {
+            match OutgoingHttp::handle(&handler, request, config).await {
+                Ok(Ok(resp)) => Ok(Ok(IncomingResponse {
                     resp,
-                    worker: Arc::new(wasmtime_wasi::runtime::spawn(async {})),
+                    worker: Some(wasmtime_wasi::runtime::spawn(async {})),
                     between_bytes_timeout,
                 })),
                 Ok(Err(err)) => Ok(Err(err)),
                 Err(e) => Err(e),
             }
-        }));
-        let res = self
-            .table()
-            .push(res)
-            .context("failed to push response")
-            .map_err(HttpError::trap)?;
-        Ok(res)
+        });
+
+        Ok(HostFutureIncomingResponse::Pending(handle))
     }
 }
 
