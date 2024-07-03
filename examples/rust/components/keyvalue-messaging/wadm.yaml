@@ -23,7 +23,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Link the component to the local NATS server
         - type: link
           properties:

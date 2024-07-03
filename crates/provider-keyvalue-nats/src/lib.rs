@@ -5,7 +5,7 @@
 //!
 //! A single connection is shared by all instances of the same consumer component, identified
 //! by its id (public key), so there may be some brief lock contention if several instances of
-//! the same component (i.e. replicas) are simultaneously attempting to communicate with NATS.
+//! the same component are simultaneously attempting to communicate with NATS.
 
 use std::collections::HashMap;
 use std::sync::Arc;

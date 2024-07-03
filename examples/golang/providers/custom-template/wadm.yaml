@@ -20,7 +20,7 @@ spec:
       traits:
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Link the component to the provider on wasmcloud:example/system-info
         # 
         # Establish a unidirectional link to the custom-template provider, over the 

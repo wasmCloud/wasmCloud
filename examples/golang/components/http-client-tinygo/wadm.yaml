@@ -21,7 +21,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Establish a unidirectional link to the outgoing-handler,
         # so the `http-component` component can make use of outgoing handler functionality
         # (i.e. making external web requests)
