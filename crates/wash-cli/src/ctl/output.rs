@@ -110,16 +110,24 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
     crate::util::configure_table_style(&mut table);
 
     invs.into_iter().for_each(|inv| {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!("Host Inventory ({})", inv.host_id),
-            4,
-            Alignment::Left,
-        )]));
+        table.add_row(Row::new(vec![
+            TableCell::new_with_alignment("Host ID", 1, Alignment::Left),
+            TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
+        ]));
+        table.add_row(Row::new(vec![
+            TableCell::new_with_alignment(inv.host_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(inv.friendly_name.clone(), 1, Alignment::Left),
+        ]));
 
         if !inv.labels.is_empty() {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "",
                 2,
+                Alignment::Left,
+            )]));
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                "Host labels",
+                1,
                 Alignment::Left,
             )]));
             inv.labels.iter().for_each(|(k, v)| {
@@ -144,14 +152,14 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
         if !inv.components.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
-                TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
-                TableCell::new_with_alignment("Max Count", 1, Alignment::Left),
+                TableCell::new_with_alignment("Name", 1, Alignment::Left),
+                TableCell::new_with_alignment("Max count", 1, Alignment::Left),
             ]));
             inv.components.iter().for_each(|a| {
                 let a = a.clone();
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(a.id, 1, Alignment::Left),
-                    TableCell::new_with_alignment(a.image_ref, 2, Alignment::Left),
+                    TableCell::new_with_alignment(format_optional(a.name), 1, Alignment::Left),
                     TableCell::new_with_alignment(a.max_instances, 1, Alignment::Left),
                 ]))
             });
@@ -171,14 +179,12 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
-                TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
             ]));
             inv.providers.iter().for_each(|p| {
                 let p = p.clone();
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(p.id, 1, Alignment::Left),
                     TableCell::new_with_alignment(format_optional(p.name), 1, Alignment::Left),
-                    TableCell::new_with_alignment(format_optional(p.image_ref), 1, Alignment::Left),
                 ]))
             });
         } else {
