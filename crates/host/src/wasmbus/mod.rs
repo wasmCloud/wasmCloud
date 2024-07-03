@@ -769,6 +769,7 @@ impl Host {
 
         // TODO: Configure
         let (runtime, epoch, epoch_end) = Runtime::builder()
+            .max_execution_time(config.max_execution_time)
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
@@ -840,6 +841,8 @@ impl Host {
 
         let config_generator = BundleGenerator::new(config_data.clone());
 
+        let max_execution_time_ms = config.max_execution_time;
+
         let host = Host {
             components: RwLock::default(),
             event_builder,
@@ -869,7 +872,7 @@ impl Host {
             component_claims: Arc::default(),
             provider_claims: Arc::default(),
             metrics: Arc::new(metrics),
-            max_execution_time: Duration::from_secs(10 * 60),
+            max_execution_time: max_execution_time_ms,
         };
 
         let host = Arc::new(host);

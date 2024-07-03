@@ -26,6 +26,7 @@ console = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+humantime.workspace = true
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 nkeys = { workspace = true }

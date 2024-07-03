@@ -173,6 +173,9 @@ struct Args {
         requires = "policy_topic"
     )]
     policy_changes_topic: Option<String>,
+    /// If provided, allows to set a custom Max Execution time for the Host in ms.
+    #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration)]
+    max_execution_time: Duration,
     /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
@@ -417,6 +420,7 @@ async fn main() -> anyhow::Result<()> {
         policy_service_config,
         secrets_topic_prefix: args.secrets_topic_prefix,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        max_execution_time: args.max_execution_time,
     }))
     .await
     .context("failed to initialize host")?;
