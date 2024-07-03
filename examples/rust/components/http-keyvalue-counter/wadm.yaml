@@ -23,7 +23,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Link the component to Redis on the default Redis port
         #
         # Establish a unidirectional link to the `kvredis` (the keyvalue capability provider),

@@ -24,7 +24,7 @@ spec:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Establish a unidirectional link to the `httpclient` provider,
         # so the `http-component` (dog-fetching) component can make use of httpclient functionality
         # (i.e. making external web requests)            

@@ -28,7 +28,7 @@ spec:
       traits:
         - type: spreadscaler
           properties:
-            replicas: 1
+            instances: 1
         # Establish a unidirectional link to the blobstore,
         # so the `blobby` component can make use of blobstore functionality
         # (i.e. reading/writing data blobs)
