@@ -1481,7 +1481,6 @@ impl Host {
             targets: Arc::default(),
             trace_ctx: Arc::default(),
             interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
-            polyfills: Arc::clone(component.polyfills()),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
 
@@ -3637,6 +3636,19 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             // There's not really anything we can do about headers that don't parse
             let name = async_nats::header::HeaderName::from_str(k.as_str()).ok()?;
             let value = async_nats::header::HeaderValue::from_str(v.as_str()).ok()?;
+            Some((name, value))
+        })
+        .collect()
+}
+
+/// Required for wrpc async nats dependency
+fn wrpc_injector_to_headers(injector: &TraceContextInjector) -> async_nats_wrpc::header::HeaderMap {
+    injector
+        .iter()
+        .filter_map(|(k, v)| {
+            // There's not really anything we can do about headers that don't parse
+            let name = async_nats_wrpc::header::HeaderName::from_str(k.as_str()).ok()?;
+            let value = async_nats_wrpc::header::HeaderValue::from_str(v.as_str()).ok()?;
             Some((name, value))
         })
         .collect()

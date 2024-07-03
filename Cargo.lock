@@ -7350,6 +7350,7 @@ version = "0.82.0"
 dependencies = [
  "anyhow",
  "async-nats 0.33.0",
+ "async-nats-wrpc",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -7359,6 +7360,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.0",
  "humantime",
+ "hyper 1.4.0",
  "names",
  "nkeys 0.4.1",
  "oci-distribution 0.11.0",
@@ -7387,6 +7389,7 @@ dependencies = [
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-transport 0.24.3",
+ "wrpc-transport 0.26.0",
  "wrpc-transport-nats 0.21.0",
  "wrpc-types",
 ]
@@ -9139,18 +9142,18 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "zerocopy"
-version = "0.7.34"
+version = "0.7.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae87e3fcd617500e5d106f0380cf7b77f3c6092aae37191433159dda23cfb087"
+checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.7.34"
+version = "0.7.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15e934569e47891f7d9411f1a451d947a60e000ab3bd24fbb970f000387d1b3b"
+checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
 dependencies = [
  "proc-macro2",
  "quote",

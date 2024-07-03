@@ -53,7 +53,7 @@ impl types::Host for Ctx {}
 
 #[async_trait]
 impl consumer::Host for Ctx {
-    #[instrument(skip(self))]
+    #[instrument]
     async fn request(
         &mut self,
         subject: String,

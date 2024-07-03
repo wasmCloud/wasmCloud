@@ -35,7 +35,7 @@ type Result<T, E = store::Error> = core::result::Result<T, E>;
 
 #[async_trait]
 impl atomics::Host for Ctx {
-    #[instrument(skip(self))]
+    #[instrument]
     async fn increment(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -52,7 +52,7 @@ impl atomics::Host for Ctx {
 
 #[async_trait]
 impl store::Host for Ctx {
-    #[instrument(skip(self))]
+    #[instrument]
     async fn open(&mut self, name: String) -> anyhow::Result<Result<Resource<store::Bucket>>> {
         let bucket = self
             .table
@@ -64,7 +64,7 @@ impl store::Host for Ctx {
 
 #[async_trait]
 impl store::HostBucket for Ctx {
-    #[instrument(skip(self))]
+    #[instrument]
     async fn get(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -77,7 +77,7 @@ impl store::HostBucket for Ctx {
             .context("failed to invoke method")
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn set(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -91,7 +91,7 @@ impl store::HostBucket for Ctx {
             .context("failed to invoke method")
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn delete(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -104,7 +104,7 @@ impl store::HostBucket for Ctx {
             .context("failed to invoke method")
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn exists(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -117,7 +117,7 @@ impl store::HostBucket for Ctx {
             .context("failed to invoke method")
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn list_keys(
         &mut self,
         bucket: Resource<store::Bucket>,
@@ -130,7 +130,7 @@ impl store::HostBucket for Ctx {
             .context("failed to invoke method")
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     fn drop(&mut self, bucket: Resource<store::Bucket>) -> anyhow::Result<()> {
         self.table
             .delete(bucket)

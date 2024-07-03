@@ -1,7 +1,7 @@
-//! This module provides `wasmcloud`-specific implementations of [`wrpc_transport`] traits.
+//! This module provides `wasmcloud`-specific implementations of [`wrpc_transport_legacy`] traits.
 //!
-//! Specifically, we wrap the [`wrpc_transport::Transmitter`], [`wrpc_transport::Invocation`],
-//! and [`wrpc_transport::Client`] traits in order to:
+//! Specifically, we wrap the [`wrpc_transport_legacy::Transmitter`], [`wrpc_transport_legacy::Invocation`],
+//! and [`wrpc_transport_legacy::Client`] traits in order to:
 //! - Propagate trace context
 //! - Append invocation headers
 //! - Perform invocation validation (where necessary)
@@ -11,7 +11,6 @@
 //!
 //! [wrpc-transport]: https://docs.rs/wrpc-transport
 
-extern crate wrpc_transport_legacy as wrpc_transport;
 extern crate wrpc_transport_nats_legacy as wrpc_transport_nats;
 
 use core::future::Future;
@@ -24,10 +23,10 @@ use async_nats::HeaderMap;
 use bytes::Bytes;
 use tower::ServiceExt;
 use tracing::instrument;
-use wrpc_transport::{AcceptedInvocation, Encode, IncomingInvocation, OutgoingInvocation};
+use wrpc_transport_legacy::{AcceptedInvocation, Encode, IncomingInvocation, OutgoingInvocation};
 use wrpc_transport_nats::{Subject, Subscriber, Transmission};
 
-/// Wrapper around [`wrpc_transport_nats::Transmitter`] that includes a [`async_nats::HeaderMap`] for
+/// Wrapper around [`wrpc_transport_nats::Transmitter`] that includes a [`async_nats_legacy::HeaderMap`] for
 /// passing invocation and trace context.
 #[derive(Clone, Debug)]
 pub struct TransmitterWithHeaders {
@@ -44,7 +43,7 @@ impl TransmitterWithHeaders {
     }
 }
 
-impl wrpc_transport::Transmitter for TransmitterWithHeaders {
+impl wrpc_transport_legacy::Transmitter for TransmitterWithHeaders {
     type Subject = Subject;
     type PublishError = wrpc_transport_nats::PublishError;
 
@@ -60,7 +59,7 @@ impl wrpc_transport::Transmitter for TransmitterWithHeaders {
     }
 }
 
-/// Wrapper around [`wrpc_transport_nats::Invocation`] that includes a [`async_nats::HeaderMap`] for
+/// Wrapper around [`wrpc_transport_nats::Invocation`] that includes a [`async_nats_legacy::HeaderMap`] for
 /// passing invocation and trace context.
 pub struct InvocationWithHeaders {
     inner: wrpc_transport_nats::Invocation,
@@ -73,7 +72,7 @@ impl InvocationWithHeaders {
     /// but since we're consuming `self` it also returns the headers to avoid a clone in [`InvocationWithHeaders::invoke`].
     pub(crate) async fn begin(
         self,
-        params: impl wrpc_transport::Encode,
+        params: impl wrpc_transport_legacy::Encode,
     ) -> anyhow::Result<(wrpc_transport_nats::InvocationPre, HeaderMap, Duration)> {
         self.inner
             .begin(params)
@@ -82,7 +81,7 @@ impl InvocationWithHeaders {
     }
 }
 
-impl wrpc_transport::Invocation for InvocationWithHeaders {
+impl wrpc_transport_legacy::Invocation for InvocationWithHeaders {
     type Transmission = Transmission;
     type TransmissionFailed = Box<dyn Future<Output = ()> + Send + Unpin>;
 
@@ -103,14 +102,14 @@ impl wrpc_transport::Invocation for InvocationWithHeaders {
     }
 }
 
-/// Wrapper around [`wrpc_transport_nats::Acceptor`] that includes a [`async_nats::HeaderMap`] for
+/// Wrapper around [`wrpc_transport_nats::Acceptor`] that includes a [`async_nats_legacy::HeaderMap`] for
 /// passing invocation and trace context.
 pub struct AcceptorWithHeaders {
     inner: wrpc_transport_nats::Acceptor,
     headers: HeaderMap,
 }
 
-impl wrpc_transport::Acceptor for AcceptorWithHeaders {
+impl wrpc_transport_legacy::Acceptor for AcceptorWithHeaders {
     type Subject = Subject;
     type Transmitter = TransmitterWithHeaders;
 
@@ -131,7 +130,7 @@ impl wrpc_transport::Acceptor for AcceptorWithHeaders {
     }
 }
 
-/// Wrapper around [`wrpc_transport_nats::Client`] that includes a [`async_nats::HeaderMap`] for
+/// Wrapper around [`wrpc_transport_nats::Client`] that includes a [`async_nats_legacy::HeaderMap`] for
 /// passing invocation and trace context.
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -163,15 +162,19 @@ impl Client {
     }
 }
 
-impl wrpc_transport::Client for Client {
+impl wrpc_transport_legacy::Client for Client {
     type Context = Option<HeaderMap>;
     type Subject = Subject;
     type Subscriber = Subscriber;
     type Transmission = Transmission;
     type Acceptor = AcceptorWithHeaders;
     type Invocation = InvocationWithHeaders;
-    type InvocationStream<Ctx, T, Tx: wrpc_transport::Transmitter> =
-        <wrpc_transport_nats::Client as wrpc_transport::Client>::InvocationStream<Ctx, T, Tx>;
+    type InvocationStream<Ctx, T, Tx: wrpc_transport_legacy::Transmitter> =
+        <wrpc_transport_nats::Client as wrpc_transport_legacy::Client>::InvocationStream<
+            Ctx,
+            T,
+            Tx,
+        >;
 
     #[instrument(level = "trace", skip(self, svc))]
     fn serve<Ctx, T, Tx, S, Fut>(
@@ -181,7 +184,7 @@ impl wrpc_transport::Client for Client {
         svc: S,
     ) -> impl Future<Output = anyhow::Result<Self::InvocationStream<Ctx, T, Tx>>> + Send
     where
-        Tx: wrpc_transport::Transmitter,
+        Tx: wrpc_transport_legacy::Transmitter,
         S: tower::Service<
                 IncomingInvocation<Self::Context, Self::Subscriber, Self::Acceptor>,
                 Future = Fut,

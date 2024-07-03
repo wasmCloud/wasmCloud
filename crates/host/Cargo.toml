@@ -15,6 +15,7 @@ status = "actively-developed"
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true }
+async-nats-wrpc = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
@@ -65,6 +66,8 @@ wrpc-interface-http = { workspace = true, features = [
     "http",
     "wasmtime-wasi-http",
 ] }
+wrpc-transport = { workspace = true }
 wrpc-transport-legacy = { workspace = true }
 wrpc-transport-nats-legacy = { workspace = true }
 wrpc-types = { workspace = true }
+hyper = { workspace = true }

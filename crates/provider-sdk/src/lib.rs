@@ -4,7 +4,7 @@ use ::core::time::Duration;
 use std::collections::HashMap;
 
 use anyhow::Context as _;
-use async_nats::{ConnectOptions, Event};
+use async_nats_legacy::{ConnectOptions, Event};
 use provider::invocation_context;
 use provider::ProviderInitState;
 use tower::ServiceExt;

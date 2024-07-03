@@ -1,15 +1,26 @@
 use std::collections::HashMap;
+use std::iter::zip;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context as _};
+use core::mem;
+use core::pin::{pin, Pin};
+use core::task::{ready, Context, Poll};
+
+use anyhow::{anyhow, bail, ensure, Context as _};
+use async_nats_wrpc::client::Publisher;
+use async_nats_wrpc::{Message, ServerInfo, StatusCode, Subject, Subscriber};
 use async_trait::async_trait;
-use futures::{stream, Stream};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use bytes::{Buf as _, Bytes};
+use futures::SinkExt;
+use futures::{stream, try_join, Future, Stream, StreamExt};
+use http::Response;
+use http_body::Body;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::spawn;
-use tokio::sync::{RwLock, TryLockError};
-use tracing::{debug, error, instrument};
+use tokio::sync::{oneshot, RwLock, TryLockError};
+use tracing::{debug, error, instrument, trace};
 use wasmcloud_core::LatticeTarget;
 use wasmcloud_runtime::capability::config::runtime::ConfigError;
 use wasmcloud_runtime::capability::logging::logging;
@@ -18,17 +29,22 @@ use wasmcloud_runtime::capability::{
     KeyValueStore, LatticeInterfaceTarget, Logging, Messaging, OutgoingHttp, TargetEntity,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
-use wasmtime_wasi_http::body::HyperIncomingBody;
+use wasmtime_wasi_http::body::{HyperIncomingBody, HyperOutgoingBody};
+use wasmtime_wasi_http::types::OutgoingRequestConfig;
+use wrpc_interface_http::{OutgoingHandler, RequestOptions};
+use wrpc_transport::Index;
+use wrpc_transport::Index;
 use wrpc_transport_legacy::{Client, DynamicTuple, IncomingInputStream};
 
 use crate::bindings::{wasmcloud, wrpc};
+use crate::wasmbus::wrpc_injector_to_headers;
 
 use super::config::ConfigBundle;
 use super::injector_to_headers;
 
 #[derive(Clone, Debug)]
 pub struct Handler {
-    pub nats: Arc<async_nats::Client>,
+    pub nats: Arc<async_nats_wrpc::Client>,
     // ConfigBundle is perfectly safe to pass around, but in order to update it on the fly, we need
     // to have it behind a lock since it can be cloned and because the `Actor` struct this gets
     // placed into is also inside of an Arc
@@ -55,12 +71,6 @@ pub struct Handler {
     #[allow(clippy::type_complexity)]
     pub interface_links:
         Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, LatticeTarget>>>>>,
-    /// Map of interface -> function name -> function type
-    ///
-    /// When invoking a function that the component imports, this map is consulted to determine the
-    /// result types of the function, which is required for the wRPC protocol to set up proper
-    /// subscriptions for the return types.
-    pub polyfills: Arc<HashMap<String, HashMap<String, wrpc_types::DynamicFunction>>>,
 
     pub invocation_timeout: Duration,
 }
@@ -77,7 +87,6 @@ impl Handler {
             targets: Arc::default(),
             trace_ctx: Arc::default(),
             interface_links: self.interface_links.clone(),
-            polyfills: self.polyfills.clone(),
             invocation_timeout: self.invocation_timeout,
         }
     }
@@ -501,6 +510,9 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
+    type Outgoing = SubjectWriter;
+    type Incoming = Reader;
+
     #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
@@ -565,13 +577,14 @@ impl Bus for Handler {
     }
 
     #[instrument(level = "info", skip(self, params, instance, name), fields(interface = instance, function = name))]
-    async fn call<T>(
+    async fn call(
         &self,
         target: TargetEntity,
         instance: &str,
         name: &str,
         params: Bytes,
-    ) -> anyhow::Result<(T::Outgoing, T::Incoming)> {
+        paths: &[&[Option<usize>]],
+    ) -> anyhow::Result<(Self::Outgoing, Self::Incoming)> {
         if let TargetEntity::Lattice(lit) = target {
             let rx = Subject::from(self.nats.new_inbox());
             let (result_rx, handshake_rx, nested) = try_join!(
@@ -603,42 +616,39 @@ impl Bus for Handler {
                 mut max_payload, ..
             } = self.nats.server_info();
             max_payload = max_payload.saturating_sub(rx.len());
-            let param_tx = Subject::from(invocation_subject(&self.prefix, instance, func));
-            if let Some(headers) = cx {
-                // based on https://github.com/nats-io/nats.rs/blob/0942c473ce56163fdd1fbc62762f8164e3afa7bf/async-nats/src/header.rs#L215-L224
-                max_payload = max_payload
-                    .saturating_sub(b"NATS/1.0\r\n".len())
-                    .saturating_sub(b"\r\n".len());
-                for (k, vs) in headers.iter() {
-                    let k: &[u8] = k.as_ref();
-                    for v in vs {
-                        max_payload = max_payload
-                            .saturating_sub(k.len())
-                            .saturating_sub(b": ".len())
-                            .saturating_sub(v.as_str().len())
-                            .saturating_sub(b"\r\n".len());
-                    }
+            let param_tx = Subject::from(invocation_subject(&self.lattice, instance, name));
+
+            // Convert target entity to headers
+            let injector = TraceContextInjector::default_with_span();
+            let mut headers = wrpc_injector_to_headers(&injector);
+
+            headers.insert("source-id", self.component_id.as_str());
+            headers.insert("link-name", lit.link_name.as_str());
+
+            // based on https://github.com/nats-io/nats.rs/blob/0942c473ce56163fdd1fbc62762f8164e3afa7bf/async-nats/src/header.rs#L215-L224
+            max_payload = max_payload
+                .saturating_sub(b"NATS/1.0\r\n".len())
+                .saturating_sub(b"\r\n".len());
+            for (k, vs) in headers.iter() {
+                let k: &[u8] = k.as_ref();
+                for v in vs {
+                    max_payload = max_payload
+                        .saturating_sub(k.len())
+                        .saturating_sub(b": ".len())
+                        .saturating_sub(v.as_str().len())
+                        .saturating_sub(b"\r\n".len());
                 }
-                trace!("publishing handshake");
-                self.nats
-                    .publish_with_reply_and_headers(
-                        param_tx.clone(),
-                        rx,
-                        headers,
-                        params.split_to(max_payload.min(params.len())),
-                    )
-                    .await
-            } else {
-                trace!("publishing handshake");
-                self.nats
-                    .publish_with_reply(
-                        param_tx.clone(),
-                        rx,
-                        params.split_to(max_payload.min(params.len())),
-                    )
-                    .await
             }
-            .context("failed to send handshake")?;
+            trace!("publishing handshake");
+            self.nats
+                .publish_with_reply_and_headers(
+                    param_tx.clone(),
+                    rx,
+                    headers,
+                    params.split_to(max_payload.min(params.len())),
+                )
+                .await
+                .context("failed to send handshake")?;
             Ok((
                 ParamWriter::Root(RootParamWriter::new(
                     SubjectWriter::new(
@@ -655,15 +665,14 @@ impl Bus for Handler {
                     nested: Arc::new(std::sync::Mutex::new(nested)),
                 },
             ));
-        } else {
-            bail!(
-                "component [{}] attempted to invoke a function [{}/{}] on an unknown target [{}]",
-                self.component_id,
-                instance,
-                name,
-                target.id().unwrap_or("<unknown>"),
-            )
         }
+        Err(anyhow::anyhow!(
+            "component [{}] attempted to invoke a function [{}/{}] on an unknown target [{}]",
+            self.component_id,
+            instance,
+            name,
+            target.id().unwrap_or("<unknown>")
+        ))
     }
 }
 
@@ -917,24 +926,23 @@ impl Messaging for Handler {
 
 #[async_trait]
 impl OutgoingHttp for Handler {
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
-        request: wasmtime_wasi_http::types::OutgoingRequest,
+        request: hyper::Request<HyperOutgoingBody>,
+        options: OutgoingRequestConfig,
     ) -> anyhow::Result<
         Result<
             http::Response<HyperIncomingBody>,
             wasmtime_wasi_http::bindings::http::types::ErrorCode,
         >,
     > {
-        use wrpc_interface_http::OutgoingHandler;
-        // Reading a trace context should _never_ block because writing happens once at the beginning of a component
-        // invocation. If it does block here, it's a bug in the runtime, and it's better to deal with a
-        // disconnected trace than to block on the invocation for an extended period of time.
-        if let Ok(trace_context) = self.trace_ctx.try_read() {
-            wasmcloud_tracing::context::attach_span_context(&trace_context);
-        }
-
+        // TODO - http wrpc parms need updating
+        let request_options = RequestOptions {
+            connect_timeout: Some(options.connect_timeout),
+            first_byte_timeout: Some(options.first_byte_timeout),
+            between_bytes_timeout: Some(options.between_bytes_timeout),
+        };
         let wrpc = self.wrpc_http_outgoing_handler().await?;
         let (res, body_errors, tx) = wrpc
             .invoke_handle_wasmtime(request)
@@ -945,21 +953,284 @@ impl OutgoingHttp for Handler {
                 error!(?err, "failed to transmit parameter values");
             }
         });
+
+        // TODO: Convert Error code from 0.2 to 0.22 wrpc interface http
+
+        let res = match res {
+            Ok(response) => Ok(response),
+            Err(_) => Err(wasmtime_wasi_http::bindings::http::types::ErrorCode::InternalError),
+        };
+
         // TODO: Do not ignore outgoing body errors
         let _ = body_errors;
         Ok(res)
     }
 }
 
+#[derive(Debug)]
+pub struct ByteSubscription(Subscriber);
+
+impl Stream for ByteSubscription {
+    type Item = std::io::Result<Bytes>;
+
+    #[instrument(level = "trace", skip_all)]
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.0.poll_next_unpin(cx) {
+            Poll::Ready(Some(Message { payload, .. })) => Poll::Ready(Some(Ok(payload))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Default)]
+enum SubscriberTree {
+    #[default]
+    Empty,
+    Leaf(Subscriber),
+    IndexNode {
+        subscriber: Option<Subscriber>,
+        nested: Vec<Option<SubscriberTree>>,
+    },
+    WildcardNode {
+        subscriber: Option<Subscriber>,
+        nested: Option<Box<SubscriberTree>>,
+    },
+}
+
+impl<'a> From<(&'a [Option<usize>], Subscriber)> for SubscriberTree {
+    fn from((path, sub): (&'a [Option<usize>], Subscriber)) -> Self {
+        match path {
+            [] => Self::Leaf(sub),
+            [None, path @ ..] => Self::WildcardNode {
+                subscriber: None,
+                nested: Some(Box::new(Self::from((path, sub)))),
+            },
+            [Some(i), path @ ..] => Self::IndexNode {
+                subscriber: None,
+                nested: {
+                    let n = i.saturating_add(1);
+                    let mut nested = Vec::with_capacity(n);
+                    nested.resize_with(n, Option::default);
+                    nested[*i] = Some(Self::from((path, sub)));
+                    nested
+                },
+            },
+        }
+    }
+}
+
+impl<P: AsRef<[Option<usize>]>> FromIterator<(P, Subscriber)> for SubscriberTree {
+    fn from_iter<T: IntoIterator<Item = (P, Subscriber)>>(iter: T) -> Self {
+        let mut root = Self::Empty;
+        for (path, sub) in iter {
+            if !root.insert(path.as_ref(), sub) {
+                return Self::Empty;
+            }
+        }
+        root
+    }
+}
+
+impl SubscriberTree {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        matches!(self, SubscriberTree::Empty)
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    fn take(&mut self, path: &[usize]) -> Option<Subscriber> {
+        let Some((i, path)) = path.split_first() else {
+            return match mem::take(self) {
+                SubscriberTree::Empty => None,
+                SubscriberTree::Leaf(subscriber) => Some(subscriber),
+                SubscriberTree::IndexNode { subscriber, nested } => {
+                    if !nested.is_empty() {
+                        *self = SubscriberTree::IndexNode {
+                            subscriber: None,
+                            nested,
+                        }
+                    }
+                    subscriber
+                }
+                SubscriberTree::WildcardNode { .. } => None,
+                // TODO: Demux the subscription
+                //SubscriberTree::WildcardNode { subscriber, nested } => {
+                //    if let Some(nested) = nested {
+                //        *self = SubscriberTree::WildcardNode {
+                //            subscriber: None,
+                //            nested: Some(nested),
+                //        }
+                //    }
+                //    subscriber
+                //}
+            };
+        };
+        match self {
+            Self::Empty | Self::Leaf(..) => None,
+            Self::IndexNode { ref mut nested, .. } => nested
+                .get_mut(*i)
+                .and_then(|nested| nested.as_mut().and_then(|nested| nested.take(path))),
+            Self::WildcardNode { .. } => None,
+            // TODO: Demux the subscription
+            //Self::WildcardNode { ref mut nested, .. } => {
+            //    nested.as_mut().and_then(|nested| nested.take(path))
+            //}
+        }
+    }
+
+    /// Inserts `sub` under a `path` - returns `false` if it failed and `true` if it succeeded.
+    /// Tree state after `false` is returned in undefined
+    #[instrument(level = "trace", skip_all)]
+    fn insert(&mut self, path: &[Option<usize>], sub: Subscriber) -> bool {
+        match self {
+            Self::Empty => {
+                *self = Self::from((path, sub));
+                true
+            }
+            Self::Leaf(..) => {
+                let Some((i, path)) = path.split_first() else {
+                    return false;
+                };
+                let Self::Leaf(subscriber) = mem::take(self) else {
+                    return false;
+                };
+                if let Some(i) = i {
+                    let n = i.saturating_add(1);
+                    let mut nested = Vec::with_capacity(n);
+                    nested.resize_with(n, Option::default);
+                    nested[*i] = Some(Self::from((path, sub)));
+                    *self = Self::IndexNode {
+                        subscriber: Some(subscriber),
+                        nested,
+                    };
+                } else {
+                    *self = Self::WildcardNode {
+                        subscriber: Some(subscriber),
+                        nested: Some(Box::new(Self::from((path, sub)))),
+                    };
+                }
+                true
+            }
+            Self::WildcardNode {
+                ref mut subscriber,
+                ref mut nested,
+            } => match (&subscriber, path) {
+                (None, []) => {
+                    *subscriber = Some(sub);
+                    true
+                }
+                (_, [None, path @ ..]) => {
+                    if let Some(nested) = nested {
+                        nested.insert(path, sub)
+                    } else {
+                        *nested = Some(Box::new(Self::from((path, sub))));
+                        true
+                    }
+                }
+                _ => false,
+            },
+            Self::IndexNode {
+                ref mut subscriber,
+                ref mut nested,
+            } => match (&subscriber, path) {
+                (None, []) => {
+                    *subscriber = Some(sub);
+                    true
+                }
+                (_, [Some(i), path @ ..]) => {
+                    if nested.len() < *i {
+                        nested.resize_with(i.saturating_add(1), Option::default);
+                    }
+                    let nested = &mut nested[*i];
+                    if let Some(nested) = nested {
+                        nested.insert(path, sub)
+                    } else {
+                        *nested = Some(Self::from((path, sub)));
+                        true
+                    }
+                }
+                _ => false,
+            },
+        }
+    }
+}
+
+pub struct Reader {
+    buffer: Bytes,
+    incoming: Subscriber,
+    nested: Arc<std::sync::Mutex<SubscriberTree>>,
+}
+
+impl wrpc_transport::Index<Self> for Reader {
+    #[instrument(level = "trace", skip(self))]
+    fn index(&self, path: &[usize]) -> anyhow::Result<Self> {
+        let mut nested = self
+            .nested
+            .lock()
+            .map_err(|err| anyhow!(err.to_string()).context("failed to lock map"))?;
+        let incoming = nested.take(path).context("unknown subscription")?;
+        Ok(Self {
+            buffer: Bytes::default(),
+            incoming,
+            nested: Arc::clone(&self.nested),
+        })
+    }
+}
+
+impl AsyncRead for Reader {
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let cap = buf.remaining();
+        if cap == 0 {
+            trace!("attempt to read empty buffer");
+            return Poll::Ready(Ok(()));
+        }
+
+        if !self.buffer.is_empty() {
+            if self.buffer.len() > cap {
+                buf.put_slice(&self.buffer.split_to(cap));
+            } else {
+                buf.put_slice(&self.buffer);
+            }
+            return Poll::Ready(Ok(()));
+        }
+        trace!("polling for next message");
+        match self.incoming.poll_next_unpin(cx) {
+            Poll::Ready(Some(Message { mut payload, .. })) => {
+                trace!(?payload, "received message");
+                if payload.len() > cap {
+                    trace!(len = payload.len(), cap, "partially reading the message");
+                    buf.put_slice(&payload.split_to(cap));
+                    self.buffer = payload;
+                } else {
+                    trace!(len = payload.len(), cap, "filling the buffer with payload");
+                    buf.put_slice(&payload);
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(None) => {
+                trace!("subscription finished");
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SubjectWriter {
-    nats: Arc<async_nats::Client>,
+    nats: Arc<async_nats_wrpc::Client>,
     tx: Subject,
     publisher: Publisher,
 }
 
 impl SubjectWriter {
-    fn new(nats: Arc<async_nats::Client>, tx: Subject, publisher: Publisher) -> Self {
+    fn new(nats: Arc<async_nats_wrpc::Client>, tx: Subject, publisher: Publisher) -> Self {
         Self {
             nats,
             tx,
@@ -1024,3 +1295,437 @@ impl AsyncWrite for SubjectWriter {
             .map_err(|_| std::io::ErrorKind::BrokenPipe.into())
     }
 }
+
+#[derive(Debug, Default)]
+pub enum RootParamWriter {
+    #[default]
+    Corrupted,
+    Handshaking {
+        tx: SubjectWriter,
+        sub: Subscriber,
+        indexed: std::sync::Mutex<Vec<(Vec<usize>, oneshot::Sender<SubjectWriter>)>>,
+        buffer: Bytes,
+    },
+    Draining {
+        tx: SubjectWriter,
+        buffer: Bytes,
+    },
+    Active(SubjectWriter),
+}
+
+impl RootParamWriter {
+    fn new(tx: SubjectWriter, sub: Subscriber, buffer: Bytes) -> Self {
+        Self::Handshaking {
+            tx,
+            sub,
+            indexed: std::sync::Mutex::default(),
+            buffer,
+        }
+    }
+}
+
+impl RootParamWriter {
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_active(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Corrupted => Poll::Ready(Err(corrupted_memory_error())),
+            Self::Handshaking { sub, .. } => {
+                trace!("polling for handshake response");
+                match sub.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Message {
+                        status: Some(StatusCode::NO_RESPONDERS),
+                        ..
+                    })) => Poll::Ready(Err(std::io::ErrorKind::NotConnected.into())),
+                    Poll::Ready(Some(Message {
+                        status: Some(StatusCode::TIMEOUT),
+                        ..
+                    })) => Poll::Ready(Err(std::io::ErrorKind::TimedOut.into())),
+                    Poll::Ready(Some(Message {
+                        status: Some(StatusCode::REQUEST_TERMINATED),
+                        ..
+                    })) => Poll::Ready(Err(std::io::ErrorKind::UnexpectedEof.into())),
+                    Poll::Ready(Some(Message {
+                        status: Some(code),
+                        description,
+                        ..
+                    })) if !code.is_success() => Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        if let Some(description) = description {
+                            format!("received a response with code `{code}` ({description})")
+                        } else {
+                            format!("received a response with code `{code}`")
+                        },
+                    ))),
+                    Poll::Ready(Some(Message {
+                        reply: Some(tx), ..
+                    })) => {
+                        let Self::Handshaking {
+                            tx: SubjectWriter { nats, .. },
+                            indexed,
+                            buffer,
+                            ..
+                        } = mem::take(&mut *self)
+                        else {
+                            return Poll::Ready(Err(corrupted_memory_error()));
+                        };
+                        let param_tx = Subject::from(param_subject(&tx));
+                        let param_pub = nats.publish_sink(param_tx.clone());
+                        let tx = SubjectWriter::new(nats, param_tx, param_pub);
+                        let indexed = indexed.into_inner().map_err(|err| {
+                            std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+                        })?;
+                        for (path, tx_tx) in indexed {
+                            let tx = tx.index(&path).map_err(|err| {
+                                std::io::Error::new(std::io::ErrorKind::Other, err)
+                            })?;
+                            tx_tx.send(tx).map_err(|_| {
+                                std::io::Error::from(std::io::ErrorKind::BrokenPipe)
+                            })?;
+                        }
+                        trace!("handshake succeeded");
+                        if buffer.is_empty() {
+                            *self = Self::Active(tx);
+                            Poll::Ready(Ok(()))
+                        } else {
+                            *self = Self::Draining { tx, buffer };
+                            self.poll_active(cx)
+                        }
+                    }
+                    Poll::Ready(Some(..)) => Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "peer did not specify a reply subject",
+                    ))),
+                    Poll::Ready(None) => {
+                        *self = Self::Corrupted;
+                        Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            Self::Draining { tx, buffer } => {
+                let mut tx = pin!(tx);
+                while !buffer.is_empty() {
+                    trace!(?tx.tx, "draining parameter buffer");
+                    match tx.as_mut().poll_write(cx, buffer) {
+                        Poll::Ready(Ok(n)) => {
+                            buffer.advance(n);
+                        }
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                let Self::Draining { tx, .. } = mem::take(&mut *self) else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("parameter buffer draining succeeded");
+                *self = Self::Active(tx);
+                Poll::Ready(Ok(()))
+            }
+            Self::Active(..) => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+impl wrpc_transport::Index<IndexedParamWriter> for RootParamWriter {
+    #[instrument(level = "trace", skip(self))]
+    fn index(&self, path: &[usize]) -> anyhow::Result<IndexedParamWriter> {
+        match self {
+            Self::Corrupted => Err(anyhow!(corrupted_memory_error())),
+            Self::Handshaking { indexed, .. } => {
+                let (tx_tx, tx_rx) = oneshot::channel();
+                let mut indexed = indexed.lock().map_err(|err| {
+                    std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+                })?;
+                indexed.push((path.to_vec(), tx_tx));
+                Ok(IndexedParamWriter::Handshaking {
+                    tx_rx,
+                    indexed: std::sync::Mutex::default(),
+                })
+            }
+            Self::Draining { tx, .. } | Self::Active(tx) => {
+                tx.index(path).map(IndexedParamWriter::Active)
+            }
+        }
+    }
+}
+
+impl AsyncWrite for RootParamWriter {
+    #[instrument(level = "trace", skip_all, ret, fields(buf = format!("{buf:02x?}")))]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("writing buffer");
+                pin!(tx).poll_write(cx, buf)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("flushing");
+                pin!(tx).poll_flush(cx)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("shutting down");
+                pin!(tx).poll_shutdown(cx)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub enum IndexedParamWriter {
+    #[default]
+    Corrupted,
+    Handshaking {
+        tx_rx: oneshot::Receiver<SubjectWriter>,
+        indexed: std::sync::Mutex<Vec<(Vec<usize>, oneshot::Sender<SubjectWriter>)>>,
+    },
+    Active(SubjectWriter),
+}
+
+impl IndexedParamWriter {
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_active(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            Self::Corrupted => Poll::Ready(Err(corrupted_memory_error())),
+            Self::Handshaking { tx_rx, .. } => {
+                trace!("polling for handshake");
+                match pin!(tx_rx).poll(cx) {
+                    Poll::Ready(Ok(tx)) => {
+                        let Self::Handshaking { indexed, .. } = mem::take(&mut *self) else {
+                            return Poll::Ready(Err(corrupted_memory_error()));
+                        };
+                        let indexed = indexed.into_inner().map_err(|err| {
+                            std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+                        })?;
+                        for (path, tx_tx) in indexed {
+                            let tx = tx.index(&path).map_err(|err| {
+                                std::io::Error::new(std::io::ErrorKind::Other, err)
+                            })?;
+                            tx_tx.send(tx).map_err(|_| {
+                                std::io::Error::from(std::io::ErrorKind::BrokenPipe)
+                            })?;
+                        }
+                        *self = Self::Active(tx);
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Ready(Err(..)) => Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            Self::Active(..) => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+impl wrpc_transport::Index<Self> for IndexedParamWriter {
+    #[instrument(level = "trace", skip_all)]
+    fn index(&self, path: &[usize]) -> anyhow::Result<Self> {
+        match self {
+            Self::Corrupted => Err(anyhow!(corrupted_memory_error())),
+            Self::Handshaking { indexed, .. } => {
+                let (tx_tx, tx_rx) = oneshot::channel();
+                let mut indexed = indexed.lock().map_err(|err| {
+                    std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+                })?;
+                indexed.push((path.to_vec(), tx_tx));
+                Ok(Self::Handshaking {
+                    tx_rx,
+                    indexed: std::sync::Mutex::default(),
+                })
+            }
+            Self::Active(tx) => tx.index(path).map(Self::Active),
+        }
+    }
+}
+
+impl AsyncWrite for IndexedParamWriter {
+    #[instrument(level = "trace", skip_all, ret, fields(buf = format!("{buf:02x?}")))]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("writing buffer");
+                pin!(tx).poll_write(cx, buf)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("flushing");
+                pin!(tx).poll_flush(cx)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.as_mut().poll_active(cx)? {
+            Poll::Ready(()) => {
+                let Self::Active(tx) = &mut *self else {
+                    return Poll::Ready(Err(corrupted_memory_error()));
+                };
+                trace!("shutting down");
+                pin!(tx).poll_shutdown(cx)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+pub enum ParamWriter {
+    Root(RootParamWriter),
+    Nested(IndexedParamWriter),
+}
+
+impl wrpc_transport::Index<Self> for ParamWriter {
+    fn index(&self, path: &[usize]) -> anyhow::Result<Self> {
+        match self {
+            ParamWriter::Root(w) => w.index(path),
+            ParamWriter::Nested(w) => w.index(path),
+        }
+        .map(Self::Nested)
+    }
+}
+
+impl AsyncWrite for ParamWriter {
+    #[instrument(level = "trace", skip_all, ret, fields(buf = format!("{buf:02x?}")))]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut *self {
+            ParamWriter::Root(w) => pin!(w).poll_write(cx, buf),
+            ParamWriter::Nested(w) => pin!(w).poll_write(cx, buf),
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            ParamWriter::Root(w) => pin!(w).poll_flush(cx),
+            ParamWriter::Nested(w) => pin!(w).poll_flush(cx),
+        }
+    }
+
+    #[instrument(level = "trace", skip_all, ret)]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match &mut *self {
+            ParamWriter::Root(w) => pin!(w).poll_shutdown(cx),
+            ParamWriter::Nested(w) => pin!(w).poll_shutdown(cx),
+        }
+    }
+}
+
+fn corrupted_memory_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, "corrupted memory state")
+}
+
+#[must_use]
+#[inline]
+pub fn param_subject(prefix: &str) -> String {
+    format!("{prefix}.params")
+}
+
+#[must_use]
+#[inline]
+pub fn result_subject(prefix: &str) -> String {
+    format!("{prefix}.results")
+}
+
+#[must_use]
+#[inline]
+pub fn index_path(prefix: &str, path: &[usize]) -> String {
+    let mut s = String::with_capacity(prefix.len() + path.len() * 2);
+    if !prefix.is_empty() {
+        s.push_str(prefix);
+    }
+    for p in path {
+        if !s.is_empty() {
+            s.push('.');
+        }
+        s.push_str(&p.to_string());
+    }
+    s
+}
+
+#[must_use]
+#[inline]
+pub fn subscribe_path(prefix: &str, path: &[Option<usize>]) -> String {
+    let mut s = String::with_capacity(prefix.len() + path.len() * 2);
+    if !prefix.is_empty() {
+        s.push_str(prefix);
+    }
+    for p in path {
+        if !s.is_empty() {
+            s.push('.');
+        }
+        if let Some(p) = p {
+            s.push_str(&p.to_string());
+        } else {
+            s.push('*');
+        }
+    }
+    s
+}
+
+#[must_use]
+#[inline]
+pub fn invocation_subject(prefix: &str, instance: &str, func: &str) -> String {
+    let mut s =
+        String::with_capacity(prefix.len() + PROTOCOL.len() + instance.len() + func.len() + 3);
+    if !prefix.is_empty() {
+        s.push_str(prefix);
+        s.push('.');
+    }
+    s.push_str(PROTOCOL);
+    s.push('.');
+    if !instance.is_empty() {
+        s.push_str(instance);
+        s.push('.');
+    }
+    s.push_str(func);
+    s
+}
+
+pub const PROTOCOL: &str = "wrpc.0.0.1";
