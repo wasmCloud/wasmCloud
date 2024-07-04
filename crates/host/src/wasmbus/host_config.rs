@@ -14,9 +14,9 @@ use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 pub struct Host {
     /// NATS URL to connect to for control interface connection
     pub ctl_nats_url: Url,
-    /// Authentication JWT for control interface connection, must be specified with ctl_seed
+    /// Authentication JWT for control interface connection, must be specified with `ctl_seed`
     pub ctl_jwt: Option<String>,
-    /// Authentication key pair for control interface connection, must be specified with ctl_jwt
+    /// Authentication key pair for control interface connection, must be specified with `ctl_jwt`
     pub ctl_key: Option<Arc<KeyPair>>,
     /// Whether to require TLS for control interface connection
     pub ctl_tls: bool,
@@ -26,14 +26,14 @@ pub struct Host {
     pub rpc_nats_url: Url,
     /// Timeout period for all RPC calls
     pub rpc_timeout: Duration,
-    /// Authentication JWT for RPC connection, must be specified with rpc_seed
+    /// Authentication JWT for RPC connection, must be specified with `rpc_seed`
     pub rpc_jwt: Option<String>,
-    /// Authentication key pair for RPC connection, must be specified with rpc_jwt
+    /// Authentication key pair for RPC connection, must be specified with `rpc_jwt`
     pub rpc_key: Option<Arc<KeyPair>>,
     /// Whether to require TLS for RPC connection
     pub rpc_tls: bool,
     /// The lattice the host belongs to
-    pub lattice: String,
+    pub lattice: Arc<str>,
     /// The domain to use for host Jetstream operations
     pub js_domain: Option<String>,
     /// Labels (key-value pairs) to add to the host
@@ -87,7 +87,7 @@ impl Default for Host {
             rpc_jwt: None,
             rpc_key: None,
             rpc_tls: false,
-            lattice: "default".to_string(),
+            lattice: "default".into(),
             js_domain: None,
             labels: HashMap::default(),
             host_key: None,

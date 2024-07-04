@@ -28,7 +28,6 @@ serde_bytes = { workspace = true, features = ["default"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tower = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["std"] }
 tracing-futures = { workspace = true, features = ["default"] }
@@ -42,8 +41,6 @@ wasmcloud-core = { workspace = true, features = [
     "webpki-roots",
 ] }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
-wrpc-interface-blobstore = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
-wrpc-types = { workspace = true }

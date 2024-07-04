@@ -28,15 +28,15 @@ use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::future::Either;
-use futures::stream::{select_all, AbortHandle, Abortable, SelectAll};
+use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{oneshot, watch, RwLock};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{interval_at, timeout, timeout_at, Instant};
+use tokio::time::{interval_at, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
@@ -50,14 +50,11 @@ use wasmcloud_control_interface::{
     UpdateComponentCommand,
 };
 use wasmcloud_core::{ComponentId, HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
-use wasmcloud_runtime::capability::{messaging, IncomingHttp as _, MessagingHandler as _};
+use wasmcloud_runtime::component::WrpcServeEvent;
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
-use wasmtime_wasi_http::body::HyperOutgoingBody;
-use wrpc_transport::{AcceptedInvocation, Client, Transmitter as _};
 
-use crate::bindings::wasmcloud;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType,
@@ -178,257 +175,145 @@ type Annotations = BTreeMap<String, String>;
 
 #[derive(Debug)]
 struct Component {
-    component: wasmcloud_runtime::Component,
+    component: wasmcloud_runtime::Component<Handler>,
     /// Unique component identifier for this component
-    id: String,
-    calls: AbortHandle,
+    id: Arc<str>,
     handler: Handler,
+    exports: JoinHandle<()>,
     annotations: Annotations,
     /// Maximum number of instances of this component that can be running at once
     max_instances: NonZeroUsize,
-    image_reference: String,
-    metrics: Arc<HostMetrics>,
-    #[allow(unused)]
-    policy_manager: Arc<PolicyManager>,
+    image_reference: Arc<str>,
 }
 
 impl Deref for Component {
-    type Target = wasmcloud_runtime::Component;
+    type Target = wasmcloud_runtime::Component<Handler>;
 
     fn deref(&self) -> &Self::Target {
         &self.component
     }
 }
 
-// This enum is used to differentiate between component export invocations
-enum InvocationParams {
-    Custom {
-        instance: Arc<String>,
-        name: Arc<String>,
-        params: Vec<wrpc_transport::Value>,
-    },
-    IncomingHttpHandle(http::Request<wasmtime_wasi_http::body::HyperIncomingBody>),
-    MessagingHandleMessage(wasmcloud::messaging::types::BrokerMessage),
+#[derive(Clone)]
+struct WrpcServer {
+    nats: wrpc_transport_nats::Client,
+    claims: Option<Arc<jwt::Claims<jwt::Component>>>,
+    id: Arc<str>,
+    image_reference: Arc<str>,
+    annotations: Arc<Annotations>,
+    policy_manager: Arc<PolicyManager>,
+    trace_ctx: Arc<RwLock<Vec<(String, String)>>>,
+    metrics: Arc<HostMetrics>,
 }
 
-impl std::fmt::Debug for InvocationParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InvocationParams::Custom { instance, name, .. } => f
-                .debug_struct("Custom")
-                .field("interface", instance)
-                .field("function", name)
-                .finish(),
-            InvocationParams::IncomingHttpHandle(_) => f.debug_tuple("IncomingHttpHandle").finish(),
-            InvocationParams::MessagingHandleMessage(_) => {
-                f.debug_tuple("MessagingHandleMessage").finish()
-            }
-        }
-    }
-}
+impl wrpc_transport::Serve for WrpcServer {
+    type Context = (Instant, Vec<KeyValue>);
+    type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Outgoing;
+    type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Incoming;
 
-impl Component {
-    /// Handle an incoming wRPC request to invoke an export on this component instance.
     #[instrument(
         level = "info",
-        skip(self, context, result_subject, transmitter),
+        skip(self, paths),
         fields(
-            component_id = self.id.as_str(),
-            component_ref = self.image_reference.as_str())
+            component_id = ?self.id,
+            component_ref = ?self.image_reference)
     )]
-    async fn handle_invocation(
+    fn serve(
         &self,
-        context: Option<async_nats::HeaderMap>,
-        params: InvocationParams,
-        result_subject: wrpc_transport_nats::Subject,
-        transmitter: &wasmcloud_core::wrpc::TransmitterWithHeaders,
-    ) -> anyhow::Result<()> {
-        let (interface, function) = match params {
-            InvocationParams::Custom {
-                ref instance,
-                ref name,
-                ..
-            } => (instance.to_string(), name.to_string()),
-            InvocationParams::IncomingHttpHandle(_) => (
-                "wasi:http/incoming-handler".to_string(),
-                "handle".to_string(),
-            ),
-            InvocationParams::MessagingHandleMessage(_) => (
-                "wasmcloud:messaging/handler".to_string(),
-                "handle-message".to_string(),
-            ),
-        };
-        let PolicyResponse {
-            request_id,
-            permitted,
-            message,
-        } = self
-            .policy_manager
-            .evaluate_perform_invocation(
-                &self.id,
-                &self.image_reference,
-                &self.annotations,
-                self.claims(),
-                interface,
-                function,
-            )
-            .await?;
-        ensure!(
-            permitted,
-            "policy denied request to invoke component `{request_id}`: `{message:?}`",
-        );
+        instance: &str,
+        func: &str,
+        paths: impl Into<Arc<[Box<[Option<usize>]>]>> + Send,
+    ) -> impl Future<
+        Output = anyhow::Result<
+            impl Stream<Item = anyhow::Result<(Self::Context, Self::Outgoing, Self::Incoming)>>
+                + Send
+                + 'static,
+        >,
+    > + Send {
+        async move {
+            debug!("serving invocations");
+            let invocations = self.nats.serve(instance, func, paths).await?;
 
-        if let Some(ref context) = context {
-            // TODO: wasmcloud_tracing take HeaderMap for my own sanity
-            // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
-            // flattening the values
-            let trace_context = context
-                .iter()
-                .flat_map(|(key, value)| {
-                    value
-                        .iter()
-                        .map(|v| (key.to_string(), v.to_string()))
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<(String, String)>>();
-            wasmcloud_tracing::context::attach_span_context(&trace_context);
-        }
+            let func: Arc<str> = Arc::from(func);
+            let instance: Arc<str> = Arc::from(instance);
+            let annotations = Arc::clone(&self.annotations);
+            let id = Arc::clone(&self.id);
+            let image_reference = Arc::clone(&self.image_reference);
+            let metrics = Arc::clone(&self.metrics);
+            let policy_manager = Arc::clone(&self.policy_manager);
+            let trace_ctx = Arc::clone(&self.trace_ctx);
+            let claims = self.claims.clone();
+            Ok(invocations.and_then(move |(cx, tx, rx)| {
+                {
+                    let annotations = Arc::clone(&annotations);
+                    let claims = claims.clone();
+                    let func = Arc::clone(&func);
+                    let id = Arc::clone(&id);
+                    let image_reference = Arc::clone(&image_reference);
+                    let instance = Arc::clone(&instance);
+                    let metrics = Arc::clone(&metrics);
+                    let policy_manager = Arc::clone(&policy_manager);
+                    let trace_ctx = Arc::clone(&trace_ctx);
+                    async move {
+                        let PolicyResponse {
+                            request_id,
+                            permitted,
+                            message,
+                        } = policy_manager
+                            .evaluate_perform_invocation(
+                                &id,
+                                &image_reference,
+                                &annotations,
+                                claims.as_deref(),
+                                instance.to_string(),
+                                func.to_string(),
+                            )
+                            .await?;
+                        ensure!(
+                        permitted,
+                        "policy denied request to invoke component `{request_id}`: `{message:?}`",
+                    );
 
-        // Instantiate component with expected handlers
-        let mut component = self
-            .instantiate()
-            .context("failed to instantiate component")?;
-        component
-            .stderr(stderr())
-            .await
-            .context("failed to set stderr")?
-            .blobstore(Arc::new(self.handler.clone()))
-            .bus(Arc::new(self.handler.clone()))
-            .config(Arc::new(self.handler.clone()))
-            .keyvalue_atomics(Arc::new(self.handler.clone()))
-            .keyvalue_store(Arc::new(self.handler.clone()))
-            .logging(Arc::new(self.handler.clone()))
-            .messaging(Arc::new(self.handler.clone()))
-            .outgoing_http(Arc::new(self.handler.clone()));
+                        if let Some(ref cx) = cx {
+                            // TODO: wasmcloud_tracing take HeaderMap for my own sanity
+                            // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
+                            // flattening the values
+                            let trace_context = cx
+                                .iter()
+                                .flat_map(|(key, value)| {
+                                    value
+                                        .iter()
+                                        .map(|v| (key.to_string(), v.to_string()))
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<(String, String)>>();
+                            wasmcloud_tracing::context::attach_span_context(&trace_context);
+                        }
 
-        // TODO(metrics): insert information about the source once we have concrete context data
-        let mut attributes = vec![
-            KeyValue::new("component.ref", self.image_reference.clone()),
-            KeyValue::new("lattice", self.metrics.lattice_id.clone()),
-            KeyValue::new("host", self.metrics.host_id.clone()),
-        ];
-
-        // Associate the current context with the span
-        let injector = TraceContextInjector::default_with_span();
-        let trace_context = injector
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        self.handler.set_trace_context(trace_context).await;
-
-        let start_at = Instant::now();
-        match params {
-            InvocationParams::Custom {
-                instance,
-                name,
-                params,
-            } => {
-                let res = component
-                    .call(&instance, &name, params)
-                    .instrument(tracing::trace_span!("call_component"))
-                    .await
-                    .context("failed to call component");
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-                attributes.push(KeyValue::new("operation", format!("{instance}/{name}")));
-                self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                let results = res?;
-                transmitter
-                    .transmit_tuple_dynamic(result_subject, results)
-                    .await
-            }
-            InvocationParams::IncomingHttpHandle(request) => {
-                let component = component
-                    .into_incoming_http()
-                    .await
-                    .context("failed to instantiate `wasi:http/incoming-handler`")?;
-                let (response_tx, response_rx) = oneshot::channel::<
-                    Result<
-                        http::Response<HyperOutgoingBody>,
-                        wasmtime_wasi_http::bindings::http::types::ErrorCode,
-                    >,
-                >();
-                let res = try_join!(
-                    async {
-                        component
-                            .handle(request, response_tx)
-                            .await
-                            .context("failed to call `wasi:http/incoming-handler.handle`")
+                        // Associate the current context with the span
+                        let injector = TraceContextInjector::default_with_span();
+                        *trace_ctx.write().await = injector
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
+                        Ok((
+                            (
+                                Instant::now(),
+                                // TODO(metrics): insert information about the source once we have concrete context data
+                                vec![
+                                    KeyValue::new("component.ref", image_reference),
+                                    KeyValue::new("lattice", metrics.lattice_id.clone()),
+                                    KeyValue::new("host", metrics.host_id.clone()),
+                                    KeyValue::new("operation", format!("{instance}/name")),
+                                ],
+                            ),
+                            tx,
+                            rx,
+                        ))
                     }
-                    .instrument(tracing::trace_span!("wasi:http/incoming-handler.handle")),
-                    async {
-                        let res = match response_rx.await.context("failed to receive response")? {
-                            Ok(resp) => {
-                                let (resp, errors) =
-                                    wrpc_interface_http::try_http_to_outgoing_response(resp)
-                                        .context("failed to convert response")?;
-                                // TODO: Handle body errors better
-                                spawn(errors.for_each(|err| async move {
-                                    error!(?err, "body error encountered");
-                                }));
-                                Result::Ok::<_, wrpc_interface_http::ErrorCode>(resp)
-                            }
-                            Err(err) => Err(err.into()),
-                        };
-                        transmitter
-                            .transmit_static(result_subject, res)
-                            .await
-                            .context("failed to transmit response")
-                    }
-                    .instrument(tracing::trace_span!("transmit_response"))
-                );
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-                attributes.push(KeyValue::new(
-                    "operation",
-                    "wrpc:http/incoming-handler.handle",
-                ));
-                self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                res?;
-                Ok(())
-            }
-            InvocationParams::MessagingHandleMessage(
-                wasmcloud::messaging::types::BrokerMessage {
-                    subject,
-                    body,
-                    reply_to,
-                },
-            ) => {
-                let component = component
-                    .into_messaging_handler()
-                    .await
-                    .context("failed to instantiate `wasmcloud:messaging/handler`")?;
-                let res = component
-                    .handle_message(&messaging::types::BrokerMessage {
-                        subject,
-                        body,
-                        reply_to,
-                    })
-                    .instrument(tracing::trace_span!(
-                        "wasmcloud:messaging/handler.handle-message"
-                    ))
-                    .await
-                    .context("failed to call `wasmcloud:messaging/handler.handle-message`");
-                let elapsed = u64::try_from(start_at.elapsed().as_nanos()).unwrap_or_default();
-                attributes.push(KeyValue::new(
-                    "operation",
-                    "wasmcloud:messaging/handler.handle-message",
-                ));
-                self.metrics
-                    .record_component_invocation(elapsed, &attributes, res.is_err());
-                let res = res?;
-                transmitter.transmit_static(result_subject, res).await
-            }
+                }
+                .in_current_span()
+            }))
         }
     }
 }
@@ -897,7 +782,7 @@ impl Host {
             ctl_nats.clone(),
             PolicyHostInfo {
                 public_key: host_key.public_key(),
-                lattice: config.lattice.clone(),
+                lattice: config.lattice.to_string(),
                 labels: labels.clone(),
             },
             config.policy_service_config.policy_topic.clone(),
@@ -915,11 +800,7 @@ impl Host {
                 KeyValue::new("host.version", config.version.clone()),
             ]),
         );
-        let metrics = HostMetrics::new(
-            &meter,
-            host_key.public_key().clone(),
-            config.lattice.clone(),
-        );
+        let metrics = HostMetrics::new(&meter, host_key.public_key(), config.lattice.to_string());
 
         let config_generator = BundleGenerator::new(config_data.clone());
 
@@ -1146,7 +1027,7 @@ impl Host {
                     .cloned();
                 Some(ComponentDescription {
                     id: id.into(),
-                    image_ref: component.image_reference.clone(),
+                    image_ref: component.image_reference.to_string(),
                     annotations: Some(component.annotations.clone().into_iter().collect()),
                     max_instances: component.max_instances.get().try_into().unwrap_or(u32::MAX),
                     revision: component
@@ -1231,216 +1112,116 @@ impl Host {
     async fn instantiate_component(
         &self,
         annotations: &Annotations,
-        image_reference: String,
-        id: String,
+        image_reference: Arc<str>,
+        id: Arc<str>,
         max_instances: NonZeroUsize,
-        mut component: wasmcloud_runtime::Component,
+        mut component: wasmcloud_runtime::Component<Handler>,
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
         trace!(
-            component_ref = image_reference,
+            component_ref = ?image_reference,
             max_instances,
             "instantiating component"
         );
 
-        let wrpc = wasmcloud_core::wrpc::Client::new(
-            self.rpc_nats.clone(),
-            &self.host_config.lattice,
-            &id,
-            // NOTE(brooksmtownsend): We only use this client for serving functions,
-            // and the headers will be set by the incoming invocation.
-            async_nats::HeaderMap::new(),
-            Duration::default(), // this client should not invoke anything
-        );
-        let mut exports: Vec<Pin<Box<dyn Stream<Item = _> + Send>>> = Vec::new();
-        for (instance, functions) in component.exports().iter() {
-            match instance.as_str() {
-                "wasi:http/incoming-handler@0.2.0" => {
-                    use wrpc_interface_http::IncomingHandler;
-
-                    let invocations = wrpc
-                        .serve_handle_wasmtime()
-                        .await
-                        .context("failed to serve `wrpc:http/incoming-handler.handle`")?;
-                    exports.push(Box::pin(invocations.map(move |invocation| {
-                        invocation.map(
-                            |AcceptedInvocation {
-                                 context,
-                                 params,
-                                 result_subject,
-                                 error_subject,
-                                 transmitter,
-                             }| AcceptedInvocation {
-                                context,
-                                params: InvocationParams::IncomingHttpHandle(params.0),
-                                result_subject,
-                                error_subject,
-                                transmitter,
-                            },
-                        )
-                    })));
-                }
-                "wasmcloud:messaging/handler@0.2.0" => {
-                    let invocations = wrpc
-                        .serve_static(instance, "handle-message")
-                        .await
-                        .context("failed to serve `wasmcloud:messaging/handler.handle-message`")?;
-                    exports.push(Box::pin(invocations.map(move |invocation| {
-                        invocation.map(
-                            |AcceptedInvocation {
-                                 context,
-                                 params,
-                                 result_subject,
-                                 error_subject,
-                                 transmitter,
-                             }| AcceptedInvocation {
-                                context,
-                                params: InvocationParams::MessagingHandleMessage(params),
-                                result_subject,
-                                error_subject,
-                                transmitter,
-                            },
-                        )
-                    })));
-                }
-                _ => {
-                    let instance = Arc::new(instance.to_string());
-                    for (name, function) in functions {
-                        if let wrpc_types::DynamicFunction::Static { params, .. } = function {
-                            // TODO(#1220): In order to implement invocation signing and response verification, we can override the
-                            // wrpc_transport::Invocation and wrpc_transport::Client trait in order to wrap the invocation with necessary
-                            // logic to verify the incoming invocations and sign the outgoing responses.
-                            trace!(?instance, name, "serving wrpc function export");
-                            let invocations = wrpc
-                                .serve_dynamic(&instance, name, params.clone())
-                                .await
-                                .context("failed to serve custom function export")?;
-                            let name = Arc::new(name.to_string());
-                            let instance = Arc::clone(&instance);
-                            exports.push(Box::pin(invocations.map(move |invocation| {
-                                invocation.map(
-                                    |AcceptedInvocation {
-                                         context,
-                                         params,
-                                         result_subject,
-                                         error_subject,
-                                         transmitter,
-                                     }| AcceptedInvocation {
-                                        context,
-                                        params: InvocationParams::Custom {
-                                            instance: Arc::clone(&instance),
-                                            name: Arc::clone(&name),
-                                            params,
-                                        },
-                                        result_subject,
-                                        error_subject,
-                                        transmitter,
-                                    },
-                                )
-                            })));
-                        }
-                    }
-                }
-            }
-        }
-
-        let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
         let max_execution_time = self.max_execution_time;
         component.set_max_execution_time(max_execution_time);
-        let component = Arc::new(Component {
+
+        let (events_tx, mut events_rx) = mpsc::channel(256);
+        let shutdown = Arc::default();
+        let (mut exports, mut tasks) = component
+            .serve_wrpc(
+                Arc::new(WrpcServer {
+                    nats: wrpc_transport_nats::Client::new(
+                        Arc::clone(&self.rpc_nats),
+                        format!("{}.{id}", &self.host_config.lattice),
+                        None, // TODO: Set queue group
+                    ),
+                    claims: component.claims().cloned().map(Arc::new),
+                    id: Arc::clone(&id),
+                    image_reference: Arc::clone(&image_reference),
+                    annotations: Arc::new(annotations.clone()),
+                    policy_manager: Arc::clone(&self.policy_manager),
+                    trace_ctx: Arc::clone(&handler.trace_ctx),
+                    metrics: Arc::clone(&self.metrics),
+                }),
+                handler.clone(),
+                events_tx,
+                Arc::clone(&shutdown),
+            )
+            .await?;
+        let metrics = Arc::clone(&self.metrics);
+        Ok(Arc::new(Component {
             component,
             id,
-            calls: calls_abort,
             handler,
+            exports: spawn(
+                async move {
+                    join!(
+                        {
+                            let metrics = Arc::clone(&metrics);
+                            async move {
+                                while let Some(res) = exports.next().await {
+                                    match res {
+                                        Ok(((start_at, ref attributes), res)) => {
+                                            metrics.record_component_invocation(
+                                                u64::try_from(start_at.elapsed().as_nanos())
+                                                    .unwrap_or_default(),
+                                                attributes,
+                                                res.is_err(),
+                                            );
+                                        }
+                                        Err(err) => {
+                                            error!(?err, "failed to accept invocation");
+                                        }
+                                    }
+                                }
+                                debug!("dynamic export serving tasks are done");
+                            }
+                        },
+                        {
+                            let metrics = Arc::clone(&metrics);
+                            async move {
+                                while let Some(evt) = events_rx.recv().await {
+                                    match evt {
+                                        WrpcServeEvent::HttpIncomingHandlerHandleReturned {
+                                            context: (start_at, ref attributes),
+                                            success,
+                                        }
+                                        | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
+                                            context: (start_at, ref attributes),
+                                            success,
+                                        } => {
+                                            metrics.record_component_invocation(
+                                                u64::try_from(start_at.elapsed().as_nanos())
+                                                    .unwrap_or_default(),
+                                                attributes,
+                                                !success,
+                                            );
+                                        }
+                                    }
+                                }
+                                debug!("serving event stream is done");
+                            }
+                        },
+                        async move {
+                            while let Some(res) = tasks.join_next().await {
+                                if let Err(err) = res {
+                                    error!(?err, "export serving task failed");
+                                    shutdown.notify_waiters();
+                                }
+                            }
+                            debug!("static export serving tasks are done");
+                        }
+                    );
+                    debug!("export serving task done");
+                }
+                .in_current_span(),
+            ),
             annotations: annotations.clone(),
             max_instances,
             image_reference,
-            metrics: Arc::clone(&self.metrics),
-            policy_manager: Arc::clone(&self.policy_manager),
-        });
-        spawn({
-            let component = Arc::clone(&component);
-            Abortable::new(select_all(exports), calls_abort_reg).for_each_concurrent(
-                max_instances.get(),
-                move |invocation| {
-                    let component = Arc::clone(&component);
-                    async move {
-                        let AcceptedInvocation {
-                            context,
-                            params,
-                            result_subject,
-                            error_subject,
-                            transmitter,
-                        } = match invocation {
-                            Ok(invocation) => invocation,
-                            Err(err) => {
-                                error!(?err, "failed to accept invocation");
-                                return;
-                            }
-                        };
-                        match timeout(
-                            max_execution_time,
-                            tokio::spawn({
-                                let transmitter = transmitter.clone();
-                                async move {
-                                    component
-                                        .handle_invocation(
-                                            context,
-                                            params,
-                                            result_subject,
-                                            &transmitter,
-                                        )
-                                        .await
-                                }
-                            }),
-                        )
-                        .await
-                        {
-                            Err(err) => {
-                                // Tokio task did not complete within `max_execution_time`
-                                // This is most likely a bug in the runtime, but may occasionally
-                                // happen if the wasmtime epoch interrupt is too slow in shutting
-                                // down the component.
-                                error!(?err, "invocation handling timed out");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit invocation task timeout error to invoker");
-                                }
-                            },
-                            Ok(Err(err)) => {
-                                // Tokio task panicked. This is most definitely a bug.
-                                error!(?err, "invocation task panicked");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit invocation task panic error to invoker");
-                                }
-                            },
-                            Ok(Ok(Err(err))) => {
-                                // Component invocation failed - this is the error returned by
-                                // `handle_invocation`.
-                                // This could happen for a variety of reasons, for example:
-                                // - if the component failed to instantiate
-                                // - if the invocation exceeded `max_execution_time`
-                                // - etc...
-                                error!(?err, "failed to handle invocation");
-                                if let Err(err) = transmitter
-                                    .transmit_static(error_subject, format!("{err:#}"))
-                                    .await
-                                {
-                                    error!(?err, "failed to transmit error to invoker");
-                                }
-                            }
-                            Ok(Ok(Ok(()))) => {}
-                        }
-                    }
-                },
-            )
-        });
-        Ok(component)
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1448,17 +1229,23 @@ impl Host {
     async fn start_component<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Component>>,
-        component: wasmcloud_runtime::Component,
-        component_ref: String,
-        component_id: String,
+        wasm: Vec<u8>,
+        claims: Option<jwt::Claims<jwt::Component>>,
+        component_ref: Arc<str>,
+        component_id: Arc<str>,
         max_instances: NonZeroUsize,
         annotations: impl Into<Annotations>,
-        config: ConfigBundle,
+        config: Vec<String>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
-        debug!(component_ref, ?max_instances, "starting new component");
+        debug!(?component_ref, ?max_instances, "starting new component");
+
+        let config = self
+            .config_generator
+            .generate(config)
+            .await
+            .context("failed to fetch requested config")?;
 
         let annotations = annotations.into();
-        let claims = component.claims().cloned();
         if let Some(ref claims) = claims {
             self.store_claims(Claims::Component(claims.clone()))
                 .await
@@ -1476,28 +1263,27 @@ impl Host {
         let handler = Handler {
             nats: Arc::clone(&self.rpc_nats),
             config_data: Arc::new(RwLock::new(config)),
-            lattice: self.host_config.lattice.clone(),
-            component_id: component_id.clone(),
+            lattice: Arc::clone(&self.host_config.lattice),
+            component_id: Arc::clone(&component_id),
             targets: Arc::default(),
             trace_ctx: Arc::default(),
-            interface_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
-            polyfills: Arc::clone(component.polyfills()),
+            instance_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
-
+        let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm, ())?;
         let component = self
             .instantiate_component(
                 &annotations,
-                component_ref.clone(),
-                component_id.clone(),
+                Arc::clone(&component_ref),
+                Arc::clone(&component_id),
                 max_instances,
                 component,
-                handler.clone(),
+                handler,
             )
             .await
             .context("failed to instantiate component")?;
 
-        info!(component_ref, "component started");
+        info!(?component_ref, "component started");
         self.publish_event(
             "component_scaled",
             event::component_scaled(
@@ -1518,7 +1304,7 @@ impl Host {
     async fn stop_component(&self, component: &Component, _host_id: &str) -> anyhow::Result<()> {
         trace!(component_id = %component.id, "stopping component");
 
-        component.calls.abort();
+        component.exports.abort();
 
         Ok(())
     }
@@ -1599,21 +1385,15 @@ impl Host {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn fetch_component(
-        &self,
-        component_ref: &str,
-    ) -> anyhow::Result<wasmcloud_runtime::Component> {
+    async fn fetch_component(&self, component_ref: &str) -> anyhow::Result<Vec<u8>> {
         let registry_config = self.registry_config.read().await;
-        let component = fetch_component(
+        fetch_component(
             component_ref,
             self.host_config.allow_file_load,
             &registry_config,
         )
         .await
-        .context("failed to fetch component")?;
-        let component = wasmcloud_runtime::Component::new(&self.runtime, component)
-            .context("failed to initialize component")?;
-        Ok(component)
+        .context("failed to fetch component")
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -1703,8 +1483,8 @@ impl Host {
                 .get(&component_id)
                 .map(|v| {
                     (
-                        Some(v.image_reference.clone()),
-                        v.image_reference != component_ref,
+                        Some(Arc::clone(&v.image_reference)),
+                        &*v.image_reference != component_ref.as_str(),
                     )
                 })
                 .unwrap_or_else(|| (None, false))
@@ -1730,12 +1510,14 @@ impl Host {
             _ => String::with_capacity(0),
         };
 
+        let component_id = Arc::from(component_id);
+        let component_ref = Arc::from(component_ref);
         // Spawn a task to perform  the scaling and possibly an update of the component afterwards
         spawn(async move {
             if let Err(e) = self
                 .handle_scale_component_task(
-                    &component_ref,
-                    &component_id,
+                    Arc::clone(&component_ref),
+                    Arc::clone(&component_id),
                     &host_id,
                     max_instances,
                     annotations,
@@ -1749,7 +1531,12 @@ impl Host {
 
             if perform_post_update {
                 if let Err(e) = self
-                    .handle_update_component_task(&component_id, &component_ref, &host_id, None)
+                    .handle_update_component_task(
+                        Arc::clone(&component_id),
+                        Arc::clone(&component_ref),
+                        &host_id,
+                        None,
+                    )
                     .await
                 {
                     error!(%component_ref, %component_id, err = ?e, "failed to update component after scale");
@@ -1769,25 +1556,25 @@ impl Host {
     /// Supplying `0` will result in stopping that component instance.
     async fn handle_scale_component_task(
         &self,
-        component_ref: &str,
-        component_id: &str,
+        component_ref: Arc<str>,
+        component_id: Arc<str>,
         host_id: &str,
         max_instances: u32,
         annotations: Annotations,
         config: Vec<String>,
     ) -> anyhow::Result<()> {
-        trace!(component_ref, max_instances, "scale component task");
+        trace!(?component_ref, max_instances, "scale component task");
 
-        let component = self.fetch_component(component_ref).await?;
-        let claims = component.claims();
+        let wasm = self.fetch_component(&component_ref).await?;
+        let claims = wasmcloud_runtime::component::claims(&wasm)?;
         let resp = self
             .policy_manager
             .evaluate_start_component(
-                component_id,
-                component_ref,
+                &component_id,
+                &component_ref,
                 max_instances,
                 &annotations,
-                claims,
+                claims.as_ref(),
             )
             .await?;
         if !resp.permitted {
@@ -1798,7 +1585,6 @@ impl Host {
             )
         };
 
-        let component_ref = component_ref.to_string();
         match (
             self.components
                 .write()
@@ -1810,17 +1596,13 @@ impl Host {
             (hash_map::Entry::Vacant(_), None) => {}
             // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
-                let config = self
-                    .config_generator
-                    .generate(config)
-                    .await
-                    .context("Unable to fetch requested config")?;
                 if let Err(e) = self
                     .start_component(
                         entry,
-                        component.clone(),
-                        component_ref.clone(),
-                        component_id.to_string(),
+                        wasm,
+                        claims.clone(),
+                        Arc::clone(&component_ref),
+                        Arc::clone(&component_id),
                         max,
                         annotations.clone(),
                         config,
@@ -1830,11 +1612,11 @@ impl Host {
                     self.publish_event(
                         "component_scale_failed",
                         event::component_scale_failed(
-                            claims,
+                            claims.as_ref(),
                             &annotations,
                             host_id,
                             &component_ref,
-                            component_id,
+                            &component_id,
                             max,
                             &e,
                         ),
@@ -1854,7 +1636,7 @@ impl Host {
                     self.publish_event(
                         "component_scale_failed",
                         event::component_scale_failed(
-                            claims,
+                            claims.as_ref(),
                             &component.annotations,
                             host_id,
                             component_ref,
@@ -1867,11 +1649,11 @@ impl Host {
                     return Err(err);
                 };
 
-                info!(component_ref, "component stopped");
+                info!(?component_ref, "component stopped");
                 self.publish_event(
                     "component_scaled",
                     event::component_scaled(
-                        claims,
+                        claims.as_ref(),
                         &component.annotations,
                         host_id,
                         0_usize,
@@ -1898,8 +1680,8 @@ impl Host {
                     let instance = self
                         .instantiate_component(
                             &annotations,
-                            component_ref.to_string(),
-                            component.id.to_string(),
+                            Arc::clone(&component_ref),
+                            Arc::clone(&component.id),
                             max,
                             component.component.clone(),
                             handler,
@@ -1911,7 +1693,7 @@ impl Host {
                             self.publish_event(
                                 "component_scaled",
                                 event::component_scaled(
-                                    component.claims(),
+                                    claims.as_ref(),
                                     &component.annotations,
                                     host_id,
                                     max,
@@ -1928,7 +1710,7 @@ impl Host {
                         .await
                         .context("failed to stop component after scaling")?;
 
-                    info!(component_ref, ?max, "component scaled");
+                    info!(?component_ref, ?max, "component scaled");
 
                     // Wait to unwrap the event publish result until after we've processed the instances
                     publish_result?;
@@ -1968,36 +1750,33 @@ impl Host {
             .read()
             .await
             .get(&component_id)
-            .map(|component| component.image_reference.clone())
+            .map(|component| Arc::clone(&component.image_reference))
         else {
             return Ok(CtlResponse::error(&format!(
-                "component {} not found",
-                component_id
+                "component {component_id} not found"
             )));
         };
 
         // If the component image reference is the same, respond with an appropriate message
-        if component_ref == new_component_ref {
+        if &*component_ref == new_component_ref.as_str() {
             return Ok(CtlResponse {
                 success: true,
-                message: format!(
-                    "component {} already updated to {}",
-                    component_id, new_component_ref
-                ),
+                message: format!("component {component_id} already updated to {new_component_ref}"),
                 response: None,
             });
         }
 
         let host_id = host_id.to_string();
         let message = format!(
-            "component {} updating from {} to {}",
-            component_id, component_ref, new_component_ref
+            "component {component_id} updating from {component_ref} to {new_component_ref}"
         );
+        let component_id = Arc::from(component_id);
+        let new_component_ref = Arc::from(new_component_ref);
         spawn(async move {
             if let Err(e) = self
                 .handle_update_component_task(
-                    &component_id,
-                    &new_component_ref,
+                    Arc::clone(&component_id),
+                    Arc::clone(&new_component_ref),
                     &host_id,
                     annotations,
                 )
@@ -2016,8 +1795,8 @@ impl Host {
 
     async fn handle_update_component_task(
         &self,
-        component_id: &str,
-        new_component_ref: &str,
+        component_id: Arc<str>,
+        new_component_ref: Arc<str>,
         host_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> anyhow::Result<()> {
@@ -2026,7 +1805,7 @@ impl Host {
         let component = {
             let components = self.components.read().await;
             let existing_component = components
-                .get(component_id)
+                .get(&*component_id)
                 .context("component not found")?;
             let annotations = annotations.unwrap_or_default().into_iter().collect();
 
@@ -2036,7 +1815,10 @@ impl Host {
                 return Ok(());
             }
 
-            let new_component = self.fetch_component(new_component_ref).await?;
+            let new_component = self.fetch_component(&new_component_ref).await?;
+            let new_component =
+                wasmcloud_runtime::Component::new(&self.runtime, &new_component, ())
+                    .context("failed to initialize component")?;
             let new_claims = new_component.claims().cloned();
             if let Some(ref claims) = new_claims {
                 self.store_claims(Claims::Component(claims.clone()))
@@ -2048,8 +1830,8 @@ impl Host {
             let Ok(component) = self
                 .instantiate_component(
                     &annotations,
-                    new_component_ref.to_string(),
-                    component_id.to_string(),
+                    Arc::clone(&new_component_ref),
+                    Arc::clone(&component_id),
                     max,
                     new_component,
                     existing_component.handler.copy_for_new(),
@@ -2068,7 +1850,7 @@ impl Host {
                     host_id,
                     max,
                     new_component_ref,
-                    component_id,
+                    &component_id,
                 ),
             )
             .await?;
@@ -2262,7 +2044,7 @@ impl Host {
 
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
-                lattice_rpc_prefix: self.host_config.lattice.clone(),
+                lattice_rpc_prefix: self.host_config.lattice.to_string(),
                 link_name: "default".to_string(),
                 lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
                 lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
@@ -2844,7 +2626,7 @@ impl Host {
             js_domain: self.host_config.js_domain.clone(),
             ctl_host: Some(self.host_config.ctl_nats_url.to_string()),
             rpc_host: Some(self.host_config.rpc_nats_url.to_string()),
-            lattice: self.host_config.lattice.clone(),
+            lattice: self.host_config.lattice.to_string(),
         }))
     }
 
@@ -3183,7 +2965,7 @@ impl Host {
 
         // If the component is already running, update the links
         if let Some(component) = self.components.write().await.get(id) {
-            *component.handler.interface_links.write().await = component_import_links(&spec.links);
+            *component.handler.instance_links.write().await = component_import_links(&spec.links);
             // NOTE(brooksmtownsend): We can consider updating the component if the image URL changes
         };
 
@@ -3346,39 +3128,30 @@ async fn resolve_link_config(
 /// - links: A Vec of [`InterfaceLinkDefinition`]s
 ///
 /// # Returns
-/// - A `HashMap` in the form of `link_name` -> namespace:package -> interface -> target
+/// - A `HashMap` in the form of `link_name` -> `instance` -> target
 fn component_import_links(
     links: &[InterfaceLinkDefinition],
-) -> HashMap<String, HashMap<String, HashMap<String, String>>> {
-    links.iter().fold(HashMap::new(), |mut acc, link| {
-        let ns_and_package = format!("{}:{}", link.wit_namespace, link.wit_package);
-
-        acc.entry(link.name.clone())
-            .and_modify(|link_for_name| {
-                link_for_name
-                    .entry(ns_and_package.clone())
-                    .and_modify(|package| {
-                        for interface in &link.interfaces {
-                            package.insert(interface.clone(), link.target.clone());
-                        }
-                    })
-                    .or_insert({
-                        link.interfaces
-                            .iter()
-                            .map(|interface| (interface.clone(), link.target.clone()))
-                            .collect::<HashMap<String, String>>()
-                    });
-            })
-            .or_insert({
-                let interfaces_map = link
-                    .interfaces
-                    .iter()
-                    .map(|interface| (interface.clone(), link.target.clone()))
-                    .collect::<HashMap<String, String>>();
-                HashMap::from_iter([(ns_and_package.clone(), interfaces_map)])
-            });
-        acc
-    })
+) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
+    let mut m = HashMap::new();
+    for InterfaceLinkDefinition {
+        name,
+        target,
+        wit_namespace,
+        wit_package,
+        interfaces,
+        ..
+    } in links
+    {
+        let instances: &mut HashMap<Box<str>, Box<str>> =
+            m.entry(name.clone().into_boxed_str()).or_default();
+        for interface in interfaces {
+            instances.insert(
+                format!("{wit_namespace}:{wit_package}/{interface}").into_boxed_str(),
+                target.clone().into_boxed_str(),
+            );
+        }
+    }
+    m
 }
 
 /// Helper function to serialize `CtlResponse`<T> into a Vec<u8> if the response is Some
@@ -3754,50 +3527,29 @@ mod test {
         // }
         let expected_result = HashMap::from_iter([
             (
-                "default".to_string(),
-                HashMap::from_iter([
+                "default".into(),
+                HashMap::from([
+                    ("wasi:keyvalue/atomics".into(), "kv-redis".into()),
+                    ("wasi:keyvalue/store".into(), "kv-redis".into()),
                     (
-                        "wasi:keyvalue".to_string(),
-                        HashMap::from_iter([
-                            ("atomics".to_string(), "kv-redis".to_string()),
-                            ("store".to_string(), "kv-redis".to_string()),
-                        ]),
+                        "wasi:http/incoming-handler".into(),
+                        "source_component".into(),
                     ),
-                    (
-                        "wasi:http".to_string(),
-                        HashMap::from_iter([
-                            (
-                                "incoming-handler".to_string(),
-                                "source_component".to_string(),
-                            ),
-                            ("outgoing-handler".to_string(), "httpclient".to_string()),
-                        ]),
-                    ),
-                    (
-                        "custom:foo".to_string(),
-                        HashMap::from_iter([
-                            ("bar".to_string(), "other_component".to_string()),
-                            ("baz".to_string(), "other_component".to_string()),
-                        ]),
-                    ),
+                    ("wasi:http/outgoing-handler".into(), "httpclient".into()),
+                    ("custom:foo/bar".into(), "other_component".into()),
+                    ("custom:foo/baz".into(), "other_component".into()),
                 ]),
             ),
             (
-                "secret".to_string(),
-                HashMap::from_iter([(
-                    "wasi:keyvalue".to_string(),
-                    HashMap::from_iter([
-                        ("atomics".to_string(), "kv-vault-offsite".to_string()),
-                        ("store".to_string(), "kv-vault".to_string()),
-                    ]),
-                )]),
+                "secret".into(),
+                HashMap::from([
+                    ("wasi:keyvalue/atomics".into(), "kv-vault-offsite".into()),
+                    ("wasi:keyvalue/store".into(), "kv-vault".into()),
+                ]),
             ),
             (
-                "link2".to_string(),
-                HashMap::from_iter([(
-                    "wit:package".to_string(),
-                    HashMap::from_iter([("interface3".to_string(), "target".to_string())]),
-                )]),
+                "link2".into(),
+                HashMap::from([("wit:package/interface3".into(), "target".into())]),
             ),
         ]);
 

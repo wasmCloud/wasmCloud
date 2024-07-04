@@ -1,25 +1,31 @@
+use core::convert::Infallible;
+
 use std::collections::HashMap;
 
+use anyhow::Context as _;
+use bytes::Bytes;
 use futures::StreamExt;
+use http_body::Frame;
+use http_body_util::{BodyExt as _, StreamBody};
 use hyper_util::rt::TokioExecutor;
 use tokio::spawn;
 use tracing::{debug, error, instrument, Instrument};
 
 use wasmcloud_provider_sdk::core::tls;
-use wasmcloud_provider_sdk::interfaces::http::OutgoingHandler;
-use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, Provider};
-use wrpc_interface_http::try_http_to_outgoing_response;
-use wrpc_transport::AcceptedInvocation;
+use wasmcloud_provider_sdk::{
+    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
+    run_provider, Context, Provider,
+};
+use wrpc_interface_http::{
+    split_outgoing_http_body, try_fields_to_header_map, ServeHttp, ServeOutgoingHandlerHttp,
+};
 
 /// HTTP client capability provider implementation struct
 #[derive(Clone)]
 pub struct HttpClientProvider {
     client: hyper_util::client::legacy::Client<
         hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
-        wrpc_interface_http::IncomingBody<
-            wrpc_transport::IncomingInputStream,
-            wrpc_interface_http::IncomingFields,
-        >,
+        wrpc_interface_http::HttpBody,
     >,
 }
 
@@ -28,6 +34,25 @@ const DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARG
 const LOAD_NATIVE_CERTS: &str = "load_native_certs";
 const LOAD_WEBPKI_CERTS: &str = "load_webpki_certs";
 const SSL_CERTS_FILE: &str = "ssl_certs_file";
+
+pub async fn run() -> anyhow::Result<()> {
+    initialize_observability!(
+        "http-client-provider",
+        std::env::var_os("PROVIDER_HTTP_CLIENT_FLAMEGRAPH_PATH")
+    );
+    let host_data = load_host_data()?;
+    let provider = HttpClientProvider::new(&host_data.config).await?;
+    let shutdown = run_provider(provider.clone(), "http-client-provider")
+        .await
+        .context("failed to run provider")?;
+    let connection = get_connection();
+    wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
+        &connection.get_wrpc_client(connection.provider_key()),
+        ServeHttp(provider),
+        shutdown,
+    )
+    .await
+}
 
 impl HttpClientProvider {
     pub async fn new(config: &HashMap<String, String>) -> anyhow::Result<Self> {
@@ -89,64 +114,64 @@ impl HttpClientProvider {
     }
 }
 
-impl OutgoingHandler for HttpClientProvider {
+impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
     #[instrument(level = "debug", skip_all)]
-    async fn serve_handle<Tx: wrpc_transport::Transmitter>(
+    async fn handle(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (wrpc_interface_http::IncomingRequestHttp(mut req), opts),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (
-                wrpc_interface_http::IncomingRequestHttp,
-                Option<wrpc_interface_http::RequestOptions>,
-            ),
-            Tx,
+        cx: Option<Context>,
+        mut request: http::Request<wrpc_interface_http::HttpBody>,
+        options: Option<wrpc_interface_http::bindings::wrpc::http::types::RequestOptions>,
+    ) -> anyhow::Result<
+        Result<
+            http::Response<impl http_body::Body<Data = Bytes, Error = Infallible> + Send + 'static>,
+            wrpc_interface_http::bindings::wasi::http::types::ErrorCode,
         >,
-    ) {
-        propagate_trace_for_ctx!(context);
+    > {
+        propagate_trace_for_ctx!(cx);
 
         // TODO: Use opts
-        let _ = opts;
-        debug!(uri = ?req.uri(), "send HTTP request");
+        let _ = options;
+        debug!(uri = ?request.uri(), "send HTTP request");
         // Ensure we have a User-Agent header set.
-        req.headers_mut()
+        request
+            .headers_mut()
             .entry(http::header::USER_AGENT)
             .or_insert(http::header::HeaderValue::from_static(DEFAULT_USER_AGENT));
-        let res = match self
-            .client
-            .request(req)
-            .instrument(tracing::debug_span!("http_request"))
-            .await
-            .map(try_http_to_outgoing_response)
-        {
-            Ok(Ok((res, errors))) => {
-                debug!("received HTTP response");
-                // TODO: Handle body errors better
-                spawn(errors.for_each(|err| async move { error!(?err, "body error encountered") }));
-                Ok(res)
-            }
-            Ok(Err(err)) => {
-                error!(
-                    ?err,
-                    "failed to convert `http` response to `wrpc:http` response"
-                );
-                return;
-            }
-            Err(err) => {
-                debug!(?err, "failed to send HTTP request");
-                Err(wrpc_interface_http::ErrorCode::InternalError(Some(
-                    err.to_string(),
-                )))
-            }
-        };
-        if let Err(err) = transmitter.transmit_static(result_subject, res).await {
-            error!(?err, "failed to transmit response");
+        Ok(async {
+            let res = self
+                .client
+                .request(request)
+                .instrument(tracing::debug_span!("http_request"))
+                .await
+                .map_err(|err| {
+                    // TODO: Convert error
+                    wrpc_interface_http::bindings::wasi::http::types::ErrorCode::InternalError(
+                        Some(err.to_string()),
+                    )
+                })?;
+            Ok(res.map(|body| {
+                let (data, trailers, mut errs) = split_outgoing_http_body(body);
+                spawn(async move {
+                    while let Some(err) = errs.next().await {
+                        error!(?err, "body error encountered");
+                    }
+                });
+                StreamBody::new(data.map(Frame::data).map(Ok)).with_trailers(async {
+                    if let Some(trailers) = trailers.await {
+                        match try_fields_to_header_map(trailers) {
+                            Ok(headers) => Some(Ok(headers)),
+                            Err(err) => {
+                                error!(?err, "failed to parse trailers");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                })
+            }))
         }
+        .await)
     }
 }
 

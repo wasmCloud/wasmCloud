@@ -9,7 +9,7 @@
 #[allow(clippy::module_inception)]
 pub mod component;
 
-/// Capability provider implementations and adaptors
+/// Capability bindings
 pub mod capability;
 
 /// Shared wasmCloud runtime engine
@@ -18,7 +18,7 @@ pub mod runtime;
 /// wasmCloud I/O functionality
 pub mod io;
 
-pub use component::{Component, ComponentInstance, Config as ComponentConfig};
+pub use component::{Component, ComponentConfig};
 pub use runtime::*;
 
 pub use async_trait::async_trait;

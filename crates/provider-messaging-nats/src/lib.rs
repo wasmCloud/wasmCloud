@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
+use bytes::Bytes;
 use futures::StreamExt;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use tokio::fs;
@@ -24,7 +25,13 @@ use wasmcloud_provider_sdk::{
 mod connection;
 use connection::ConnectionConfig;
 
-wit_bindgen_wrpc::generate!();
+wit_bindgen_wrpc::generate!({
+    with: {
+        "wasmcloud:messaging/consumer@0.2.0": generate,
+        "wasmcloud:messaging/handler@0.2.0": generate,
+        "wasmcloud:messaging/types@0.2.0": generate,
+    },
+});
 
 pub async fn run() -> anyhow::Result<()> {
     NatsMessagingProvider::run().await
@@ -224,11 +231,6 @@ async fn dispatch_msg(
         _ => (),
     };
 
-    let trace_headers = TraceContextInjector::default_with_span()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-
     let msg = BrokerMessage {
         body: nats_msg.payload.into(),
         reply_to: nats_msg.reply.map(|s| s.to_string()),
@@ -240,8 +242,13 @@ async fn dispatch_msg(
         component_id = component_id,
         "sending message to component",
     );
+    let mut cx = async_nats::HeaderMap::new();
+    for (k, v) in TraceContextInjector::default_with_span().iter() {
+        cx.insert(k.as_str(), v.as_str())
+    }
     if let Err(e) = wasmcloud::messaging::handler::handle_message(
-        &get_connection().get_wrpc_client_custom(component_id, Some(trace_headers), None),
+        &get_connection().get_wrpc_client_custom(component_id, None),
+        Some(cx),
         &msg,
     )
     .await
@@ -463,7 +470,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
         &self,
         ctx: Option<Context>,
         subject: String,
-        body: Vec<u8>,
+        body: Bytes,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
         let nats_client =
@@ -486,7 +493,6 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
         let headers = NatsHeaderInjector::default_with_span().into();
 
         let timeout = Duration::from_millis(timeout_ms.into());
-        let body = body.into();
         // Perform the request with a timeout
         let request_with_timeout = if should_strip_headers(&subject) {
             tokio::time::timeout(timeout, nats_client.request(subject, body)).await
@@ -509,7 +515,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsM
                 return Ok(Err(format!("nats send error: {send_err}")));
             }
             Ok(Ok(resp)) => Ok(Ok(BrokerMessage {
-                body: resp.payload.to_vec(),
+                body: resp.payload,
                 reply_to: resp.reply.map(|s| s.to_string()),
                 subject: resp.subject.to_string(),
             })),
@@ -530,12 +536,11 @@ fn add_tls_ca(
     let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
     let mut roots = async_nats::rustls::RootCertStore::empty();
     if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
-        roots.add_parsable_certificates(&[ca]);
+        roots.add_parsable_certificates([ca]);
     } else {
         bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
     };
     let tls_client = async_nats::rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(roots)
         .with_no_client_auth();
     Ok(opts.tls_client_config(tls_client).require_tls(true))

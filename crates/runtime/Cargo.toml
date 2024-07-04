@@ -13,9 +13,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [features]
-log = [
-    "tracing/log"
-]
+log = ["tracing/log"]
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
@@ -28,20 +26,31 @@ http-body-util = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tokio-util = { workspace = true, features = ["codec", "io"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmparser = { workspace = true }
-wasmtime = { workspace = true, features = ["addr2line", "async", "cache", "component-model", "coredump", "cranelift", "parallel-compilation", "pooling-allocator" ] }
+wasmtime = { workspace = true, features = [
+    "addr2line",
+    "async",
+    "cache",
+    "component-model",
+    "coredump",
+    "cranelift",
+    "parallel-compilation",
+    "pooling-allocator",
+] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
+wrpc-interface-http = { workspace = true, features = ["wasmtime-wasi-http"] }
 wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }
-wrpc-types = { workspace = true }
 
 [dev-dependencies]
 once_cell = { workspace = true }
@@ -49,5 +58,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 test-components = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
-tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
+] }
 wasmcloud-component = { workspace = true, features = ["uuid"] }

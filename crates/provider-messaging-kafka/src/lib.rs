@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context as _};
+use bytes::Bytes;
 use futures::TryStreamExt as _;
 use rskafka::client::consumer::{StartOffset, StreamConsumerBuilder};
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
@@ -16,9 +17,17 @@ use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
 use wasmcloud_tracing::context::TraceContextInjector;
 
-use crate::wasmcloud::messaging::types::BrokerMessage;
+use bindings::wasmcloud::messaging::types::BrokerMessage;
 
-wit_bindgen_wrpc::generate!();
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wasmcloud:messaging/consumer@0.2.0": generate,
+            "wasmcloud:messaging/handler@0.2.0": generate,
+            "wasmcloud:messaging/types@0.2.0": generate,
+        },
+    });
+}
 
 /// Config value for hosts, accepted as a comma separated string
 const KAFKA_HOSTS_CONFIG_KEY: &str = "hosts";
@@ -62,7 +71,7 @@ impl KafkaMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
@@ -155,10 +164,11 @@ impl Provider for KafkaMessagingProvider {
                         let wrpc = get_connection().get_wrpc_client(&source_id);
                         let subject = Arc::clone(&subject);
                         async move {
-                            if let Err(e) = wasmcloud::messaging::handler::handle_message(
+                            if let Err(e) = bindings::wasmcloud::messaging::handler::handle_message(
                                 &wrpc,
+                                None,
                                 &BrokerMessage {
-                                    body: message,
+                                    body: message.into(),
                                     // By default, we always append '.reply' for reply topics
                                     reply_to: Some(format!("{subject}.reply")),
                                     subject: subject.to_string(),
@@ -218,7 +228,9 @@ impl Provider for KafkaMessagingProvider {
 }
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
-impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for KafkaMessagingProvider {
+impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
+    for KafkaMessagingProvider
+{
     #[instrument(
         skip_all,
         fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len())
@@ -325,7 +337,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
         // Produce some data
         let records = vec![Record {
             key: None,
-            value: Some(msg.body),
+            value: Some(msg.body.to_vec()),
             headers: BTreeMap::from([("source".to_owned(), b"wasm".to_vec())]),
             timestamp: chrono::offset::Utc::now(),
         }];
@@ -345,7 +357,7 @@ impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for Kafka
         &self,
         ctx: Option<Context>,
         _subject: String,
-        _body: Vec<u8>,
+        _body: Bytes,
         _timeout_ms: u32,
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
         // Extract tracing information from invocation context, if present

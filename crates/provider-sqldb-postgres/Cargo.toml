@@ -38,4 +38,3 @@ ulid = { workspace = true }
 uuid = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }
- 

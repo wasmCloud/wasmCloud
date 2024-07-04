@@ -13,6 +13,7 @@ use test_components::{
 use tokio::net::TcpListener;
 use tokio::try_join;
 use tracing::info;
+use tracing::instrument;
 use tracing_subscriber::prelude::*;
 use wasmcloud_host::wasmbus::config::BundleGenerator;
 use wasmcloud_test_util::lattice::config::assert_config_put;
@@ -28,6 +29,7 @@ const LATTICE: &str = "config";
 const PINGER_COMPONENT_ID: &str = "pinger_component";
 const PONGER_COMPONENT_ID: &str = "ponger_component";
 
+#[instrument(skip_all, ret)]
 #[tokio::test(flavor = "multi_thread")]
 async fn config_updates() -> Result<()> {
     let (nats_server, _, nats_client) = start_nats()
@@ -107,6 +109,7 @@ async fn config_updates() -> Result<()> {
     Ok(())
 }
 
+#[instrument(skip_all, ret)]
 async fn put_config(
     store: &jetstream::kv::Store,
     name: &str,
@@ -120,6 +123,7 @@ async fn put_config(
         .map(|_| ())
 }
 
+#[instrument(skip_all, ret)]
 #[tokio::test]
 async fn config_e2e() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -141,6 +145,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     let wrpc_client = wrpc_transport_nats::Client::new(
         nats_client.clone(),
         format!("{LATTICE}.{PINGER_COMPONENT_ID}"),
+        None,
     );
     let wrpc_client = Arc::new(wrpc_client);
     // Build the host
@@ -221,6 +226,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[instrument(skip_all, ret)]
 async fn assert_incoming_http(
     wrpc_client: &Arc<wrpc_transport_nats::Client>,
 ) -> anyhow::Result<()> {
@@ -232,7 +238,7 @@ async fn assert_incoming_http(
         .context("failed to query listener local address")?;
     try_join!(
         async {
-            info!("await connection");
+            info!("awaiting connection");
             let (stream, addr) = listener
                 .accept()
                 .await

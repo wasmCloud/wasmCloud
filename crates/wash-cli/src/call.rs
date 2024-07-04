@@ -388,7 +388,7 @@ struct HttpResponse {
 
 /// Invoke a wRPC endpoint that takes a HTTP request (usually `wasi:http/incoming-handler.handle`);
 async fn wrpc_invoke_http_handler(
-    wrpc_client: &wasmcloud_core::wrpc::Client,
+    nats: async_nats::Client,
     lattice: &str,
     component_id: &str,
     timeout_ms: u64,
@@ -397,16 +397,17 @@ async fn wrpc_invoke_http_handler(
 ) -> Result<CommandOutput> {
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
-        wrpc_client.invoke_handle_http(request),
+        wrpc_transport_nats::Client::new(nats, format!("{lattice}.{component_id}"), None).invoke_handle_http(None, request)
     )
     .await
     .with_context(|| format!("component invocation timeout, is component [{component_id}] running in lattice [{lattice}]?"))?
     .context("failed to perform HTTP request")?;
 
     match result {
-        (Ok(mut resp), tx, _body_err) => {
-            tx.await
-                .context("failed to wait for transmission to close")?;
+        (Ok(mut resp), _errs, io) => {
+            if let Some(io) = io {
+                io.await.context("failed to complete async I/O")?;
+            }
 
             let status = resp.status().as_u16();
             let headers =
@@ -460,7 +461,7 @@ async fn wrpc_invoke_http_handler(
 
 /// Invoke a wRPC endpoint that takes nothing and returns a string
 async fn wrpc_invoke_simple(
-    wrpc_client: &wasmcloud_core::wrpc::Client,
+    nats: async_nats::Client,
     lattice: &str,
     component_id: &str,
     instance: &str,
@@ -469,13 +470,13 @@ async fn wrpc_invoke_simple(
 ) -> Result<CommandOutput> {
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
-        wrpc_client.invoke_dynamic(instance, function_name, (), &[wrpc_types::Type::String]),
+        wrpc_transport_nats::Client::new(nats, format!("{lattice}.{component_id}"), None).invoke_values(instance, function_name, ())
     )
     .await
     .context("Timeout while invoking component, ensure component {component_id} is running in lattice {lattice}")?;
 
     match result {
-        Ok((values, _tx)) => {
+        Ok(((result), io)) => {
             if let Some(wrpc_transport::Value::String(result)) = values.first() {
                 Ok(CommandOutput::new(result.to_string(), HashMap::from([("result".to_string(), json!(result))])))
             } else {

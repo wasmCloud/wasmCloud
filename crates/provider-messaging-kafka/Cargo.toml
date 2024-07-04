@@ -16,6 +16,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true, features = ["clock"] }
 futures = { workspace = true }
 rskafka = { workspace = true }

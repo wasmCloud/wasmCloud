@@ -13,11 +13,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
+use bytes::Bytes;
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
-
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{
@@ -25,9 +25,16 @@ use wasmcloud_provider_sdk::{
     Provider,
 };
 
-use exports::wrpc::keyvalue;
-
-wit_bindgen_wrpc::generate!();
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wrpc:keyvalue/atomics@0.2.0-draft": generate,
+            "wrpc:keyvalue/batch@0.2.0-draft": generate,
+            "wrpc:keyvalue/store@0.2.0-draft": generate,
+        }
+    });
+}
+use bindings::exports::wrpc::keyvalue;
 
 /// Default URL to use to connect to Redis
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -74,7 +81,7 @@ impl KvRedisProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
@@ -186,7 +193,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    ) -> anyhow::Result<Result<Option<Bytes>>> {
         propagate_trace_for_ctx!(context);
         check_bucket_name(&bucket);
         match self
@@ -194,7 +201,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
             .await
         {
             Ok(redis::Value::Nil) => Ok(Ok(None)),
-            Ok(redis::Value::Data(buf)) => Ok(Ok(Some(buf))),
+            Ok(redis::Value::Data(buf)) => Ok(Ok(Some(buf.into()))),
             Ok(_) => Ok(Err(keyvalue::store::Error::Other(
                 "invalid data type returned by Redis".into(),
             ))),
@@ -208,11 +215,13 @@ impl keyvalue::store::Handler<Option<Context>> for KvRedisProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
         check_bucket_name(&bucket);
-        Ok(self.exec_cmd(context, &mut Cmd::set(key, value)).await)
+        Ok(self
+            .exec_cmd(context, &mut Cmd::set(key, value.to_vec()))
+            .await)
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -264,7 +273,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         ctx: Option<Context>,
         bucket: String,
         keys: Vec<String>,
-    ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
+    ) -> anyhow::Result<Result<Vec<Option<(String, Bytes)>>>> {
         check_bucket_name(&bucket);
         Ok(self.exec_cmd(ctx, &mut Cmd::mget(&keys)).await)
     }
@@ -273,9 +282,13 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         &self,
         ctx: Option<Context>,
         bucket: String,
-        items: Vec<(String, Vec<u8>)>,
+        items: Vec<(String, Bytes)>,
     ) -> anyhow::Result<Result<()>> {
         check_bucket_name(&bucket);
+        let items = items
+            .into_iter()
+            .map(|(name, buf)| (name, buf.to_vec()))
+            .collect::<Vec<_>>();
         Ok(self.exec_cmd(ctx, &mut Cmd::mset(&items)).await)
     }
 
