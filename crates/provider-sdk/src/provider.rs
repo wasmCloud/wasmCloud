@@ -8,10 +8,11 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use async_nats::subject::ToSubject;
+use async_nats::subject::ToSubject as _;
 use async_nats::HeaderMap;
 use base64::Engine;
-use futures::StreamExt;
+use bytes::Bytes;
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
@@ -28,11 +29,10 @@ use wasmcloud_core::{
 use wasmcloud_core::TraceContext;
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::attach_span_context;
+use wrpc_transport::InvokeExt as _;
 
 use crate::error::{ProviderInitError, ProviderInitResult};
-use crate::{
-    with_connection_event_logging, Context, LinkConfig, Provider, WrpcClient, DEFAULT_NATS_ADDR,
-};
+use crate::{with_connection_event_logging, Context, LinkConfig, Provider, DEFAULT_NATS_ADDR};
 
 /// Name of the header that should be passed for invocations that identifies the source
 const WRPC_SOURCE_ID_HEADER_NAME: &str = "source-id";
@@ -434,7 +434,7 @@ async fn receive_link_for_provider<P>(
 where
     P: Provider,
 {
-    match if ld.source_id == connection.provider_id {
+    match if ld.source_id == &*connection.provider_id {
         provider
             .receive_link_config_as_source(LinkConfig {
                 source_id: &ld.source_id,
@@ -444,7 +444,7 @@ where
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
-    } else if ld.target == connection.provider_id {
+    } else if ld.target == &*connection.provider_id {
         provider
             .receive_link_config_as_target(LinkConfig {
                 source_id: &ld.source_id,
@@ -473,11 +473,11 @@ async fn delete_link_for_provider<P>(
 where
     P: Provider,
 {
-    if ld.source_id == connection.provider_id {
+    if ld.source_id == &*connection.provider_id {
         if let Err(e) = provider.delete_link_as_source(&ld.target).await {
             error!(error = %e, target = &ld.target, "failed to delete link to component");
         }
-    } else if ld.target == connection.provider_id {
+    } else if ld.target == &*connection.provider_id {
         if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
             error!(error = %e, source = &ld.source_id, "failed to delete link from component");
         }
@@ -628,7 +628,7 @@ pub async fn run_provider(
 
     let connection = ProviderConnection::new(
         Arc::clone(&nats),
-        provider_key,
+        provider_key.into(),
         lattice_rpc_prefix.clone(),
         host_id,
         config,
@@ -672,7 +672,7 @@ pub struct ProviderConnection {
     /// Lattice name
     lattice: String,
     host_id: String,
-    provider_id: String,
+    provider_id: Arc<str>,
 
     // TODO: Reference this field to get static config
     #[allow(unused)]
@@ -708,10 +708,65 @@ pub fn invocation_context(headers: &HeaderMap) -> Context {
     }
 }
 
+pub struct WrpcClient {
+    nats: wrpc_transport_nats::Client,
+    timeout: Duration,
+    provider_id: Arc<str>,
+    target: Arc<str>,
+}
+
+impl wrpc_transport::Invoke for WrpcClient {
+    type Context = Option<HeaderMap>;
+    type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Outgoing;
+    type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Incoming;
+
+    async fn invoke<P>(
+        &self,
+        cx: Self::Context,
+        instance: &str,
+        func: &str,
+        params: Bytes,
+        paths: impl AsRef<[P]> + Send,
+    ) -> anyhow::Result<(Self::Outgoing, Self::Incoming)>
+    where
+        P: AsRef<[Option<usize>]> + Send + Sync,
+    {
+        let mut headers = cx.unwrap_or_default();
+        headers.insert("source-id", &*self.provider_id);
+        headers.insert("target-id", &*self.target);
+        self.nats
+            .timeout(self.timeout)
+            .invoke(Some(headers), instance, func, params, paths)
+            .await
+    }
+}
+
+impl wrpc_transport::Serve for WrpcClient {
+    type Context = Option<Context>;
+    type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Outgoing;
+    type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Serve>::Incoming;
+
+    async fn serve(
+        &self,
+        instance: &str,
+        func: &str,
+        paths: impl Into<Arc<[Box<[Option<usize>]>]>> + Send,
+    ) -> anyhow::Result<
+        impl Stream<Item = anyhow::Result<(Self::Context, Self::Outgoing, Self::Incoming)>>
+            + Send
+            + 'static,
+    > {
+        let invocations = self.nats.serve(instance, func, paths).await?;
+        Ok(invocations.and_then(|(cx, tx, rx)| async move {
+            Ok((cx.as_ref().map(invocation_context), tx, rx))
+        }))
+    }
+}
+
 impl ProviderConnection {
     pub(crate) fn new(
         nats: Arc<async_nats::Client>,
-        provider_id: String,
+        provider_id: Arc<str>,
         lattice: String,
         host_id: String,
         config: HashMap<String, String>,
@@ -734,39 +789,28 @@ impl ProviderConnection {
     /// * `target` - Target ID to which invocations will be sent
     #[must_use]
     pub fn get_wrpc_client(&self, target: &str) -> WrpcClient {
-        self.get_wrpc_client_custom(target, None, None)
+        self.get_wrpc_client_custom(target, None)
     }
 
     /// Retrieve a wRPC client that can be used based on the NATS client of this connection,
-    /// customized with headers and duration
+    /// customized with uration
     ///
     /// # Arguments
     ///
     /// * `target` - Target ID to which invocations will be sent
-    /// * `headers` - Additional headers (other than `source-id`, `target-id`) to be placed on the client
     /// * `timeout` - Timeout to be set on the client (by default if this is unset it will be 10 seconds)
     #[must_use]
-    pub fn get_wrpc_client_custom(
-        &self,
-        target: &str,
-        headers: Option<HashMap<String, String>>,
-        timeout: Option<Duration>,
-    ) -> WrpcClient {
-        let mut hmap = HeaderMap::new();
-        if let Some(values) = headers {
-            for (k, v) in &values {
-                hmap.insert(k.as_str(), v.as_str());
-            }
+    pub fn get_wrpc_client_custom(&self, target: &str, timeout: Option<Duration>) -> WrpcClient {
+        WrpcClient {
+            nats: wrpc_transport_nats::Client::new(
+                Arc::clone(&self.nats),
+                format!("{}.{target}", self.lattice),
+                None, // TODO: Set queue group
+            ),
+            provider_id: Arc::clone(&self.provider_id),
+            target: Arc::from(target),
+            timeout: timeout.unwrap_or_else(|| Duration::from_secs(10)),
         }
-        hmap.insert("source-id", self.provider_id.as_str());
-        hmap.insert("target-id", target);
-        WrpcClient(wasmcloud_core::wrpc::Client::new(
-            Arc::clone(&self.nats),
-            &self.lattice,
-            target,
-            hmap,
-            timeout.unwrap_or_else(|| Duration::from_secs(10)),
-        ))
     }
 
     /// Get the provider key that was assigned to this host at startup
@@ -778,7 +822,7 @@ impl ProviderConnection {
     /// Stores link in the [ProviderConnection], either as a source link or target link
     /// depending on if the provider is the source or target of the link
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
-        if ld.source_id == self.provider_id {
+        if ld.source_id == *self.provider_id {
             self.source_links
                 .write()
                 .await
@@ -794,9 +838,9 @@ impl ProviderConnection {
     /// Deletes link from the [ProviderConnection], either a source link or target link
     /// based on if the provider is the source or target of the link
     pub async fn delete_link(&self, source_id: &str, target: &str) {
-        if source_id == self.provider_id {
+        if source_id == &*self.provider_id {
             self.source_links.write().await.remove(source_id);
-        } else if target == self.provider_id {
+        } else if target == &*self.provider_id {
             self.target_links.write().await.remove(target);
         }
     }
@@ -804,10 +848,10 @@ impl ProviderConnection {
     /// Returns true if the source is linked to this provider or if the provider is linked to the target
     pub async fn is_linked(&self, source_id: &str, target_id: &str) -> bool {
         // Provider is the source of the link, so we check if the target is linked
-        if self.provider_id == source_id {
+        if &*self.provider_id == source_id {
             self.source_links.read().await.contains_key(target_id)
         // Provider is the target of the link, so we check if the source is linked
-        } else if self.provider_id == target_id {
+        } else if &*self.provider_id == target_id {
             self.target_links.read().await.contains_key(source_id)
         // Shouldn't occur, but if the provider is neither source nor target, it's not linked
         } else {

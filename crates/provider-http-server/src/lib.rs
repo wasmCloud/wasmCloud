@@ -35,18 +35,21 @@
 use core::str::FromStr as _;
 use core::time::Duration;
 
+use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::{collections::HashMap, net::Ipv4Addr};
 
 use anyhow::Context as _;
 use axum::extract;
 use axum::handler::Handler as _;
 use axum_server::tls_rustls::RustlsConfig;
+use futures::StreamExt as _;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
-use wasmcloud_provider_sdk::{get_connection, LinkConfig, Provider};
-use wrpc_interface_http::IncomingHandler as _;
+use wasmcloud_provider_sdk::{
+    get_connection, initialize_observability, run_provider, LinkConfig, Provider,
+};
+use wrpc_interface_http::InvokeIncomingHandler as _;
 
 mod hashmap_ci;
 pub(crate) use hashmap_ci::make_case_insensitive;
@@ -61,6 +64,18 @@ use crate::settings::Tls;
 pub struct HttpServerProvider {
     // map to store http server (and its link parameters) for each linked component
     actors: Arc<dashmap::DashMap<String, HttpServerCore>>,
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    initialize_observability!(
+        "http-server-provider",
+        std::env::var_os("PROVIDER_HTTP_SERVER_FLAMEGRAPH_PATH")
+    );
+    let shutdown = run_provider(HttpServerProvider::default(), "http-server-provider")
+        .await
+        .context("failed to run provider")?;
+    shutdown.await;
+    Ok(())
 }
 
 impl Provider for HttpServerProvider {
@@ -211,16 +226,17 @@ async fn handle_request(
     trace!(?req, "httpserver calling component");
 
     // Create a new wRPC client with all headers from the current span injected
-    let invocation_headers: HashMap<String, String> = wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
+    let mut cx = async_nats::HeaderMap::new();
+    for (k, v) in
+        wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector::default_with_span(
         )
         .iter()
-        .map(|(k, v)| (k.into(), v.into()))
-        .collect();
+    {
+        cx.insert(k.as_str(), v.as_str())
+    }
 
-    let wrpc =
-        get_connection().get_wrpc_client_custom(target.as_str(), Some(invocation_headers), None);
-
-    let fut = wrpc.invoke_handle_http(req);
+    let wrpc = get_connection().get_wrpc_client_custom(target.as_str(), None);
+    let fut = wrpc.invoke_handle_http(Some(cx), req);
     let res = if let Some(timeout) = timeout {
         let Ok(res) = time::timeout(timeout, fut).await else {
             Err(http::StatusCode::REQUEST_TIMEOUT)?
@@ -229,15 +245,20 @@ async fn handle_request(
     } else {
         fut.await
     };
-    let (res, tx, errs) =
+    let (res, mut errs, io) =
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")))?;
+    if let Some(io) = io {
+        spawn(async move {
+            if let Err(err) = io.await {
+                error!(?err, "failed to complete async I/O");
+            }
+        });
+    }
     spawn(async move {
-        if let Err(err) = tx.await {
-            error!(?err, "failed to transmit parameter values");
+        while let Some(err) = errs.next().await {
+            error!(?err, "body error encountered");
         }
     });
-    // TODO: Do not ignore body errors
-    let _ = errs;
     // TODO: Convert this to http status code
     let mut res =
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")))?;

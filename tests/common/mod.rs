@@ -106,15 +106,8 @@ pub async fn copy_par(path: impl AsRef<Path>) -> Result<(Url, NamedTempFile)> {
 pub async fn serve_incoming_http(
     wrpc_client: &Arc<wrpc_transport_nats::Client>,
     mut request: hyper::Request<hyper::body::Incoming>,
-) -> anyhow::Result<
-    hyper::Response<
-        wrpc_interface_http::IncomingBody<
-            wrpc_transport::IncomingInputStream,
-            wrpc_interface_http::IncomingFields,
-        >,
-    >,
-> {
-    use wrpc_interface_http::IncomingHandler as _;
+) -> anyhow::Result<hyper::Response<wrpc_interface_http::HttpBody>> {
+    use wrpc_interface_http::InvokeIncomingHandler as _;
 
     let host = request.headers().get(HOST).expect("`host` header missing");
     let host = host
@@ -132,15 +125,18 @@ pub async fn serve_incoming_http(
         .expect("failed to build request URI");
     *request.uri_mut() = uri;
     info!(?request, "invoke `handle`");
-    let (response, tx, errors) = wrpc_client
-        .invoke_handle_hyper(request)
+    let (response, errs, io) = wrpc_client
+        .invoke_handle_http(None, request)
         .await
         .context("failed to invoke `wrpc:http/incoming-handler.handle`")?;
+    let response = response?;
     info!("await parameter transmit");
-    tx.await.context("failed to transmit parameters")?;
+    if let Some(io) = io {
+        io.await.context("failed to complete async I/O")?;
+    }
     info!("await error collect");
-    let errors: Vec<_> = errors.collect().await;
-    assert!(errors.is_empty());
+    let errs: Vec<_> = errs.collect().await;
+    assert!(errs.is_empty());
     info!("request served");
-    response
+    Ok(response)
 }

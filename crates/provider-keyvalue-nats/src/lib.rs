@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
+use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -25,9 +26,16 @@ use wasmcloud_provider_sdk::{
 mod config;
 use config::NatsConnectionConfig;
 
-use exports::wrpc::keyvalue;
-
-wit_bindgen_wrpc::generate!();
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wrpc:keyvalue/atomics@0.2.0-draft": generate,
+            "wrpc:keyvalue/batch@0.2.0-draft": generate,
+            "wrpc:keyvalue/store@0.2.0-draft": generate,
+        }
+    });
+}
+use bindings::exports::wrpc::keyvalue;
 
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
@@ -56,7 +64,7 @@ impl KvNatsProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
@@ -168,7 +176,7 @@ impl KvNatsProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    ) -> anyhow::Result<Result<Option<Bytes>>> {
         keyvalue::store::Handler::get(self, context, bucket, key).await
     }
 
@@ -178,7 +186,7 @@ impl KvNatsProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> anyhow::Result<Result<()>> {
         keyvalue::store::Handler::set(self, context, bucket, key, value).await
     }
@@ -288,12 +296,12 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    ) -> anyhow::Result<Result<Option<Bytes>>> {
         propagate_trace_for_ctx!(context);
 
         match self.get_kv_store(context, bucket).await {
             Ok(store) => match store.get(key.clone()).await {
-                Ok(Some(bytes)) => Ok(Ok(Some(bytes.to_vec()))),
+                Ok(Some(bytes)) => Ok(Ok(Some(bytes))),
                 Ok(None) => Ok(Ok(None)),
                 Err(err) => {
                     error!(%key, "failed to get key value: {err:?}");
@@ -311,12 +319,12 @@ impl keyvalue::store::Handler<Option<Context>> for KvNatsProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
 
         match self.get_kv_store(context, bucket).await {
-            Ok(store) => match store.put(key.clone(), bytes::Bytes::from(value)).await {
+            Ok(store) => match store.put(key.clone(), value).await {
                 Ok(_) => Ok(Ok(())),
                 Err(err) => {
                     error!(%key, "failed to set key value: {err:?}");
@@ -446,11 +454,7 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
 
             // Increment the value of the key
             match kv_store
-                .update(
-                    key.clone(),
-                    bytes::Bytes::from(new_value.to_string().into_bytes()),
-                    revision,
-                )
+                .update(key.clone(), new_value.to_string().into(), revision)
                 .await
             {
                 Ok(_) => {
@@ -479,7 +483,7 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
 }
 
 /// Reducing type complexity for the `get_many` function of wasi:keyvalue/batch
-type KvResult = Vec<Option<(String, Vec<u8>)>>;
+type KvResult = Vec<Option<(String, Bytes)>>;
 
 /// Implement the 'wasi:keyvalue/batch' capability provider interface
 impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
@@ -538,7 +542,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvNatsProvider {
         &self,
         ctx: Option<Context>,
         bucket: String,
-        items: Vec<(String, Vec<u8>)>,
+        items: Vec<(String, Bytes)>,
     ) -> anyhow::Result<Result<()>> {
         let ctx = ctx.clone();
         let bucket = bucket.clone();
@@ -595,15 +599,11 @@ fn add_tls_ca(
     let ca = rustls_pemfile::read_one(&mut tls_ca.as_bytes()).context("failed to read CA")?;
     let mut roots = async_nats::rustls::RootCertStore::empty();
     if let Some(rustls_pemfile::Item::X509Certificate(ca)) = ca {
-        roots.add_parsable_certificates(&[ca]);
+        roots.add_parsable_certificates([ca]);
     } else {
         bail!("tls ca: invalid certificate type, must be a DER encoded PEM file")
     };
     let tls_client = async_nats::rustls::ClientConfig::builder()
-        // TODO: Replace the `with_safe_defaults` method with the following 2 lines, when the async_nats crate is upgraded to 0.35.x, or higher
-        // .with_safe_default_protocol_versions()
-        // .map_err(|e| format!("Failed to set protocol versions: {}", e))?
-        .with_safe_defaults()
         .with_root_certificates(roots)
         .with_no_client_auth();
     Ok(opts.tls_client_config(tls_client).require_tls(true))

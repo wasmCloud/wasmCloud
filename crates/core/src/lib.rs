@@ -16,8 +16,6 @@ pub use otel::*;
 pub mod rpc;
 pub use rpc::*;
 
-pub mod wrpc;
-
 pub mod wit;
 pub use wit::*;
 

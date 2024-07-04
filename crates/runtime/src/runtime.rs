@@ -1,24 +1,14 @@
-use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomics, KeyValueStore, Logging, Messaging,
-    OutgoingHttp,
-};
 use crate::ComponentConfig;
 
 use core::fmt;
 use core::fmt::Debug;
 use core::time::Duration;
 
-use std::sync::Arc;
 use std::thread;
 
 use anyhow::Context;
-use builtin::Config;
 use tokio::sync::oneshot;
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
-
-const KB: u64 = 1024;
-const MB: u64 = KB * 1024;
-const GB: u64 = MB * 1024;
 
 /// [`RuntimeBuilder`] used to configure and build a [Runtime]
 #[derive(Clone, Default)]
@@ -27,7 +17,6 @@ pub struct RuntimeBuilder {
     max_components: u32,
     max_component_size: u64,
     max_execution_time: Duration,
-    handler: builtin::HandlerBuilder,
     component_config: ComponentConfig,
     force_pooling_allocator: bool,
 }
@@ -47,9 +36,8 @@ impl RuntimeBuilder {
             max_components: 10000,
             // Why so large you ask? Well, python components are chonky, like 35MB for a hello world
             // chonky. So this is pretty big for now.
-            max_component_size: 50 * MB,
+            max_component_size: 50 * 1024 * 1024,
             max_execution_time: Duration::from_secs(10 * 60),
-            handler: builtin::HandlerBuilder::default(),
             component_config: ComponentConfig::default(),
             force_pooling_allocator: false,
         }
@@ -60,99 +48,6 @@ impl RuntimeBuilder {
     pub fn component_config(self, component_config: ComponentConfig) -> Self {
         Self {
             component_config,
-            ..self
-        }
-    }
-
-    /// Set a [`Blobstore`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn blobstore(self, blobstore: Arc<impl Blobstore + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.blobstore(blobstore),
-            ..self
-        }
-    }
-
-    /// Set a [`Bus`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.bus(bus),
-            ..self
-        }
-    }
-
-    /// Set a [`Config`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn config(self, config: Arc<impl Config + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.config(config),
-            ..self
-        }
-    }
-
-    /// Set a [`IncomingHttp`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn incoming_http(
-        self,
-        incoming_http: Arc<impl IncomingHttp + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.incoming_http(incoming_http),
-            ..self
-        }
-    }
-
-    /// Set a [`KeyValueAtomics`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn keyvalue_atomics(
-        self,
-        keyvalue_atomics: Arc<impl KeyValueAtomics + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.keyvalue_atomics(keyvalue_atomics),
-            ..self
-        }
-    }
-
-    /// Set a [`KeyValueStore`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn keyvalue_store(
-        self,
-        keyvalue_store: Arc<impl KeyValueStore + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.keyvalue_store(keyvalue_store),
-            ..self
-        }
-    }
-
-    /// Set a [`Logging`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn logging(self, logging: Arc<impl Logging + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.logging(logging),
-            ..self
-        }
-    }
-
-    /// Set a [`Messaging`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn messaging(self, messaging: Arc<impl Messaging + Sync + Send + 'static>) -> Self {
-        Self {
-            handler: self.handler.messaging(messaging),
-            ..self
-        }
-    }
-
-    /// Set a [`OutgoingHttp`] handler to use for all component instances unless overriden for the instance
-    #[must_use]
-    pub fn outgoing_http(
-        self,
-        outgoing_http: Arc<impl OutgoingHttp + Sync + Send + 'static>,
-    ) -> Self {
-        Self {
-            handler: self.handler.outgoing_http(outgoing_http),
             ..self
         }
     }
@@ -235,10 +130,10 @@ impl RuntimeBuilder {
             // This means the max host memory any single component can take is 2 GB. This would be a
             // lot, so we shouldn't need to tweak this for a while. We can always expose this option
             // later
-            .memory_pages(2 * GB / (64 * KB)) //64 KB is the wasm page size
+            .max_memory_size(2 * 1024 * 1024)
             // These numbers are set to avoid page faults when trying to claim new space on linux
-            .linear_memory_keep_resident((10 * MB) as usize)
-            .table_keep_resident((10 * MB) as usize);
+            .linear_memory_keep_resident(10 * 1024)
+            .table_keep_resident(10 * 1024);
         self.engine_config
             .allocation_strategy(InstanceAllocationStrategy::Pooling(pooling_config));
         let engine = match wasmtime::Engine::new(&self.engine_config)
@@ -269,7 +164,6 @@ impl RuntimeBuilder {
         Ok((
             Runtime {
                 engine,
-                handler: self.handler,
                 component_config: self.component_config,
                 max_execution_time: self.max_execution_time,
             },
@@ -297,7 +191,6 @@ impl TryFrom<RuntimeBuilder>
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) engine: wasmtime::Engine,
-    pub(crate) handler: builtin::HandlerBuilder,
     pub(crate) component_config: ComponentConfig,
     pub(crate) max_execution_time: Duration,
 }
@@ -305,9 +198,9 @@ pub struct Runtime {
 impl Debug for Runtime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Runtime")
-            .field("handler", &self.handler)
             .field("component_config", &self.component_config)
             .field("runtime", &"wasmtime")
+            .field("max_execution_time", &"max_execution_time")
             .finish_non_exhaustive()
     }
 }

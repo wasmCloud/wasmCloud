@@ -5,6 +5,7 @@
 //! can be used by actors on your lattice.
 //!
 
+use core::pin::Pin;
 use core::str::FromStr;
 
 use std::collections::HashMap;
@@ -28,17 +29,34 @@ use aws_sdk_s3::types::{
 };
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use base64::Engine as _;
+use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, StreamExt as _, TryStreamExt as _};
+use futures::{stream, Stream, StreamExt as _};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt as _;
-use tokio::sync::RwLock;
+use tokio::spawn;
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::core::tls;
-use wasmcloud_provider_sdk::interfaces::blobstore::Blobstore;
-use wasmcloud_provider_sdk::{propagate_trace_for_ctx, Context, LinkConfig, Provider};
-use wrpc_transport::{AcceptedInvocation, Transmitter};
+use wasmcloud_provider_sdk::{
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider, Context,
+    LinkConfig, Provider,
+};
+
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wasi:blobstore/types@0.2.0-draft": generate,
+            "wasi:io/error@0.2.0": generate,
+            "wasi:io/poll@0.2.0": generate,
+            "wasi:io/streams@0.2.0": generate,
+            "wrpc:blobstore/blobstore@0.1.0": generate,
+            "wrpc:blobstore/types@0.1.0": generate,
+        }
+    });
+}
 
 const ALIAS_PREFIX: &str = "alias_";
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
@@ -312,12 +330,9 @@ impl StorageClient {
     }
 
     #[instrument(level = "debug", skip(self))]
-    pub async fn get_container_info(
-        &self,
-        bucket: &str,
-    ) -> anyhow::Result<wrpc_interface_blobstore::ContainerMetadata> {
+    pub async fn get_container_info(&self, bucket: &str) -> anyhow::Result<ContainerMetadata> {
         match self.s3_client.head_bucket().bucket(bucket).send().await {
-            Ok(_) => Ok(wrpc_interface_blobstore::ContainerMetadata {
+            Ok(_) => Ok(ContainerMetadata {
                 // unfortunately, HeadBucketOut doesn't include any information
                 // so we can't fill in creation date
                 created_at: 0,
@@ -475,11 +490,7 @@ impl StorageClient {
 
     /// Retrieves metadata about the object
     #[instrument(level = "debug", skip(self))]
-    pub async fn get_object_info(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> anyhow::Result<wrpc_interface_blobstore::ObjectMetadata> {
+    pub async fn get_object_info(&self, bucket: &str, key: &str) -> anyhow::Result<ObjectMetadata> {
         match self
             .s3_client
             .head_object()
@@ -489,7 +500,7 @@ impl StorageClient {
             .await
         {
             Ok(HeadObjectOutput { content_length, .. }) => {
-                Ok(wrpc_interface_blobstore::ObjectMetadata {
+                Ok(ObjectMetadata {
                     // NOTE: The `created_at` value is not reported by S3
                     created_at: 0,
                     size: content_length
@@ -527,7 +538,30 @@ pub struct BlobstoreS3Provider {
     actors: Arc<RwLock<HashMap<String, StorageClient>>>,
 }
 
+pub async fn run() -> anyhow::Result<()> {
+    BlobstoreS3Provider::run().await
+}
+
 impl BlobstoreS3Provider {
+    pub async fn run() -> anyhow::Result<()> {
+        initialize_observability!(
+            "blobstore-s3-provider",
+            std::env::var_os("PROVIDER_BLOBSTORE_S3_FLAMEGRAPH_PATH")
+        );
+
+        let provider = Self::default();
+        let shutdown = run_provider(provider.clone(), "blobstore-s3-provider")
+            .await
+            .context("failed to run provider")?;
+        let connection = get_connection();
+        bindings::serve(
+            &connection.get_wrpc_client(connection.provider_key()),
+            provider,
+            shutdown,
+        )
+        .await
+    }
+
     /// Retrieve the per-component [`StorageClient`] for a given link context
     async fn client(&self, context: Option<Context>) -> Result<StorageClient> {
         if let Some(ref source_id) = context.and_then(|Context { component, .. }| component) {
@@ -544,488 +578,297 @@ impl BlobstoreS3Provider {
     }
 }
 
-impl Blobstore for BlobstoreS3Provider {
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_clear_container<Tx: Transmitter>(
+impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
+    for BlobstoreS3Provider
+{
+    #[instrument(level = "trace", skip(self))]
+    async fn clear_container(
         &self,
-        AcceptedInvocation {
-            context,
-            params: container,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, String, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    let bucket = client.unalias(&container);
-                    let objects = client
-                        .list_container_objects(bucket, None, None)
-                        .await
-                        .context("failed to list container objects")?;
-                    client.delete_objects(bucket, objects).await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            let bucket = client.unalias(&name);
+            let objects = client
+                .list_container_objects(bucket, None, None)
+                .await
+                .context("failed to list container objects")?;
+            client.delete_objects(bucket, objects).await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_container_exists<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn container_exists(
         &self,
-        AcceptedInvocation {
-            context,
-            params: container,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, String, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client.container_exists(client.unalias(&container)).await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+    ) -> anyhow::Result<Result<bool, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client.container_exists(client.unalias(&name)).await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_create_container<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn create_container(
         &self,
-        AcceptedInvocation {
-            context,
-            params: container,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, String, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client.create_container(client.unalias(&container)).await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client.create_container(client.unalias(&name)).await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete_container<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn delete_container(
         &self,
-        AcceptedInvocation {
-            context,
-            params: container,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, String, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client.delete_container(client.unalias(&container)).await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client.delete_container(client.unalias(&name)).await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get_container_info<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn get_container_info(
         &self,
-        AcceptedInvocation {
-            context,
-            params: container,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, String, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client.get_container_info(client.unalias(&container)).await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+    ) -> anyhow::Result<Result<ContainerMetadata, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client.get_container_info(client.unalias(&name)).await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[allow(clippy::type_complexity)]
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_list_container_objects<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn list_container_objects(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (container, limit, offset),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, Option<u64>, Option<u64>), Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .list_container_objects(client.unalias(&container), limit, offset)
-                        .await
-                        .map(Vec::from_iter)
-                        .map(Some)
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        name: String,
+        limit: Option<u64>,
+        offset: Option<u64>,
+    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Vec<String>> + Send>>, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            let names = client
+                .list_container_objects(client.unalias(&name), limit, offset)
+                .await
+                .map(Vec::from_iter)?;
+            anyhow::Ok(Box::pin(stream::iter([names])) as Pin<Box<dyn Stream<Item = _> + Send>>)
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_copy_object<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn copy_object(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (src, dest),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (
-                wrpc_interface_blobstore::ObjectId,
-                wrpc_interface_blobstore::ObjectId,
-            ),
-            Tx,
-        >,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    let src_bucket = client.unalias(&src.container);
-                    let dest_bucket = client.unalias(&dest.container);
-                    client
-                        .copy_object(src_bucket, &src.object, dest_bucket, &dest.object)
-                        .await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            let src_bucket = client.unalias(&src.container);
+            let dest_bucket = client.unalias(&dest.container);
+            client
+                .copy_object(src_bucket, &src.object, dest_bucket, &dest.object)
+                .await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete_object<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn delete_object(
         &self,
-        AcceptedInvocation {
-            context,
-            params: id,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .delete_object(client.unalias(&id.container), id.object)
-                        .await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        id: ObjectId,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client
+                .delete_object(client.unalias(&id.container), id.object)
+                .await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_delete_objects<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn delete_objects(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (container, objects),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, (String, Vec<String>), Tx>,
-    ) {
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .delete_objects(client.unalias(&container), objects)
-                        .await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        container: String,
+        objects: Vec<String>,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client
+                .delete_objects(client.unalias(&container), objects)
+                .await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get_container_data<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn get_container_data(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (id, start, end),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (wrpc_interface_blobstore::ObjectId, u64, u64),
-            Tx,
-        >,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let limit = end
-                        .checked_sub(start)
-                        .context("`end` must be greater than `start`")?;
-                    let client = self.client(context).await?;
-                    let bucket = client.unalias(&id.container);
-                    let GetObjectOutput { body, .. } = client
-                        .s3_client
-                        .get_object()
-                        .bucket(bucket)
-                        .key(id.object)
-                        .range(format!("bytes={start}-{end}"))
-                        .send()
-                        .await
-                        .context("failed to get object")?;
-                    let data =
-                        ReaderStream::new(body.into_async_read().take(limit)).map(move |buf| {
-                            let buf = buf.context("failed to read chunk")?;
-                            // TODO: Remove the need for this wrapping
-                            Ok(buf
-                                .into_iter()
-                                .map(wrpc_transport::Value::U8)
-                                .map(Some)
-                                .collect())
-                        });
-                    anyhow::Ok(wrpc_transport::Value::Stream(Box::pin(data)))
+        cx: Option<Context>,
+        id: ObjectId,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Bytes> + Send>>, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let limit = end
+                .checked_sub(start)
+                .context("`end` must be greater than `start`")?;
+            let client = self.client(cx).await?;
+            let bucket = client.unalias(&id.container);
+            let GetObjectOutput { body, .. } = client
+                .s3_client
+                .get_object()
+                .bucket(bucket)
+                .key(id.object)
+                .range(format!("bytes={start}-{end}"))
+                .send()
+                .await
+                .context("failed to get object")?;
+            let mut data = ReaderStream::new(body.into_async_read().take(limit));
+            let (tx, rx) = mpsc::channel(16);
+            spawn(async move {
+                while let Some(buf) = data.next().await {
+                    match buf {
+                        Ok(buf) => {
+                            if tx.send(buf).await.is_err() {
+                                warn!("stream receiver closed");
+                                return;
+                            }
+                        }
+                        Err(err) => {
+                            error!(?err, "failed to read object");
+                            return;
+                        }
+                    }
                 }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+            });
+            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_get_object_info<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn get_object_info(
         &self,
-        AcceptedInvocation {
-            context,
-            params: id,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .get_object_info(client.unalias(&id.container), &id.object)
-                        .await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        id: ObjectId,
+    ) -> anyhow::Result<Result<ObjectMetadata, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client
+                .get_object_info(client.unalias(&id.container), &id.object)
+                .await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_has_object<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn has_object(
         &self,
-        AcceptedInvocation {
-            context,
-            params: id,
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<Option<Context>, wrpc_interface_blobstore::ObjectId, Tx>,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .has_object(client.unalias(&id.container), &id.object)
-                        .await
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        id: ObjectId,
+    ) -> anyhow::Result<Result<bool, String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            client
+                .has_object(client.unalias(&id.container), &id.object)
+                .await
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(level = "debug", skip(self, result_subject, transmitter))]
-    async fn serve_move_object<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self))]
+    async fn move_object(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (src, dest),
-            result_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (
-                wrpc_interface_blobstore::ObjectId,
-                wrpc_interface_blobstore::ObjectId,
-            ),
-            Tx,
-        >,
-    ) {
-        propagate_trace_for_ctx!(context);
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    let src_bucket = client.unalias(&src.container);
-                    let dest_bucket = client.unalias(&dest.container);
-                    client
-                        .copy_object(src_bucket, &src.object, dest_bucket, &dest.object)
-                        .await
-                        .context("failed to copy object")?;
-                    client
-                        .delete_object(src_bucket, src.object)
-                        .await
-                        .context("failed to delete source object")
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        src: ObjectId,
+        dest: ObjectId,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            let src_bucket = client.unalias(&src.container);
+            let dest_bucket = client.unalias(&dest.container);
+            client
+                .copy_object(src_bucket, &src.object, dest_bucket, &dest.object)
+                .await
+                .context("failed to copy object")?;
+            client
+                .delete_object(src_bucket, src.object)
+                .await
+                .context("failed to delete source object")
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument(
-        level = "debug",
-        skip(self, result_subject, error_subject, transmitter, data)
-    )]
-    async fn serve_write_container_data<Tx: Transmitter>(
+    #[instrument(level = "trace", skip(self, data))]
+    async fn write_container_data(
         &self,
-        AcceptedInvocation {
-            context,
-            params: (id, data),
-            result_subject,
-            error_subject,
-            transmitter,
-            ..
-        }: AcceptedInvocation<
-            Option<Context>,
-            (
-                wrpc_interface_blobstore::ObjectId,
-                impl Stream<Item = anyhow::Result<Bytes>> + Send,
-            ),
-            Tx,
-        >,
-    ) {
-        propagate_trace_for_ctx!(context);
-        // TODO: Stream value to S3
-        let data: BytesMut = match data.try_collect().await {
-            Ok(data) => data,
-            Err(err) => {
-                error!(?err, "failed to receive value");
-                if let Err(err) = transmitter
-                    .transmit_static(error_subject, err.to_string())
-                    .await
-                {
-                    error!(?err, "failed to transmit error");
-                }
-                return;
-            }
-        };
-        if let Err(err) = transmitter
-            .transmit_static(
-                result_subject,
-                async {
-                    let client = self.client(context).await?;
-                    client
-                        .s3_client
-                        .put_object()
-                        .bucket(client.unalias(&id.container))
-                        .key(&id.object)
-                        .body(data.freeze().into())
-                        .send()
-                        .await
-                        .context("failed to put object")?;
-                    anyhow::Ok(())
-                }
-                .await,
-            )
-            .await
-        {
-            error!(?err, "failed to transmit result");
+        cx: Option<Context>,
+        id: ObjectId,
+        data: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
+    ) -> anyhow::Result<Result<(), String>> {
+        Ok(async {
+            propagate_trace_for_ctx!(cx);
+            let client = self.client(cx).await?;
+            // TODO: Stream value to S3
+            let data: BytesMut = data.collect().await;
+            client
+                .s3_client
+                .put_object()
+                .bucket(client.unalias(&id.container))
+                .key(&id.object)
+                .body(data.freeze().into())
+                .send()
+                .await
+                .context("failed to put object")?;
+            anyhow::Ok(())
         }
+        .await
+        .map_err(|err| format!("{err:#}")))
     }
 }
 

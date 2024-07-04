@@ -21,11 +21,6 @@ mod par;
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 
-/// wRPC interface bindings
-mod bindings {
-    wit_bindgen_wrpc::generate!();
-}
-
 pub use metrics::HostMetrics;
 pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
 pub use policy::{

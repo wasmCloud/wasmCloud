@@ -58,13 +58,5 @@ wasmcloud-core = { workspace = true, features = [
 ] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
-wasmtime-wasi-http = { workspace = true }
-wit-bindgen-wrpc = { workspace = true }
-wrpc-interface-blobstore = { workspace = true }
-wrpc-interface-http = { workspace = true, features = [
-    "http",
-    "wasmtime-wasi-http",
-] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
-wrpc-types = { workspace = true }

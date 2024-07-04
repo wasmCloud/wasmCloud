@@ -1,14 +1,20 @@
 package wasmcloud:host@1.0.0;
 
 world interfaces {
-    import wasmcloud:bus/lattice@1.0.0;
-
     import wasi:blobstore/blobstore@0.2.0-draft;
     import wasi:config/runtime@0.2.0-draft;
-    import wasi:http/outgoing-handler@0.2.0;
     import wasi:keyvalue/atomics@0.2.0-draft;
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:logging/logging;
-
+    import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:messaging/consumer@0.2.0;
+}
+
+world wrpc-interfaces {
+    import wasmcloud:messaging/consumer@0.2.0;
+    import wrpc:blobstore/blobstore@0.1.0;
+    import wrpc:keyvalue/atomics@0.2.0-draft;
+    import wrpc:keyvalue/store@0.2.0-draft;
+
+    export wasmcloud:messaging/handler@0.2.0;
 }

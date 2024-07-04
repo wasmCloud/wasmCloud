@@ -4,10 +4,8 @@ use core::task::{Context, Poll};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::sync::{Arc, MutexGuard};
 
-use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
-use wrpc_transport::IncomingInputStream;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
 
 /// wasmCloud I/O functionality
 
@@ -86,73 +84,16 @@ impl AsyncSeek for AsyncVec {
     }
 }
 
-/// [`AsyncRead`] adapter for [`IncomingInputStream`]
-pub struct IncomingInputStreamReader {
-    stream: IncomingInputStream,
-    buffer: Bytes,
-}
-
-impl IncomingInputStreamReader {
-    /// Create a new [`IncomingInputStreamReader`]
-    #[must_use]
-    pub fn new(stream: IncomingInputStream) -> Self {
-        Self {
-            stream,
-            buffer: Bytes::default(),
-        }
-    }
-}
-
-impl AsyncRead for IncomingInputStreamReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        match self.buffer.len() {
-            0 => match self.stream.poll_next_unpin(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(None) => Poll::Ready(Ok(())),
-                Poll::Ready(Some(Ok(mut data))) => {
-                    let cap = buf.remaining();
-                    if data.len() > cap {
-                        self.buffer = data.split_off(cap);
-                    }
-                    buf.put_slice(&data);
-                    Poll::Ready(Ok(()))
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, err)))
-                }
-            },
-            buffered => {
-                let cap = buf.remaining();
-                if buffered > cap {
-                    let tail = self.buffer.split_off(cap);
-                    buf.put_slice(&self.buffer);
-                    self.buffer = tail;
-                } else {
-                    buf.put_slice(&self.buffer);
-                    self.buffer.clear();
-                }
-                Poll::Ready(Ok(()))
-            }
-        }
-    }
-}
-
 /// Incoming value [`Stream`] wrapper, which buffers the chunks and flattens them
 pub struct BufferedIncomingStream<T> {
-    stream: Box<dyn Stream<Item = anyhow::Result<Vec<T>>> + Send + Sync + Unpin>,
+    stream: Pin<Box<dyn Stream<Item = Vec<T>> + Send>>,
     buffer: Vec<T>,
 }
 
 impl<T> BufferedIncomingStream<T> {
     /// Create a new [`BufferedIncomingStream`]
     #[must_use]
-    pub fn new(
-        stream: Box<dyn Stream<Item = anyhow::Result<Vec<T>>> + Send + Sync + Unpin>,
-    ) -> Self {
+    pub fn new(stream: Pin<Box<dyn Stream<Item = Vec<T>> + Send>>) -> Self {
         Self {
             stream,
             buffer: Vec::default(),
@@ -164,34 +105,33 @@ impl<T> Stream for BufferedIncomingStream<T>
 where
     T: Unpin,
 {
-    type Item = anyhow::Result<T>;
+    type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.buffer.is_empty() {
             match self.stream.poll_next_unpin(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(None),
-                Poll::Ready(Some(Ok(mut values))) => match values.len() {
+                Poll::Ready(Some(mut values)) => match values.len() {
                     0 => Poll::Ready(None),
                     1 => {
                         let item = values.pop().expect("element missing");
-                        Poll::Ready(Some(Ok(item)))
+                        Poll::Ready(Some(item))
                     }
                     _ => {
                         self.buffer = values.split_off(1);
                         let item = values.pop().expect("element missing");
                         assert!(values.is_empty());
-                        Poll::Ready(Some(Ok(item)))
+                        Poll::Ready(Some(item))
                     }
                 },
-                Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
             }
         } else {
             let tail = self.buffer.split_off(1);
             let item = self.buffer.pop().expect("element missing");
             assert!(self.buffer.is_empty());
             self.buffer = tail;
-            Poll::Ready(Some(Ok(item)))
+            Poll::Ready(Some(item))
         }
     }
 }

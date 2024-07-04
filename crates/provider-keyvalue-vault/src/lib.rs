@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
+use bytes::Bytes;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
@@ -20,9 +21,14 @@ use wasmcloud_provider_sdk::{
 
 use crate::config::Config;
 
-use exports::wrpc::keyvalue;
-
-wit_bindgen_wrpc::generate!();
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wrpc:keyvalue/store@0.2.0-draft": generate,
+        }
+    });
+}
+use bindings::exports::wrpc::keyvalue;
 
 type Result<T, E = keyvalue::store::Error> = core::result::Result<T, E>;
 
@@ -188,7 +194,7 @@ impl KvVaultProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
@@ -218,12 +224,7 @@ impl KvVaultProvider {
     /// If the stored value is a plain string, returns the plain value
     /// All other values are returned as serialized json
     #[instrument(level = "debug", skip(ctx, self))]
-    async fn get(
-        &self,
-        ctx: Option<Context>,
-        path: String,
-        key: String,
-    ) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, ctx: Option<Context>, path: String, key: String) -> Result<Option<Bytes>> {
         propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
         if let Some(mut secret) = client.read_secret(&path).await? {
@@ -238,7 +239,7 @@ impl KvVaultProvider {
                                 anyhow!(err).context("failed to decode secret value")
                             ))
                         })?;
-                    Ok(Some(value))
+                    Ok(Some(value.into()))
                 }
                 None => Ok(None),
             }
@@ -282,7 +283,7 @@ impl KvVaultProvider {
         ctx: Option<Context>,
         path: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> Result<()> {
         propagate_trace_for_ctx!(ctx);
         let client = self.get_client(ctx).await?;
@@ -360,7 +361,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-    ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
+    ) -> anyhow::Result<Result<Option<Bytes>>> {
         propagate_trace_for_ctx!(context);
         Ok(self.get(context, bucket, key).await)
     }
@@ -371,7 +372,7 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         context: Option<Context>,
         bucket: String,
         key: String,
-        value: Vec<u8>,
+        value: Bytes,
     ) -> anyhow::Result<Result<()>> {
         propagate_trace_for_ctx!(context);
         Ok(self.set(context, bucket, key, value).await)

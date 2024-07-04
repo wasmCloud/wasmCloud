@@ -9,6 +9,7 @@ use std::str::FromStr;
 use anyhow::{bail, Context as _};
 use bigdecimal::num_traits::Float;
 use bit_vec::BitVec;
+use bytes::Bytes;
 use bytes::{BufMut, BytesMut};
 use chrono::{
     DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset as _, Timelike,
@@ -23,7 +24,11 @@ use uuid::Uuid;
 
 // Bindgen happens here
 wit_bindgen_wrpc::generate!({
-  additional_derives: [PartialEq, Eq, Hash, Clone],
+  with: {
+      "wasmcloud:postgres/types@0.1.0-draft": generate,
+      "wasmcloud:postgres/query@0.1.0-draft": generate,
+      "wasmcloud:postgres/prepared@0.1.0-draft": generate,
+  },
 });
 
 // Start bindgen-generated type imports
@@ -371,7 +376,7 @@ impl ToSql for PgValue {
                 if bytes.len() != *exact_size as usize {
                     return Err("bitfield size does not match".into());
                 }
-                bytes.to_sql(ty, out)
+                bytes.as_ref().to_sql(ty, out)
             }
             PgValue::BitArray(many_bits) => {
                 let mut vec: Vec<Vec<u8>> = Vec::new();
@@ -387,7 +392,7 @@ impl ToSql for PgValue {
                 if limit.is_some_and(|limit| bytes.len() > limit as usize) {
                     return Err("bit field length is greater than limit".into());
                 }
-                bytes.to_sql(ty, out)
+                bytes.as_ref().to_sql(ty, out)
             }
             PgValue::VarbitArray(many_varbits) => {
                 let mut valid_varbits: Vec<Vec<u8>> = Vec::new();
@@ -400,15 +405,15 @@ impl ToSql for PgValue {
                 valid_varbits.to_sql(ty, out)
 
             }
-            PgValue::Bytea(bytes) => bytes.to_sql(ty, out),
-            PgValue::ByteaArray(many_bytes) => many_bytes.to_sql(ty, out),
+            PgValue::Bytea(bytes) => bytes.as_ref().to_sql(ty, out),
+            PgValue::ByteaArray(many_bytes) => many_bytes.into_iter().map(AsRef::as_ref).collect::<Vec<_>>().to_sql(ty, out),
 
             // Characters
             PgValue::Char((len, bytes)) => {
                 if bytes.len() != *len as usize {
                     return Err("char length does not match specified size".into());
                 }
-                bytes.to_sql(ty, out)
+                bytes.as_ref().to_sql(ty, out)
             }
             PgValue::CharArray(many_chars) => {
                 let mut valid_chars = Vec::new();
@@ -416,7 +421,7 @@ impl ToSql for PgValue {
                     if bytes.len() != *len as usize {
                         return Err("char length does not match specified size".into());
                     }
-                    valid_chars.push(bytes);
+                    valid_chars.push(bytes.as_ref());
                 }
                 valid_chars.to_sql(ty, out)
             }
@@ -430,7 +435,7 @@ impl ToSql for PgValue {
                         .into());
                     }
                 }
-                bytes.to_sql(ty, out)
+                bytes.as_ref().to_sql(ty, out)
             }
             PgValue::VarcharArray(vs) => {
                 let mut valid_varchars = Vec::new();
@@ -444,7 +449,7 @@ impl ToSql for PgValue {
                                        .into());
                         }
                     }
-                    valid_varchars.push(bytes)
+                    valid_varchars.push(bytes.as_ref())
                 }
                 valid_varchars.to_sql(ty, out)
             }
@@ -776,48 +781,50 @@ impl FromSql<'_> for PgValue {
                 Ok(PgValue::BoolArray(Vec::<bool>::from_sql(ty, raw)?))
             }
             &tokio_postgres::types::Type::BYTEA => {
-                Ok(PgValue::Bytea(Vec::<u8>::from_sql(ty, raw)?))
+                let buf = Vec::<u8>::from_sql(ty, raw)?;
+                Ok(PgValue::Bytea(buf.into()))
             }
             &tokio_postgres::types::Type::BYTEA_ARRAY => {
-                Ok(PgValue::ByteaArray(Vec::<Vec<u8>>::from_sql(ty, raw)?))
+                let buf = Vec::<Vec<u8>>::from_sql(ty, raw)?;
+                Ok(PgValue::ByteaArray(buf.into_iter().map(Bytes::from).collect()))
             }
             &tokio_postgres::types::Type::CHAR => {
                 let s = Vec::<u8>::from_sql(ty, raw)?;
                 let len = s.len().try_into()?;
-                Ok(PgValue::Char((len, s)))
+                Ok(PgValue::Char((len, s.into())))
             }
             &tokio_postgres::types::Type::CHAR_ARRAY => {
                 let list = Vec::<Vec<u8>>::from_sql(ty, raw)?;
                 let mut cs = Vec::new();
                 for c in list {
-                    cs.push((c.len().try_into()?, c));
+                    cs.push((c.len().try_into()?, c.into()));
                 }
                 Ok(PgValue::CharArray(cs))
             }
             &tokio_postgres::types::Type::BIT => {
                 let vec = BitVec::from_sql(ty, raw)?;
                 let len = vec.len().try_into()?;
-                Ok(PgValue::Bit((len, vec.to_bytes())))
+                Ok(PgValue::Bit((len, vec.to_bytes().into())))
             }
             &tokio_postgres::types::Type::BIT_ARRAY => {
                 let vecs = Vec::<BitVec>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(|v| v.len().try_into().map(|len| (len, v.to_bytes())))
-                    .collect::<Result<Vec<(u32, Vec<u8>)>, _>>()?;
+                    .map(|v| v.len().try_into().map(|len| (len, v.to_bytes().into())))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(PgValue::BitArray(vecs))
             }
             &tokio_postgres::types::Type::VARBIT => {
                 let vec = BitVec::from_sql(ty, raw)?;
                 let len = vec.len().try_into()?;
-                Ok(PgValue::Bit((len, vec.to_bytes())))
+                Ok(PgValue::Bit((len, vec.to_bytes().into())))
             }
             &tokio_postgres::types::Type::VARBIT_ARRAY => {
                 let varbits = Vec::<BitVec>::from_sql(ty, raw)?
                     .into_iter()
                     // NOTE: we don't know what the  limit of this varbit was if we only
                     // have the bytes, default to allowing it to be unbounded
-                    .map(|v| (None, v.to_bytes()))
-                    .collect::<Vec<(Option<u32>, Vec<u8>)>>();
+                    .map(|v| (None, v.to_bytes().into()))
+                    .collect::<Vec<_>>();
                 Ok(PgValue::VarbitArray(varbits))
             }
             &tokio_postgres::types::Type::FLOAT4 => {
@@ -908,13 +915,13 @@ impl FromSql<'_> for PgValue {
             &tokio_postgres::types::Type::VARCHAR => {
                 Ok(PgValue::Varchar(
                     // We cannot know whether the varchar had a limit
-                    Vec::<u8>::from_sql(ty, raw).map(|v| (None, v))?,
+                    Vec::<u8>::from_sql(ty, raw).map(|v| (None, v.into()))?,
                 ))
             }
             &tokio_postgres::types::Type::VARCHAR_ARRAY => Ok(PgValue::VarcharArray(
                 Vec::<Vec<u8>>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(|s| (None, s))
+                    .map(|s| (None, s.into()))
                     .collect::<Vec<_>>(),
             )),
             &tokio_postgres::types::Type::NAME => Ok(PgValue::Name(String::from_sql(ty, raw)?)),

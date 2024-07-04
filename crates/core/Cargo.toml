@@ -22,7 +22,7 @@ otel = []
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
@@ -49,5 +49,3 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 webpki-roots = { workspace = true, optional = true }
-wrpc-transport = { workspace = true }
-wrpc-transport-nats = { workspace = true }

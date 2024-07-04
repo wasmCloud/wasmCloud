@@ -16,7 +16,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 bytes = { workspace = true }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
@@ -29,5 +29,5 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }

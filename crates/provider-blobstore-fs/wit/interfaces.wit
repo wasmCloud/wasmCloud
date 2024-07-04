@@ -1,0 +1,5 @@
+package wasmcloud:provider-blobstore-fs;
+
+world interfaces {
+    export wrpc:blobstore/blobstore@0.1.0;
+}
