@@ -484,7 +484,7 @@ mod test {
             arch2.libraries.get("aarch64-linux")
         );
         assert!(
-            arch2.libraries.get("x86_64-macos").is_none(),
+            !arch2.libraries.contains_key("x86_64-macos"),
             "Should have loaded only one binary"
         );
         assert_eq!(
