@@ -4993,9 +4993,9 @@ dependencies = [
 
 [[package]]
 name = "rustversion"
-version = "1.0.15"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80af6f9131f277a45a3fba6ce8e2258037bb0477a67e610d3c1fe046ab31de47"
+checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
 
 [[package]]
 name = "ryu"
@@ -7274,14 +7274,15 @@ name = "wasmcloud-provider-keyvalue-nats"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "futures",
  "rustls-pemfile 2.1.2",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
- "wascap 0.14.0",
+ "wascap 0.15.0",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
 ]
