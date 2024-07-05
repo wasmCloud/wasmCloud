@@ -38,6 +38,8 @@
       rust.mkFlake {
         src = ./.;
 
+        nixpkgsConfig.allowUnfree = true;
+
         overlays = [
           wit-deps.overlays.default
         ];
@@ -185,8 +187,8 @@
                 ++ [
                   pkgs.nats-server
                   pkgs.redis
-                  pkgs.vault
                   pkgs.minio
+                  pkgs.vault
                 ];
             };
 
