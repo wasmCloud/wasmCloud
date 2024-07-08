@@ -22,7 +22,9 @@ spec:
     - name: blobby
       type: component
       properties:
-        image: wasmcloud.azurecr.io/blobby:0.1.0
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        # image: file://./build/blobby_s.wasm
+        image: ghcr.io/wasmcloud/components/blobby-rust:0.4.0
       traits:
         - type: spreadscaler
           properties:
@@ -39,7 +41,7 @@ spec:
             target_config:
               - name: root-directory
                 properties:
-                  root: '/tmp'
+                  root: '/tmp/blobstore'
 
     # Capability Providers
     - name: http
