@@ -22,6 +22,18 @@ async fn record_reachability(host: &str) {
 
 #[tokio::main]
 async fn main() {
+    // On Windows, `clap` can overflow the stack in debug mode due to small default stack size
+    //
+    // This generally triggers during the `integration_help_subcommand_check` which checks the help
+    // command (i.e. walking the entire arg tree)
+    //
+    // see:
+    // - https://github.com/clap-rs/clap/issues/5134
+    // - https://github.com/clap-rs/clap/issues/4516
+    if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
+        println!("cargo:rustc-link-arg=/stack:{}", 8 * 1024 * 1024);
+    }
+
     join!(
         record_reachability("github.com"),
         record_reachability("ghcr.io"),
