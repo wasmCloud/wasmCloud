@@ -105,7 +105,12 @@ fn build_rust_provider(
 
     // Build for a specified target if provided, or the default rust target
     let mut build_args = Vec::with_capacity(4);
-    build_args.extend_from_slice(&["build", "--release"]);
+    build_args.push("build");
+
+    if !rust_config.debug {
+        build_args.push("--release");
+    }
+    
     if let Some(override_target) = &provider_config.rust_target {
         build_args.extend_from_slice(&["--target", override_target]);
     };

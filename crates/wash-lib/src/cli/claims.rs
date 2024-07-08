@@ -1214,7 +1214,8 @@ mod test {
             project_config.language,
             LanguageConfig::Rust(RustConfig {
                 cargo_path: Some("./cargo".into()),
-                target_path: Some("./target".into())
+                target_path: Some("./target".into()),
+                debug: false,
             })
         );
 
@@ -1354,7 +1355,8 @@ mod test {
             project_config.language,
             LanguageConfig::Rust(RustConfig {
                 cargo_path: Some("./cargo".into()),
-                target_path: Some("./target".into())
+                target_path: Some("./target".into()),
+                debug: false,
             })
         );
 
