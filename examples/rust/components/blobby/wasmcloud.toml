@@ -1,7 +1,6 @@
 name = "blobby"
 language = "rust"
 type = "component"
-version = "0.1.0"
 
 [component]
 wit_world = "blobby"
