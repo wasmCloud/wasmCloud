@@ -213,6 +213,8 @@ pub struct RustConfig {
     pub cargo_path: Option<PathBuf>,
     /// Path to cargo/rust's `target` directory. Optional, defaults to the cargo target directory for the workspace or project.
     pub target_path: Option<PathBuf>,
+    // Whether to build in debug mode. Defaults to false.
+    pub debug: bool,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Default, Clone)]
@@ -221,6 +223,8 @@ struct RawRustConfig {
     pub cargo_path: Option<PathBuf>,
     /// Path to cargo/rust's `target` directory. Optional, defaults to `./target`.
     pub target_path: Option<PathBuf>,
+    // Whether to build in debug mode. Defaults to false.
+    pub debug: bool,
 }
 
 impl TryFrom<RawRustConfig> for RustConfig {
@@ -230,6 +234,7 @@ impl TryFrom<RawRustConfig> for RustConfig {
         Ok(Self {
             cargo_path: raw_config.cargo_path,
             target_path: raw_config.target_path,
+            debug: raw_config.debug,
         })
     }
 }

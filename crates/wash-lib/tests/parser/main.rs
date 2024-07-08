@@ -20,7 +20,8 @@ fn rust_component() {
         config.language,
         LanguageConfig::Rust(RustConfig {
             cargo_path: Some("./cargo".into()),
-            target_path: Some("./target".into())
+            target_path: Some("./target".into()),
+            debug: false,
         })
     );
 
@@ -70,7 +71,8 @@ fn rust_component_with_revision() {
         config.language,
         LanguageConfig::Rust(RustConfig {
             cargo_path: Some("./cargo".into()),
-            target_path: Some("./target".into())
+            target_path: Some("./target".into()),
+            debug: false,
         })
     );
 
@@ -190,7 +192,8 @@ fn folder_path() {
         config.language,
         LanguageConfig::Rust(RustConfig {
             cargo_path: Some("./cargo".into()),
-            target_path: Some("./target".into())
+            target_path: Some("./target".into()),
+            debug: false,
         })
     );
 }
@@ -336,6 +339,7 @@ fn minimal_rust_component() {
         LanguageConfig::Rust(RustConfig {
             cargo_path: None,
             target_path: None,
+            debug: false,
         })
     );
 
@@ -389,6 +393,7 @@ fn cargo_toml_component() {
         LanguageConfig::Rust(RustConfig {
             cargo_path: None,
             target_path: None,
+            debug: false,
         })
     );
 
