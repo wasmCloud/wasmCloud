@@ -52,6 +52,6 @@
     "type-fest": "^4.20.1"
   },
   "dependencies": {
-    "nats.ws": "^1.28.0"
+    "nats.ws": "^1.29.0"
   }
 }
