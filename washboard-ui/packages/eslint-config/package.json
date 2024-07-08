@@ -7,8 +7,8 @@
     "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^20.14.9",
-    "typescript": "^5.5.2"
+    "@types/node": "^20.14.10",
+    "typescript": "^5.5.3"
   },
   "peerDependencies": {
     "eslint": "^8.57.0",
