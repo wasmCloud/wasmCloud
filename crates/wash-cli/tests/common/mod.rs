@@ -312,8 +312,9 @@ impl TestWashInstance {
             wasmcloud_log,
             deployed_wadm_manifest_path,
             ..
-        } = serde_json::from_str::<UpCommandOutput>(&out)
-            .context("failed to parse wash up cmd output")?;
+        } = serde_json::from_str::<UpCommandOutput>(&out).with_context(|| {
+            format!("failed to parse wash up cmd output, received:===\n{out}\n===")
+        })?;
 
         // Wait until the host starts by checking the logs
         let logs_path = String::from(wasmcloud_log.to_string().trim_matches('"'));
@@ -759,9 +760,17 @@ pub async fn wait_for_no_hosts() -> Result<()> {
     )
     .await
     .context("number of hosts running is still non-zero")?;
-    let install_dir = downloads_dir()?;
-    let lockfile = install_dir.join(WASMCLOUD_PID_FILE);
-    wait_for_file_to_be_removed(&lockfile).await
+    let lockfile = downloads_dir().map(|p| p.join(WASMCLOUD_PID_FILE))?;
+    if wait_for_file_to_be_removed(&lockfile).await.is_err() {
+        // If the PID file wasn't removed, attempt to delete it manually
+        tokio::fs::remove_file(&lockfile).await.with_context(|| {
+            format!(
+                "failed to delete wasmcloud PID file at [{}]",
+                lockfile.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Wait for a file to be removed.
@@ -775,7 +784,12 @@ pub async fn wait_for_file_to_be_removed(file_path: &Path) -> Result<()> {
         }
     })
     .await
-    .context("file {file_path} was not removed by previous test")
+    .with_context(|| {
+        format!(
+            "file {} was not removed by previous test",
+            file_path.display()
+        )
+    })
 }
 
 /// Wait for NATS to start running by checking for process names.

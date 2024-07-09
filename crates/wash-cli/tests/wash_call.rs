@@ -12,7 +12,7 @@ use crate::common::wait_for_no_hosts;
 #[tokio::test]
 #[serial]
 #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-async fn integration_call() -> Result<()> {
+async fn integration_call_serial() -> Result<()> {
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
@@ -27,14 +27,16 @@ async fn integration_call() -> Result<()> {
         .context("failed to pull component")?;
 
     // Start an echo component
-    let StartCommandOutput { component_id, .. } = instance
+    let output: StartCommandOutput = instance
         .start_component(HTTP_JSONIFY_OCI_REF, "http-jsonify")
         .await
         .context("failed to start component")?;
-    let component_id = component_id.context("component ID not present after starting component")?;
+    let component_id = output
+        .component_id
+        .context("component ID not present after starting component")?;
 
     // Call the component
-    let cmd_output = instance
+    let output = instance
         .call_component(
             &component_id,
             "wasi:http/incoming-handler.handle",
@@ -43,8 +45,8 @@ async fn integration_call() -> Result<()> {
         .await
         .context("failed to call component")?;
 
-    assert!(cmd_output.success, "call command succeeded");
-    assert_eq!(cmd_output.response["status"], 200, "status code is 200");
+    assert!(output.success, "call command succeeded");
+    assert_eq!(output.response["status"], 200, "status code is 200");
 
     Ok(())
 }
