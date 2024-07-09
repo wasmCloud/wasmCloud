@@ -9,6 +9,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.docs.rs]
+features = [ "otel" ]
+
 [features]
 default = []
 otel = ["opentelemetry", "tracing-opentelemetry"]
