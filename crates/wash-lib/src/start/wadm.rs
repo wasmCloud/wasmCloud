@@ -74,24 +74,24 @@ where
         // Check version to see if we need to download new one
         if let Ok(output) = Command::new(&wadm_bin_path).arg("--version").output().await {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            println!("👀 Found wadm version on the disk: {}", stdout.trim_end());
+            eprintln!("👀 Found wadm version on the disk: {}", stdout.trim_end());
             let re = regex::Regex::new(r"^wadm[^\s]*").unwrap();
             if re.replace(&stdout, "").to_string().trim() == version.trim_start_matches('v') {
                 // wadm already exists, return early
-                println!("✅ Using wadm version [{}]", &version);
+                eprintln!("✅ Using wadm version [{}]", &version);
                 return Ok(wadm_bin_path);
             }
         }
     }
     // Download wadm tarball
-    println!(
+    eprintln!(
         "🎣 Downloading new wadm from {}",
         &wadm_url(os, arch, version)
     );
 
     let res = download_binary_from_github(&wadm_url(os, arch, version), dir, WADM_BINARY).await;
     if let Ok(ref path) = res {
-        println!("🎯 Saved wadm to {}", path.display());
+        eprintln!("🎯 Saved wadm to {}", path.display());
     }
 
     res
