@@ -19,7 +19,7 @@ anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true }
 bytes = { workspace = true }
-clap = { workspace = true, features = ["derive", "env", "string"] }
+clap = { workspace = true, features = ["std", "derive", "env", "string"] }
 clap_complete = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
