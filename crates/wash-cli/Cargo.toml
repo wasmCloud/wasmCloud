@@ -17,7 +17,7 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
-async-nats = { workspace = true }
+async-nats = { version = "0.33" } # TODO: Use workspace version once https://github.com/nats-io/nats.rs/pull/1267 resolved to use in wasmCloud
 bytes = { workspace = true }
 clap = { workspace = true, features = ["std", "derive", "env", "string"] }
 clap_complete = { workspace = true }

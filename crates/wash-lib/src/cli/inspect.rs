@@ -113,7 +113,7 @@ pub async fn handle_command(
         })) if command.wit => {
             let witty = wit_component::decode(&buf).expect("Failed to decode WIT");
             let resolve = witty.resolve();
-            let main = witty.package();
+            let main = witty.packages();
             let mut printer = wit_component::WitPrinter::default();
             CommandOutput::from_key_and_text(
                 "wit",
