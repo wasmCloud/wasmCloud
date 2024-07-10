@@ -15,7 +15,7 @@ use anyhow::{Context, Ok};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
-use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpImpl};
 
 use super::Data;
 
@@ -43,6 +43,13 @@ pub struct DirMapping {
     pub host_path: PathBuf,
     /// The path that will be accessible in the component. Otherwise defaults to the `host_path`
     pub component_path: Option<String>,
+}
+
+fn type_annotate_http<F, T>(val: F) -> F
+where
+    F: Fn(&mut T) -> WasiHttpImpl<&mut T>,
+{
+    val
 }
 
 impl SubcommandRunner {
@@ -102,22 +109,26 @@ impl SubcommandRunner {
         let ctx = Data {
             table: wasmtime::component::ResourceTable::default(),
             ctx,
-            http: WasiHttpCtx,
+            http: WasiHttpCtx::new(),
         };
 
         let mut store = wasmtime::Store::new(&self.engine, ctx);
 
         let component = Component::from_file(&self.engine, &path)?;
         let mut linker = Linker::new(&self.engine);
-        wasmtime_wasi::bindings::Command::add_to_linker(&mut linker, |state: &mut Data| state)?;
-        wasmtime_wasi_http::bindings::http::outgoing_handler::add_to_linker(
+        wasmtime_wasi::add_to_linker_async(&mut linker)
+            .context("failed to link core WASI interfaces")?;
+        let closure = type_annotate_http(|ctx| WasiHttpImpl(ctx));
+        wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
             &mut linker,
-            |state: &mut Data| state,
-        )?;
-        wasmtime_wasi_http::bindings::http::types::add_to_linker(
+            closure,
+        )
+        .context("failed to link `wasi:http/outgoing-handler` interface")?;
+        wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(
             &mut linker,
-            |state: &mut Data| state,
-        )?;
+            closure,
+        )
+        .context("failed to link `wasi:http/types` interface")?;
 
         let (instance, _) = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
         let metadata = instance
@@ -253,7 +264,7 @@ impl SubcommandRunner {
             *matching = str_canonical;
         }
         // Disable socket connections for now. We may gradually open this up later
-        ctx.socket_addr_check(|_, _| false)
+        ctx.socket_addr_check(|_, _| Box::pin(async { false }))
             .inherit_stdio()
             .preopened_dir(plugin_dir, "/", DIRECTORY_ALLOW, FilePerms::all())
             .context("Error when preopening plugin dir")?

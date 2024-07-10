@@ -53,7 +53,7 @@ async fn interfaces() -> anyhow::Result<()> {
 
     let (
         (minio_server, minio_url),
-        (nats_server, nats_url, nats_client),
+        (nats_server, nats_url, _, nats_client_0_33),
         (redis_server, redis_url),
         (vault_server, vault_url, vault_client),
     ) = try_join!(
@@ -74,7 +74,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .context("failed to construct Redis connection manager")?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client_0_33)
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
