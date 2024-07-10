@@ -34,7 +34,6 @@ impl<H> types::Host for Ctx<H> where H: Handler {}
 impl<H> consumer::Host for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument]
     async fn request(
@@ -45,7 +44,7 @@ where
     ) -> anyhow::Result<Result<types::BrokerMessage, String>> {
         match wrpc::wasmcloud::messaging::consumer::request(
             &self.handler,
-            self.cx.clone(),
+            None,
             &subject,
             &Bytes::from(body),
             timeout_ms,
@@ -76,7 +75,7 @@ where
     ) -> anyhow::Result<Result<(), String>> {
         wrpc::wasmcloud::messaging::consumer::publish(
             &self.handler,
-            self.cx.clone(),
+            None,
             &wrpc::wasmcloud::messaging::types::BrokerMessage {
                 subject,
                 body: body.into(),
@@ -91,7 +90,6 @@ impl<H, C> wrpc_handler_bindings::exports::wasmcloud::messaging::handler::Handle
     for Instance<H, C>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument(level = "debug", skip_all)]
     async fn handle_message(
@@ -103,12 +101,7 @@ where
             reply_to,
         }: wrpc_handler_bindings::wasmcloud::messaging::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        let mut store = new_store(
-            &self.engine,
-            self.handler.clone(),
-            self.cx.clone(),
-            self.max_execution_time,
-        );
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
         let (bindings, _) =
             wasmtime_handler_bindings::MessagingHandler::instantiate_pre(&mut store, &self.pre)
                 .await?;
@@ -141,35 +134,3 @@ where
         res
     }
 }
-
-//impl<H: Handler> Instance<H> {
-//    /// Instantiates and returns a [`InterfaceInstance<messaging_handler_bindings::MessagingHandler>`] if exported by the [`Instance`].
-//    ///
-//    /// # Errors
-//    ///
-//    /// Fails if messaging handler bindings are not exported by the [`Instance`]
-//    pub async fn into_messaging_handler(
-//        mut self,
-//    ) -> anyhow::Result<InterfaceInstance<messaging_handler_bindings::MessagingHandler, H>> {
-//        Ok(InterfaceInstance {
-//            store: Mutex::new(self.store),
-//            bindings,
-//        })
-//    }
-//}
-
-// TODO: Implment export handling
-//impl<H: Handler> MessagingHandler
-//    for InterfaceInstance<messaging_handler_bindings::MessagingHandler, H>
-//{
-//    async fn handle_message(
-//        &self,
-//        msg: &types::BrokerMessage,
-//    ) -> anyhow::Result<Result<(), String>> {
-//        let mut store = self.store.lock().await;
-//        self.bindings
-//            .wasmcloud_messaging_handler()
-//            .call_handle_message(&mut *store, msg)
-//            .await
-//    }
-//}

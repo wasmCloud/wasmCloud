@@ -1,4 +1,4 @@
-use super::{new_store, Ctx, Handler, Instance, WrpcServeEvent};
+use super::{new_store, Ctx, Handler, Instance, ReplacedInstanceTarget, WrpcServeEvent};
 
 use crate::capability::http::types;
 
@@ -28,7 +28,6 @@ pub mod incoming_http_bindings {
 
 async fn invoke_outgoing_handle<H>(
     handler: H,
-    cx: H::Context,
     request: http::Request<HyperOutgoingBody>,
     config: OutgoingRequestConfig,
 ) -> anyhow::Result<Result<IncomingResponse, types::ErrorCode>>
@@ -38,7 +37,14 @@ where
     use wrpc_interface_http::InvokeOutgoingHandler as _;
 
     let between_bytes_timeout = config.between_bytes_timeout;
-    match handler.invoke_handle_wasmtime(cx, request, config).await? {
+    match handler
+        .invoke_handle_wasmtime(
+            Some(ReplacedInstanceTarget::HttpOutgoingHandler),
+            request,
+            config,
+        )
+        .await?
+    {
         (Ok(resp), errs, io) => {
             let worker = wasmtime_wasi::runtime::spawn(async move {
                 // TODO: Do more than just log errors
@@ -68,7 +74,6 @@ where
 impl<H> WasiHttpView for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.http
@@ -89,7 +94,6 @@ where
         Ok(HostFutureIncomingResponse::pending(
             wasmtime_wasi::runtime::spawn(invoke_outgoing_handle(
                 self.handler.clone(),
-                self.cx.clone(),
                 request,
                 config,
             )),
@@ -100,7 +104,6 @@ where
 impl<H, C> ServeIncomingHandlerWasmtime<C> for Instance<H, C>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument(level = "debug", skip_all)]
     async fn handle(
@@ -114,12 +117,7 @@ where
         >,
     > {
         let (tx, rx) = oneshot::channel();
-        let mut store = new_store(
-            &self.engine,
-            self.handler.clone(),
-            self.cx.clone(),
-            self.max_execution_time,
-        );
+        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
         let (bindings, _) =
             incoming_http_bindings::IncomingHttp::instantiate_pre(&mut store, &self.pre).await?;
         let data = store.data_mut();

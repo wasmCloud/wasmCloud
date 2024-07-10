@@ -1,4 +1,4 @@
-use super::{Ctx, Handler};
+use super::{Ctx, Handler, ReplacedInstanceTarget};
 
 use crate::capability::keyvalue::{atomics, store};
 use crate::capability::wrpc;
@@ -27,7 +27,6 @@ impl From<wrpc::wrpc::keyvalue::store::Error> for store::Error {
 impl<H> atomics::Host for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument]
     async fn increment(
@@ -39,7 +38,7 @@ where
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::atomics::increment(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::KeyvalueAtomics),
             bucket,
             &key,
             delta,
@@ -56,7 +55,6 @@ where
 impl<H> store::Host for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument]
     async fn open(&mut self, name: String) -> anyhow::Result<Result<Resource<store::Bucket>>> {
@@ -72,7 +70,6 @@ where
 impl<H> store::HostBucket for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument]
     async fn get(
@@ -81,7 +78,13 @@ where
         key: String,
     ) -> anyhow::Result<Result<Option<Vec<u8>>>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
-        match wrpc::wrpc::keyvalue::store::get(&self.handler, self.cx.clone(), bucket, &key).await?
+        match wrpc::wrpc::keyvalue::store::get(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueStore),
+            bucket,
+            &key,
+        )
+        .await?
         {
             Ok(buf) => Ok(Ok(buf.map(Into::into))),
             Err(err) => Ok(Err(err.into())),
@@ -98,7 +101,7 @@ where
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
         match wrpc::wrpc::keyvalue::store::set(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::KeyvalueStore),
             bucket,
             &key,
             &Bytes::from(outgoing_value),
@@ -117,8 +120,13 @@ where
         key: String,
     ) -> anyhow::Result<Result<()>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
-        match wrpc::wrpc::keyvalue::store::delete(&self.handler, self.cx.clone(), bucket, &key)
-            .await?
+        match wrpc::wrpc::keyvalue::store::delete(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueStore),
+            bucket,
+            &key,
+        )
+        .await?
         {
             Ok(()) => Ok(Ok(())),
             Err(err) => Err(err.into()),
@@ -132,8 +140,13 @@ where
         key: String,
     ) -> anyhow::Result<Result<bool>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
-        match wrpc::wrpc::keyvalue::store::exists(&self.handler, self.cx.clone(), bucket, &key)
-            .await?
+        match wrpc::wrpc::keyvalue::store::exists(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueStore),
+            bucket,
+            &key,
+        )
+        .await?
         {
             Ok(ok) => Ok(Ok(ok)),
             Err(err) => Err(err.into()),
@@ -147,8 +160,13 @@ where
         cursor: Option<u64>,
     ) -> anyhow::Result<Result<store::KeyResponse>> {
         let bucket = self.table.get(&bucket).context("failed to get bucket")?;
-        match wrpc::wrpc::keyvalue::store::list_keys(&self.handler, self.cx.clone(), bucket, cursor)
-            .await?
+        match wrpc::wrpc::keyvalue::store::list_keys(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueStore),
+            bucket,
+            cursor,
+        )
+        .await?
         {
             Ok(wrpc::wrpc::keyvalue::store::KeyResponse { keys, cursor }) => {
                 Ok(Ok(store::KeyResponse { keys, cursor }))
