@@ -54,7 +54,7 @@ wash call custom-template wasmcloud:example/system-info.call
 
 ## Running as an application
 
-You can deploy this provider, along with a [prebuilt component](../component/) for testing, by deploying the [wadm.yaml](./wadm.yaml) application.
+You can deploy this provider, along with a [component](../component/) for testing, by deploying the [wadm.yaml](./wadm.yaml) application. Make sure to build the component with `wash build`.
 
 ```bash
 # Build the component
