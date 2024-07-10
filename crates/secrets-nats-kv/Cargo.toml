@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true, features = ["server_2_10"] }
+async-nats = { workspace = true, features = ["server_2_10", "ring"] }
 async-trait = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
 bytes = { workspace = true}
