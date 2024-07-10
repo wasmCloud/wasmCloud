@@ -34,6 +34,24 @@ mod keyvalue;
 mod logging;
 mod messaging;
 
+/// Instance target, which is replaced in wRPC
+/// This enum represents the original instance import invoked by the component
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ReplacedInstanceTarget {
+    /// `wasi:blobstore/blobstore` instance replacement
+    BlobstoreBlobstore,
+    /// `wasi:blobstore/container` instance replacement
+    BlobstoreContainer,
+    /// `wasi:keyvalue/atomic` instance replacement
+    KeyvalueAtomics,
+    /// `wasi:keyvalue/store` instance replacement
+    KeyvalueStore,
+    /// `wasi:http/incoming-handler` instance replacement
+    HttpIncomingHandler,
+    /// `wasi:http/outgoing-handler` instance replacement
+    HttpOutgoingHandler,
+}
+
 /// skips instance names, for which static (builtin) bindings exist
 macro_rules! skip_static_instances {
     ($instance:expr) => {
@@ -83,12 +101,27 @@ macro_rules! skip_static_instances {
 
 /// A collection of traits that the host must implement
 pub trait Handler:
-    wrpc_transport::Invoke + Bus + Config + Logging + Send + Sync + Clone + 'static
+    wrpc_transport::Invoke<Context = Option<ReplacedInstanceTarget>>
+    + Bus
+    + Config
+    + Logging
+    + Send
+    + Sync
+    + Clone
+    + 'static
 {
 }
 
-impl<T: wrpc_transport::Invoke + Bus + Config + Logging + Send + Sync + Clone + 'static> Handler
-    for T
+impl<
+        T: wrpc_transport::Invoke<Context = Option<ReplacedInstanceTarget>>
+            + Bus
+            + Config
+            + Logging
+            + Send
+            + Sync
+            + Clone
+            + 'static,
+    > Handler for T
 {
 }
 
@@ -127,7 +160,6 @@ where
     H: Handler,
 {
     engine: wasmtime::Engine,
-    cx: H::Context,
     claims: Option<jwt::Claims<jwt::Component>>,
     instance_pre: wasmtime::component::InstancePre<Ctx<H>>,
     max_execution_time: Duration,
@@ -157,7 +189,6 @@ where
 fn new_store<H: Handler>(
     engine: &wasmtime::Engine,
     handler: H,
-    cx: H::Context,
     max_execution_time: Duration,
 ) -> wasmtime::Store<Ctx<H>> {
     let table = ResourceTable::new();
@@ -170,7 +201,6 @@ fn new_store<H: Handler>(
         engine,
         Ctx {
             handler,
-            cx,
             wasi,
             http: WasiHttpCtx::new(),
             table,
@@ -181,6 +211,7 @@ fn new_store<H: Handler>(
 }
 
 /// Events sent by [`Component::serve_wrpc`]
+#[derive(Clone, Debug)]
 pub enum WrpcServeEvent<C> {
     /// `wasi:http/incoming-handler.handle` return event
     HttpIncomingHandlerHandleReturned {
@@ -201,12 +232,11 @@ pub enum WrpcServeEvent<C> {
 impl<H> Component<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
     /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
-    pub fn new(rt: &Runtime, wasm: &[u8], cx: H::Context) -> anyhow::Result<Self> {
+    pub fn new(rt: &Runtime, wasm: &[u8]) -> anyhow::Result<Self> {
         if wasmparser::Parser::is_core_wasm(wasm) {
             let wasm = wit_component::ComponentEncoder::default()
                 .module(wasm)
@@ -218,7 +248,7 @@ where
                 .context("failed to add WASI preview1 adapter")?
                 .encode()
                 .context("failed to encode a component from module")?;
-            return Self::new(rt, &wasm, cx);
+            return Self::new(rt, &wasm);
         }
         let engine = rt.engine.clone();
         let claims = claims(wasm)?;
@@ -264,13 +294,12 @@ where
         let ty = component.component_type();
         for (name, ty) in ty.imports(&engine) {
             skip_static_instances!(name);
-            link_item(&engine, &mut linker.root(), ty, "", name, cx.clone())
+            link_item(&engine, &mut linker.root(), ty, "", name, None)
                 .context("failed to link item")?;
         }
         let instance_pre = linker.instantiate_pre(&component)?;
         Ok(Self {
             engine,
-            cx,
             claims,
             instance_pre,
             max_execution_time: rt.max_execution_time,
@@ -291,16 +320,12 @@ where
     ///
     /// Fails if either reading `wasm` fails or [Self::new] fails
     #[instrument(level = "trace", skip_all)]
-    pub async fn read(
-        rt: &Runtime,
-        mut wasm: impl AsyncRead + Unpin,
-        cx: H::Context,
-    ) -> anyhow::Result<Self> {
+    pub async fn read(rt: &Runtime, mut wasm: impl AsyncRead + Unpin) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf)
             .await
             .context("failed to read Wasm")?;
-        Self::new(rt, &buf, cx)
+        Self::new(rt, &buf)
     }
 
     /// Reads the WebAssembly binary synchronously and calls [Component::new].
@@ -309,14 +334,10 @@ where
     ///
     /// Fails if either reading `wasm` fails or [Self::new] fails
     #[instrument(level = "trace", skip_all)]
-    pub fn read_sync(
-        rt: &Runtime,
-        mut wasm: impl std::io::Read,
-        cx: H::Context,
-    ) -> anyhow::Result<Self> {
+    pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
-        Self::new(rt, &buf, cx)
+        Self::new(rt, &buf)
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
@@ -349,7 +370,6 @@ where
             engine: self.engine.clone(),
             pre: self.instance_pre.clone(),
             handler: handler.clone(),
-            cx: self.cx.clone(),
             max_execution_time: self.max_execution_time,
             events: events.clone(),
         };
@@ -403,16 +423,13 @@ where
                     });
                 }
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
-                    let cx = self.cx.clone();
                     let engine = self.engine.clone();
                     let handler = handler.clone();
                     let pre = self.instance_pre.clone();
                     debug!(?name, "serving root function");
                     let s = srv
                         .serve_function(
-                            move || {
-                                new_store(&engine, handler.clone(), cx.clone(), max_execution_time)
-                            },
+                            move || new_store(&engine, handler.clone(), max_execution_time),
                             pre,
                             ty,
                             "",
@@ -438,7 +455,6 @@ where
                     for (name, ty) in ty.exports(&self.engine) {
                         match ty {
                             types::ComponentItem::ComponentFunc(ty) => {
-                                let cx = self.cx.clone();
                                 let engine = self.engine.clone();
                                 let handler = handler.clone();
                                 let pre = self.instance_pre.clone();
@@ -446,12 +462,7 @@ where
                                 let s = srv
                                     .serve_function(
                                         move || {
-                                            new_store(
-                                                &engine,
-                                                handler.clone(),
-                                                cx.clone(),
-                                                max_execution_time,
-                                            )
+                                            new_store(&engine, handler.clone(), max_execution_time)
                                         },
                                         pre,
                                         ty,
@@ -510,7 +521,6 @@ where
     engine: wasmtime::Engine,
     pre: wasmtime::component::InstancePre<Ctx<H>>,
     handler: H,
-    cx: H::Context,
     max_execution_time: Duration,
     events: mpsc::Sender<WrpcServeEvent<C>>,
 }
@@ -518,14 +528,12 @@ where
 impl<H, C> Clone for Instance<H, C>
 where
     H: Handler,
-    H::Context: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             engine: self.engine.clone(),
             pre: self.pre.clone(),
             handler: self.handler.clone(),
-            cx: self.cx.clone(),
             max_execution_time: self.max_execution_time,
             events: self.events.clone(),
         }
@@ -539,7 +547,6 @@ where
     H: Handler,
 {
     handler: H,
-    cx: H::Context,
     wasi: WasiCtx,
     http: WasiHttpCtx,
     table: ResourceTable,

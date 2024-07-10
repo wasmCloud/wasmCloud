@@ -1270,7 +1270,7 @@ impl Host {
             instance_links: Arc::new(RwLock::new(component_import_links(&component_spec.links))),
             invocation_timeout: Duration::from_secs(10), // TODO: Make this configurable
         };
-        let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm, ())?;
+        let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
         let component = self
             .instantiate_component(
                 &annotations,
@@ -1816,9 +1816,8 @@ impl Host {
             }
 
             let new_component = self.fetch_component(&new_component_ref).await?;
-            let new_component =
-                wasmcloud_runtime::Component::new(&self.runtime, &new_component, ())
-                    .context("failed to initialize component")?;
+            let new_component = wasmcloud_runtime::Component::new(&self.runtime, &new_component)
+                .context("failed to initialize component")?;
             let new_claims = new_component.claims().cloned();
             if let Some(ref claims) = new_claims {
                 self.store_claims(Claims::Component(claims.clone()))

@@ -11,7 +11,7 @@ use tracing::{debug, instrument};
 use wasmcloud_runtime::capability::config::runtime::ConfigError;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::CallTargetInterface;
-use wasmcloud_runtime::component::{Bus, Config, Logging};
+use wasmcloud_runtime::component::{Bus, Config, Logging, ReplacedInstanceTarget};
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
 
@@ -110,13 +110,13 @@ impl Bus for Handler {
 }
 
 impl wrpc_transport::Invoke for Handler {
-    type Context = ();
+    type Context = Option<ReplacedInstanceTarget>;
     type Outgoing = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Outgoing;
     type Incoming = <wrpc_transport_nats::Client as wrpc_transport::Invoke>::Incoming;
 
     async fn invoke<P>(
         &self,
-        (): Self::Context,
+        target_instance: Self::Context,
         instance: &str,
         func: &str,
         params: Bytes,
@@ -135,7 +135,15 @@ impl wrpc_transport::Invoke for Handler {
         let links = self.instance_links.read().await;
         let targets = self.targets.read().await;
 
-        let target_instance = instance.split_once('@').map_or(instance, |(l, _)| l);
+        let target_instance = match target_instance {
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore) => "wasi:blobstore/blobstore",
+            Some(ReplacedInstanceTarget::BlobstoreContainer) => "wasi:blobstore/container",
+            Some(ReplacedInstanceTarget::KeyvalueAtomics) => "wasi:keyvalue/atomics",
+            Some(ReplacedInstanceTarget::KeyvalueStore) => "wasi:keyvalue/store",
+            Some(ReplacedInstanceTarget::HttpIncomingHandler) => "wasi:http/incoming-handler",
+            Some(ReplacedInstanceTarget::HttpOutgoingHandler) => "wasi:http/outgoing-handler",
+            None => instance.split_once('@').map_or(instance, |(l, _)| l),
+        };
 
         let link_name = targets
             .get(target_instance)

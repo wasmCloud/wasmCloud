@@ -1,4 +1,4 @@
-use super::{Ctx, Handler};
+use super::{Ctx, Handler, ReplacedInstanceTarget};
 
 use crate::capability::blobstore::blobstore::ContainerName;
 use crate::capability::blobstore::container::{Container, StreamObjectNames};
@@ -28,7 +28,6 @@ type Result<T, E = Error> = core::result::Result<T, E>;
 impl<H> container::HostContainer for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument(skip(self))]
     fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
@@ -58,7 +57,7 @@ where
             .context("failed to get container")?;
         match wrpc::wrpc::blobstore::blobstore::get_container_info(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             name,
         )
         .await?
@@ -87,7 +86,7 @@ where
             .context("failed to get container")?;
         match wrpc::wrpc::blobstore::blobstore::get_container_data(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             &wrpc::wasi::blobstore::types::ObjectId {
                 container: container.to_string(),
                 object: name,
@@ -134,7 +133,7 @@ where
         data.read_to_end(&mut buf).await?;
         match wrpc::wrpc::blobstore::blobstore::write_container_data(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             &wrpc::wrpc::blobstore::types::ObjectId {
                 container: container.to_string(),
                 object,
@@ -166,7 +165,7 @@ where
         // TODO: implement a stream with limit and offset
         match wrpc::wrpc::blobstore::blobstore::list_container_objects(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             container,
             None,
             None,
@@ -209,7 +208,7 @@ where
             .context("failed to get container")?;
         wrpc::wrpc::blobstore::blobstore::delete_objects(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             container,
             &names.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -228,7 +227,7 @@ where
             .context("failed to get container")?;
         wrpc::wrpc::blobstore::blobstore::has_object(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             &wrpc::wrpc::blobstore::types::ObjectId {
                 container: container.to_string(),
                 object,
@@ -249,7 +248,7 @@ where
             .context("failed to get container")?;
         match wrpc::wrpc::blobstore::blobstore::get_object_info(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
             &wrpc::wrpc::blobstore::types::ObjectId {
                 container: container.to_string(),
                 object: name.clone(),
@@ -275,8 +274,12 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        wrpc::wrpc::blobstore::blobstore::clear_container(&self.handler, self.cx.clone(), container)
-            .await
+        wrpc::wrpc::blobstore::blobstore::clear_container(
+            &self.handler,
+            Some(ReplacedInstanceTarget::BlobstoreContainer),
+            container,
+        )
+        .await
     }
 }
 
@@ -423,7 +426,6 @@ impl<H: Handler> types::Host for Ctx<H> {}
 impl<H> blobstore::Host for Ctx<H>
 where
     H: Handler,
-    H::Context: Clone,
 {
     #[instrument(skip(self))]
     async fn create_container(
@@ -432,7 +434,7 @@ where
     ) -> anyhow::Result<Result<Resource<Container>>> {
         match wrpc::wrpc::blobstore::blobstore::create_container(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
             &name,
         )
         .await?
@@ -455,7 +457,7 @@ where
     ) -> anyhow::Result<Result<Resource<Container>>> {
         match wrpc::wrpc::blobstore::blobstore::container_exists(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
             &name,
         )
         .await?
@@ -474,21 +476,29 @@ where
 
     #[instrument(skip(self))]
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
-        wrpc::wrpc::blobstore::blobstore::delete_container(&self.handler, self.cx.clone(), &name)
-            .await
+        wrpc::wrpc::blobstore::blobstore::delete_container(
+            &self.handler,
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+            &name,
+        )
+        .await
     }
 
     #[instrument(skip(self))]
     async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
-        wrpc::wrpc::blobstore::blobstore::container_exists(&self.handler, self.cx.clone(), &name)
-            .await
+        wrpc::wrpc::blobstore::blobstore::container_exists(
+            &self.handler,
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+            &name,
+        )
+        .await
     }
 
     #[instrument(skip(self))]
     async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
         wrpc::wrpc::blobstore::blobstore::copy_object(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
             &wrpc::wasi::blobstore::types::ObjectId {
                 container: src.container,
                 object: src.object,
@@ -505,7 +515,7 @@ where
     async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
         wrpc::wrpc::blobstore::blobstore::move_object(
             &self.handler,
-            self.cx.clone(),
+            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
             &wrpc::wasi::blobstore::types::ObjectId {
                 container: src.container,
                 object: src.object,
@@ -520,9 +530,4 @@ where
 }
 
 #[async_trait]
-impl<H> container::Host for Ctx<H>
-where
-    H: Handler,
-    H::Context: Clone,
-{
-}
+impl<H> container::Host for Ctx<H> where H: Handler {}
