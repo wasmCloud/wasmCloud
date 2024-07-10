@@ -15,7 +15,7 @@ async-nats = { workspace = true }
 async-trait = { workspace = true }
 backoff = { workspace = true, features = ["tokio"] }
 bytes = { workspace = true}
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "std"] }
 futures = { workspace = true }
 nkeys = { workspace = true, features = ["xkeys"] }
 serde = { workspace = true, features = ["derive"] }

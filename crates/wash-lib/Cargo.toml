@@ -43,7 +43,7 @@ bytes = { workspace = true, features = ["serde"] }
 cargo_metadata = { workspace = true }
 cargo_toml = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"], optional = true }
+clap = { workspace = true, features = ["std", "derive", "env"], optional = true }
 cloudevents-sdk = { workspace = true }
 command-group = { workspace = true, features = ["with-tokio"] }
 config = { workspace = true, features = ["toml"], optional = true }
