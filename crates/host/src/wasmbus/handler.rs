@@ -136,8 +136,10 @@ impl wrpc_transport::Invoke for Handler {
         let targets = self.targets.read().await;
 
         let target_instance = match target_instance {
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore) => "wasi:blobstore/blobstore",
-            Some(ReplacedInstanceTarget::BlobstoreContainer) => "wasi:blobstore/container",
+            Some(
+                ReplacedInstanceTarget::BlobstoreBlobstore
+                | ReplacedInstanceTarget::BlobstoreContainer,
+            ) => "wasi:blobstore/blobstore",
             Some(ReplacedInstanceTarget::KeyvalueAtomics) => "wasi:keyvalue/atomics",
             Some(ReplacedInstanceTarget::KeyvalueStore) => "wasi:keyvalue/store",
             Some(ReplacedInstanceTarget::HttpIncomingHandler) => "wasi:http/incoming-handler",
