@@ -26,6 +26,8 @@ const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 /// Configuration options for OCI operations.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Config {
+    /// Additional CAs to include in the OCI client configuration
+    pub additional_ca_paths: Vec<PathBuf>,
     /// Whether or not to allow downloading OCI artifacts with the tag `latest`
     pub allow_latest: bool,
     /// A list of OCI registries that are allowed to be accessed over HTTP
@@ -107,6 +109,7 @@ async fn cache_oci_image(
 /// OCI artifact fetcher
 #[derive(Clone, Debug)]
 pub struct Fetcher {
+    additional_ca_paths: Vec<PathBuf>,
     allow_latest: bool,
     allow_insecure: bool,
     auth: RegistryAuth,
@@ -115,6 +118,7 @@ pub struct Fetcher {
 impl Default for Fetcher {
     fn default() -> Self {
         Self {
+            additional_ca_paths: Vec::default(),
             allow_latest: false,
             allow_insecure: false,
             auth: RegistryAuth::Anonymous,
@@ -128,6 +132,7 @@ impl From<&RegistryConfig> for Fetcher {
             auth,
             allow_latest,
             allow_insecure,
+            additional_ca_paths,
             ..
         }: &RegistryConfig,
     ) -> Self {
@@ -135,6 +140,7 @@ impl From<&RegistryConfig> for Fetcher {
             auth: auth.into(),
             allow_latest: *allow_latest,
             allow_insecure: *allow_insecure,
+            additional_ca_paths: additional_ca_paths.clone(),
         }
     }
 }
@@ -145,6 +151,7 @@ impl From<RegistryConfig> for Fetcher {
             auth,
             allow_latest,
             allow_insecure,
+            additional_ca_paths,
             ..
         }: RegistryConfig,
     ) -> Self {
@@ -152,6 +159,7 @@ impl From<RegistryConfig> for Fetcher {
             auth: auth.into(),
             allow_latest,
             allow_insecure,
+            additional_ca_paths,
         }
     }
 }
@@ -179,9 +187,20 @@ impl Fetcher {
         } else {
             ClientProtocol::Https
         };
+        let mut certs = tls::NATIVE_ROOTS_OCI.to_vec();
+        if !self.additional_ca_paths.is_empty() {
+            certs.extend(
+                tls::load_certs_from_paths(&self.additional_ca_paths)?
+                    .iter()
+                    .map(|cert| oci_distribution::client::Certificate {
+                        encoding: oci_distribution::client::CertificateEncoding::Der,
+                        data: cert.to_vec(),
+                    }),
+            );
+        }
         let c = Client::new(ClientConfig {
             protocol,
-            extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
+            extra_root_certificates: certs,
             ..Default::default()
         });
 
@@ -259,5 +278,11 @@ impl Fetcher {
         par::read(&path, host_id, oci_ref)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))
+    }
+
+    /// Used to set additional CA paths that will be used as part of fetching components and providers
+    pub fn with_additional_ca_paths(mut self, additional_ca_paths: &Vec<PathBuf>) -> Self {
+        self.additional_ca_paths.clone_from(additional_ca_paths);
+        self
     }
 }

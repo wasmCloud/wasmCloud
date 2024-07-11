@@ -20,8 +20,9 @@
 //! [webpki-roots]: https://crates.io/crates/webpki-roots
 //! [rustls-native-certs]: https://crates.io/crates/rustls-native-certs
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
+use anyhow::Context as _;
 use once_cell::sync::Lazy;
 
 #[cfg(feature = "rustls-native-certs")]
@@ -107,5 +108,37 @@ impl NativeRootsExt for reqwest::ClientBuilder {
             .iter()
             .cloned()
             .fold(self, reqwest::ClientBuilder::add_root_certificate)
+    }
+}
+
+/// Attempt to load certificates from a given array of paths
+pub fn load_certs_from_paths(
+    paths: &[impl AsRef<Path>],
+) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+    paths
+        .iter()
+        .map(read_certs_from_path)
+        .flat_map(|result| match result {
+            Ok(vec) => vec.into_iter().map(Ok).collect(),
+            Err(er) => vec![Err(er)],
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Read certificates from a given path
+///
+/// At present this function only supports files -- directories will return an empty list
+pub fn read_certs_from_path(
+    path: impl AsRef<Path>,
+) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+    // TODO(joonas): Support directories
+    let path = path.as_ref();
+    if path.is_file() {
+        let f = std::fs::File::open(path)
+            .with_context(|| format!("failed to open file at provided path: {}", path.display()))?;
+        let mut reader = std::io::BufReader::new(f);
+        Ok(rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?)
+    } else {
+        Ok(vec![])
     }
 }

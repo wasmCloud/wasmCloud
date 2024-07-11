@@ -11,6 +11,8 @@ pub struct Config {
     pub allow_latest: bool,
     /// Whether or not to allow downloading artifacts over HTTP
     pub allow_insecure: bool,
+    /// Additional CAs to include in the OCI client configuration
+    pub additional_ca_paths: Vec<std::path::PathBuf>,
 }
 
 /// The type of a registry
@@ -54,6 +56,7 @@ impl From<wasmcloud_control_interface::RegistryCredential> for Config {
             },
             allow_latest: false,
             allow_insecure: false,
+            additional_ca_paths: Vec::default(),
         }
     }
 }

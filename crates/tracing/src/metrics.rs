@@ -12,15 +12,23 @@ pub fn configure_metrics(
     use wasmcloud_core::OtelProtocol;
 
     let builder: MetricsExporterBuilder = match otel_config.protocol {
-        OtelProtocol::Http => opentelemetry_otlp::new_exporter()
-            .http()
-            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-            .with_endpoint(otel_config.metrics_endpoint())
-            .into(),
-        OtelProtocol::Grpc => opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(otel_config.metrics_endpoint())
-            .into(),
+        OtelProtocol::Http => {
+            let client = crate::get_http_client(otel_config)
+                .context("failed to get an http client for otel metrics exporter")?;
+            opentelemetry_otlp::new_exporter()
+                .http()
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+                .with_http_client(client)
+                .with_endpoint(otel_config.metrics_endpoint())
+                .into()
+        }
+        OtelProtocol::Grpc => {
+            // TODO(joonas): Configure tonic::transport::ClientTlsConfig via .with_tls_config(...), passing in additional certificates.
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(otel_config.metrics_endpoint())
+                .into()
+        }
     };
 
     opentelemetry_otlp::new_pipeline()

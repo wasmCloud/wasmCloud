@@ -586,6 +586,7 @@ async fn merge_registry_config(
 ) -> () {
     let mut registry_config = registry_config.write().await;
     let allow_latest = oci_opts.allow_latest;
+    let additional_ca_paths = oci_opts.additional_ca_paths;
 
     // update auth for specific registry, if provided
     if let Some(reg) = oci_opts.oci_registry {
@@ -625,6 +626,9 @@ async fn merge_registry_config(
 
     // update allow_latest for all registries
     registry_config.iter_mut().for_each(|(url, config)| {
+        if !additional_ca_paths.is_empty() {
+            config.additional_ca_paths.clone_from(&additional_ca_paths);
+        }
         if allow_latest {
             debug!(oci_registry_url = %url, "set allow_latest");
         }
@@ -1421,6 +1425,7 @@ impl Host {
         fetch_component(
             component_ref,
             self.host_config.allow_file_load,
+            &self.host_config.oci_opts.additional_ca_paths,
             &registry_config,
         )
         .await
@@ -2068,6 +2073,7 @@ impl Host {
                 metrics_endpoint: self.host_config.otel_config.metrics_endpoint.clone(),
                 logs_endpoint: self.host_config.otel_config.logs_endpoint.clone(),
                 protocol: self.host_config.otel_config.protocol,
+                additional_ca_paths: self.host_config.otel_config.additional_ca_paths.clone(),
             };
 
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source

@@ -2,7 +2,7 @@
 //!
 //! [otel]: https://opentelemetry.io
 
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,9 @@ pub struct OtelConfig {
     /// Determines whether http or grpc will be used for exporting the telemetry.
     #[serde(default)]
     pub protocol: OtelProtocol,
+    /// Additional CAs to include in the OpenTelemetry client configuration
+    #[serde(default)]
+    pub additional_ca_paths: Vec<PathBuf>,
 }
 
 impl OtelConfig {
