@@ -5,6 +5,9 @@ on:
     tags:
       - 'wit-wasmcloud-postgres-v*'
 
+permissions:
+  contents: read
+
 jobs:
 
   build:

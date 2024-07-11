@@ -1,8 +1,5 @@
 name: wasmcloud-chart
 
-env:
-  HELM_VERSION: v3.13.1
-
 on:
   push:
     tags:
@@ -12,6 +9,12 @@ on:
       - 'chart/**'
       - '!chart/artifacthub-repo.yml'
       - '.github/workflows/wasmcloud-chart.yml'
+
+permissions:
+  contents: read
+
+env:
+  HELM_VERSION: v3.13.1
 
 jobs:
   validate:

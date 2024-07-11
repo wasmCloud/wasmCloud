@@ -77,6 +77,9 @@ on:
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+'
       - 'wash-lib-v[0-9].[0-9]+.[0-9]+-*'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

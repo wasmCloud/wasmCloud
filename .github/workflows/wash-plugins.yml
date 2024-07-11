@@ -5,6 +5,9 @@ on:
     tags:
       - 'wash-plugin-v*'
 
+permissions:
+  contents: read
+
 jobs:
 
   build:
