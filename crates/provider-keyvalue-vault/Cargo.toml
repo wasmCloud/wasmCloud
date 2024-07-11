@@ -15,6 +15,7 @@ repository.workspace = true
 anyhow = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

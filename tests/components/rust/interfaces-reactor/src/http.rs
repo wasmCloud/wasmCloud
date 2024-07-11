@@ -187,6 +187,7 @@ fn assert_http_run(
         .expect("HTTP request response missing")
         .expect("HTTP request response requested more than once")
         .expect("HTTP request failed");
+    eprintln!("received outgoing HTTP request response");
     assert_eq!(outgoing_request_response.status(), 200);
 
     // TODO: Assert headers

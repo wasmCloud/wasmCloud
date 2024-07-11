@@ -6,7 +6,7 @@ use anyhow::{bail, Context as _};
 use futures::stream::StreamExt as _;
 use tokio::sync::oneshot;
 use tokio::{join, spawn};
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn, Instrument as _};
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
@@ -26,6 +26,7 @@ pub mod incoming_http_bindings {
     });
 }
 
+#[instrument(level = "debug", skip_all)]
 async fn invoke_outgoing_handle<H>(
     handler: H,
     request: http::Request<HyperOutgoingBody>,
@@ -37,6 +38,7 @@ where
     use wrpc_interface_http::InvokeOutgoingHandler as _;
 
     let between_bytes_timeout = config.between_bytes_timeout;
+    debug!("invoking `wrpc:http/outgoing-handler.handle`");
     match handler
         .invoke_handle_wasmtime(
             Some(ReplacedInstanceTarget::HttpOutgoingHandler),
@@ -46,28 +48,40 @@ where
         .await?
     {
         (Ok(resp), errs, io) => {
-            let worker = wasmtime_wasi::runtime::spawn(async move {
-                // TODO: Do more than just log errors
-                join!(
-                    errs.for_each(|err| async move {
-                        warn!(?err, "body processing error encountered");
-                    }),
-                    async move {
-                        if let Some(io) = io {
-                            if let Err(err) = io.await {
-                                warn!(?err, "failed to perform async I/O");
+            debug!("`wrpc:http/outgoing-handler.handle` succeeded");
+            let worker = wasmtime_wasi::runtime::spawn(
+                async move {
+                    // TODO: Do more than just log errors
+                    join!(
+                        errs.for_each(|err| async move {
+                            warn!(?err, "body processing error encountered");
+                        }),
+                        async move {
+                            if let Some(io) = io {
+                                debug!("performing async I/O");
+                                if let Err(err) = io.await {
+                                    warn!(?err, "failed to complete async I/O");
+                                }
+                                debug!("async I/O completed");
                             }
                         }
-                    }
-                );
-            });
+                    );
+                }
+                .in_current_span(),
+            );
             Ok(Ok(IncomingResponse {
                 resp,
                 worker: Some(worker),
                 between_bytes_timeout,
             }))
         }
-        (Err(err), _, _) => Ok(Err(err)),
+        (Err(err), _, _) => {
+            debug!(
+                ?err,
+                "`wrpc:http/outgoing-handler.handle` returned an error code"
+            );
+            Ok(Err(err))
+        }
     }
 }
 
@@ -83,6 +97,7 @@ where
         &mut self.table
     }
 
+    #[instrument(level = "debug", skip_all)]
     fn send_request(
         &mut self,
         request: http::Request<HyperOutgoingBody>,
@@ -92,11 +107,9 @@ where
         Self: Sized,
     {
         Ok(HostFutureIncomingResponse::pending(
-            wasmtime_wasi::runtime::spawn(invoke_outgoing_handle(
-                self.handler.clone(),
-                request,
-                config,
-            )),
+            wasmtime_wasi::runtime::spawn(
+                invoke_outgoing_handle(self.handler.clone(), request, config).in_current_span(),
+            ),
         ))
     }
 }
@@ -104,6 +117,7 @@ where
 impl<H, C> ServeIncomingHandlerWasmtime<C> for Instance<H, C>
 where
     H: Handler,
+    C: Send,
 {
     #[instrument(level = "debug", skip_all)]
     async fn handle(

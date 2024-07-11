@@ -90,6 +90,7 @@ impl<H, C> wrpc_handler_bindings::exports::wasmcloud::messaging::handler::Handle
     for Instance<H, C>
 where
     H: Handler,
+    C: Send,
 {
     #[instrument(level = "debug", skip_all)]
     async fn handle_message(

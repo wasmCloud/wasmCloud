@@ -26,7 +26,7 @@ pub async fn start_nats() -> Result<(
         )
         .args([
             "-js",
-            "-V",
+            "-D",
             "-T=false",
             "-p",
             &port.to_string(),

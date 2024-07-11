@@ -169,7 +169,7 @@ struct RequestContext {
     scheme: http::uri::Scheme,
 }
 
-#[instrument(level = "debug")]
+#[instrument(level = "debug", skip(settings))]
 async fn handle_request(
     extract::State(RequestContext {
         target,
@@ -223,7 +223,6 @@ async fn handle_request(
         .method(method)
         .body(body)
         .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    trace!(?req, "httpserver calling component");
 
     // Create a new wRPC client with all headers from the current span injected
     let mut cx = async_nats::HeaderMap::new();
@@ -236,6 +235,7 @@ async fn handle_request(
     }
 
     let wrpc = get_connection().get_wrpc_client_custom(target.as_str(), None);
+    trace!(?req, "httpserver calling component");
     let fut = wrpc.invoke_handle_http(Some(cx), req);
     let res = if let Some(timeout) = timeout {
         let Ok(res) = time::timeout(timeout, fut).await else {

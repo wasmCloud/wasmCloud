@@ -5,15 +5,18 @@
 //! use different connections and can run in parallel.
 //!
 
+use core::pin::pin;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use deadpool_postgres::Pool;
-use futures::stream::TryStreamExt;
+use futures::{stream, StreamExt as _, TryStreamExt as _};
+use tokio::select;
 use tokio::sync::RwLock;
 use tokio_postgres::Statement;
-use tracing::{error, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 use ulid::Ulid;
 
 use wasmcloud_provider_sdk::initialize_observability;
@@ -23,8 +26,8 @@ use wasmcloud_provider_sdk::{
 
 mod bindings;
 use bindings::{
-    into_result_row, serve, PgValue, PreparedStatementExecError, PreparedStatementToken,
-    QueryError, ResultRow, StatementPrepareError,
+    into_result_row, PgValue, PreparedStatementExecError, PreparedStatementToken, QueryError,
+    ResultRow, StatementPrepareError,
 };
 
 mod config;
@@ -56,12 +59,34 @@ impl PostgresProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 
     /// Create and store a connection pool, if not already present
