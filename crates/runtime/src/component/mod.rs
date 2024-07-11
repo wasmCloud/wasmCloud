@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use crate::capability::{self};
 use crate::Runtime;
 
@@ -239,6 +237,19 @@ pub enum WrpcServeEvent<C> {
     },
 }
 
+/// This represents a [Stream] of incoming invocations.
+/// Each item represents processing of a single invocation.
+pub type InvocationStream = Pin<
+    Box<
+        dyn Stream<
+                Item = anyhow::Result<
+                    Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>,
+                >,
+            > + Send
+            + 'static,
+    >,
+>;
+
 impl<H> Component<H>
 where
     H: Handler,
@@ -357,26 +368,16 @@ where
     }
 
     /// Serve all exports of this [Component] using supplied [`wrpc_transport::Serve`]
+    /// The returned [Vec] contains a [InvocationStream] per each function exported by component.
+    /// A [`WrpcServeEvent`] containing the incoming [`wrpc_transport::Serve::Context`] will be sent
+    /// on completion of each invocation.
     #[instrument(level = "debug", skip_all)]
     pub async fn serve_wrpc<S>(
         &self,
         srv: &S,
         handler: H,
         events: mpsc::Sender<WrpcServeEvent<S::Context>>,
-    ) -> anyhow::Result<
-        Vec<
-            Pin<
-                Box<
-                    dyn Stream<
-                            Item = anyhow::Result<
-                                Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>,
-                            >,
-                        > + Send
-                        + 'static,
-                >,
-            >,
-        >,
-    >
+    ) -> anyhow::Result<Vec<InvocationStream>>
     where
         S: wrpc_transport::Serve,
     {
