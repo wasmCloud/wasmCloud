@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 //! blobstore-fs capability provider
 //!
 //!

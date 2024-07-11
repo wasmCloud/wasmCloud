@@ -406,7 +406,7 @@ impl ToSql for PgValue {
 
             }
             PgValue::Bytea(bytes) => bytes.as_ref().to_sql(ty, out),
-            PgValue::ByteaArray(many_bytes) => many_bytes.into_iter().map(AsRef::as_ref).collect::<Vec<_>>().to_sql(ty, out),
+            PgValue::ByteaArray(many_bytes) => many_bytes.iter().map(AsRef::as_ref).collect::<Vec<_>>().to_sql(ty, out),
 
             // Characters
             PgValue::Char((len, bytes)) => {

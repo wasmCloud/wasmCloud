@@ -115,8 +115,7 @@ impl Context {
     pub fn link_name(&self) -> &str {
         self.tracing
             .get("link-name")
-            .map(String::as_str)
-            .unwrap_or("default")
+            .map_or("default", String::as_str)
     }
 }
 

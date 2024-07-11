@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use core::pin::{pin, Pin};
 
 use std::collections::HashMap;
