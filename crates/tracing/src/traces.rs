@@ -189,15 +189,23 @@ where
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
     let builder: SpanExporterBuilder = match otel_config.protocol {
-        OtelProtocol::Http => opentelemetry_otlp::new_exporter()
-            .http()
-            .with_endpoint(otel_config.traces_endpoint())
-            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-            .into(),
-        OtelProtocol::Grpc => opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(otel_config.traces_endpoint())
-            .into(),
+        OtelProtocol::Http => {
+            let client = crate::get_http_client(otel_config)
+                .context("failed to get an http client for otel tracing exporter")?;
+            opentelemetry_otlp::new_exporter()
+                .http()
+                .with_endpoint(otel_config.traces_endpoint())
+                .with_http_client(client)
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+                .into()
+        }
+        OtelProtocol::Grpc => {
+            // TODO(joonas): Configure tonic::transport::ClientTlsConfig via .with_tls_config(...), passing in additional certificates.
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(otel_config.traces_endpoint())
+                .into()
+        }
     };
 
     let tracer = opentelemetry_otlp::new_pipeline()
@@ -230,15 +238,23 @@ where
     S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
     let builder: LogExporterBuilder = match otel_config.protocol {
-        OtelProtocol::Http => opentelemetry_otlp::new_exporter()
-            .http()
-            .with_endpoint(otel_config.logs_endpoint())
-            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-            .into(),
-        OtelProtocol::Grpc => opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(otel_config.logs_endpoint())
-            .into(),
+        OtelProtocol::Http => {
+            let client = crate::get_http_client(otel_config)
+                .context("failed to get an http client for otel logging exporter")?;
+            opentelemetry_otlp::new_exporter()
+                .http()
+                .with_endpoint(otel_config.logs_endpoint())
+                .with_http_client(client)
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+                .into()
+        }
+        OtelProtocol::Grpc => {
+            // TODO(joonas): Configure tonic::transport::ClientTlsConfig via .with_tls_config(...), passing in additional certificates.
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(otel_config.logs_endpoint())
+                .into()
+        }
     };
 
     let log_provider = opentelemetry_otlp::new_pipeline()

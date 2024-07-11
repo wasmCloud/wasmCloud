@@ -110,6 +110,7 @@ impl ResourceRef<'_> {
 pub async fn fetch_component(
     component_ref: &str,
     allow_file_load: bool,
+    additional_ca_paths: &Vec<PathBuf>,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
     match ResourceRef::try_from(component_ref)? {
@@ -127,6 +128,7 @@ pub async fn fetch_component(
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
+            .with_additional_ca_paths(additional_ca_paths)
             .fetch_component(component_ref)
             .await
             .with_context(|| {

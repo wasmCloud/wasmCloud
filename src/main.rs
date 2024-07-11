@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -258,6 +259,10 @@ struct Args {
     /// Path to generate flame graph at
     #[clap(long = "flame-graph", env = "WASMCLOUD_FLAME_GRAPH")]
     flame_graph: Option<String>,
+
+    /// Configures the set of certificate authorities as repeatable set of file paths to load into the OCI and OpenTelemetry clients
+    #[arg(long = "tls-ca-path")]
+    pub tls_ca_paths: Option<Vec<PathBuf>>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -266,6 +271,10 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
+
+    if let Some(tls_ca_paths) = args.tls_ca_paths.clone() {
+        ensure_certs_for_paths(tls_ca_paths)?;
+    }
 
     let otel_config = OtelConfig {
         enable_observability: args.enable_observability,
@@ -277,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
         metrics_endpoint: args.metrics_endpoint,
         logs_endpoint: args.logs_endpoint,
         protocol: args.observability_protocol.unwrap_or_default(),
+        additional_ca_paths: args.tls_ca_paths.clone().unwrap_or_default(),
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
 
@@ -341,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to construct RPC key pair from seed")?
         .map(Arc::new);
     let oci_opts = OciConfig {
+        additional_ca_paths: args.tls_ca_paths.unwrap_or_default(),
         allow_latest: args.allow_latest,
         allowed_insecure: args.allowed_insecure,
         oci_registry: args.oci_registry,
@@ -446,4 +457,14 @@ fn parse_label(labelpair: &str) -> anyhow::Result<(String, String)> {
         [k, v] => Ok((k.to_string(), v.to_string())),
         _ => bail!("invalid label format `{labelpair}`. Expected `key=value`"),
     }
+}
+
+fn ensure_certs_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<()> {
+    if wasmcloud_core::tls::load_certs_from_paths(&paths)
+        .context("failed to load certificates from the provided path")?
+        .is_empty()
+    {
+        bail!("failed to parse certificates from the provided path");
+    };
+    Ok(())
 }
