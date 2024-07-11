@@ -32,6 +32,7 @@ mod logging;
 mod messaging;
 
 /// Instance target, which is replaced in wRPC
+///
 /// This enum represents the original instance import invoked by the component
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ReplacedInstanceTarget {
@@ -255,6 +256,7 @@ where
     H: Handler,
 {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
+    ///
     /// If `wasm` represents a core Wasm module, then it will first be turned into a component.
     #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: &[u8]) -> anyhow::Result<Self> {
@@ -368,9 +370,11 @@ where
     }
 
     /// Serve all exports of this [Component] using supplied [`wrpc_transport::Serve`]
-    /// The returned [Vec] contains a [InvocationStream] per each function exported by component.
+    ///
+    /// The returned [Vec] contains an [InvocationStream] per each function exported by the component.
     /// A [`WrpcServeEvent`] containing the incoming [`wrpc_transport::Serve::Context`] will be sent
     /// on completion of each invocation.
+    /// The supplied [`Handler`] will be used to satisfy imports.
     #[instrument(level = "debug", skip_all)]
     pub async fn serve_wrpc<S>(
         &self,

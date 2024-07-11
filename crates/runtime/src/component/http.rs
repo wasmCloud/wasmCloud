@@ -169,7 +169,7 @@ where
         {
             warn!(
                 ?err,
-                success, "failed to send `wasi:http/incoming-handler.handle` event"
+                success, "failed to send `wasi:http/incoming-handler.handle` return event"
             );
         }
         res
