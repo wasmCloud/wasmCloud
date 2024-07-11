@@ -1,6 +1,9 @@
 #![allow(clippy::missing_safety_doc)]
 
-wit_bindgen::generate!("interfaces");
+wit_bindgen::generate!({
+    world: "interfaces",
+    generate_all,
+});
 
 mod wrappers;
 pub use wrappers::*;
