@@ -13,6 +13,9 @@ on:
     types:
       - completed
 
+permissions:
+  contents: read
+
 # Leave a comment on PRs that fail conventional commits
 jobs:
   comment:

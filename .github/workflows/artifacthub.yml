@@ -8,6 +8,9 @@ on:
       - 'chart/artifacthub-repo.yml'
       - '.github/workflows/artifacthub.yml'
 
+permissions:
+  contents: read
+
 env:
   CHART_NAME: wasmcloud-chart
 

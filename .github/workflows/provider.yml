@@ -17,6 +17,9 @@ on:
       azurecr_password:
         description: wasmCloud AzureCR password
 
+permissions:
+  contents: none
+
 jobs:
   package:
     runs-on: ubuntu-22.04-16-cores
