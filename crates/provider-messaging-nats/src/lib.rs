@@ -1,3 +1,4 @@
+use core::pin::pin;
 use core::time::Duration;
 
 use std::collections::HashMap;
@@ -6,15 +7,14 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{stream, StreamExt as _, TryStreamExt as _};
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
-use tokio::fs;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
+use tokio::{fs, select};
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
@@ -25,13 +25,16 @@ use wasmcloud_provider_sdk::{
 mod connection;
 use connection::ConnectionConfig;
 
-wit_bindgen_wrpc::generate!({
-    with: {
-        "wasmcloud:messaging/consumer@0.2.0": generate,
-        "wasmcloud:messaging/handler@0.2.0": generate,
-        "wasmcloud:messaging/types@0.2.0": generate,
-    },
-});
+mod bindings {
+    wit_bindgen_wrpc::generate!({
+        with: {
+            "wasmcloud:messaging/consumer@0.2.0": generate,
+            "wasmcloud:messaging/handler@0.2.0": generate,
+            "wasmcloud:messaging/types@0.2.0": generate,
+        },
+    });
+}
+use bindings::wasmcloud::messaging::types::BrokerMessage;
 
 pub async fn run() -> anyhow::Result<()> {
     NatsMessagingProvider::run().await
@@ -72,12 +75,34 @@ impl NatsMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
@@ -246,7 +271,7 @@ async fn dispatch_msg(
     for (k, v) in TraceContextInjector::default_with_span().iter() {
         cx.insert(k.as_str(), v.as_str())
     }
-    if let Err(e) = wasmcloud::messaging::handler::handle_message(
+    if let Err(e) = bindings::wasmcloud::messaging::handler::handle_message(
         &get_connection().get_wrpc_client_custom(component_id, None),
         Some(cx),
         &msg,
@@ -412,7 +437,9 @@ impl Provider for NatsMessagingProvider {
 }
 
 /// Implement the 'wasmcloud:messaging' capability provider interface
-impl exports::wasmcloud::messaging::consumer::Handler<Option<Context>> for NatsMessagingProvider {
+impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
+    for NatsMessagingProvider
+{
     #[instrument(level = "debug", skip(self, ctx, msg), fields(subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
     async fn publish(
         &self,

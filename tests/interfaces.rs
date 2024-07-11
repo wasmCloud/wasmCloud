@@ -265,7 +265,6 @@ async fn interfaces() -> anyhow::Result<()> {
         async {
             try_join!(
                 async {
-                    // Scale pinger
                     assert_scale_component(
                         &ctl_client,
                         &host.host_key(),
@@ -279,7 +278,6 @@ async fn interfaces() -> anyhow::Result<()> {
                     .context("failed to scale `interface_reactor` component")
                 },
                 async {
-                    // Scale ponger
                     assert_scale_component(
                         &ctl_client,
                         &host.host_key(),

@@ -1,17 +1,19 @@
 //! Implementation for wasmcloud:messaging
-//!
+
+use core::pin::pin;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context as _};
 use bytes::Bytes;
-use futures::TryStreamExt as _;
+use futures::{stream, StreamExt as _, TryStreamExt as _};
 use rskafka::client::consumer::{StartOffset, StreamConsumerBuilder};
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use rskafka::record::{Record, RecordAndOffset};
-use tokio::spawn;
 use tokio::task::JoinHandle;
+use tokio::{select, spawn};
 use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
@@ -71,12 +73,34 @@ impl KafkaMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        bindings::serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 }
 

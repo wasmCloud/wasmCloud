@@ -2,17 +2,14 @@ use crate::capability::{self};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
+use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
 
-use std::sync::Arc;
-
 use anyhow::{bail, ensure, Context as _};
-use futures::stream::SelectAll;
-use futures::Stream;
+use futures::{Stream, TryStreamExt as _};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
-use tokio::sync::{mpsc, Notify};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc;
 use tracing::{debug, instrument, warn};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
@@ -227,6 +224,13 @@ pub enum WrpcServeEvent<C> {
         /// Whether the invocation was successfully handled
         success: bool,
     },
+    /// dynamic export return event
+    DynamicExportReturned {
+        /// Invocation context
+        context: C,
+        /// Whether the invocation was successfully handled
+        success: bool,
+    },
 }
 
 impl<H> Component<H>
@@ -350,22 +354,28 @@ where
     #[instrument(level = "debug", skip_all)]
     pub async fn serve_wrpc<S>(
         &self,
-        srv: Arc<S>,
+        srv: &S,
         handler: H,
         events: mpsc::Sender<WrpcServeEvent<S::Context>>,
-        shutdown: Arc<Notify>,
-    ) -> anyhow::Result<(
-        SelectAll<
-            Pin<Box<dyn Stream<Item = anyhow::Result<(S::Context, anyhow::Result<()>)>> + Send>>,
+    ) -> anyhow::Result<
+        Vec<
+            Pin<
+                Box<
+                    dyn Stream<
+                            Item = anyhow::Result<
+                                Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>,
+                            >,
+                        > + Send
+                        + 'static,
+                >,
+            >,
         >,
-        JoinSet<anyhow::Result<()>>,
-    )>
+    >
     where
-        S: wrpc_transport::Serve + Send + 'static,
+        S: wrpc_transport::Serve,
     {
         let max_execution_time = self.max_execution_time;
-        let mut invocations = SelectAll::new();
-        let mut tasks = JoinSet::new();
+        let mut invocations = vec![];
         let instance = Instance {
             engine: self.engine.clone(),
             pre: self.instance_pre.clone(),
@@ -384,50 +394,34 @@ where
                     "wasi:http/incoming-handler@0.2.0",
                     types::ComponentItem::ComponentInstance(..),
                 ) => {
-                    let srv = Arc::clone(&srv);
                     let instance = instance.clone();
-                    let shutdown = Arc::clone(&shutdown);
-                    tasks.spawn(async move {
-                        let shutdown = Arc::clone(&shutdown);
-                        wrpc_interface_http::bindings::exports::wrpc::http::incoming_handler::serve_interface(
-                            srv.as_ref(),
-                            wrpc_interface_http::ServeWasmtime(instance),
-                            shutdown.notified(),
-                        )
-                        .await
-                        .map_err(|err| {
-                            shutdown.notify_waiters();
-                            err
-                        })
-                    });
+                    let [(_, _, handle)] = wrpc_interface_http::bindings::exports::wrpc::http::incoming_handler::serve_interface(
+                        srv,
+                        wrpc_interface_http::ServeWasmtime(instance),
+                    )
+                    .await
+                    .context("failed to serve `wrpc:http/incoming-handler`")?;
+                    invocations.push(handle);
                 }
                 (
                     "wasmcloud:messaging/handler@0.2.0",
                     types::ComponentItem::ComponentInstance(..),
                 ) => {
-                    let srv = Arc::clone(&srv);
                     let instance = instance.clone();
-                    let shutdown = Arc::clone(&shutdown);
-                    tasks.spawn(async move {
-                        let shutdown = Arc::clone(&shutdown);
-                        messaging::wrpc_handler_bindings::exports::wasmcloud::messaging::handler::serve_interface(
-                            srv.as_ref(),
+                    let [(_, _, handle_message)] = messaging::wrpc_handler_bindings::exports::wasmcloud::messaging::handler::serve_interface(
+                            srv,
                             instance,
-                            shutdown.notified(),
                         )
                         .await
-                        .map_err(|err| {
-                            shutdown.notify_waiters();
-                            err
-                        })
-                    });
+                    .context("failed to serve `wasmcloud:messaging/handler`")?;
+                    invocations.push(handle_message);
                 }
                 (name, types::ComponentItem::ComponentFunc(ty)) => {
                     let engine = self.engine.clone();
                     let handler = handler.clone();
                     let pre = self.instance_pre.clone();
                     debug!(?name, "serving root function");
-                    let s = srv
+                    let func = srv
                         .serve_function(
                             move || new_store(&engine, handler.clone(), max_execution_time),
                             pre,
@@ -436,11 +430,28 @@ where
                             name,
                         )
                         .await
-                        .map_err(|err| {
-                            shutdown.notify_waiters();
-                            err
-                        })?;
-                    invocations.push(Box::pin(s) as Pin<Box<dyn Stream<Item = _> + Send>>);
+                        .context("failed to serve root function")?;
+                    let events = events.clone();
+                    invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
+                        let events = events.clone();
+                        Box::pin(async move {
+                            let res = res.await;
+                            let success = res.is_ok();
+                            if let Err(err) =
+                                events.try_send(WrpcServeEvent::DynamicExportReturned {
+                                    context: cx,
+                                    success,
+                                })
+                            {
+                                warn!(
+                                    ?err,
+                                    success, "failed to send dynamic root export return event"
+                                )
+                            }
+                            res
+                        })
+                            as Pin<Box<dyn Future<Output = _> + Send + 'static>>
+                    })));
                 }
                 (_, types::ComponentItem::CoreFunc(_)) => {
                     bail!("serving root core function exports not supported yet")
@@ -459,7 +470,7 @@ where
                                 let handler = handler.clone();
                                 let pre = self.instance_pre.clone();
                                 debug!(?instance_name, ?name, "serving instance function");
-                                let s = srv
+                                let func = srv
                                     .serve_function(
                                         move || {
                                             new_store(&engine, handler.clone(), max_execution_time)
@@ -470,11 +481,29 @@ where
                                         name,
                                     )
                                     .await
-                                    .map_err(|err| {
-                                        shutdown.notify_waiters();
-                                        err
-                                    })?;
-                                invocations.push(Box::pin(s));
+                                    .context("failed to serve instance function")?;
+                                let events = events.clone();
+                                invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
+                                    let events = events.clone();
+                                    Box::pin(async move {
+                                        let res = res.await;
+                                        let success = res.is_ok();
+                                        if let Err(err) =
+                                            events.try_send(WrpcServeEvent::DynamicExportReturned {
+                                                context: cx,
+                                                success,
+                                            })
+                                        {
+                                            warn!(
+                                            ?err,
+                                            success,
+                                            "failed to send dynamic instance export return event"
+                                        )
+                                        }
+                                        res
+                                    })
+                                        as Pin<Box<dyn Future<Output = _> + Send + 'static>>
+                                })));
                             }
                             types::ComponentItem::CoreFunc(_) => {
                                 bail!("serving instance core function exports not supported yet")
@@ -501,7 +530,7 @@ where
                 }
             }
         }
-        Ok((invocations, tasks))
+        Ok(invocations)
     }
 }
 

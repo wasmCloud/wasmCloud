@@ -8,14 +8,17 @@
 //! on the [exec](#exec) function for more information.
 
 use core::num::NonZeroU64;
+use core::pin::pin;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
 use bytes::Bytes;
+use futures::{stream, StreamExt as _, TryStreamExt as _};
 use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
+use tokio::select;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use wasmcloud_provider_sdk::core::HostData;
@@ -81,12 +84,34 @@ impl KvRedisProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        bindings::serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 
     #[must_use]

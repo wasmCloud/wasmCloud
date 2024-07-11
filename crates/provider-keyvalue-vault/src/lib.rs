@@ -1,5 +1,6 @@
 pub(crate) mod config;
 
+use core::pin::pin;
 use core::str;
 use core::time::Duration;
 
@@ -10,6 +11,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
 use bytes::Bytes;
+use futures::{stream, StreamExt as _, TryStreamExt as _};
+use tokio::select;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
@@ -194,12 +197,34 @@ impl KvVaultProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        bindings::serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 
     /// Retrieve a client for a given context (determined by `source_id`)

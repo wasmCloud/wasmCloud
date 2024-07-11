@@ -34,8 +34,8 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, watch, RwLock};
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, watch, RwLock, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
@@ -1128,10 +1128,9 @@ impl Host {
         component.set_max_execution_time(max_execution_time);
 
         let (events_tx, mut events_rx) = mpsc::channel(256);
-        let shutdown = Arc::default();
-        let (mut exports, mut tasks) = component
+        let exports = component
             .serve_wrpc(
-                Arc::new(WrpcServer {
+                &WrpcServer {
                     nats: wrpc_transport_nats::Client::new(
                         Arc::clone(&self.rpc_nats),
                         format!("{}.{id}", &self.host_config.lattice),
@@ -1144,12 +1143,14 @@ impl Host {
                     policy_manager: Arc::clone(&self.policy_manager),
                     trace_ctx: Arc::clone(&handler.trace_ctx),
                     metrics: Arc::clone(&self.metrics),
-                }),
+                },
                 handler.clone(),
                 events_tx,
-                Arc::clone(&shutdown),
             )
             .await?;
+        let permits = Arc::new(Semaphore::new(
+            usize::from(max_instances).min(Semaphore::MAX_PERMITS),
+        ));
         let metrics = Arc::clone(&self.metrics);
         Ok(Arc::new(Component {
             component,
@@ -1158,61 +1159,60 @@ impl Host {
             exports: spawn(
                 async move {
                     join!(
-                        {
-                            let metrics = Arc::clone(&metrics);
-                            async move {
-                                while let Some(res) = exports.next().await {
-                                    match res {
-                                        Ok(((start_at, ref attributes), res)) => {
-                                            metrics.record_component_invocation(
-                                                u64::try_from(start_at.elapsed().as_nanos())
-                                                    .unwrap_or_default(),
-                                                attributes,
-                                                res.is_err(),
-                                            );
+                        async move {
+                            let mut tasks = JoinSet::new();
+                            let mut exports = stream::select_all(exports);
+                            loop {
+                                let permits = Arc::clone(&permits);
+                                select! {
+                                    Some(fut) = exports.next() => {
+                                        match fut {
+                                            Ok(fut) => {
+                                                let permit = permits.acquire_owned().await;
+                                                tasks.spawn(async move {
+                                                    let _permit = permit;
+                                                    fut.await
+                                                });
+                                            }
+                                            Err(err) => {
+                                                warn!(?err, "failed to accept invocation")
+                                            }
                                         }
-                                        Err(err) => {
-                                            error!(?err, "failed to accept invocation");
+                                    }
+                                    Some(res) = tasks.join_next() => {
+                                        if let Err(err) = res {
+                                            error!(?err, "export serving task failed");
                                         }
                                     }
                                 }
-                                debug!("dynamic export serving tasks are done");
-                            }
-                        },
-                        {
-                            let metrics = Arc::clone(&metrics);
-                            async move {
-                                while let Some(evt) = events_rx.recv().await {
-                                    match evt {
-                                        WrpcServeEvent::HttpIncomingHandlerHandleReturned {
-                                            context: (start_at, ref attributes),
-                                            success,
-                                        }
-                                        | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
-                                            context: (start_at, ref attributes),
-                                            success,
-                                        } => {
-                                            metrics.record_component_invocation(
-                                                u64::try_from(start_at.elapsed().as_nanos())
-                                                    .unwrap_or_default(),
-                                                attributes,
-                                                !success,
-                                            );
-                                        }
-                                    }
-                                }
-                                debug!("serving event stream is done");
                             }
                         },
                         async move {
-                            while let Some(res) = tasks.join_next().await {
-                                if let Err(err) = res {
-                                    error!(?err, "export serving task failed");
-                                    shutdown.notify_waiters();
+                            while let Some(evt) = events_rx.recv().await {
+                                match evt {
+                                    WrpcServeEvent::HttpIncomingHandlerHandleReturned {
+                                        context: (start_at, ref attributes),
+                                        success,
+                                    }
+                                    | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
+                                        context: (start_at, ref attributes),
+                                        success,
+                                    }
+                                    | WrpcServeEvent::DynamicExportReturned {
+                                        context: (start_at, ref attributes),
+                                        success,
+                                    } => {
+                                        metrics.record_component_invocation(
+                                            u64::try_from(start_at.elapsed().as_nanos())
+                                                .unwrap_or_default(),
+                                            attributes,
+                                            !success,
+                                        );
+                                    }
                                 }
                             }
-                            debug!("static export serving tasks are done");
-                        }
+                            debug!("serving event stream is done");
+                        },
                     );
                     debug!("export serving task done");
                 }

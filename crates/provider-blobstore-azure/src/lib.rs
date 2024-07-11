@@ -1,4 +1,5 @@
-use core::pin::Pin;
+use core::pin::{pin, Pin};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -6,11 +7,11 @@ use anyhow::{bail, Context as _, Result};
 use azure_storage_blobs::prelude::*;
 use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, StreamExt as _, TryStreamExt as _};
-use tokio::spawn;
+use futures::{stream, Stream, StreamExt as _, TryStreamExt as _};
 use tokio::sync::{mpsc, RwLock};
+use tokio::{select, spawn};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{error, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider, Context,
     LinkConfig, Provider,
@@ -95,12 +96,34 @@ impl BlobstoreAzblobProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        bindings::serve(
+        let invocations = bindings::serve(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
-            shutdown,
         )
         .await
+        .context("failed to serve exports")?;
+        let mut invocations = stream::select_all(invocations.into_iter().map(
+            |(instance, name, invocations)| {
+                invocations
+                    .try_buffer_unordered(256)
+                    .map(move |res| (instance, name, res))
+            },
+        ));
+        let mut shutdown = pin!(shutdown);
+        loop {
+            select! {
+                Some((instance, name, res)) = invocations.next() => {
+                    if let Err(err) = res {
+                        warn!(?err, instance, name, "failed to serve invocation");
+                    } else {
+                        debug!(instance, name, "successfully served invocation");
+                    }
+                },
+                () = &mut shutdown => {
+                    return Ok(())
+                }
+            }
+        }
     }
 
     async fn get_config(&self, context: Option<&Context>) -> anyhow::Result<BlobServiceClient> {

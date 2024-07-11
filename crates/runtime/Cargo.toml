@@ -56,7 +56,6 @@ wrpc-transport = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-test-components = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
 tracing-subscriber = { workspace = true, features = [
     "ansi",

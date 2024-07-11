@@ -1,15 +1,16 @@
 use core::convert::Infallible;
+use core::pin::pin;
 
 use std::collections::HashMap;
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt as _, TryStreamExt as _};
 use http_body::Frame;
 use http_body_util::{BodyExt as _, StreamBody};
 use hyper_util::rt::TokioExecutor;
-use tokio::spawn;
-use tracing::{debug, error, instrument, Instrument};
+use tokio::{select, spawn};
+use tracing::{debug, error, instrument, trace, warn, Instrument};
 
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
@@ -46,12 +47,29 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("failed to run provider")?;
     let connection = get_connection();
-    wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
-        &connection.get_wrpc_client(connection.provider_key()),
-        ServeHttp(provider),
-        shutdown,
-    )
-    .await
+    let [(_, _, invocations)] =
+        wrpc_interface_http::bindings::exports::wrpc::http::outgoing_handler::serve_interface(
+            &connection.get_wrpc_client(connection.provider_key()),
+            ServeHttp(provider),
+        )
+        .await
+        .context("failed to serve exports")?;
+    let mut invocations = invocations.try_buffer_unordered(256);
+    let mut shutdown = pin!(shutdown);
+    loop {
+        select! {
+            Some(res) = invocations.next() => {
+                if let Err(err) = res {
+                    warn!(?err, "failed to serve invocation");
+                } else {
+                    debug!("successfully served invocation");
+                }
+            },
+            () = &mut shutdown => {
+                return Ok(())
+            }
+        }
+    }
 }
 
 impl HttpClientProvider {
@@ -131,13 +149,13 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
 
         // TODO: Use opts
         let _ = options;
-        debug!(uri = ?request.uri(), "send HTTP request");
         // Ensure we have a User-Agent header set.
         request
             .headers_mut()
             .entry(http::header::USER_AGENT)
             .or_insert(http::header::HeaderValue::from_static(DEFAULT_USER_AGENT));
         Ok(async {
+            debug!(uri = ?request.uri(), "sending HTTP request");
             let res = self
                 .client
                 .request(request)
@@ -149,15 +167,22 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                         Some(err.to_string()),
                     )
                 })?;
+            trace!("HTTP response received");
             Ok(res.map(|body| {
                 let (data, trailers, mut errs) = split_outgoing_http_body(body);
-                spawn(async move {
-                    while let Some(err) = errs.next().await {
-                        error!(?err, "body error encountered");
+                spawn(
+                    async move {
+                        while let Some(err) = errs.next().await {
+                            error!(?err, "body error encountered");
+                        }
+                        trace!("body processing finished");
                     }
-                });
+                    .in_current_span(),
+                );
                 StreamBody::new(data.map(Frame::data).map(Ok)).with_trailers(async {
+                    trace!("awaiting trailers");
                     if let Some(trailers) = trailers.await {
+                        trace!("trailers received");
                         match try_fields_to_header_map(trailers) {
                             Ok(headers) => Some(Ok(headers)),
                             Err(err) => {
@@ -166,6 +191,7 @@ impl ServeOutgoingHandlerHttp<Option<Context>> for HttpClientProvider {
                             }
                         }
                     } else {
+                        trace!("no trailers received");
                         None
                     }
                 })
