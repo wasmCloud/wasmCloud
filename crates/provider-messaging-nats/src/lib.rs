@@ -257,7 +257,7 @@ async fn dispatch_msg(
     };
 
     let msg = BrokerMessage {
-        body: nats_msg.payload.into(),
+        body: nats_msg.payload,
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
     };
@@ -466,7 +466,7 @@ impl bindings::exports::wasmcloud::messaging::consumer::Handler<Option<Context>>
 
         let headers = NatsHeaderInjector::default_with_span().into();
 
-        let body = msg.body.into();
+        let body = msg.body;
         let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
                 nats_client

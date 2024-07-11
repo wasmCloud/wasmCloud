@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 //! blobstore-s3 capability provider
 //!
 //! This capability provider exposes [S3](https://aws.amazon.com/s3/)-compatible object storage

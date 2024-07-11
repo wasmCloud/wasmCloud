@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use crate::capability::{self};
 use crate::Runtime;
 
@@ -134,6 +136,10 @@ pub struct ComponentConfig {
 /// # Arguments
 ///
 /// * `wasm` - Bytes that constitute a valid WebAssembly binary
+///
+/// # Errors
+///
+/// Fails if either parsing fails, or claims are not valid
 pub fn claims(wasm: impl AsRef<[u8]>) -> anyhow::Result<Option<jwt::Claims<jwt::Component>>> {
     let Some(claims) = extract_claims(wasm).context("failed to extract module claims")? else {
         return Ok(None);
@@ -446,7 +452,7 @@ where
                                 warn!(
                                     ?err,
                                     success, "failed to send dynamic root export return event"
-                                )
+                                );
                             }
                             res
                         })
@@ -498,7 +504,7 @@ where
                                             ?err,
                                             success,
                                             "failed to send dynamic instance export return event"
-                                        )
+                                        );
                                         }
                                         res
                                     })

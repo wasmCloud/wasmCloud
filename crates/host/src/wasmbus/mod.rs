@@ -218,103 +218,99 @@ impl wrpc_transport::Serve for WrpcServer {
             component_id = ?self.id,
             component_ref = ?self.image_reference)
     )]
-    fn serve(
+    async fn serve(
         &self,
         instance: &str,
         func: &str,
         paths: impl Into<Arc<[Box<[Option<usize>]>]>> + Send,
-    ) -> impl Future<
-        Output = anyhow::Result<
-            impl Stream<Item = anyhow::Result<(Self::Context, Self::Outgoing, Self::Incoming)>>
-                + Send
-                + 'static,
-        >,
-    > + Send {
-        async move {
-            debug!("serving invocations");
-            let invocations = self.nats.serve(instance, func, paths).await?;
+    ) -> anyhow::Result<
+        impl Stream<Item = anyhow::Result<(Self::Context, Self::Outgoing, Self::Incoming)>>
+            + Send
+            + 'static,
+    > {
+        debug!("serving invocations");
+        let invocations = self.nats.serve(instance, func, paths).await?;
 
-            let func: Arc<str> = Arc::from(func);
-            let instance: Arc<str> = Arc::from(instance);
-            let annotations = Arc::clone(&self.annotations);
-            let id = Arc::clone(&self.id);
-            let image_reference = Arc::clone(&self.image_reference);
-            let metrics = Arc::clone(&self.metrics);
-            let policy_manager = Arc::clone(&self.policy_manager);
-            let trace_ctx = Arc::clone(&self.trace_ctx);
-            let claims = self.claims.clone();
-            Ok(invocations.and_then(move |(cx, tx, rx)| {
-                {
-                    let annotations = Arc::clone(&annotations);
-                    let claims = claims.clone();
-                    let func = Arc::clone(&func);
-                    let id = Arc::clone(&id);
-                    let image_reference = Arc::clone(&image_reference);
-                    let instance = Arc::clone(&instance);
-                    let metrics = Arc::clone(&metrics);
-                    let policy_manager = Arc::clone(&policy_manager);
-                    let trace_ctx = Arc::clone(&trace_ctx);
-                    async move {
-                        let PolicyResponse {
-                            request_id,
-                            permitted,
-                            message,
-                        } = policy_manager
-                            .evaluate_perform_invocation(
-                                &id,
-                                &image_reference,
-                                &annotations,
-                                claims.as_deref(),
-                                instance.to_string(),
-                                func.to_string(),
-                            )
-                            .await?;
-                        ensure!(
+        let func: Arc<str> = Arc::from(func);
+        let instance: Arc<str> = Arc::from(instance);
+        let annotations = Arc::clone(&self.annotations);
+        let id = Arc::clone(&self.id);
+        let image_reference = Arc::clone(&self.image_reference);
+        let metrics = Arc::clone(&self.metrics);
+        let policy_manager = Arc::clone(&self.policy_manager);
+        let trace_ctx = Arc::clone(&self.trace_ctx);
+        let claims = self.claims.clone();
+        Ok(invocations.and_then(move |(cx, tx, rx)| {
+            {
+                let annotations = Arc::clone(&annotations);
+                let claims = claims.clone();
+                let func = Arc::clone(&func);
+                let id = Arc::clone(&id);
+                let image_reference = Arc::clone(&image_reference);
+                let instance = Arc::clone(&instance);
+                let metrics = Arc::clone(&metrics);
+                let policy_manager = Arc::clone(&policy_manager);
+                let trace_ctx = Arc::clone(&trace_ctx);
+                async move {
+                    let PolicyResponse {
+                        request_id,
+                        permitted,
+                        message,
+                    } = policy_manager
+                        .evaluate_perform_invocation(
+                            &id,
+                            &image_reference,
+                            &annotations,
+                            claims.as_deref(),
+                            instance.to_string(),
+                            func.to_string(),
+                        )
+                        .await?;
+                    ensure!(
                         permitted,
                         "policy denied request to invoke component `{request_id}`: `{message:?}`",
                     );
 
-                        if let Some(ref cx) = cx {
-                            // TODO: wasmcloud_tracing take HeaderMap for my own sanity
-                            // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
-                            // flattening the values
-                            let trace_context = cx
-                                .iter()
-                                .flat_map(|(key, value)| {
-                                    value
-                                        .iter()
-                                        .map(|v| (key.to_string(), v.to_string()))
-                                        .collect::<Vec<_>>()
-                                })
-                                .collect::<Vec<(String, String)>>();
-                            wasmcloud_tracing::context::attach_span_context(&trace_context);
-                        }
-
-                        // Associate the current context with the span
-                        let injector = TraceContextInjector::default_with_span();
-                        *trace_ctx.write().await = injector
+                    if let Some(ref cx) = cx {
+                        // TODO: wasmcloud_tracing take HeaderMap for my own sanity
+                        // Coerce the HashMap<String, Vec<String>> into a Vec<(String, String)> by
+                        // flattening the values
+                        let trace_context = cx
                             .iter()
-                            .map(|(k, v)| (k.to_string(), v.to_string()))
-                            .collect();
-                        Ok((
-                            (
-                                Instant::now(),
-                                // TODO(metrics): insert information about the source once we have concrete context data
-                                vec![
-                                    KeyValue::new("component.ref", image_reference),
-                                    KeyValue::new("lattice", metrics.lattice_id.clone()),
-                                    KeyValue::new("host", metrics.host_id.clone()),
-                                    KeyValue::new("operation", format!("{instance}/name")),
-                                ],
-                            ),
-                            tx,
-                            rx,
-                        ))
+                            .flat_map(|(key, value)| {
+                                value
+                                    .iter()
+                                    .map(|v| (key.to_string(), v.to_string()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<(String, String)>>();
+                        wasmcloud_tracing::context::attach_span_context(&trace_context);
                     }
+
+                    // Associate the current context with the span
+                    let injector = TraceContextInjector::default_with_span();
+                    *trace_ctx.write().await = injector
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    Ok((
+                        (
+                            Instant::now(),
+                            // TODO(metrics): insert information about the source once we have concrete context data
+                            vec![
+                                KeyValue::new("component.ref", image_reference),
+                                KeyValue::new("lattice", metrics.lattice_id.clone()),
+                                KeyValue::new("host", metrics.host_id.clone()),
+                                KeyValue::new("operation", format!("{instance}/name")),
+                            ],
+                        ),
+                        tx,
+                        rx,
+                    ))
                 }
-                .in_current_span()
-            }))
-        }
+            }
+            .in_current_span()
+        }))
     }
 }
 
@@ -1745,6 +1741,9 @@ impl Host {
         );
 
         // Find the component and extract the image reference
+        #[allow(clippy::map_clone)]
+        // NOTE: clippy thinks, that we can just replace the `.map` below by
+        // `.cloned` - we can't, because we need to clone the field
         let Some(component_ref) = self
             .components
             .read()

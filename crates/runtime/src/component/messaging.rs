@@ -130,7 +130,7 @@ where
             warn!(
                 ?err,
                 success, "failed to send `wasmcloud:messaging/handler.handle-message` event"
-            )
+            );
         }
         res
     }

@@ -434,7 +434,7 @@ async fn receive_link_for_provider<P>(
 where
     P: Provider,
 {
-    match if ld.source_id == &*connection.provider_id {
+    match if ld.source_id == *connection.provider_id {
         provider
             .receive_link_config_as_source(LinkConfig {
                 source_id: &ld.source_id,
@@ -444,7 +444,7 @@ where
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
-    } else if ld.target == &*connection.provider_id {
+    } else if ld.target == *connection.provider_id {
         provider
             .receive_link_config_as_target(LinkConfig {
                 source_id: &ld.source_id,
@@ -473,11 +473,11 @@ async fn delete_link_for_provider<P>(
 where
     P: Provider,
 {
-    if ld.source_id == &*connection.provider_id {
+    if ld.source_id == *connection.provider_id {
         if let Err(e) = provider.delete_link_as_source(&ld.target).await {
             error!(error = %e, target = &ld.target, "failed to delete link to component");
         }
-    } else if ld.target == &*connection.provider_id {
+    } else if ld.target == *connection.provider_id {
         if let Err(e) = provider.delete_link_as_target(&ld.source_id).await {
             error!(error = %e, source = &ld.source_id, "failed to delete link from component");
         }
@@ -819,7 +819,7 @@ impl ProviderConnection {
         &self.provider_id
     }
 
-    /// Stores link in the [ProviderConnection], either as a source link or target link
+    /// Stores link in the [`ProviderConnection`], either as a source link or target link
     /// depending on if the provider is the source or target of the link
     pub async fn put_link(&self, ld: InterfaceLinkDefinition) {
         if ld.source_id == *self.provider_id {
@@ -835,7 +835,7 @@ impl ProviderConnection {
         }
     }
 
-    /// Deletes link from the [ProviderConnection], either a source link or target link
+    /// Deletes link from the [`ProviderConnection`], either a source link or target link
     /// based on if the provider is the source or target of the link
     pub async fn delete_link(&self, source_id: &str, target: &str) {
         if source_id == &*self.provider_id {
