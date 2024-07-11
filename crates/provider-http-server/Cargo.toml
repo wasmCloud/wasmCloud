@@ -14,7 +14,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 axum = { workspace = true, features = ["http1", "http2", "tokio", "tracing"] }
 axum-server = { workspace = true, features = ["tls-rustls"] }
 base64 = { workspace = true }

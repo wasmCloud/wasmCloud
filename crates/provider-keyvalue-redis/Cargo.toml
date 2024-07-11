@@ -25,7 +25,7 @@ wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }
 
 [dev-dependencies]
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 tempfile = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["v4", "fast-rng"] }

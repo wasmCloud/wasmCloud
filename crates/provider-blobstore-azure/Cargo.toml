@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 async-trait = { workspace = true }
 azure_core = { workspace = true, features = [
     "enable_reqwest_rustls",

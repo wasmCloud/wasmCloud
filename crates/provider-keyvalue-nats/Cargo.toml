@@ -16,7 +16,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring"] }
 bytes = { workspace = true }
 futures = { workspace = true }
 rustls-pemfile = { workspace = true }
