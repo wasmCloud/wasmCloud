@@ -5,7 +5,7 @@ use std::time::Duration;
 use std::{future::Future, sync::Arc};
 
 use anyhow::{anyhow, Context as _, Result};
-use async_nats_0_33::{Client as NatsClient, ServerAddr};
+use async_nats::{Client as NatsClient, ServerAddr};
 use nkeys::KeyPair;
 use url::Url;
 
@@ -133,7 +133,7 @@ impl WasmCloudTestHost {
     ) -> Result<WasmcloudCtlClient> {
         let nats_client = match nats_client {
             Some(c) => c,
-            None => async_nats_0_33::connect(self.nats_url.clone())
+            None => async_nats::connect(self.nats_url.clone())
                 .await
                 .context("failed to connect to NATS client via URL used at test host creation")?,
         };
