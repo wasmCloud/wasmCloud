@@ -62,7 +62,7 @@ pub async fn run() -> anyhow::Result<()> {
                 if let Err(err) = res {
                     warn!(?err, "failed to serve invocation");
                 } else {
-                    debug!("successfully served invocation");
+                    trace!("successfully served invocation");
                 }
             },
             () = &mut shutdown => {

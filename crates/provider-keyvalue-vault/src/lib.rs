@@ -1,6 +1,5 @@
 pub(crate) mod config;
 
-use core::pin::pin;
 use core::str;
 use core::time::Duration;
 
@@ -11,16 +10,14 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use base64::Engine as _;
 use bytes::Bytes;
-use futures::{stream, StreamExt as _, TryStreamExt as _};
-use tokio::select;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
-use wasmcloud_provider_sdk::initialize_observability;
 use wasmcloud_provider_sdk::{
     get_connection, propagate_trace_for_ctx, run_provider, Context, LinkConfig, Provider,
 };
+use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
 use crate::config::Config;
 
@@ -197,34 +194,14 @@ impl KvVaultProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        let invocations = bindings::serve(
+        serve_provider_exports(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
+            shutdown,
+            bindings::serve,
         )
         .await
-        .context("failed to serve exports")?;
-        let mut invocations = stream::select_all(invocations.into_iter().map(
-            |(instance, name, invocations)| {
-                invocations
-                    .try_buffer_unordered(256)
-                    .map(move |res| (instance, name, res))
-            },
-        ));
-        let mut shutdown = pin!(shutdown);
-        loop {
-            select! {
-                Some((instance, name, res)) = invocations.next() => {
-                    if let Err(err) = res {
-                        warn!(?err, instance, name, "failed to serve invocation");
-                    } else {
-                        debug!(instance, name, "successfully served invocation");
-                    }
-                },
-                () = &mut shutdown => {
-                    return Ok(())
-                }
-            }
-        }
+        .context("failed to serve provider exports")
     }
 
     /// Retrieve a client for a given context (determined by `source_id`)

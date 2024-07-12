@@ -1,4 +1,3 @@
-use core::pin::pin;
 use core::time::Duration;
 
 use std::collections::HashMap;
@@ -7,19 +6,19 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
 use bytes::Bytes;
-use futures::{stream, StreamExt as _, TryStreamExt as _};
+use futures::StreamExt as _;
 use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
+use tokio::fs;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
-use tokio::{fs, select};
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, serve_provider_exports,
+    Context, LinkConfig, Provider,
 };
 
 mod connection;
@@ -75,34 +74,14 @@ impl NatsMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        let invocations = bindings::serve(
+        serve_provider_exports(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
+            shutdown,
+            bindings::serve,
         )
         .await
-        .context("failed to serve exports")?;
-        let mut invocations = stream::select_all(invocations.into_iter().map(
-            |(instance, name, invocations)| {
-                invocations
-                    .try_buffer_unordered(256)
-                    .map(move |res| (instance, name, res))
-            },
-        ));
-        let mut shutdown = pin!(shutdown);
-        loop {
-            select! {
-                Some((instance, name, res)) = invocations.next() => {
-                    if let Err(err) = res {
-                        warn!(?err, instance, name, "failed to serve invocation");
-                    } else {
-                        debug!(instance, name, "successfully served invocation");
-                    }
-                },
-                () = &mut shutdown => {
-                    return Ok(())
-                }
-            }
-        }
+        .context("failed to serve provider exports")
     }
 
     /// Build a [`NatsMessagingProvider`] from [`HostData`]
