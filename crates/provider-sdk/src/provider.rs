@@ -848,7 +848,7 @@ impl ProviderConnection {
     }
 
     /// Retrieve a wRPC client that can be used based on the NATS client of this connection,
-    /// customized with uration
+    /// customized with invocation timeout
     ///
     /// # Arguments
     ///
