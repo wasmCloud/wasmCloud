@@ -34,10 +34,10 @@ jobs:
             release: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
         with:
           node-version-file: ./washboard-ui/.tool-versions
           cache-dependency-path: ./washboard-ui/yarn.lock
@@ -48,7 +48,7 @@ jobs:
           yarn --version
 
       - name: Cache turbo build setup
-        uses: actions/cache@v4
+        uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9
         with:
           path: ./washboard-ui/.turbo
           key: ${{ runner.os }}-turbo-${{ github.sha }}
@@ -71,7 +71,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Install wash
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@0256b3ea9ae3d751755a35cbb0608979a842f1d2
         with:
           tool: wash-cli@${{ matrix.wash.version }}
 
@@ -86,13 +86,13 @@ jobs:
 
       - name: Upload Artifact
         if: ${{ matrix.wash.release }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
         with:
           name: washboard
           path: ./washboard-ui/washboard.tar.gz
 
       - name: Upload Playwright Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
         if: always()
         with:
           name: playwright-report
@@ -111,12 +111,12 @@ jobs:
           - version: 0.29.2
     steps:
       - name: Download Asset
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: washboard-${{ matrix.wash.version }}
 
       - name: Create Release
-        uses: ncipollo/release-action@v1.14.0
+        uses: ncipollo/release-action@2c591bcc8ecdcd2db72b97d6147f871fcd833ba5
         with:
           draft: false
           prerelease: false

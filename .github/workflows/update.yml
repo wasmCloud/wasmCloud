@@ -10,7 +10,7 @@ jobs:
     if: ${{ github.repository == 'wasmCloud/wasmCloud' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: rvolosatovs/nix-flake-update-action@v2
+      - uses: rvolosatovs/nix-flake-update-action@630fa97f3c210e531f845874c1fb92746dbb1d3d
         with:
           app-id: ${{ secrets.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}

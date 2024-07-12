@@ -19,14 +19,14 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
-      - uses: oras-project/setup-oras@v1.2.0
+      - uses: oras-project/setup-oras@ca28077386065e263c03428f4ae0c09024817c93
         with:
           version: "1.1.0"
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@0d4c9c5ea7693da7b068278f7b52bda2a190a446
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
