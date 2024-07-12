@@ -14,7 +14,7 @@ use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 pub struct Host {
     /// NATS URL to connect to for control interface connection
     pub ctl_nats_url: Url,
-    /// Authentication JWT for control interface connection, must be specified with `ctl_seed`
+    /// Authentication JWT for control interface connection, must be specified with `ctl_key`
     pub ctl_jwt: Option<String>,
     /// Authentication key pair for control interface connection, must be specified with `ctl_jwt`
     pub ctl_key: Option<Arc<KeyPair>>,
