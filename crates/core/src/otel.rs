@@ -49,7 +49,7 @@ pub struct OtelConfig {
 }
 
 fn default_trace_level() -> Level {
-    Level::Debug
+    Level::Info
 }
 
 impl OtelConfig {

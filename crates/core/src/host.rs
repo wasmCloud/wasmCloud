@@ -59,9 +59,6 @@ pub struct HostData {
     /// The log level providers should log at
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<Level>,
-    /// The trace level providers should instrument at
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trace_level: Option<Level>,
     #[serde(default)]
     pub otel_config: OtelConfig,
 }
