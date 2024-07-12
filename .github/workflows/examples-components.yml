@@ -44,25 +44,25 @@ jobs:
           - 0.28.1
           - current
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
         if: ${{ matrix.wash-version == 'current' }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
           shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@0256b3ea9ae3d751755a35cbb0608979a842f1d2
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
         if: ${{ matrix.wash-version == 'current' }}
         run: cargo build -p wash-cli --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
         if: ${{ matrix.wash-version == 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
           path: ./target/release/wash
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
         if: ${{ matrix.wash-version != 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
@@ -121,9 +121,9 @@ jobs:
             lang: "typescript"
             lang_version: "20.x"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       # Download wash binary & install to path
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: wash-${{ matrix.wash-version }}
           path: artifacts
@@ -133,16 +133,16 @@ jobs:
           chmod +x ./artifacts/wash;
           echo "$(realpath ./artifacts)" >> "$GITHUB_PATH";
       # Language specific setup
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           go-version: ${{ matrix.project.lang_version }}
-      - uses: acifani/setup-tinygo@v2
+      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tinygo-version: "0.30.0"
           install-binaryen: "false"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f
         if: ${{ matrix.project.lang == 'python' }}
         with:
           python-version: ${{ matrix.project.lang_version }}
@@ -150,7 +150,7 @@ jobs:
         if: ${{ matrix.project.lang == 'python' }}
         run: |
           pip install componentize-py
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
         if: ${{ matrix.project.lang == 'typescript' }}
         with:
           node-version: ${{ matrix.project.lang_version }}
@@ -164,7 +164,7 @@ jobs:
         run: wash build
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
       # Save example as an artifact for later step(s)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
         if: ${{ startswith(github.ref, format('refs/tags/component-{0}-v', matrix.project.name)) }}
         with:
           name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}
@@ -208,7 +208,7 @@ jobs:
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       # Determine tag version (if this is a release tag), without the 'v'
       - name: Determine version
         id: meta
@@ -223,7 +223,7 @@ jobs:
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
           echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (wash binary and example component binaries) to work dir
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           path: artifacts
       - name: install wash binary to PATH # Some build tools expect wash to be on the PATH

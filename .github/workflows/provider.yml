@@ -24,7 +24,7 @@ jobs:
   package:
     runs-on: ubuntu-22.04-16-cores
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
     - name: Extract tag context
       id: ctx
       run: |
@@ -48,7 +48,7 @@ jobs:
           echo "prerelease=true" >> "$GITHUB_OUTPUT"
         fi
 
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
       with:
         path: artifacts
 
@@ -81,7 +81,7 @@ jobs:
         ./wash par insert --arch x86_64-windows --binary "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
         ./wash par inspect "${{ inputs.name }}.par.gz"
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
       with:
         name: ${{ inputs.name }}.par.gz
         path: ${{ inputs.name }}.par.gz

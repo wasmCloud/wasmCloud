@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       with:
         sparse-checkout: |
           wit
@@ -28,7 +28,7 @@ jobs:
       run: |
         tar cvzf ${{ steps.ctx.outputs.tarball }} -C wit postgres/wit
     - name: Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@a74c6b72af54cfa997e81df42d94703d6313a2d0
       with:
         files: ${{ steps.ctx.outputs.tarball }}
         make_latest: "false"
