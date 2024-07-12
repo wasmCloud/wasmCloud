@@ -7,7 +7,7 @@
 //! can be used by actors on your lattice.
 //!
 
-use core::pin::{pin, Pin};
+use core::pin::Pin;
 use core::str::FromStr;
 
 use std::collections::HashMap;
@@ -33,18 +33,18 @@ use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use base64::Engine as _;
 use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
-use futures::{stream, Stream, StreamExt as _, TryStreamExt as _};
+use futures::{stream, Stream, StreamExt as _};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt as _;
+use tokio::spawn;
 use tokio::sync::{mpsc, RwLock};
-use tokio::{select, spawn};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument, warn};
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider, Context,
-    LinkConfig, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports, Context, LinkConfig, Provider,
 };
 
 mod bindings {
@@ -556,34 +556,14 @@ impl BlobstoreS3Provider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        let invocations = bindings::serve(
+        serve_provider_exports(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
+            shutdown,
+            bindings::serve,
         )
         .await
-        .context("failed to serve exports")?;
-        let mut invocations = stream::select_all(invocations.into_iter().map(
-            |(instance, name, invocations)| {
-                invocations
-                    .try_buffer_unordered(256)
-                    .map(move |res| (instance, name, res))
-            },
-        ));
-        let mut shutdown = pin!(shutdown);
-        loop {
-            select! {
-                Some((instance, name, res)) = invocations.next() => {
-                    if let Err(err) = res {
-                        warn!(?err, instance, name, "failed to serve invocation");
-                    } else {
-                        debug!(instance, name, "successfully served invocation");
-                    }
-                },
-                () = &mut shutdown => {
-                    return Ok(())
-                }
-            }
-        }
+        .context("failed to serve provider exports")
     }
 
     /// Retrieve the per-component [`StorageClient`] for a given link context

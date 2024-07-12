@@ -15,7 +15,9 @@ pub mod provider;
 pub mod otel;
 
 pub use anyhow;
-pub use provider::{get_connection, load_host_data, run_provider, ProviderConnection};
+pub use provider::{
+    get_connection, load_host_data, run_provider, serve_provider_exports, ProviderConnection,
+};
 pub use tracing_subscriber;
 pub use wasmcloud_core as core;
 /// Re-export of types from [`wasmcloud_core`]

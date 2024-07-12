@@ -4,7 +4,7 @@
 //!
 //!
 
-use core::pin::{pin, Pin};
+use core::pin::Pin;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -14,18 +14,18 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, bail, Context as _};
 use bindings::wrpc::blobstore::types::{ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
-use futures::{stream, Stream, StreamExt as _, TryStreamExt as _};
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
 use tokio::fs::{self, create_dir_all, File};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+use tokio::spawn;
 use tokio::sync::{mpsc, RwLock};
-use tokio::{select, spawn};
 use tokio_stream::wrappers::{ReadDirStream, ReceiverStream};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider, Context,
-    LinkConfig, Provider,
+    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
+    serve_provider_exports, Context, LinkConfig, Provider,
 };
 
 use crate::bindings::wrpc::blobstore::types::ContainerMetadata;
@@ -70,34 +70,14 @@ impl FsProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        let invocations = bindings::serve(
+        serve_provider_exports(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
+            shutdown,
+            bindings::serve,
         )
         .await
-        .context("failed to serve exports")?;
-        let mut invocations = stream::select_all(invocations.into_iter().map(
-            |(instance, name, invocations)| {
-                invocations
-                    .try_buffer_unordered(256)
-                    .map(move |res| (instance, name, res))
-            },
-        ));
-        let mut shutdown = pin!(shutdown);
-        loop {
-            select! {
-                Some((instance, name, res)) = invocations.next() => {
-                    if let Err(err) = res {
-                        warn!(?err, instance, name, "failed to serve invocation");
-                    } else {
-                        debug!(instance, name, "successfully served invocation");
-                    }
-                },
-                () = &mut shutdown => {
-                    return Ok(())
-                }
-            }
-        }
+        .context("failed to serve provider exports")
     }
 }
 
