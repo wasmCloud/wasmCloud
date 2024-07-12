@@ -801,11 +801,12 @@ impl ProviderConnection {
     /// * `timeout` - Timeout to be set on the client (by default if this is unset it will be 10 seconds)
     #[must_use]
     pub fn get_wrpc_client_custom(&self, target: &str, timeout: Option<Duration>) -> WrpcClient {
+        let prefix = Arc::from(format!("{}.{target}", &self.lattice));
         WrpcClient {
             nats: wrpc_transport_nats::Client::new(
                 Arc::clone(&self.nats),
-                format!("{}.{target}", self.lattice),
-                None, // TODO: Set queue group
+                Arc::clone(&prefix),
+                Some(prefix),
             ),
             provider_id: Arc::clone(&self.provider_id),
             target: Arc::from(target),
