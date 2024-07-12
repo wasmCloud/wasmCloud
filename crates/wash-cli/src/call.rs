@@ -4,9 +4,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context, Result};
-use bytes::Bytes;
 use clap::Args;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tracing::debug;
 
