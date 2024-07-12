@@ -6,18 +6,20 @@ use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
 
-use anyhow::{bail, ensure, Context as _};
+use anyhow::{ensure, Context as _};
 use futures::{Stream, TryStreamExt as _};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::sync::mpsc;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument, warn, Instrument as _, Span};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpImpl};
-use wrpc_runtime_wasmtime::{link_item, ServeExt as _, WrpcView};
+use wrpc_runtime_wasmtime::{
+    collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
+};
 
 pub use bus::Bus;
 pub use config::Config;
@@ -206,6 +208,8 @@ fn new_store<H: Handler>(
             wasi,
             http: WasiHttpCtx::new(),
             table,
+            shared_resources: SharedResourceTable::default(),
+            timeout: max_execution_time,
         },
     );
     store.set_epoch_deadline(max_execution_time.as_secs());
@@ -315,9 +319,14 @@ where
             .context("failed to link `wasmcloud:messaging/consumer`")?;
 
         let ty = component.component_type();
+        let mut guest_resources = Vec::new();
+        collect_component_resources(&engine, &ty, &mut guest_resources);
+        if !guest_resources.is_empty() {
+            warn!("exported component resources are not supported in wasmCloud runtime and will be ignored, use a provider instead to enable this functionality");
+        }
         for (name, ty) in ty.imports(&engine) {
             skip_static_instances!(name);
-            link_item(&engine, &mut linker.root(), ty, "", name, None)
+            link_item(&engine, &mut linker.root(), [], ty, "", name, None)
                 .context("failed to link item")?;
         }
         let instance_pre = linker.instantiate_pre(&component)?;
@@ -385,6 +394,7 @@ where
     where
         S: wrpc_transport::Serve,
     {
+        let span = Span::current();
         let max_execution_time = self.max_execution_time;
         let mut invocations = vec![];
         let instance = Instance {
@@ -443,35 +453,39 @@ where
                         .await
                         .context("failed to serve root function")?;
                     let events = events.clone();
+                    let span = span.clone();
                     invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
                         let events = events.clone();
-                        Box::pin(async move {
-                            let res = res.await;
-                            let success = res.is_ok();
-                            if let Err(err) =
-                                events.try_send(WrpcServeEvent::DynamicExportReturned {
-                                    context: cx,
-                                    success,
-                                })
-                            {
-                                warn!(
-                                    ?err,
-                                    success, "failed to send dynamic root export return event"
-                                );
+                        Box::pin(
+                            async move {
+                                let res = res.await;
+                                let success = res.is_ok();
+                                if let Err(err) =
+                                    events.try_send(WrpcServeEvent::DynamicExportReturned {
+                                        context: cx,
+                                        success,
+                                    })
+                                {
+                                    warn!(
+                                        ?err,
+                                        success, "failed to send dynamic root export return event"
+                                    );
+                                }
+                                res
                             }
-                            res
-                        })
+                            .instrument(span.clone()),
+                        )
                             as Pin<Box<dyn Future<Output = _> + Send + 'static>>
                     })));
                 }
                 (_, types::ComponentItem::CoreFunc(_)) => {
-                    bail!("serving root core function exports not supported yet")
+                    warn!(name, "serving root core function exports not supported yet");
                 }
                 (_, types::ComponentItem::Module(_)) => {
-                    bail!("serving root module exports not supported yet");
+                    warn!(name, "serving root module exports not supported yet");
                 }
                 (_, types::ComponentItem::Component(_)) => {
-                    bail!("serving root component exports not supported yet");
+                    warn!(name, "serving root component exports not supported yet");
                 }
                 (instance_name, types::ComponentItem::ComponentInstance(ty)) => {
                     for (name, ty) in ty.exports(&self.engine) {
@@ -494,51 +508,62 @@ where
                                     .await
                                     .context("failed to serve instance function")?;
                                 let events = events.clone();
+                                let span = span.clone();
                                 invocations.push(Box::pin(func.map_ok(move |(cx, res)| {
                                     let events = events.clone();
-                                    Box::pin(async move {
-                                        let res = res.await;
-                                        let success = res.is_ok();
-                                        if let Err(err) =
-                                            events.try_send(WrpcServeEvent::DynamicExportReturned {
-                                                context: cx,
-                                                success,
-                                            })
-                                        {
-                                            warn!(
+                                    Box::pin(
+                                        async move {
+                                            let res = res.await;
+                                            let success = res.is_ok();
+                                            if let Err(err) = events.try_send(
+                                                WrpcServeEvent::DynamicExportReturned {
+                                                    context: cx,
+                                                    success,
+                                                },
+                                            ) {
+                                                warn!(
                                             ?err,
                                             success,
                                             "failed to send dynamic instance export return event"
                                         );
+                                            }
+                                            res
                                         }
-                                        res
-                                    })
+                                        .instrument(span.clone()),
+                                    )
                                         as Pin<Box<dyn Future<Output = _> + Send + 'static>>
                                 })));
                             }
                             types::ComponentItem::CoreFunc(_) => {
-                                bail!("serving instance core function exports not supported yet")
+                                warn!(
+                                    instance_name,
+                                    name,
+                                    "serving instance core function exports not supported yet"
+                                );
                             }
                             types::ComponentItem::Module(_) => {
-                                bail!("serving instance module exports not supported yet")
+                                warn!(
+                                    instance_name,
+                                    name, "serving instance module exports not supported yet"
+                                );
                             }
                             types::ComponentItem::Component(_) => {
-                                bail!("serving instance component exports not supported yet")
+                                warn!(
+                                    instance_name,
+                                    name, "serving instance component exports not supported yet"
+                                );
                             }
                             types::ComponentItem::ComponentInstance(_) => {
-                                bail!("serving nested instance exports not supported yet")
+                                warn!(
+                                    instance_name,
+                                    name, "serving nested instance exports not supported yet"
+                                );
                             }
-                            types::ComponentItem::Type(_) => {}
-                            types::ComponentItem::Resource(_) => {
-                                bail!("serving instance resource exports not supported yet")
-                            }
+                            types::ComponentItem::Type(_) | types::ComponentItem::Resource(_) => {}
                         }
                     }
                 }
-                (_, types::ComponentItem::Type(_)) => {}
-                (_, types::ComponentItem::Resource(_)) => {
-                    bail!("serving root resource exports not supported yet")
-                }
+                (_, types::ComponentItem::Type(_) | types::ComponentItem::Resource(_)) => {}
             }
         }
         Ok(invocations)
@@ -590,6 +615,8 @@ where
     wasi: WasiCtx,
     http: WasiHttpCtx,
     table: ResourceTable,
+    shared_resources: SharedResourceTable,
+    timeout: Duration,
 }
 
 impl<H: Handler> WasiView for Ctx<H> {
@@ -602,9 +629,19 @@ impl<H: Handler> WasiView for Ctx<H> {
     }
 }
 
-impl<H: Handler> WrpcView<H> for Ctx<H> {
+impl<H: Handler> WrpcView for Ctx<H> {
+    type Invoke = H;
+
     fn client(&self) -> &H {
         &self.handler
+    }
+
+    fn shared_resources(&mut self) -> &mut SharedResourceTable {
+        &mut self.shared_resources
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        Some(self.timeout)
     }
 }
 
