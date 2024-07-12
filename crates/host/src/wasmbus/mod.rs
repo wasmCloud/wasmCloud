@@ -2141,7 +2141,6 @@ impl Host {
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
                 log_level: Some(self.host_config.log_level.clone()),
-                trace_level: Some(self.host_config.otel_config.trace_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
             };

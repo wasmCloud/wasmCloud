@@ -50,7 +50,6 @@ macro_rules! initialize_observability {
                 otel_config,
                 structured_logging,
                 log_level,
-                trace_level,
                 ..
             } = $crate::provider::load_host_data().context("failed to load host data")?;
 
@@ -64,7 +63,7 @@ macro_rules! initialize_observability {
                 *structured_logging,
                 $maybe_flamegraphs_path,
                 log_level.as_ref(),
-                trace_level.as_ref(),
+                Some(&otel_config.trace_level),
             )
             .context("failed to configure observability")?;
             dispatch

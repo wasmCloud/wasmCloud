@@ -24,7 +24,7 @@ use wasmcloud_tracing::configure_observability;
 #[command(version, about, long_about = None)]
 struct Args {
     /// Controls the verbosity of traces emitted from the wasmCloud host
-    #[clap(long = "trace-level", default_value_t = TracingLogLevel::DEBUG, env = "WASMCLOUD_TRACE_LEVEL")]
+    #[clap(long = "trace-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_TRACE_LEVEL")]
     pub trace_level: TracingLogLevel,
     /// Controls the verbosity of logs from the wasmCloud host
     #[clap(long = "log-level", alias = "structured-log-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]

@@ -176,12 +176,14 @@ pub fn configure_tracing(
                 fmt.event_format(JsonOrNot::Json(Format::default().json()))
                     .fmt_fields(JsonFields::new())
                     .with_filter(log_level_filter),
-            ).into()
+            )
+            .into()
     } else {
         registry
             .with(
                 fmt.event_format(JsonOrNot::Not(Format::default()))
-                    .fmt_fields(DefaultFields::new()).with_filter(log_level_filter),
+                    .fmt_fields(DefaultFields::new())
+                    .with_filter(log_level_filter),
             )
             .into()
     };
