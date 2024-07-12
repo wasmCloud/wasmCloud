@@ -682,7 +682,7 @@ where
     F: FnOnce(&'a WrpcClient, P) -> Fut,
     Fut: Future<Output = anyhow::Result<InvocationStreams>> + wrpc_transport::Captures<'a>,
 {
-    let invocations = serve(&client, provider)
+    let invocations = serve(client, provider)
         .await
         .context("failed to serve exports")?;
     let mut invocations = stream::select_all(invocations.into_iter().map(
