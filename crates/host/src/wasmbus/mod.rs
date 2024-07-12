@@ -1124,13 +1124,14 @@ impl Host {
         component.set_max_execution_time(max_execution_time);
 
         let (events_tx, mut events_rx) = mpsc::channel(256);
+        let prefix = Arc::from(format!("{}.{id}", &self.host_config.lattice));
         let exports = component
             .serve_wrpc(
                 &WrpcServer {
                     nats: wrpc_transport_nats::Client::new(
                         Arc::clone(&self.rpc_nats),
-                        format!("{}.{id}", &self.host_config.lattice),
-                        None, // TODO: Set queue group
+                        Arc::clone(&prefix),
+                        Some(prefix),
                     ),
                     claims: component.claims().cloned().map(Arc::new),
                     id: Arc::clone(&id),
