@@ -373,16 +373,17 @@ impl HttpHandlerInvocationOpts {
     }
 }
 
-/// Utility type used mostly for printing HTTP responses to the console as JSON
-#[derive(Debug, Clone, Serialize)]
-struct HttpResponse {
-    status: u16,
-    headers: HashMap<String, String>,
-    body: Bytes,
-}
-
 // TODO: Reenable
-
+//
+///// Utility type used mostly for printing HTTP responses to the console as JSON
+//#[derive(Debug, Clone, Serialize)]
+//struct HttpResponse {
+//    status: u16,
+//    headers: HashMap<String, String>,
+//    body: Bytes,
+//}
+//
+//
 ///// Invoke a wRPC endpoint that takes a HTTP request (usually `wasi:http/incoming-handler.handle`);
 //async fn wrpc_invoke_http_handler(
 //    nats: async_nats::Client,
