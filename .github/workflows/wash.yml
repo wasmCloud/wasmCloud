@@ -36,7 +36,9 @@ jobs:
         with:
           shared-key: "${{ matrix.os }}-shared-cache"
       - name: Install nextest
-        uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569 # nextest
+        uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569
+        with:
+          tool: nextest
 
       - name: Build wash
         run: make build
@@ -68,7 +70,9 @@ jobs:
         with:
           cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
       - name: Install nextest
-        uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569 # nextest
+        uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569
+        with:
+          tool: nextest
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
