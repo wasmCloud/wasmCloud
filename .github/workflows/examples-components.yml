@@ -176,6 +176,8 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [wash-build]
     if: ${{ startswith(github.ref, 'refs/tags/component-') }}
+    permissions:
+      packages: write
     strategy:
       fail-fast: false
       matrix:
