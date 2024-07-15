@@ -30,11 +30,11 @@ jobs:
     steps:
       - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
         with:
-          node-version: "18.x"
+          node-version: '18.x'
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "${{ matrix.os }}-shared-cache"
+          shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
         uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569 # nextest
 
@@ -53,22 +53,22 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         with:
           go-version: '1.22'
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
-          tinygo-version: "0.31.0"
-          install-binaryen: "false"
+          tinygo-version: '0.31.0'
+          install-binaryen: 'false'
       - name: Add wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
+          cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569 # nextest
+        uses: taiki-e/install-action@2.41.18 # nextest
       - name: Run integration tests
         run: make test-integration-ci
         working-directory: ./crates/wash-cli
@@ -89,7 +89,7 @@ jobs:
         if: ${{ matrix.wash-version == 'current' }}
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
         uses: taiki-e/install-action@32300fcc7462d35c920c6d4a42efe7bc39b61569
