@@ -627,6 +627,45 @@ pub async fn init_component_from_template(
     Ok(project_dir)
 }
 
+#[allow(dead_code)]
+pub async fn init_provider(provider_name: &str, template_name: &str) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    std::env::set_current_dir(&test_dir)?;
+    let project_dir = init_provider_from_template(provider_name, template_name).await?;
+    std::env::set_current_dir(&project_dir)?;
+    Ok(TestSetup {
+        test_dir,
+        project_dir,
+    })
+}
+
+/// Initializes a new provider from a template provider template
+#[allow(dead_code)]
+pub async fn init_provider_from_template(
+    provider_name: &str,
+    template_name: &str,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "provider",
+            provider_name,
+            "--template-name",
+            template_name,
+            "--silent",
+            "--no-git-init",
+        ])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate provider")?;
+
+    assert!(status.success());
+
+    let project_dir = std::env::current_dir()?.join(provider_name);
+    Ok(project_dir)
+}
+
 /// Wait until a process has a given count on the current machine
 #[allow(dead_code)]
 pub async fn wait_until_process_has_count(
