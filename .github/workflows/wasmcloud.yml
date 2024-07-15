@@ -332,6 +332,7 @@ jobs:
       - build-windows
       - test-linux
     permissions:
+      contents: read
       packages: write
     uses: ./.github/workflows/provider.yml
     with:
@@ -346,6 +347,7 @@ jobs:
     runs-on: ubuntu-22.04-16-cores
     needs: build-doc
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
@@ -390,6 +392,7 @@ jobs:
 
     runs-on: ubuntu-22.04-16-cores
     permissions:
+      contents: read
       packages: write
     needs:
       - build-bin
