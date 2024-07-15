@@ -14,6 +14,7 @@ pub mod generate;
 pub mod keys;
 pub mod par;
 pub mod plugin;
+pub mod secrets;
 pub mod ui;
 pub mod up;
 pub mod util;

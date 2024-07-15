@@ -19,6 +19,7 @@ use wash_cli::generate::{self, NewCliCommand};
 use wash_cli::keys::{self, KeysCliCommand};
 use wash_cli::par::{self, ParCliCommand};
 use wash_cli::plugin::{self, PluginCommand};
+use wash_cli::secrets::{self, SecretsCliCommand};
 use wash_cli::ui::{self, UiCommand};
 use wash_cli::up::{self, UpCommand};
 use wash_cli::util::ensure_plugin_dir;
@@ -186,6 +187,9 @@ enum CliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
+    /// Manage secret references
+    #[clap(name = "secrets", subcommand)]
+    Secrets(SecretsCliCommand),
     /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]
     Spy(SpyCommand),
@@ -407,6 +411,7 @@ async fn main() {
         CliCommand::Scale(scale_cli) => {
             common::scale_cmd::handle_command(scale_cli, output_kind).await
         }
+        CliCommand::Secrets(secrets_cli) => secrets::handle_command(secrets_cli, output_kind).await,
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }

@@ -2,6 +2,7 @@ use anyhow::ensure;
 use async_trait::async_trait;
 use nkeys::XKey;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use wascap::jwt::{validate_token, CapabilityProvider, Component, Host};
 
 mod errors;
@@ -11,6 +12,14 @@ pub use crate::errors::*;
 /// It is also used to encrypt the response so that only the requestor can decrypt it.
 pub const WASMCLOUD_HOST_XKEY: &str = "WasmCloud-Host-Xkey";
 pub const RESPONSE_XKEY: &str = "Server-Response-Xkey";
+
+/// The type of secret.
+/// This is used to inform wadm or anything else that is consuming the secret about how to
+/// deserialize the payload.
+pub const SECRET_TYPE: &str = "v1.secret.wasmcloud.dev";
+
+/// The prefix for all secret keys in the config store
+pub const SECRET_PREFIX: &str = "SECRET";
 
 /// The request context for retrieving a secret
 #[derive(Serialize, Deserialize, Default)]
@@ -122,6 +131,38 @@ pub struct Secret {
     pub version: String,
     pub string_secret: Option<String>,
     pub binary_secret: Option<Vec<u8>>,
+}
+
+/// The representation of a secret reference in the config store.
+#[derive(Serialize, Deserialize)]
+pub struct SecretConfig {
+    pub backend: String,
+    pub key: String,
+    pub version: Option<String>,
+
+    /// The type of secret.
+    /// This is used to inform wadm or anything else that is consuming the secret about how to
+    /// deserialize the payload.
+    #[serde(rename = "type")]
+    pub secret_type_identifier: String,
+}
+
+/// Helper function to convert a SecretConfig into a HashMap. This is only intended to be used by
+/// wash or anything else that needs to interact directly with the config KV bucket to manipulate
+/// secrets.
+impl TryInto<HashMap<String, String>> for SecretConfig {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
+        let mut map = HashMap::new();
+        map.insert("type".to_string(), SECRET_TYPE.to_string());
+        map.insert("backend".to_string(), self.backend);
+        map.insert("key".to_string(), self.key);
+        if let Some(version) = self.version {
+            map.insert("version".to_string(), version);
+        }
+        Ok(map)
+    }
 }
 
 #[async_trait]
