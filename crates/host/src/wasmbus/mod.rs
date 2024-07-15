@@ -806,11 +806,14 @@ impl Host {
         )
         .await?;
 
+        // If provided, secrets topic must be non-empty
+        // TODO(#2411): Validate secrets topic prefix as a valid NATS subject
         ensure!(
-            config
-                .secrets_topic_prefix
-                .as_ref()
-                .is_some_and(|topic| !topic.is_empty()),
+            config.secrets_topic_prefix.is_none()
+                || config
+                    .secrets_topic_prefix
+                    .as_ref()
+                    .is_some_and(|topic| !topic.is_empty()),
             "secrets topic prefix must be non-empty"
         );
 
