@@ -110,7 +110,7 @@ fn build_rust_provider(
     if !rust_config.debug {
         build_args.push("--release");
     }
-    
+
     if let Some(override_target) = &provider_config.rust_target {
         build_args.extend_from_slice(&["--target", override_target]);
     };
@@ -153,7 +153,11 @@ fn build_rust_provider(
         provider_path_buf.push(override_target);
     }
 
-    provider_path_buf.push("release");
+    if rust_config.debug {
+        provider_path_buf.push("debug");
+    } else {
+        provider_path_buf.push("release");
+    }
     provider_path_buf.push(&bin_name);
 
     Ok((provider_path_buf, bin_name))
