@@ -1,8 +1,8 @@
 mod common;
 
-use common::{init, init_workspace};
+use common::{init, init_provider, init_workspace};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Ok, Result};
 use std::env;
 use std::fs::File;
 use tokio::process::Command;
@@ -388,6 +388,45 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
         .spawn()?;
 
     assert!(build_cmd.wait().await?.success());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn integration_build_provider_debug_mode() -> Result<()> {
+    let test_setup = init_provider(
+        /* provider_name= */ "hello-world",
+        /* template_name= */ "messaging-nats",
+    )
+    .await?;
+
+    let project_dir = test_setup.project_dir;
+
+    tokio::fs::write(
+        &project_dir.join("wasmcloud.toml"),
+        r#"
+    name = "Messaging NATS"
+    language = "rust"
+    type = "provider"
+    
+    [provider]
+    vendor = "wasmcloud"
+
+    [rust]
+    debug = true
+    "#,
+    )
+    .await
+    .context("failed to update wasmcloud.toml file content for test case")?;
+
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
 
     Ok(())
 }
