@@ -150,7 +150,7 @@ export class WasmCloudInstance {
   /** Base URL for the the running wash UI instance */
   uiBaseURL(): string {
     const existing = this.#processes.get(WashProcessType.UI);
-    const port = existing ? existing.extra?.port : this.opts.washUI?.port ?? DEFAULT_WASH_UI_PORT;
+    const port = existing ? existing.extra?.port : (this.opts.washUI?.port ?? DEFAULT_WASH_UI_PORT);
     return `http://localhost:${port}`;
   }
 
