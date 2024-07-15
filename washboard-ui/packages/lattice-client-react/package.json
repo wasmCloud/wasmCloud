@@ -1,6 +1,5 @@
 {
   "name": "@wasmcloud/lattice-client-react",
-  "packageManager": "yarn@4.2.2",
   "license": "Apache-2.0",
   "version": "0.2.3",
   "description": "React specific package for the wasmCloud Lattice Client",
