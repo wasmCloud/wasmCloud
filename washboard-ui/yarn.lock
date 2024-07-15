@@ -2457,22 +2457,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-table@npm:^8.19.2":
-  version: 8.19.2
-  resolution: "@tanstack/react-table@npm:8.19.2"
+"@tanstack/react-table@npm:^8.19.3":
+  version: 8.19.3
+  resolution: "@tanstack/react-table@npm:8.19.3"
   dependencies:
-    "@tanstack/table-core": "npm:8.19.2"
+    "@tanstack/table-core": "npm:8.19.3"
   peerDependencies:
     react: ">=16.8"
     react-dom: ">=16.8"
-  checksum: 10/899fa0a91f54d4429a569a69be9a876a6ad9d64376b81fbf726e5cbef2ceabe3b5edd852fb3bd94220df2756f5582e8cd127769cdac53575becc563ed8fd2579
+  checksum: 10/10a9bd671f7a8ed5cd22120014dcb1e6cccb5387e01c95a810d28ea0d984f26577582197cd736636acdbb4daeb773984ade4614a048ced4d654953bb79b13118
   languageName: node
   linkType: hard
 
-"@tanstack/table-core@npm:8.19.2":
-  version: 8.19.2
-  resolution: "@tanstack/table-core@npm:8.19.2"
-  checksum: 10/c0d980f43341a73bdaed6bf39db6addd20bf2d7f6b59a3cdc078afe963676e04c0354a02a4d6ba90086e3ab1b9e79429cb1222cca5e27990ef7068c89dc5d161
+"@tanstack/table-core@npm:8.19.3":
+  version: 8.19.3
+  resolution: "@tanstack/table-core@npm:8.19.3"
+  checksum: 10/84af3b9088764ad7ed5f563d564fd5fa480de7b688bf1a8756d169c36730bb49bccf7a0904032eb22f674f84eddf4090e73759be88f86179f8523bbb5bf63f26
   languageName: node
   linkType: hard
 
@@ -2811,9 +2811,9 @@ __metadata:
     eslint-plugin-eslint-comments: "npm:^3.2.0"
     eslint-plugin-import: "npm:^2.29.1"
     eslint-plugin-no-use-extend-native: "npm:^0.5.0"
-    eslint-plugin-react: "npm:^7.34.3"
+    eslint-plugin-react: "npm:^7.34.4"
     eslint-plugin-react-hooks: "npm:^4.6.2"
-    eslint-plugin-react-refresh: "npm:^0.4.7"
+    eslint-plugin-react-refresh: "npm:^0.4.8"
     eslint-plugin-tailwindcss: "npm:3.17.4"
     eslint-plugin-unicorn: "npm:^52.0.0"
     typescript: "npm:^5.5.3"
@@ -2906,7 +2906,7 @@ __metadata:
     "@radix-ui/react-toast": "npm:^1.2.1"
     "@radix-ui/react-toggle": "npm:^1.1.0"
     "@radix-ui/react-tooltip": "npm:^1.1.2"
-    "@tanstack/react-table": "npm:^8.19.2"
+    "@tanstack/react-table": "npm:^8.19.3"
     "@types/node": "npm:^20.14.10"
     "@types/react": "npm:^18.3.3"
     "@types/react-dom": "npm:^18.3.0"
@@ -2928,14 +2928,14 @@ __metadata:
     eslint-plugin-eslint-comments: "npm:^3.2.0"
     eslint-plugin-import: "npm:^2.29.1"
     eslint-plugin-jsx-a11y: "npm:^6.9.0"
-    eslint-plugin-react: "npm:^7.34.3"
+    eslint-plugin-react: "npm:^7.34.4"
     eslint-plugin-react-hooks: "npm:^4.6.2"
-    eslint-plugin-react-refresh: "npm:^0.4.7"
+    eslint-plugin-react-refresh: "npm:^0.4.8"
     eslint-plugin-tailwindcss: "npm:^3.17.4"
     eslint-plugin-unicorn: "npm:^52.0.0"
     execa: "npm:^9.3.0"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.404.0"
+    lucide-react: "npm:^0.408.0"
     nats.ws: "npm:^1.29.0"
     pino: "npm:^9.2.0"
     postcss: "npm:^8.4.39"
@@ -4705,18 +4705,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-react-refresh@npm:^0.4.7":
-  version: 0.4.7
-  resolution: "eslint-plugin-react-refresh@npm:0.4.7"
+"eslint-plugin-react-refresh@npm:^0.4.8":
+  version: 0.4.8
+  resolution: "eslint-plugin-react-refresh@npm:0.4.8"
   peerDependencies:
     eslint: ">=7"
-  checksum: 10/acbbe24e40b2b6fe96656e9407e275fdda6db031814674117e7a65d49a7a713f05b0d79dc6426d927b7622ce310a261cff385821c80b2e97089068dcd30bda52
+  checksum: 10/f502cd803a43dac83db43a924defe543a3ed57b545a4b5a9fc74c578c05903ffcb4f2988848b8d02672cf9443e390ef831ba5a1577f64617b68b3746229172b4
   languageName: node
   linkType: hard
 
-"eslint-plugin-react@npm:^7.34.3":
-  version: 7.34.3
-  resolution: "eslint-plugin-react@npm:7.34.3"
+"eslint-plugin-react@npm:^7.34.4":
+  version: 7.34.4
+  resolution: "eslint-plugin-react@npm:7.34.4"
   dependencies:
     array-includes: "npm:^3.1.8"
     array.prototype.findlast: "npm:^1.2.5"
@@ -4726,19 +4726,20 @@ __metadata:
     doctrine: "npm:^2.1.0"
     es-iterator-helpers: "npm:^1.0.19"
     estraverse: "npm:^5.3.0"
+    hasown: "npm:^2.0.2"
     jsx-ast-utils: "npm:^2.4.1 || ^3.0.0"
     minimatch: "npm:^3.1.2"
     object.entries: "npm:^1.1.8"
     object.fromentries: "npm:^2.0.8"
-    object.hasown: "npm:^1.1.4"
     object.values: "npm:^1.2.0"
     prop-types: "npm:^15.8.1"
     resolve: "npm:^2.0.0-next.5"
     semver: "npm:^6.3.1"
     string.prototype.matchall: "npm:^4.0.11"
+    string.prototype.repeat: "npm:^1.0.0"
   peerDependencies:
     eslint: ^3 || ^4 || ^5 || ^6 || ^7 || ^8
-  checksum: 10/f160a5b0a376e520b0cd5e2b6111e91966533708842270e460e2f93a45c80f42dc79232a38a6ccb1a397b1d9deba06f6dc819333d9e1af55d392bf52b20d6c9b
+  checksum: 10/9ad948a109bcb5b1f2f3a8099fa9eab3bee3eb996786f783d1f17208f44c8e3dcbc4f9dab84aa70062c03a053a48a333ca03fee21d406d5732291d204e43d9ca
   languageName: node
   linkType: hard
 
@@ -6428,12 +6429,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.404.0":
-  version: 0.404.0
-  resolution: "lucide-react@npm:0.404.0"
+"lucide-react@npm:^0.408.0":
+  version: 0.408.0
+  resolution: "lucide-react@npm:0.408.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10/7dd226caf9ace63791a8ab027901b100f9289ba17253d201485141c1e83f044bad84f2dc504ab26773a53e42e9aebcf078c45f6a3fe94481853e4d04b858b6c6
+  checksum: 10/3849f76a3aec5a60008606d661ba8b540f2769b117a797c4c5300f303f18971a725b9de0410f278b89004bff99d1596e3669acb46c6452aa9bd7b029acd1c758
   languageName: node
   linkType: hard
 
@@ -6896,17 +6897,6 @@ __metadata:
     es-abstract: "npm:^1.22.1"
     get-intrinsic: "npm:^1.2.1"
   checksum: 10/b7123d91403f95d63978513b23a6079c30f503311f64035fafc863c291c787f287b58df3b21ef002ce1d0b820958c9009dd5a8ab696e0eca325639d345e41524
-  languageName: node
-  linkType: hard
-
-"object.hasown@npm:^1.1.4":
-  version: 1.1.4
-  resolution: "object.hasown@npm:1.1.4"
-  dependencies:
-    define-properties: "npm:^1.2.1"
-    es-abstract: "npm:^1.23.2"
-    es-object-atoms: "npm:^1.0.0"
-  checksum: 10/797385577b3ef3c0d19333e03ed34bc7987978ae1ee1245069c9922e17d1128265187f729dc610260d03f8d418af26fcd7919b423793bf0af9099d9f08367d69
   languageName: node
   linkType: hard
 
@@ -8276,6 +8266,16 @@ __metadata:
     set-function-name: "npm:^2.0.2"
     side-channel: "npm:^1.0.6"
   checksum: 10/a902ff4500f909f2a08e55cc5ab1ffbbc905f603b36837674370ee3921058edd0392147e15891910db62a2f31ace2adaf065eaa3bc6e9810bdbc8ca48e05a7b5
+  languageName: node
+  linkType: hard
+
+"string.prototype.repeat@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "string.prototype.repeat@npm:1.0.0"
+  dependencies:
+    define-properties: "npm:^1.1.3"
+    es-abstract: "npm:^1.17.5"
+  checksum: 10/4b1bd91b75fa8fdf0541625184ebe80e445a465ce4253c19c3bccd633898005dadae0f74b85ae72662a53aafb8035bf48f8f5c0755aec09bc106a7f13959d05e
   languageName: node
   linkType: hard
 
