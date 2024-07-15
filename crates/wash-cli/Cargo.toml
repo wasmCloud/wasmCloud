@@ -39,6 +39,7 @@ regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }
 sanitize-filename = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
