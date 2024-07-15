@@ -265,7 +265,7 @@ serial_test = { version = "0.9", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 sysinfo = { version = "0.27", default-features = false }
 tempfile = { version = "3", default-features = false }
-term-table = { version = "1", default-features = false }
+term-table = { version = "=1.3.2", default-features = false }
 termcolor = { version = "1", default-features = false }
 # TODO(joonas): point testcontainers to a real version once 0.16.8 is released
 # so that https://github.com/testcontainers/testcontainers-rs/pull/633 is included.
