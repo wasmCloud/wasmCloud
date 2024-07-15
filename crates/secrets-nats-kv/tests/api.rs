@@ -151,9 +151,7 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
         },
         version: None,
     };
-    // wasmcloud-secrets-nats-kv uses async-nats 0.35, but
-    // wasmcloud-secrets-client uses 0.33 so we can't just clone the existing client.
-    let nats_client = nats_033::connect("127.0.0.1:4222").await?;
+    let nats_client = async_nats::connect("127.0.0.1:4222").await?;
     let secrets_client = wasmcloud_secrets_client::Client::new_with_version(
         &name,
         SUBJECT_BASE,
@@ -259,9 +257,7 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
         version: Some("1".to_string()),
     };
 
-    // wasmcloud-secrets-nats-kv uses async-nats 0.35, but
-    // wasmcloud-secrets-client uses 0.33 so we can't just clone the existing client.
-    let nats_client = nats_033::connect("127.0.0.1:4222").await?;
+    let nats_client = async_nats::connect("127.0.0.1:4222").await?;
     let secrets_client = wasmcloud_secrets_client::Client::new_with_version(
         &name,
         SUBJECT_BASE,

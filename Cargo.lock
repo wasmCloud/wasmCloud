@@ -5127,7 +5127,6 @@ name = "secrets-nats-kv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats",
  "async-nats-wrpc",
  "async-trait",
  "backoff",

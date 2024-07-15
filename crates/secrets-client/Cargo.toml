@@ -11,7 +11,7 @@ repository.workspace = true
 status = "actively-developed"
 
 [dependencies]
-async-nats = { workspace = true }
+async-nats = { workspace = true, features = ["ring", "server_2_10"] }
 nkeys = { workspace = true }
 serde_json = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
