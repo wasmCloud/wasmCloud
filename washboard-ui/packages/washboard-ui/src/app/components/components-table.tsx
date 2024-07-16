@@ -15,6 +15,8 @@ import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/
 import {ShortCopy} from '@/components/short-copy';
 import {Table, TableHeader, TableRow, TableHead, TableBody, TableCell} from '@/components/table';
 import {countInstances} from '../helpers/count-instances';
+import {useColumnVisibility, hideableWadmManagedColumnId} from '../hooks/use-column-visibility';
+import {WadmManagedIndicator} from './wadm-indicator/wadm-indicator';
 
 const columnHelper = createColumnHelper<WasmCloudComponent>();
 
@@ -36,6 +38,7 @@ const columns = [
     },
   }),
   columnHelper.accessor('id', {
+    id: 'id',
     header: 'ID',
     cell: (info) => <ShortCopy text={info.getValue()} />,
     meta: {
@@ -86,11 +89,17 @@ const columns = [
     },
   }),
   columnHelper.accessor('max_instances', {
+    id: 'max_instances_count',
     header: 'Max Count',
     meta: {
       baseRow: 'visible',
       expandedRow: 'empty',
     },
+  }),
+  columnHelper.accessor('annotations', {
+    id: hideableWadmManagedColumnId,
+    header: 'Managed',
+    cell: (info) => WadmManagedIndicator(info.getValue()),
   }),
 ];
 
@@ -100,6 +109,7 @@ export function ComponentsTable(): ReactElement {
   const data = useMemo(() => Object.values(components), [components]);
 
   const [sorting, setSorting] = useState<SortingState>([]);
+  const {columnVisibility, setColumnVisibility} = useColumnVisibility(columns);
 
   const table = useReactTable({
     data,
@@ -109,7 +119,8 @@ export function ComponentsTable(): ReactElement {
     getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    state: {sorting},
+    state: {sorting, columnVisibility},
+    onColumnVisibilityChange: setColumnVisibility,
   });
 
   return (
