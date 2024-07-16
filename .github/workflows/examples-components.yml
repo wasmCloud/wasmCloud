@@ -177,6 +177,7 @@ jobs:
     needs: [wash-build]
     if: ${{ startswith(github.ref, 'refs/tags/component-') }}
     permissions:
+      contents: read
       packages: write
     strategy:
       fail-fast: false
