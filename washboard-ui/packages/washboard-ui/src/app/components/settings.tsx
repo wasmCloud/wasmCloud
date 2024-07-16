@@ -12,6 +12,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/sheet';
+import {WadmManagedToggle} from './wadm-indicator/wadm-managed-toggle';
 
 function Settings(): ReactElement {
   return (
@@ -35,6 +36,8 @@ function Settings(): ReactElement {
             <div className="grid w-full max-w-sm items-center gap-1.5">
               <Label htmlFor="dark-mode">Dark Mode</Label>
               <DarkModeToggle id="dark-mode" />
+              <Label htmlFor="wadm-managed-indicator">WADM managed assets indicator</Label>
+              <WadmManagedToggle id="wadm-managed-indicator" />
             </div>
           </div>
           <SettingsSectionLabel>Lattice Configuration</SettingsSectionLabel>

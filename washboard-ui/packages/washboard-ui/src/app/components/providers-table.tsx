@@ -15,6 +15,8 @@ import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/
 import {ShortCopy} from '@/components/short-copy';
 import {StatusIndicator} from '@/components/status-indicator';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/table';
+import {useColumnVisibility, hideableWadmManagedColumnId} from '../hooks/use-column-visibility';
+import {WadmManagedIndicator} from './wadm-indicator/wadm-indicator';
 
 const columnHelper = createColumnHelper<WasmCloudProvider>();
 
@@ -37,6 +39,7 @@ const columns = [
   }),
   columnHelper.accessor('name', {
     header: 'Name',
+    id: 'name',
     meta: {
       baseRow: 'visible',
       expandedRow: 'empty',
@@ -112,6 +115,12 @@ const columns = [
       expandedRow: 'empty',
     },
   }),
+  columnHelper.accessor('annotations', {
+    id: hideableWadmManagedColumnId,
+    header: 'Managed',
+    enableHiding: true,
+    cell: (info) => WadmManagedIndicator(info.getValue()),
+  }),
 ];
 
 export function ProvidersTable(): ReactElement {
@@ -123,6 +132,7 @@ export function ProvidersTable(): ReactElement {
   );
 
   const [sorting, setSorting] = useState<SortingState>([]);
+  const {columnVisibility, setColumnVisibility} = useColumnVisibility(columns);
 
   const table = useReactTable({
     data,
@@ -132,7 +142,8 @@ export function ProvidersTable(): ReactElement {
     getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    state: {sorting},
+    state: {sorting, columnVisibility},
+    onColumnVisibilityChange: setColumnVisibility,
   });
 
   return (
