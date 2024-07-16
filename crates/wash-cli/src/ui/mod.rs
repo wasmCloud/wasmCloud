@@ -14,7 +14,7 @@ use wash_lib::{
 };
 use wasmcloud_core::tls;
 
-const DEFAULT_WASHBOARD_VERSION: &str = "v0.3.0";
+const DEFAULT_WASHBOARD_VERSION: &str = "v0.4.0";
 
 #[derive(Parser, Debug, Clone)]
 pub struct UiCommand {
