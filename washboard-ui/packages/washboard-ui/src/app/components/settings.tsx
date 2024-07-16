@@ -3,6 +3,7 @@ import {PropsWithChildren, ReactElement} from 'react';
 import {DarkModeToggle} from '@/app/components/dark-mode-toggle';
 import {LatticeSettings} from '@/app/components/lattice-settings';
 import {Button} from '@/components/button';
+import {FormItem} from '@/components/form';
 import {Label} from '@/components/label';
 import {
   Sheet,
@@ -30,26 +31,42 @@ function Settings(): ReactElement {
             Make changes to your settings here. Click update when you&nbsp;re done.
           </SheetDescription>
         </SheetHeader>
-        <div className="grid gap-4 py-4">
-          <div className="mb-6">
+        <div className="my-4 grid gap-8">
+          <SettingsSection>
             <SettingsSectionLabel>Display</SettingsSectionLabel>
-            <div className="grid w-full max-w-sm items-center gap-1.5">
-              <Label htmlFor="dark-mode">Dark Mode</Label>
-              <DarkModeToggle id="dark-mode" />
-              <Label htmlFor="wadm-managed-indicator">WADM managed assets indicator</Label>
-              <WadmManagedToggle id="wadm-managed-indicator" />
-            </div>
-          </div>
-          <SettingsSectionLabel>Lattice Configuration</SettingsSectionLabel>
-          <LatticeSettings />
+            <SettingsSectionContent>
+              <FormItem>
+                <Label htmlFor="dark-mode">Theme</Label>
+                <DarkModeToggle id="dark-mode" />
+              </FormItem>
+              <FormItem>
+                <Label htmlFor="wadm-managed-indicator">WADM managed assets indicator</Label>
+                <WadmManagedToggle id="wadm-managed-indicator" />
+              </FormItem>
+            </SettingsSectionContent>
+          </SettingsSection>
+          <SettingsSection>
+            <SettingsSectionLabel>Lattice Configuration</SettingsSectionLabel>
+            <SettingsSectionContent>
+              <LatticeSettings />
+            </SettingsSectionContent>
+          </SettingsSection>
         </div>
       </SheetContent>
     </Sheet>
   );
 }
 
+function SettingsSection({children}: PropsWithChildren): ReactElement {
+  return <div className="mb-6">{children}</div>;
+}
+
 function SettingsSectionLabel({children}: PropsWithChildren): ReactElement {
   return <div className="mb-3 font-semibold">{children}</div>;
+}
+
+function SettingsSectionContent({children}: PropsWithChildren): ReactElement {
+  return <div className="grid gap-4">{children}</div>;
 }
 
 export {Settings};

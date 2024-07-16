@@ -61,12 +61,12 @@ export function LatticeSettings(): ReactElement {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="contents">
         <FormField
           control={form.control}
           name="latticeUrl"
           render={({field}) => (
-            <FormItem className="grid w-full max-w-sm items-center gap-1.5">
+            <FormItem>
               <FormLabel htmlFor="latticeUrl">Server URL</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="ws://server:port" {...field} />
@@ -79,7 +79,7 @@ export function LatticeSettings(): ReactElement {
           control={form.control}
           name="latticeId"
           render={({field}) => (
-            <FormItem className="grid w-full max-w-sm items-center gap-1.5">
+            <FormItem>
               <FormLabel htmlFor="latticeId">Lattice ID</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="default" {...field} />
@@ -92,7 +92,7 @@ export function LatticeSettings(): ReactElement {
           control={form.control}
           name="retryCount"
           render={({field}) => (
-            <FormItem className="grid w-full max-w-sm items-center gap-1.5">
+            <FormItem>
               <FormLabel htmlFor="retryCount">Retry Count</FormLabel>
               <FormControl>
                 <Input type="number" min="0" {...field} />
@@ -105,7 +105,7 @@ export function LatticeSettings(): ReactElement {
           control={form.control}
           name="ctlTopicPrefix"
           render={({field}) => (
-            <FormItem className="grid w-full max-w-sm items-center gap-1.5">
+            <FormItem>
               <FormLabel htmlFor="ctlTopicPrefix">Control Topic Prefix</FormLabel>
               <FormControl>
                 <Input type="text" placeholder="wasmbus.ctl" {...field} />
