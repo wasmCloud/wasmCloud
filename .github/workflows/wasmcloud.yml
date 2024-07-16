@@ -609,7 +609,7 @@ jobs:
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
 
-      - uses: snapcore/action-build@2096990827aa966f773676c8a53793c723b6b40f
+      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79
         id: build
         with:
           path: ./crates/wash-cli
