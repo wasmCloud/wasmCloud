@@ -132,10 +132,10 @@ impl Manager {
             );
         };
 
-        let secrets = stream::iter(secret_names.iter())
+        let secrets = stream::iter(secret_names.into_iter())
             // Fetch the secret reference from the config store
             .then(|secret_name| async move {
-                match self.config_store.get(secret_name).await {
+                match self.config_store.get(&secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
                         .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
                     Ok(None) => bail!(

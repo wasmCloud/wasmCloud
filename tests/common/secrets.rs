@@ -50,29 +50,31 @@ impl NatsKvSecretsBackend {
             request_xkey
                 .public_key()
                 .parse::<async_nats::HeaderValue>()
-                .unwrap(),
+                .context("Should be able to parse header as value")?,
         );
 
         // NOTE: This is just demonstrative that you only need the public key to seal the secret
         let transit_xkey_pub = nkeys::XKey::from_public_key(&self.transit_xkey.public_key())
-            .expect("public key to be valid");
+            .context("public key to be valid")?;
         let value = serde_json::to_string(&secret)?;
         let v = request_xkey
             .seal(value.as_bytes(), &transit_xkey_pub)
-            .unwrap();
+            .context("should be able to seal the secret")?;
         let resp = self
             .nats_client
             .request_with_headers(self.topic("put_secret"), headers, v.into())
             .await?;
 
-        let put_resp: serde_json::Value = serde_json::from_slice(&resp.payload).unwrap();
+        let put_resp: serde_json::Value =
+            serde_json::from_slice(&resp.payload).context("should be able to parse response")?;
         assert_eq!(put_resp["revision"], 1);
 
         Ok(())
     }
 
     pub async fn add_mapping(&self, public_key: &str, secrets: HashSet<String>) -> Result<()> {
-        let payload = serde_json::to_string(&secrets).unwrap();
+        let payload =
+            serde_json::to_string(&secrets).context("should be able to serialize secrets")?;
         let response = self
             .nats_client
             .request(
@@ -94,9 +96,12 @@ impl NatsKvSecretsBackend {
             )
             .args([
                 "--encryption-xkey-seed",
-                &self.encryption_xkey.seed().expect("seed to be valid"),
+                &self
+                    .encryption_xkey
+                    .seed()
+                    .context("seed should be valid")?,
                 "--transit-xkey-seed",
-                &self.transit_xkey.seed().expect("seed to be valid"),
+                &self.transit_xkey.seed().context("seed should be valid")?,
                 "--subject-base",
                 &self.subject_base,
                 "--secrets-bucket",
