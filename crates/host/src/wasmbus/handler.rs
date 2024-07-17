@@ -303,11 +303,11 @@ impl Secrets for Handler {
         let Some(secret_val) = read_lock.get(secret.as_str()) else {
             // NOTE(brooksmtownsend): This error case should never happen, since we check for existence during `get` and
             // fail to start the component if the secret is missing. We might hit this during wRPC testing with resources.
-            let error_msg = "secret not found to reveal, ensure the secret is declared and associated with this component at startup";
+            const ERROR_MSG: &str = "secret not found to reveal, ensure the secret is declared and associated with this component at startup";
             // NOTE: This "secret" is just the name of the key, not the actual secret value. Regardless the secret itself
             // both wasn't found and is wrapped by `secrecy` so it won't be logged.
-            error!(?secret, error_msg);
-            bail!(error_msg)
+            error!(?secret, ERROR_MSG);
+            bail!(ERROR_MSG)
         };
         use secrecy::ExposeSecret;
         Ok(secret_val.expose_secret().clone())
