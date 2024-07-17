@@ -13,6 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         string_secret: Some("sup3rS3cr3tP4ssw0rd".to_string()),
         ..Default::default()
     };
+    let default_provider_secret = wasmcloud_secrets_types::Secret {
+        name: "default_redis_password".to_string(),
+        string_secret: Some("sup3rS3cr3tP4ssw0rd".to_string()),
+        ..Default::default()
+    };
 
     let nats_client = async_nats::connect("127.0.0.1:4222").await?;
     let transit_xkey_seed = std::env::args()
@@ -25,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &nats_client,
         "wasmcloud.secrets",
         &transit_xkey,
-        vec![component_secret, provider_secret],
+        vec![component_secret, provider_secret, default_provider_secret],
     )
     .await;
     for res in results {
