@@ -562,7 +562,7 @@ jobs:
             done
           done
 
-      - uses: softprops/action-gh-release@a74c6b72af54cfa997e81df42d94703d6313a2d0
+      - uses: softprops/action-gh-release@fb2d03176f42a1f0dd433ca263f314051d3edd44
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
@@ -570,7 +570,7 @@ jobs:
           generate_release_notes: true
           files: ./wasmcloud/*
 
-      - uses: softprops/action-gh-release@a74c6b72af54cfa997e81df42d94703d6313a2d0
+      - uses: softprops/action-gh-release@fb2d03176f42a1f0dd433ca263f314051d3edd44
         if: startsWith(github.ref, 'refs/tags/wash-cli-v')
         with:
           draft: false
