@@ -15,7 +15,7 @@ use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
 use wasmcloud_secrets_types::{Application, Context, Secret as WasmcloudSecret, SecretRequest};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-struct SecretReference {
+pub(crate) struct SecretReference {
     /// The backend to use for retrieving the secret.
     pub backend: String,
     /// The key to use for retrieving the secret from the backend.

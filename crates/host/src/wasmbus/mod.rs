@@ -30,7 +30,7 @@ use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::future::Either;
 use futures::stream::{AbortHandle, Abortable, SelectAll};
 use futures::{join, stream, try_join, Stream, StreamExt, TryFutureExt, TryStreamExt};
-use nkeys::{KeyPair, KeyPairType};
+use nkeys::{KeyPair, KeyPairType, XKey};
 use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -321,7 +321,8 @@ struct Provider {
     child: JoinHandle<()>,
     annotations: Annotations,
     image_ref: String,
-    claims: Option<jwt::Claims<jwt::CapabilityProvider>>,
+    claims_token: Option<jwt::Token<jwt::CapabilityProvider>>,
+    xkey: XKey,
 }
 
 /// wasmCloud Host
@@ -333,6 +334,8 @@ pub struct Host {
     host_config: HostConfig,
     host_key: Arc<KeyPair>,
     host_token: Arc<jwt::Token<jwt::Host>>,
+    /// The Xkey used to encrypt secrets when sending them over NATS
+    secrets_xkey: Arc<XKey>,
     labels: RwLock<HashMap<String, String>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
@@ -851,6 +854,7 @@ impl Host {
             ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
             host_token,
+            secrets_xkey: Arc::new(XKey::new()),
             labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats: Arc::new(rpc_nats),
@@ -1091,14 +1095,14 @@ impl Host {
                     provider_id,
                     Provider {
                         annotations,
-                        claims,
+                        claims_token,
                         image_ref,
                         ..
                     },
                 )| {
-                    let name = claims
+                    let name = claims_token
                         .as_ref()
-                        .and_then(|claims| claims.metadata.as_ref())
+                        .and_then(|claims| claims.claims.metadata.as_ref())
                         .and_then(|metadata| metadata.name.as_ref())
                         .cloned();
                     let annotations = Some(annotations.clone().into_iter().collect());
@@ -1107,9 +1111,9 @@ impl Host {
                         image_ref: Some(image_ref.clone()),
                         name: name.clone(),
                         annotations,
-                        revision: claims
+                        revision: claims_token
                             .as_ref()
-                            .and_then(|claims| claims.metadata.as_ref())
+                            .and_then(|claims| claims.claims.metadata.as_ref())
                             .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
                             .unwrap_or_default(),
                     }
@@ -2080,28 +2084,60 @@ impl Host {
                 trace_level: self.host_config.otel_config.trace_level.clone(),
             };
 
+            let provider_xkey = XKey::new();
+            // The provider itself needs to know its private key
+            let provider_xkey_private_key = if let Ok(seed) = provider_xkey.seed() {
+                seed
+            } else if self.host_config.secrets_topic_prefix.is_none() {
+                "".to_string()
+            } else {
+                // This should never happen since this returns an error when an Xkey is
+                // created from a public key, but if we can't generate one for whatever
+                // reason, we should bail.
+                bail!("failed to generate seed for provider xkey")
+            };
+            // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
+            let xkey = XKey::from_public_key(&provider_xkey.public_key())?;
+
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
             // or target of a link, we need to iterate over all links to find the ones that involve the provider.
-            let link_definitions = stream::iter(self.links.read().await.values().flatten())
+            let provider_links: Vec<InterfaceLinkDefinition> = self
+                .links
+                .read()
+                .await
+                .values()
+                .flatten()
+                .filter_map(|link| {
+                    if link.source_id == provider_id || link.target == provider_id {
+                        Some(link.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let link_definitions = stream::iter(provider_links.iter())
                 .filter_map(|link| async {
                     if link.source_id == provider_id || link.target == provider_id {
-                        if let Ok(provider_link) = self
+                        match self
                             .resolve_link_config(
                                 link.clone(),
                                 claims_token.as_ref().map(|t| &t.jwt),
                                 annotations.get("wasmcloud.dev/appspec"),
+                                &xkey,
                             )
                             .await
                         {
-                            Some(provider_link)
-                        } else {
-                            error!(
-                                provider_id,
-                                source_id = link.source_id,
-                                target = link.target,
-                                "failed to resolve link config, skipping link"
-                            );
-                            None
+                            Ok(provider_link) => Some(provider_link),
+                            Err(e) => {
+                                error!(
+                                    error = ?e,
+                                    provider_id,
+                                    source_id = link.source_id,
+                                    target = link.target,
+                                    "failed to resolve link config, skipping link"
+                                );
+                                None
+                            }
                         }
                     } else {
                         None
@@ -2128,6 +2164,7 @@ impl Host {
                     })
                     .collect()
             };
+
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice.to_string(),
@@ -2141,6 +2178,8 @@ impl Host {
                 link_definitions,
                 config: config.get_config().await.clone(),
                 secrets,
+                provider_xkey_private_key,
+                host_xkey_public_key: self.secrets_xkey.public_key(),
                 cluster_issuers: vec![],
                 default_rpc_timeout_ms,
                 log_level: Some(self.host_config.log_level.clone()),
@@ -2313,8 +2352,9 @@ impl Host {
             entry.insert(Provider {
                 child,
                 annotations,
-                claims,
+                claims_token,
                 image_ref: provider_ref.to_string(),
+                xkey,
             });
         } else {
             bail!("provider is already running with that ID")
@@ -2495,10 +2535,7 @@ impl Host {
     /// the change is written to the LATTICEDATA store, each host in the lattice (including this one)
     /// will handle the new specification and update their own internal link maps via [process_component_spec_put].
     #[instrument(level = "debug", skip_all)]
-    async fn handle_interface_link_put(
-        &self,
-        payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<CtlResponse<()>> {
+    async fn handle_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
         let interface_link_definition: InterfaceLinkDefinition = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
@@ -2523,17 +2560,16 @@ impl Host {
             "handling put wrpc link definition"
         );
 
-        // Before we store the link, we need to ensure the configuration is resolvable
-        let provider_link = self
-            // TODO(#2407): This is going to fail every time if a secret is defined in a link.
-            // Since links can be created before the component/provider we need some ability to
-            // just check config
-            .resolve_link_config(interface_link_definition.clone(), None, None)
-            .await
-            .context("failed to resolve link config for provider")?;
+        self.validate_config(
+            interface_link_definition
+                .source_config
+                .iter()
+                .chain(&interface_link_definition.target_config)
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .await?;
 
-        // Note here that unwrapping to a default is intentional. If the component spec doesn't exist, we want to create it
-        // so that when that component does start it can use pre-existing links.
         let mut component_spec = self
             .get_component_spec(&source_id)
             .await?
@@ -2562,18 +2598,12 @@ impl Host {
         let set_event = event::linkdef_set(&interface_link_definition);
         self.publish_event("linkdef_set", set_event).await?;
 
-        self.put_provider_link(&source_id, &target, provider_link)
-            .await?;
-
         Ok(CtlResponse::success())
     }
 
     #[instrument(level = "debug", skip_all)]
     /// Remove an interface link on a source component for a specific package
-    async fn handle_interface_link_del(
-        &self,
-        payload: impl AsRef<[u8]>,
-    ) -> anyhow::Result<CtlResponse<()>> {
+    async fn handle_link_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
         let DeleteInterfaceLinkDefinitionRequest {
             source_id,
@@ -2800,7 +2830,7 @@ impl Host {
                 .map(serialize_ctl_response),
             // Link commands
             (Some("link"), Some("del"), None, None) => self
-                .handle_interface_link_del(message.payload)
+                .handle_link_del(message.payload)
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),
@@ -2809,7 +2839,7 @@ impl Host {
                 self.handle_links().await.map(|bytes| Some(Ok(bytes)))
             }
             (Some("link"), Some("put"), None, None) => self
-                .handle_interface_link_put(message.payload)
+                .handle_link_put(message.payload)
                 .await
                 .map(Some)
                 .map(serialize_ctl_response),
@@ -2899,42 +2929,40 @@ impl Host {
         }
     }
 
-    /// Publishes a link to the lattice for all instances of a provider to handle
-    /// Right now this is publishing _both_ to the source and the target in order to
-    /// ensure that the provider is aware of the link. This would cause problems if a provider
-    /// is linked to a provider (which it should never be.)
-    #[instrument(level = "debug", skip(self, provider_link))]
+    /// Publishes a link to a provider running on this host to handle.
+    #[instrument(level = "debug", skip_all)]
     async fn put_provider_link(
         &self,
-        source_id: &str,
-        target: &str,
-        provider_link: wasmcloud_core::InterfaceLinkDefinition,
+        provider: &Provider,
+        link: &InterfaceLinkDefinition,
     ) -> anyhow::Result<()> {
+        let Ok(provider_link) = self
+            .resolve_link_config(
+                link.clone(),
+                provider.claims_token.as_ref().map(|t| &t.jwt),
+                provider.annotations.get("wasmcloud.dev/appspec"),
+                &provider.xkey,
+            )
+            .await
+        else {
+            bail!("failed to resolve link config");
+        };
         let lattice = &self.host_config.lattice;
         let payload: Bytes = serde_json::to_vec(&provider_link)
             .context("failed to serialize provider link definition")?
             .into();
-        let source_provider = self
-            .rpc_nats
+
+        self.rpc_nats
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{source_id}.linkdefs.put"),
+                format!(
+                    "wasmbus.rpc.{lattice}.{}.linkdefs.put",
+                    provider.xkey.public_key()
+                ),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload.clone(),
             )
             .await
-            .context("failed to publish provider link definition put");
-        let target_provider = self
-            .rpc_nats
-            .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{target}.linkdefs.put"),
-                injector_to_headers(&TraceContextInjector::default_with_span()),
-                payload,
-            )
-            .await
-            .context("failed to publish provider link definition put");
-        source_provider?;
-        target_provider?;
-        Ok(())
+            .context("failed to publish provider link definition put")
     }
 
     /// Publishes a delete link to the lattice for all instances of a provider to handle
@@ -3052,6 +3080,49 @@ impl Host {
 
         let spec: ComponentSpecification = serde_json::from_slice(value.as_ref())
             .context("failed to deserialize component specification")?;
+
+        // Compute all new links that do not exist in the host map, which we'll use to
+        // publish to any running providers that are the source or target of the link.
+        let new_links = {
+            let all_links = self.links.read().await;
+            spec.links
+                .iter()
+                .filter(|spec_link| {
+                    // Retain only links that do not exist in the host map
+                    !all_links
+                        .iter()
+                        .filter_map(|(source_id, links)| {
+                            // Only consider links that are either the source or target of the new link
+                            if source_id == &spec_link.source_id || source_id == &spec_link.target {
+                                Some(links)
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten()
+                        .any(|host_link| spec_link == &host_link)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        {
+            // Acquire lock once in this block to avoid continually trying to acquire it
+            let providers = self.providers.read().await;
+            // For every new link, if a provider is running on this host as the source or target,
+            // send the link to the provider for handling based on the xkey public key.
+            for link in new_links {
+                if let Some(provider) = providers.get(&link.source_id) {
+                    if let Err(e) = self.put_provider_link(provider, link).await {
+                        error!(?e, "failed to put provider link");
+                    }
+                }
+                if let Some(provider) = providers.get(&link.target) {
+                    if let Err(e) = self.put_provider_link(provider, link).await {
+                        error!(?e, "failed to put provider link");
+                    }
+                }
+            }
+        }
 
         // If the component is already running, update the links
         if let Some(component) = self.components.write().await.get(id) {
@@ -3196,7 +3267,7 @@ impl Host {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())
-            .partition(|name| name.starts_with("secret_"));
+            .partition(|name| name.starts_with("SECRET_"));
 
         let config = self
             .config_generator
@@ -3213,27 +3284,114 @@ impl Host {
         Ok((config, secrets))
     }
 
+    /// Validates that the provided configuration names exist in the store and are valid.
+    ///
+    /// For any configuration that starts with `SECRET_`, the configuration is expected to be a secret reference.
+    /// For any other configuration, the configuration is expected to be a [`HashMap<String, String>`].
+    async fn validate_config(&self, config_names: Vec<String>) -> anyhow::Result<()> {
+        let config_store = self.config_data.clone();
+        let validation_errors = futures::future::join_all(
+            config_names.iter().map(|config_name| {
+                let config_store = config_store.clone();
+                async move {
+                    match config_store.get(config_name).await {
+                        // TODO: no magic string
+                        Ok(Some(secret)) if config_name.starts_with("SECRET_") => serde_json::from_slice::<crate::secrets::SecretReference>(&secret)
+                            .map(|_| ())
+                            .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {config_name} is a secret reference and not configuration")),
+                        Ok(Some(config)) => serde_json::from_slice::<HashMap<String, String>>(&config)
+                            .map(|_| ())
+                            .map_err(|_| anyhow::anyhow!("failed to deserialize config from config store, ensure {config_name} is a valid string -> string map")),
+                        Ok(None) => bail!("Configuration {config_name} not found in config store"),
+                        Err(e) => bail!(e),
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let errors = validation_errors
+            .into_iter()
+            .filter_map(|res| res.err())
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            let mut error_chain = anyhow::anyhow!("failed to validate link config");
+            for error in errors {
+                error_chain = error_chain.context(error);
+            }
+            return Err(error_chain);
+        }
+
+        Ok(())
+    }
+
     /// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
-    /// by generating the source and target config for the link
+    /// by fetching the source and target configurations and secrets, and encrypting the secrets.
     async fn resolve_link_config(
         &self,
         link: wasmcloud_control_interface::InterfaceLinkDefinition,
-        entity_jwt: Option<&String>,
+        provider_jwt: Option<&String>,
         application: Option<&String>,
+        provider_xkey: &XKey,
     ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
-        let (source_bundle, source_secrets) = self
-            .fetch_config_and_secrets(&link.source_config, entity_jwt, application)
+        let (source_bundle, raw_source_secrets) = self
+            .fetch_config_and_secrets(&link.source_config, provider_jwt, application)
             .await?;
-        let (target_bundle, target_secrets) = self
-            .fetch_config_and_secrets(&link.target_config, entity_jwt, application)
+        let (target_bundle, raw_target_secrets) = self
+            .fetch_config_and_secrets(&link.target_config, provider_jwt, application)
             .await?;
 
         let source_config = source_bundle.get_config().await;
         let target_config = target_bundle.get_config().await;
-
         // NOTE(brooksmtownsend): This trait import is used here to ensure we're only exposing secret
         // values when we need them.
         use secrecy::ExposeSecret;
+        let source_secrets_map: HashMap<String, wasmcloud_core::secrets::SecretValue> =
+            raw_source_secrets
+                .iter()
+                .map(|(k, v)| match v.expose_secret() {
+                    SecretValue::String(s) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                    ),
+                    SecretValue::Bytes(b) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                    ),
+                })
+                .collect();
+        let target_secrets_map: HashMap<String, wasmcloud_core::secrets::SecretValue> =
+            raw_target_secrets
+                .iter()
+                .map(|(k, v)| match v.expose_secret() {
+                    SecretValue::String(s) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
+                    ),
+                    SecretValue::Bytes(b) => (
+                        k.clone(),
+                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
+                    ),
+                })
+                .collect();
+        // Serializing & sealing an empty map results in a non-empty Vec, which is difficult to tell the
+        // difference between an empty map and an encrypted empty map. To avoid this, we explicitly handle
+        // the case where the map is empty.
+        let source_secrets = if source_secrets_map.is_empty() {
+            Vec::with_capacity(0)
+        } else {
+            serde_json::to_vec(&source_secrets_map)
+                .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
+                .context("failed to serialize and encrypt source secrets")??
+        };
+        let target_secrets = if target_secrets_map.is_empty() {
+            Vec::with_capacity(0)
+        } else {
+            serde_json::to_vec(&target_secrets_map)
+                .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
+                .context("failed to serialize and encrypt target secrets")??
+        };
+
         Ok(wasmcloud_core::InterfaceLinkDefinition {
             source_id: link.source_id,
             target: link.target,
@@ -3243,33 +3401,8 @@ impl Host {
             interfaces: link.interfaces,
             source_config: source_config.clone(),
             target_config: target_config.clone(),
-            // TODO(#2407): We should be encrypting and decrypting these, especially when sent over the lattice
-            source_secrets: source_secrets
-                .iter()
-                .map(|(k, v)| match v.expose_secret() {
-                    SecretValue::String(s) => (
-                        k.clone(),
-                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
-                    ),
-                    SecretValue::Bytes(b) => (
-                        k.clone(),
-                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
-                    ),
-                })
-                .collect(),
-            target_secrets: target_secrets
-                .iter()
-                .map(|(k, v)| match v.expose_secret() {
-                    SecretValue::String(s) => (
-                        k.clone(),
-                        wasmcloud_core::secrets::SecretValue::String(s.to_owned()),
-                    ),
-                    SecretValue::Bytes(b) => (
-                        k.clone(),
-                        wasmcloud_core::secrets::SecretValue::Bytes(b.to_owned()),
-                    ),
-                })
-                .collect(),
+            source_secrets,
+            target_secrets,
         })
     }
 }
