@@ -242,7 +242,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         PONGER_COMPONENT_ID,
         None,
         5,
-        vec!["ponger".to_string(), "secret_ponger".to_string()],
+        vec!["ponger".to_string(), "SECRET_ponger".to_string()],
     )
     .await
     .expect("should've scaled component");
