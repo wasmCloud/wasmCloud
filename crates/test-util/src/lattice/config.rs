@@ -37,5 +37,5 @@ pub async fn assert_put_secret_reference(
         config.insert("version".to_string(), version.to_string());
     }
 
-    assert_config_put(client, format!("secret_{}", name.as_ref()), config).await
+    assert_config_put(client, format!("SECRET_{}", name.as_ref()), config).await
 }
