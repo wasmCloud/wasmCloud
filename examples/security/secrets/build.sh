@@ -1,10 +1,5 @@
 #!/bin/bash
 
-echo "Building NATS KV secrets backend ..."
-pushd ../../../crates/secrets-nats-kv
-cargo build
-popd
-
 echo "Building NATS KV setup utility..."
 pushd ./secret-setup
 cargo build

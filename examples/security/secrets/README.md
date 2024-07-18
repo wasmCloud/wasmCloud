@@ -13,8 +13,7 @@ This example uses a locally built version of the NATS KV secrets backend and was
 - [Rust toolchain](https://www.rust-lang.org/tools/install)
 - [wash](https://wasmcloud.com/docs/installation)
 - [NATS CLI](https://github.com/nats-io/natscli)
-- [redis-server](https://redis.io/docs/latest/operate/oss_and_stack/install/install-redis/)
-- [nats-server](https://docs.nats.io/running-a-nats-service/introduction)
+- [Docker](https://www.docker.com/)
 - [jq](https://jqlang.github.io/jq/download/)
 
 ## Running this example
@@ -25,7 +24,7 @@ Build wasmCloud, the NATS KV secrets backend, the keyvalue counter auth componen
 ./build.sh
 ```
 
-Run the example:
+Run the example, including the docker compose file for infrastructure:
 
 ```bash
 ./run.sh

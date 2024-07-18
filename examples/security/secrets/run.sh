@@ -1,25 +1,10 @@
 #!/bin/bash
 
-echo "Starting Redis with password ..."
-redis-server ./redis.conf > /dev/null 2>&1 &
-redis_pid=$!
-
-echo "Starting NATS server ..."
-nats-server -js > /dev/null 2>&1 &
-nats_pid=$!
-
-echo "Starting NATS KV secrets backend ..."
+echo "Starting docker compose infrastructure ..."
 subject_base=wasmcloud.secrets
 encryption_key=$(nk -gen x25519)
 transit_key=$(nk -gen x25519)
-pushd ../../../crates/secrets-nats-kv > /dev/null
-cargo run -- --encryption-xkey-seed $encryption_key \
-    --transit-xkey-seed $transit_key \
-    --subject-base $subject_base \
-    --secrets-bucket WASMCLOUD_EXAMPLE_SECRETS_default &
-nats_kv_pid=$!
-
-popd > /dev/null
+ENCRYPTION_KEY=$encryption_key TRANSIT_KEY=$transit_key SUBJECT_BASE=$subject_base docker compose up -d
 
 echo "Putting secrets and mappings in NATS KV ..."
 sleep 5
@@ -90,11 +75,7 @@ echo "Now send requests to localhost:8080 ..."
 # Neat little trick to wait for CTRL+c to exit
 cleanup() {
     echo "CTRL+c detected, cleaning up ..."
-    wash down --purge-jetstream wasmcloud
-    wash stop host $host_id
-    kill $nats_kv_pid
-    kill $redis_pid
-    kill $nats_pid
+    docker compose down
 }
 trap cleanup INT
 
