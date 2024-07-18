@@ -291,6 +291,7 @@ jobs:
           path: doc
 
   providers:
+    if: startswith(github.ref, 'refs/tags/provider-')
     strategy:
       matrix:
         include:
