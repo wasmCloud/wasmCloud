@@ -52,7 +52,7 @@ pub async fn put_secret(
         .expect("should be able to encrypt the secret");
     nats_client
         .request_with_headers(
-            format!("{subject_base}.v0.{}.put_secret", secret.name),
+            format!("{subject_base}.v0.nats-kv.put_secret"),
             headers,
             v.into(),
         )

@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let nats_client = async_nats::connect("127.0.0.1:4222").await?;
     let transit_xkey_seed = std::env::args()
-        .next()
+        .nth(1)
         .expect("transit xkey required to put secrets");
     let transit_xkey =
         nkeys::XKey::from_seed(&transit_xkey_seed).expect("transit xkey seed is invalid");
