@@ -50,6 +50,12 @@ pub struct HostData {
     /// Secrets given to this provider at runtime
     #[serde(default)]
     pub secrets: HashMap<String, SecretValue>,
+    /// The public key xkey of the host, used for decrypting secrets
+    #[serde(default)]
+    pub host_xkey_public_key: String,
+    /// The private key xkey of the provider, used for decrypting secrets
+    #[serde(default)]
+    pub provider_xkey_private_key: String,
     /// Host-wide default RPC timeout for rpc messages, in milliseconds.  Defaults to 2000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_rpc_timeout_ms: Option<u64>,
