@@ -6,9 +6,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    secrets::SecretValue, ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage,
-};
+use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
 
 /// Name of a link on the wasmCloud lattice
 pub type LinkName = String;
@@ -39,11 +37,13 @@ pub struct InterfaceLinkDefinition {
     #[serde(default)]
     pub target_config: HashMap<String, String>,
     /// The secrets to give to the source of this link
+    /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub source_secrets: HashMap<String, SecretValue>,
+    pub source_secrets: Vec<u8>,
     /// The secrets to give to the target of this link
+    /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub target_secrets: HashMap<String, SecretValue>,
+    pub target_secrets: Vec<u8>,
 }
 
 /// Helper function to provide a default link name
