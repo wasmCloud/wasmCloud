@@ -190,7 +190,8 @@ impl Fetcher {
         let mut certs = tls::NATIVE_ROOTS_OCI.to_vec();
         if !self.additional_ca_paths.is_empty() {
             certs.extend(
-                tls::load_certs_from_paths(&self.additional_ca_paths)?
+                tls::load_certs_from_paths(&self.additional_ca_paths)
+                    .context("failed to load CA certs from provided paths")?
                     .iter()
                     .map(|cert| oci_distribution::client::Certificate {
                         encoding: oci_distribution::client::CertificateEncoding::Der,
@@ -281,8 +282,8 @@ impl Fetcher {
     }
 
     /// Used to set additional CA paths that will be used as part of fetching components and providers
-    pub fn with_additional_ca_paths(mut self, additional_ca_paths: &Vec<PathBuf>) -> Self {
-        self.additional_ca_paths.clone_from(additional_ca_paths);
+    pub fn with_additional_ca_paths(mut self, paths: &[impl AsRef<Path>]) -> Self {
+        self.additional_ca_paths = paths.iter().map(AsRef::as_ref).map(PathBuf::from).collect();
         self
     }
 }
