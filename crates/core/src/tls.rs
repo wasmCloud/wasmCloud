@@ -22,7 +22,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use anyhow::Context as _;
+use anyhow::{Context as _, Result};
 use once_cell::sync::Lazy;
 
 #[cfg(feature = "rustls-native-certs")]
@@ -114,7 +114,7 @@ impl NativeRootsExt for reqwest::ClientBuilder {
 /// Attempt to load certificates from a given array of paths
 pub fn load_certs_from_paths(
     paths: &[impl AsRef<Path>],
-) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
     paths
         .iter()
         .map(read_certs_from_path)
@@ -130,15 +130,15 @@ pub fn load_certs_from_paths(
 /// At present this function only supports files -- directories will return an empty list
 pub fn read_certs_from_path(
     path: impl AsRef<Path>,
-) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    // TODO(joonas): Support directories
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
     let path = path.as_ref();
-    if path.is_file() {
-        let f = std::fs::File::open(path)
-            .with_context(|| format!("failed to open file at provided path: {}", path.display()))?;
-        let mut reader = std::io::BufReader::new(f);
-        Ok(rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?)
-    } else {
-        Ok(vec![])
+    // TODO(joonas): Support directories
+    if !path.is_file() {
+        return Ok(Vec::with_capacity(0));
     }
+    let mut reader =
+        std::io::BufReader::new(std::fs::File::open(path).with_context(|| {
+            format!("failed to open file at provided path: {}", path.display())
+        })?);
+    Ok(rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?)
 }
