@@ -14,6 +14,7 @@ use async_nats::HeaderMap;
 use base64::Engine;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt as _, TryStreamExt as _};
+use nkeys::XKey;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
@@ -245,12 +246,16 @@ async fn subscribe_link_put(
     nats: Arc<async_nats::Client>,
     mut quit: broadcast::Receiver<()>,
     lattice: &str,
-    provider_key: &str,
+    provider_xkey: &str,
 ) -> ProviderInitResult<mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>> {
-    let mut sub = nats
-        .subscribe(link_put_subject(lattice, provider_key))
-        .await?;
     let (link_put_tx, link_put_rx) = mpsc::channel(1);
+    if provider_xkey.is_empty() {
+        warn!("Provider is running on a host that does not provide a provider xkey, secrets will not be supported");
+        return Ok(link_put_rx);
+    }
+    let mut sub = nats
+        .subscribe(link_put_subject(lattice, provider_xkey))
+        .await?;
     spawn(async move {
         process_until_quit!(sub, quit, msg, {
             match serde_json::from_slice::<InterfaceLinkDefinition>(&msg.payload) {
@@ -333,6 +338,10 @@ pub(crate) struct ProviderInitState {
     pub commands: ProviderCommandReceivers,
     pub config: HashMap<String, String>,
     pub secrets: HashMap<String, SecretValue>,
+    /// The public key xkey of the host, used for decrypting secrets
+    /// Do not attempt to access the [`XKey::seed()`] of this XKey, it will always error.
+    host_xkey: XKey,
+    provider_xkey: XKey,
 }
 
 #[instrument]
@@ -352,12 +361,50 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         secrets,
         default_rpc_timeout_ms: _,
         link_name: _link_name,
+        host_xkey_public_key,
+        provider_xkey_private_key,
         ..
     } = spawn_blocking(load_host_data).await.map_err(|e| {
         ProviderInitError::Initialization(format!("failed to load host data: {e}"))
     })??;
 
     let (quit_tx, quit_rx) = broadcast::channel(1);
+
+    // If the xkey strings are empty, it just means that the host is <1.1.0 and does not support secrets.
+    // There aren't any negative side effects here, so it's really just a warning to update to 1.1.0.
+    let host_xkey = if host_xkey_public_key.is_empty() {
+        warn!("Provider is running on a host that does not provide a host xkey, secrets will not be supported");
+        XKey::new()
+    } else {
+        XKey::from_public_key(host_xkey_public_key).map_err(|e| {
+            ProviderInitError::Initialization(format!(
+                "failed to create host xkey from public key: {e}"
+            ))
+        })?
+    };
+    let provider_xkey = if provider_xkey_private_key.is_empty() {
+        warn!("Provider is running on a host that does not provide a provider xkey, secrets will not be supported");
+        XKey::new()
+    } else {
+        XKey::from_seed(provider_xkey_private_key).map_err(|e| {
+            ProviderInitError::Initialization(format!(
+                "failed to create provider xkey from private key: {e}"
+            ))
+        })?
+    };
+
+    // wasmCloud 1.1.0 hosts provide xkeys and publish links to the provider using the xkey public key in the NATS subject.
+    // Older hosts will use the provider key in the NATS subject.
+    // This allows for backwards compatibility with older hosts.
+    let provider_link_put_id = if host_xkey_public_key.is_empty()
+        && provider_xkey_private_key.is_empty()
+    {
+        debug!("Provider is running on a host that does not provide xkeys, using provider key in NATS subject");
+        provider_key.to_string()
+    } else {
+        debug!("Provider is running on a host that provides xkeys, using provider xkey in NATS subject");
+        provider_xkey.public_key()
+    };
 
     info!(
         "Starting capability provider {provider_key} instance {instance_id} with nats url {lattice_rpc_url}"
@@ -402,7 +449,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             Arc::clone(&nats),
             quit_tx.subscribe(),
             lattice_rpc_prefix,
-            provider_key,
+            &provider_link_put_id,
         ),
         subscribe_link_del(
             Arc::clone(&nats),
@@ -421,6 +468,8 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         link_definitions: link_definitions.clone(),
         config: config.clone(),
         secrets: secrets.clone(),
+        host_xkey,
+        provider_xkey,
         commands: ProviderCommandReceivers {
             health,
             shutdown,
@@ -440,24 +489,42 @@ where
     P: Provider,
 {
     match if ld.source_id == *connection.provider_id {
+        let secrets = if ld.source_secrets.is_empty() {
+            &HashMap::with_capacity(0)
+        } else {
+            &decrypt_link_secret(
+                &ld.source_secrets,
+                &connection.provider_xkey,
+                &connection.host_xkey,
+            )?
+        };
         provider
             .receive_link_config_as_source(LinkConfig {
                 source_id: &ld.source_id,
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.source_config,
-                secrets: &ld.source_secrets,
+                secrets,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
     } else if ld.target == *connection.provider_id {
+        let secrets = if ld.target_secrets.is_empty() {
+            &HashMap::with_capacity(0)
+        } else {
+            &decrypt_link_secret(
+                &ld.target_secrets,
+                &connection.provider_xkey,
+                &connection.host_xkey,
+            )?
+        };
         provider
             .receive_link_config_as_target(LinkConfig {
                 source_id: &ld.source_id,
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.target_config,
-                secrets: &ld.target_secrets,
+                secrets,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
@@ -470,6 +537,19 @@ where
         }
     };
     Ok(())
+}
+
+/// Given a serialized and encrypted [`HashMap<String, SecretValue>`], decrypts the secrets and deserializes
+/// the inner bytes into a [`HashMap<String, SecretValue>`]. This can either fail due to a decryption error
+/// or a deserialization error.
+fn decrypt_link_secret(
+    secrets: &[u8],
+    provider_xkey: &XKey,
+    host_xkey: &XKey,
+) -> Result<HashMap<String, SecretValue>> {
+    provider_xkey
+        .open(secrets, host_xkey)
+        .map(|secrets| serde_json::from_slice(&secrets).context("failed to deserialize secrets"))?
 }
 
 async fn delete_link_for_provider<P>(
@@ -560,7 +640,11 @@ async fn handle_provider_commands(
                 if let Some((ld, tx)) = req {
                     // If the link has already been put, return early
                     if connection.is_linked(&ld.source_id, &ld.target).await {
-                        warn!(source = &ld.source_id, target = &ld.target, "Ignoring duplicate link put");
+                        warn!(
+                            source = &ld.source_id,
+                            target = &ld.target,
+                            "Ignoring duplicate link put"
+                        );
                     } else {
                         info!("Linking component with provider");
                         if let Err(e) = receive_link_for_provider(&provider, connection, ld).await {
@@ -578,7 +662,7 @@ async fn handle_provider_commands(
                     if quit_tx.send(()).is_err() {
                         error!("failed to send quit");
                     };
-                    return
+                    return;
                 };
             }
             req = link_del.recv() => {
@@ -632,6 +716,8 @@ pub async fn run_provider(
         commands,
         config,
         secrets: _secrets,
+        host_xkey,
+        provider_xkey,
     } = init_state;
 
     let connection = ProviderConnection::new(
@@ -640,6 +726,8 @@ pub async fn run_provider(
         lattice_rpc_prefix.clone(),
         host_id,
         config,
+        provider_xkey,
+        host_xkey,
     )?;
     CONNECTION.set(connection).map_err(|_| {
         ProviderInitError::Initialization("Provider connection was already initialized".to_string())
@@ -735,6 +823,10 @@ pub struct ProviderConnection {
     lattice: String,
     host_id: String,
     provider_id: Arc<str>,
+
+    /// Secrets XKeys
+    provider_xkey: Arc<XKey>,
+    host_xkey: Arc<XKey>,
 
     // TODO: Reference this field to get static config
     #[allow(unused)]
@@ -833,6 +925,8 @@ impl ProviderConnection {
         lattice: String,
         host_id: String,
         config: HashMap<String, String>,
+        provider_xkey: XKey,
+        host_xkey: XKey,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
             source_links: Arc::default(),
@@ -842,6 +936,8 @@ impl ProviderConnection {
             host_id,
             provider_id,
             config,
+            provider_xkey: Arc::new(provider_xkey),
+            host_xkey: Arc::new(host_xkey),
         })
     }
 

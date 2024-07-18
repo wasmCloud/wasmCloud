@@ -22,7 +22,7 @@ async-nats = { workspace = true, features = ["ring"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-nkeys = { workspace = true }
+nkeys = { workspace = true, features = ["xkeys"] }
 once_cell = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 rmp-serde = { workspace = true }
