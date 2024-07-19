@@ -249,10 +249,6 @@ async fn subscribe_link_put(
     provider_xkey: &str,
 ) -> ProviderInitResult<mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>> {
     let (link_put_tx, link_put_rx) = mpsc::channel(1);
-    if provider_xkey.is_empty() {
-        warn!("Provider is running on a host that does not provide a provider xkey, secrets will not be supported");
-        return Ok(link_put_rx);
-    }
     let mut sub = nats
         .subscribe(link_put_subject(lattice, provider_xkey))
         .await?;
