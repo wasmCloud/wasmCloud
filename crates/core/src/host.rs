@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use secrecy::zeroize::ZeroizeOnDrop;
+use secrecy::Zeroize;
 use serde::{Deserialize, Serialize};
 
 use crate::link::InterfaceLinkDefinition;
@@ -67,4 +69,12 @@ pub struct HostData {
     pub log_level: Option<Level>,
     #[serde(default)]
     pub otel_config: OtelConfig,
+}
+
+// Trait implementations that ensure we zeroize the memory of secrets when they are dropped
+impl ZeroizeOnDrop for HostData {}
+impl Zeroize for HostData {
+    fn zeroize(&mut self) {
+        self.provider_xkey_private_key.zeroize();
+    }
 }

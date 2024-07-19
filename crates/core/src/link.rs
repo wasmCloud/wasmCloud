@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use secrecy::{zeroize::ZeroizeOnDrop, Zeroize};
 use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, LatticeTarget, WitInterface, WitNamespace, WitPackage};
@@ -44,6 +45,15 @@ pub struct InterfaceLinkDefinition {
     /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
     pub target_secrets: Vec<u8>,
+}
+
+// Trait implementations that ensure we zeroize secrets when they are dropped
+impl ZeroizeOnDrop for InterfaceLinkDefinition {}
+impl Zeroize for InterfaceLinkDefinition {
+    fn zeroize(&mut self) {
+        self.source_secrets.zeroize();
+        self.target_secrets.zeroize();
+    }
 }
 
 /// Helper function to provide a default link name
