@@ -313,8 +313,8 @@ async fn put_model(cmd: PutCommand) -> anyhow::Result<CommandOutput> {
         )
         .await
         .map_err(|e| anyhow::anyhow!(e)),
-        AppManifest::ModelName(_) => {
-            bail!("failed to retrieve manifest at `{:?}`", cmd.source)
+        AppManifest::ModelName(name) => {
+            bail!("failed to retrieve manifest. Ensure `{name}` is a valid path to a Wadm application manifest.")
         }
     }?;
 
