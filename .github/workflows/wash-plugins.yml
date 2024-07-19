@@ -25,7 +25,7 @@ jobs:
         cd crates/
         tar czf wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz wash-lib/wit
     - name: Release
-      uses: softprops/action-gh-release@a74c6b72af54cfa997e81df42d94703d6313a2d0
+      uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
       with:
         files: crates/wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz
         make_latest: "false"
