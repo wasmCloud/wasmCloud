@@ -34,13 +34,21 @@ pub struct Context {
     pub host_jwt: String,
     /// The application the entity belongs to.
     /// TODO: should this also be a JWT, but signed by the host?
-    pub application: Option<Application>,
+    pub application: Application,
 }
 
 /// The application that the entity belongs to.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Application {
+    /// The name of the application.
+    #[serde(default)]
     pub name: String,
+
+    /// The policy used define the application's access to secrets.
+    /// This meant to be a JSON string that can be deserialized by a secrets backend
+    /// implementation.
+    #[serde(default)]
+    pub policy: String,
 }
 
 impl Context {
