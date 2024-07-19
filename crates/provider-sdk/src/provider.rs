@@ -489,42 +489,32 @@ where
     P: Provider,
 {
     match if ld.source_id == *connection.provider_id {
-        let secrets = if ld.source_secrets.is_empty() {
-            &HashMap::with_capacity(0)
-        } else {
-            &decrypt_link_secret(
-                &ld.source_secrets,
-                &connection.provider_xkey,
-                &connection.host_xkey,
-            )?
-        };
         provider
             .receive_link_config_as_source(LinkConfig {
                 source_id: &ld.source_id,
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.source_config,
-                secrets,
+                secrets: &decrypt_link_secret(
+                    &ld.source_secrets,
+                    &connection.provider_xkey,
+                    &connection.host_xkey,
+                )?,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
     } else if ld.target == *connection.provider_id {
-        let secrets = if ld.target_secrets.is_empty() {
-            &HashMap::with_capacity(0)
-        } else {
-            &decrypt_link_secret(
-                &ld.target_secrets,
-                &connection.provider_xkey,
-                &connection.host_xkey,
-            )?
-        };
         provider
             .receive_link_config_as_target(LinkConfig {
                 source_id: &ld.source_id,
                 target_id: &ld.target,
                 link_name: &ld.name,
                 config: &ld.target_config,
-                secrets,
+                secrets: &decrypt_link_secret(
+                    &ld.target_secrets,
+                    &connection.provider_xkey,
+                    &connection.host_xkey,
+                )?,
                 wit_metadata: (&ld.wit_namespace, &ld.wit_package, &ld.interfaces),
             })
             .await
@@ -547,9 +537,14 @@ fn decrypt_link_secret(
     provider_xkey: &XKey,
     host_xkey: &XKey,
 ) -> Result<HashMap<String, SecretValue>> {
-    provider_xkey
-        .open(secrets, host_xkey)
-        .map(|secrets| serde_json::from_slice(&secrets).context("failed to deserialize secrets"))?
+    // An empty vec shouldn't be decrypted or deserialized, so return an empty hashmap
+    if secrets.is_empty() {
+        Ok(HashMap::with_capacity(0))
+    } else {
+        provider_xkey.open(secrets, host_xkey).map(|secrets| {
+            serde_json::from_slice(&secrets).context("failed to deserialize secrets")
+        })?
+    }
 }
 
 async fn delete_link_for_provider<P>(

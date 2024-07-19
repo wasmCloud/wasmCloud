@@ -57,6 +57,7 @@ use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
 
+use crate::secrets::SECRET_PREFIX;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
@@ -2097,7 +2098,8 @@ impl Host {
                 bail!("failed to generate seed for provider xkey")
             };
             // We only need to store the public key of the provider xkey, as the private key is only needed by the provider
-            let xkey = XKey::from_public_key(&provider_xkey.public_key())?;
+            let xkey = XKey::from_public_key(&provider_xkey.public_key())
+                .context("failed to create XKey from provider public key xkey")?;
 
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
             // or target of a link, we need to iterate over all links to find the ones that involve the provider.
@@ -2598,6 +2600,9 @@ impl Host {
         let set_event = event::linkdef_set(&interface_link_definition);
         self.publish_event("linkdef_set", set_event).await?;
 
+        self.put_backwards_compat_provider_link(&interface_link_definition)
+            .await?;
+
         Ok(CtlResponse::success())
     }
 
@@ -2929,6 +2934,74 @@ impl Host {
         }
     }
 
+    // TODO: Remove this before wasmCloud 1.2 is released. This is a backwards-compatible
+    // provider link definition put that is published to the provider's id, which is what
+    // providers built for wasmCloud 1.0 expected.
+    //
+    // Thankfully, in a lattice where there are no "older" providers running, these publishes
+    // will return immediately as there will be no subscribers on those topics.
+    async fn put_backwards_compat_provider_link(
+        &self,
+        link: &InterfaceLinkDefinition,
+    ) -> anyhow::Result<()> {
+        // Only attempt to publish the backwards-compatible provider link definition if the link
+        // does not contain any secret values.
+        if !(link
+            .source_config
+            .iter()
+            .any(|c| c.starts_with(SECRET_PREFIX))
+            || link
+                .target_config
+                .iter()
+                .any(|c| c.starts_with(SECRET_PREFIX)))
+        {
+            trace!("link contains secrets and is not backwards compatible, skipping");
+            return Ok(());
+        }
+        let Ok(provider_link) = self
+            .resolve_link_config(link.clone(), None, None, &XKey::new())
+            .await
+        else {
+            bail!("failed to resolve link config");
+        };
+        let lattice = &self.host_config.lattice;
+        let payload: Bytes = serde_json::to_vec(&provider_link)
+            .context("failed to serialize provider link definition")?
+            .into();
+
+        if let Err(e) = self
+            .rpc_nats
+            .publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.source_id),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload.clone(),
+            )
+            .await
+        {
+            warn!(
+                ?e,
+                "failed to publish backwards-compatible provider link to source"
+            );
+        }
+
+        if let Err(e) = self
+            .rpc_nats
+            .publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.target),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload,
+            )
+            .await
+        {
+            warn!(
+                ?e,
+                "failed to publish backwards-compatible provider link to target"
+            );
+        }
+
+        Ok(())
+    }
+
     /// Publishes a link to a provider running on this host to handle.
     #[instrument(level = "debug", skip_all)]
     async fn put_provider_link(
@@ -2936,7 +3009,7 @@ impl Host {
         provider: &Provider,
         link: &InterfaceLinkDefinition,
     ) -> anyhow::Result<()> {
-        let Ok(provider_link) = self
+        let provider_link = self
             .resolve_link_config(
                 link.clone(),
                 provider.claims_token.as_ref().map(|t| &t.jwt),
@@ -2944,9 +3017,7 @@ impl Host {
                 &provider.xkey,
             )
             .await
-        else {
-            bail!("failed to resolve link config");
-        };
+            .context("failed to resolve link config")?;
         let lattice = &self.host_config.lattice;
         let payload: Bytes = serde_json::to_vec(&provider_link)
             .context("failed to serialize provider link definition")?
@@ -3267,7 +3338,7 @@ impl Host {
         let (secret_names, config_names) = config_names
             .iter()
             .map(|s| s.to_string())
-            .partition(|name| name.starts_with("SECRET_"));
+            .partition(|name| name.starts_with(SECRET_PREFIX));
 
         let config = self
             .config_generator
@@ -3295,8 +3366,7 @@ impl Host {
                 let config_store = config_store.clone();
                 async move {
                     match config_store.get(config_name).await {
-                        // TODO: no magic string
-                        Ok(Some(secret)) if config_name.starts_with("SECRET_") => serde_json::from_slice::<crate::secrets::SecretReference>(&secret)
+                        Ok(Some(secret)) if config_name.starts_with(SECRET_PREFIX) => serde_json::from_slice::<crate::secrets::SecretReference>(&secret)
                             .map(|_| ())
                             .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {config_name} is a secret reference and not configuration")),
                         Ok(Some(config)) => serde_json::from_slice::<HashMap<String, String>>(&config)
