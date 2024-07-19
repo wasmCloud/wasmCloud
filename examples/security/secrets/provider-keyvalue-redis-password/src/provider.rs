@@ -54,7 +54,7 @@ impl SecretsExampleProvider {
 
         let conn_manager = connect_to_redis_authenticated(&password, &url)
             .await
-            .context("failed to connect to redis")?;
+            .context("failed to make authenticated connection to redis")?;
         let provider = SecretsExampleProvider {
             default_connection: Arc::new(RwLock::new(conn_manager)),
             component_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -83,14 +83,13 @@ impl keyvalue::atomics::Handler<Option<Context>> for SecretsExampleProvider {
     ) -> anyhow::Result<Result<u64, keyvalue::atomics::Error>> {
         let ctx = ctx.context("unexpectedly missing context")?;
         let connections = self.component_connections.read().await;
-        let mut conn = if let Some(source_id) = ctx.component {
-            connections
-                .get(&source_id)
-                .context("unexpectedly missing context")?
-                .clone()
-        } else {
-            bail!("received invocation from unlinked component");
-        };
+        let source_id = ctx
+            .component
+            .context("received invocation from unlinked component")?;
+        let mut conn = connections
+            .get(&source_id)
+            .with_context(|| format!("failed to find redis connection for source [{source_id}]"))?
+            .clone();
 
         Ok(conn
             .incr(key, delta)
@@ -105,7 +104,7 @@ impl Provider for SecretsExampleProvider {
         let SecretValue::String(password) = config
             .secrets
             .get("redis_password")
-            .context(format!("password secret not found: {:?}", config.secrets))?
+            .with_context(|| format!("password secret not found: {:?}", config.secrets))?
         else {
             bail!("password secret not a string")
         };
@@ -114,12 +113,13 @@ impl Provider for SecretsExampleProvider {
             password,
             config.config.get("url").context("url secret not found")?,
         )
-        .await;
+        .await
+        .context("failed to make authenticated connection to redis")?;
 
         self.component_connections
             .write()
             .await
-            .insert(config.source_id.to_string(), component_connection?);
+            .insert(config.source_id.to_string(), component_connection);
 
         Ok(())
     }

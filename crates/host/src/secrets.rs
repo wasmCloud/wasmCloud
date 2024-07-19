@@ -14,6 +14,9 @@ use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
 use wasmcloud_secrets_types::{Application, Context, Secret as WasmcloudSecret, SecretRequest};
 
+/// The prefix in the CONFIGDATA bucket for secret references
+pub const SECRET_PREFIX: &str = "SECRET_";
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SecretReference {
     /// The backend to use for retrieving the secret.
