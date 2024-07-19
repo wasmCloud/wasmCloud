@@ -6,7 +6,7 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use secrets_nats_kv::{Api, PutSecretResponse};
 use std::collections::HashMap;
 use wascap::jwt::{Claims, ClaimsBuilder, Component, Host};
-use wasmcloud_secrets_types::{Context, Secret, SecretRequest, WASMCLOUD_HOST_XKEY};
+use wasmcloud_secrets_types::{Application, Context, Secret, SecretRequest, WASMCLOUD_HOST_XKEY};
 
 const SUBJECT_BASE: &str = "kvstore_test";
 const NAME_BASE: &str = "nats-kv";
@@ -147,7 +147,10 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
         context: Context {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
-            application: None,
+            application: Application {
+                name: "test".to_string(),
+                policy: "".to_string(),
+            },
         },
         version: None,
     };
@@ -252,7 +255,10 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
         context: Context {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
-            application: None,
+            application: Application {
+                name: "test".to_string(),
+                policy: "".to_string(),
+            },
         },
         version: Some("1".to_string()),
     };

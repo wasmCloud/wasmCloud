@@ -26,6 +26,8 @@ pub(crate) struct SecretReference {
     /// The version of the secret to retrieve. If not supplied, the latest version will be used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The policy that defines configuration options for the backend.
+    pub policy_properties: String,
 }
 
 #[derive(Debug)]
@@ -148,13 +150,17 @@ impl Manager {
                 let secrets_client = self
                     .get_or_create_secrets_client(&secret_ref.backend)
                     .await?;
+                let application = Application{
+                    name: application.cloned().unwrap_or_default(),
+                    policy: secret_ref.policy_properties.clone(),
+                };
                 let request = SecretRequest {
                     name: secret_ref.key.clone(),
                     version: secret_ref.version.clone(),
                     context: Context {
                         entity_jwt: entity_jwt.to_string(),
                         host_jwt: host_jwt.to_string(),
-                        application: application.cloned().map(|name| Application { name }),
+                        application,
                     },
                 };
                 secrets_client
