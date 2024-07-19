@@ -13,7 +13,7 @@ cargo run -- $transit_key
 popd > /dev/null
 component_key=$(wash inspect ./component-keyvalue-counter-auth/build/component_keyvalue_counter_auth_s.wasm -o json | jq -r '.component')
 component_mapping="[\"api_password\"]"
-provider_key=$(wash inspect ./provider-keyvalue-redis-password/build/wasmcloud-example-auth-kvredis.par.gz -o json | jq -r '.service')
+provider_key=$(wash inspect ./provider-keyvalue-redis-auth/build/wasmcloud-example-auth-kvredis.par.gz -o json | jq -r '.service')
 provider_mapping="[\"redis_password\", \"default_redis_password\"]"
 nats req "$subject_base.v0.nats-kv.add_mapping.$provider_key" "$provider_mapping"
 nats req "$subject_base.v0.nats-kv.add_mapping.$component_key" "$component_mapping"
@@ -56,7 +56,7 @@ wash link put http-server kvcounter-auth wasi http \
 
 # Start providers
 wash config put SECRET_default_redis_password key=default_redis_password backend=nats-kv
-wash start provider file://$(pwd)/provider-keyvalue-redis-password/build/wasmcloud-example-auth-kvredis.par.gz kvredis-auth \
+wash start provider file://$(pwd)/provider-keyvalue-redis-auth/build/wasmcloud-example-auth-kvredis.par.gz kvredis-auth \
     --host-id $host_id \
     --config SECRET_default_redis_password
 wash start provider ghcr.io/wasmcloud/http-server:0.21.0 http-server

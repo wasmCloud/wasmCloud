@@ -14,4 +14,4 @@ echo "Building application component ..."
 wash build -p component-keyvalue-counter-auth
 
 echo "Building application provider ..."
-wash build -p provider-keyvalue-redis-password
+wash build -p provider-keyvalue-redis-auth
