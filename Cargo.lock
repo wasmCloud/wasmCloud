@@ -7560,6 +7560,7 @@ dependencies = [
  "async-nats-wrpc",
  "nkeys 0.4.1",
  "serde_json",
+ "thiserror",
  "wasmcloud-secrets-types",
 ]
 
