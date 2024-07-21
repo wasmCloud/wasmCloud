@@ -1,7 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
 wit_bindgen::generate!({
-    world: "component",
     with: {
         "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
     }
@@ -17,6 +16,10 @@ struct Actor;
 impl testing::pingpong::Guest for Actor {
     fn ping() -> String {
         "pong".to_string()
+    }
+
+    fn ping_secret() -> String {
+        "pong_secret".to_string()
     }
 }
 

@@ -1,4 +1,4 @@
-package test-wrpc:pinger;
+package test-components:pinger-config;
 
 world component {
   import test-components:testing/pingpong;
