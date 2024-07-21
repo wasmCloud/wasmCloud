@@ -17,8 +17,7 @@ use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 /// List of (manifest path, output artifact name) for all the packages used during test
 ///
 /// Manifest paths should be relative to the directory containing this build.rs (i.e. tests/components)
-const WASI_WASM32_PACKAGES: [(&str, &str); 6] = [
-    ("./rust/Cargo.toml", "builtins-component-reactor"),
+const WASI_WASM32_PACKAGES: [(&str, &str); 5] = [
     ("./rust/Cargo.toml", "interfaces-handler-reactor"),
     ("./rust/Cargo.toml", "interfaces-reactor"),
     ("./rust/Cargo.toml", "pinger-config-component"),
@@ -30,9 +29,7 @@ const WASI_WASM32_PACKAGES: [(&str, &str); 6] = [
 ];
 
 /// List of packages which should have output artifacts signed
-const WASI_WASM32_PACKAGES_SIGNED: [&str; 12] = [
-    "builtins-component-reactor",
-    "builtins-component-reactor-preview2",
+const WASI_WASM32_PACKAGES_SIGNED: [&str; 10] = [
     "http-keyvalue-counter",
     "http-keyvalue-counter-preview2",
     "interfaces-handler-reactor",
