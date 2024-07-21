@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "builtins-component-reactor",
     "interfaces-handler-reactor",
     "interfaces-reactor",
     "pinger-config-component",

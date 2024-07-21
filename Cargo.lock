@@ -7583,7 +7583,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.3.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-nats",

@@ -1,21 +1,5 @@
 pub const ISSUER: &str = env!("ISSUER");
 
-pub const RUST_BUILTINS_COMPONENT_REACTOR: &str =
-    concat!(env!("OUT_DIR"), "/rust-builtins-component-reactor.wasm");
-pub const RUST_BUILTINS_COMPONENT_REACTOR_SIGNED: &str = concat!(
-    env!("OUT_DIR"),
-    "/rust-builtins-component-reactor.signed.wasm"
-);
-
-pub const RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2: &str = concat!(
-    env!("OUT_DIR"),
-    "/rust-builtins-component-reactor-preview2.wasm"
-);
-pub const RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED: &str = concat!(
-    env!("OUT_DIR"),
-    "/rust-builtins-component-reactor-preview2.signed.wasm"
-);
-
 pub const RUST_HTTP_KEYVALUE_COUNTER: &str =
     concat!(env!("OUT_DIR"), "/rust-http-keyvalue-counter.wasm");
 pub const RUST_HTTP_KEYVALUE_COUNTER_PREVIEW2: &str =

@@ -27,17 +27,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf4b9d6a944f767f8e5e0db018570623c85f3d925ac718db4e06d0187adb21c1"
 
 [[package]]
-name = "builtins-component-reactor"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
- "wasmcloud-component",
- "wit-bindgen 0.22.0",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
