@@ -1,7 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
 wit_bindgen::generate!({
-    world: "component",
     with: {
         "wasi:http/types@0.2.0": wasmcloud_component::wasi::http::types,
         "wasi:io/streams@0.2.0": wasmcloud_component::wasi::io::streams,

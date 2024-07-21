@@ -1,4 +1,4 @@
-package test-wrpc:pinger;
+package test-components:interfaces;
 
 world component {
   import wasi:sockets/instance-network@0.2.0;

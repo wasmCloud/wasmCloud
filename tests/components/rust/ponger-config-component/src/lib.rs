@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-wit_bindgen::generate!("component");
+wit_bindgen::generate!();
 
 use wasmcloud_component::wasi;
 

@@ -1,4 +1,4 @@
-package test-wrpc:ponger;
+package test-components:ponger-config;
 
 world component {
   export test-components:testing/pingpong;
