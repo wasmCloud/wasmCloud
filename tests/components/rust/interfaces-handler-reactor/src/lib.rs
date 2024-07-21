@@ -3,7 +3,7 @@
 wit_bindgen::generate!({
     world: "component",
     with: {
-        "wasmcloud:messaging/types@0.2.0":  wasmcloud_component::wasmcloud::messaging::types,
+        "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
     }
 });
 
@@ -21,19 +21,16 @@ impl testing::pingpong::Guest for Actor {
 }
 
 impl testing::busybox::Guest for Actor {
-    #[doc = " increments a number"]
     fn increment_number(num: u32) -> u32 {
         num.saturating_add(1)
     }
 
-    #[doc = " split a string based on a char delimiter"]
     fn string_split(str: String, del: char) -> Vec<String> {
         str.split(del)
             .map(|s| s.to_string())
             .collect::<Vec<String>>()
     }
 
-    #[doc = " Assert that a String matches the variant"]
     fn string_assert(letter: testing::busybox::Easyasonetwothree, test: String) -> bool {
         match letter {
             testing::busybox::Easyasonetwothree::A => test == "a",
