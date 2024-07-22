@@ -47,8 +47,8 @@
     "@types/eslint": "~8.56.10",
     "@wasmcloud/eslint-config": "workspace:^",
     "@wasmcloud/tsconfig": "workspace:^",
-    "tsup": "^8.1.0",
-    "type-fest": "^4.21.0"
+    "tsup": "^8.2.2",
+    "type-fest": "^4.23.0"
   },
   "dependencies": {
     "nats.ws": "^1.29.0"
