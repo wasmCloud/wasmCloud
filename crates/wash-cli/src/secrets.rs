@@ -1,9 +1,10 @@
 use clap::Subcommand;
 use std::collections::HashMap;
-use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
-use wasmcloud_secrets_types::{SecretConfig, SECRET_PREFIX, SECRET_TYPE};
+use tracing::trace;
+use wash_lib::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, OutputKind};
+use wasmcloud_secrets_types::{SecretConfig, SECRET_PREFIX};
 
-use crate::config::{delete_config, get_config, put_config};
+use crate::config::{delete_config, get_config, is_secret, put_config};
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum SecretsCliCommand {
@@ -11,15 +12,24 @@ pub enum SecretsCliCommand {
     PutCommand {
         #[clap(flatten)]
         opts: CliConnectionOpts,
+        /// The name of the secret reference to create.
         #[clap(name = "name")]
         name: String,
-        // TODO: we should have a type for all that, since we use it in wadm
+        /// The backend to fetch the secret from at runtime.
+        #[clap(name = "backend")]
         backend: String,
+        /// The key to use for retrieving the secret from the backend.
+        #[clap(name = "key")]
         key: String,
+        /// The version of the secret to retrieve. If not supplied, the latest version will be used.
+        #[clap(short = 'v', long = "version")]
         version: Option<String>,
+        /// Freeform policy properties to pass to the secrets backend, in the form of `key=value`. Can be specified multiple times.
+        #[clap(long = "property")]
+        policy_properties: Vec<String>,
     },
 
-    /// Get a secret reference
+    /// Get a secret reference by name
     #[clap(name = "get")]
     GetCommand {
         #[clap(flatten)]
@@ -28,7 +38,7 @@ pub enum SecretsCliCommand {
         name: String,
     },
 
-    /// Delete a secret reference
+    /// Delete a secret reference by name
     #[clap(name = "del", alias = "delete")]
     DelCommand {
         #[clap(flatten)]
@@ -49,14 +59,12 @@ pub async fn handle_command(
             backend,
             key,
             version,
+            policy_properties,
         } => {
-            let cfg = SecretConfig {
-                backend,
-                key,
-                version,
-                secret_type_identifier: SECRET_TYPE.to_string(),
-            };
-            let values: HashMap<String, String> = cfg.try_into()?;
+            let policy_property_map = input_vec_to_hashmap(policy_properties)?;
+            let secret_config = SecretConfig::new(backend, key, version, policy_property_map);
+            trace!(?secret_config, "Putting secret config");
+            let values: HashMap<String, String> = secret_config.try_into()?;
 
             put_config(opts, &format_secret_name(&name), values, output_kind).await
         }
@@ -69,10 +77,11 @@ pub async fn handle_command(
     }
 }
 
+/// Ensures the secret name is prefixed by `SECRET_`
 fn format_secret_name(name: &str) -> String {
-    if !name.starts_with(SECRET_PREFIX) {
-        format!("{SECRET_PREFIX}_{}", name)
-    } else {
+    if is_secret(name) {
         name.to_string()
+    } else {
+        format!("{SECRET_PREFIX}_{}", name)
     }
 }

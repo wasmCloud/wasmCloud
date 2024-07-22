@@ -56,7 +56,7 @@ pub async fn handle_command(
             name,
             config_values,
         } => {
-            validate_not_secret(&name)?;
+            ensure_not_secret(&name)?;
 
             put_config(
                 opts,
@@ -67,11 +67,11 @@ pub async fn handle_command(
             .await
         }
         ConfigCliCommand::GetCommand { opts, name } => {
-            validate_not_secret(&name)?;
+            ensure_not_secret(&name)?;
             get_config(opts, &name, output_kind).await
         }
         ConfigCliCommand::DelCommand { opts, name } => {
-            validate_not_secret(&name)?;
+            ensure_not_secret(&name)?;
             delete_config(opts, &name, output_kind).await
         }
     }
@@ -111,7 +111,7 @@ pub(crate) async fn put_config(
                 .unwrap_or(name);
             config_type = "Secret";
         };
-        format!("{config_type} {out_name} put successfully.")
+        format!("{config_type} '{out_name}' put successfully.")
     } else {
         config_response
             .message
@@ -189,7 +189,7 @@ pub(crate) async fn delete_config(
                 .strip_prefix(format!("{SECRET_PREFIX}_").as_str())
                 .unwrap_or(name);
         };
-        format!("{config_type} {out_name} deleted successfully.")
+        format!("{config_type} '{out_name}' deleted successfully.")
     } else {
         config_response
             .message
@@ -214,13 +214,13 @@ fn suggest_run_host_error(e: Box<dyn Error + std::marker::Send + Sync>) -> anyho
     }
 }
 
-fn validate_not_secret(name: &str) -> anyhow::Result<()> {
+fn ensure_not_secret(name: &str) -> anyhow::Result<()> {
     if name.starts_with(SECRET_PREFIX) {
         anyhow::bail!("Configuration names cannot start with '{SECRET_PREFIX}'. Did you mean to use the 'secrets' command?");
     }
     Ok(())
 }
 
-fn is_secret(name: &str) -> bool {
+pub(crate) fn is_secret(name: &str) -> bool {
     name.starts_with(SECRET_PREFIX)
 }
