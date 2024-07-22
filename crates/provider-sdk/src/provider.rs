@@ -336,8 +336,8 @@ pub(crate) struct ProviderInitState {
     pub secrets: HashMap<String, SecretValue>,
     /// The public key xkey of the host, used for decrypting secrets
     /// Do not attempt to access the [`XKey::seed()`] of this XKey, it will always error.
-    host_xkey: XKey,
-    provider_xkey: XKey,
+    host_public_xkey: XKey,
+    provider_private_xkey: XKey,
 }
 
 #[instrument]
@@ -368,7 +368,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
 
     // If the xkey strings are empty, it just means that the host is <1.1.0 and does not support secrets.
     // There aren't any negative side effects here, so it's really just a warning to update to 1.1.0.
-    let host_xkey = if host_xkey_public_key.is_empty() {
+    let host_public_xkey = if host_xkey_public_key.is_empty() {
         warn!("Provider is running on a host that does not provide a host xkey, secrets will not be supported");
         XKey::new()
     } else {
@@ -378,7 +378,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             ))
         })?
     };
-    let provider_xkey = if provider_xkey_private_key.is_empty() {
+    let provider_private_xkey = if provider_xkey_private_key.is_empty() {
         warn!("Provider is running on a host that does not provide a provider xkey, secrets will not be supported");
         XKey::new()
     } else {
@@ -399,7 +399,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         provider_key.to_string()
     } else {
         debug!("Provider is running on a host that provides xkeys, using provider xkey in NATS subject");
-        provider_xkey.public_key()
+        provider_private_xkey.public_key()
     };
 
     info!(
@@ -464,8 +464,8 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         link_definitions: link_definitions.clone(),
         config: config.clone(),
         secrets: secrets.clone(),
-        host_xkey,
-        provider_xkey,
+        host_public_xkey,
+        provider_private_xkey,
         commands: ProviderCommandReceivers {
             health,
             shutdown,
@@ -492,7 +492,7 @@ where
                 link_name: &ld.name,
                 config: &ld.source_config,
                 secrets: &decrypt_link_secret(
-                    &ld.source_secrets,
+                    ld.source_secrets.as_deref(),
                     &connection.provider_xkey,
                     &connection.host_xkey,
                 )?,
@@ -507,7 +507,7 @@ where
                 link_name: &ld.name,
                 config: &ld.target_config,
                 secrets: &decrypt_link_secret(
-                    &ld.target_secrets,
+                    ld.target_secrets.as_deref(),
                     &connection.provider_xkey,
                     &connection.host_xkey,
                 )?,
@@ -528,19 +528,22 @@ where
 /// Given a serialized and encrypted [`HashMap<String, SecretValue>`], decrypts the secrets and deserializes
 /// the inner bytes into a [`HashMap<String, SecretValue>`]. This can either fail due to a decryption error
 /// or a deserialization error.
+///
+/// This will return an empty [`HashMap`] if no secrets are provided.
 fn decrypt_link_secret(
-    secrets: &[u8],
+    secrets: Option<&[u8]>,
     provider_xkey: &XKey,
     host_xkey: &XKey,
 ) -> Result<HashMap<String, SecretValue>> {
-    // An empty vec shouldn't be decrypted or deserialized, so return an empty hashmap
-    if secrets.is_empty() {
-        Ok(HashMap::with_capacity(0))
-    } else {
-        provider_xkey.open(secrets, host_xkey).map(|secrets| {
-            serde_json::from_slice(&secrets).context("failed to deserialize secrets")
-        })?
-    }
+    // Note that we only `unwrap_or` in the fallback case where there are no secrets,
+    // not when the decryption or deserialization fails.
+    secrets
+        .map(|secrets| {
+            provider_xkey.open(secrets, host_xkey).map(|secrets| {
+                serde_json::from_slice(&secrets).context("failed to deserialize secrets")
+            })?
+        })
+        .unwrap_or(Ok(HashMap::with_capacity(0)))
 }
 
 async fn delete_link_for_provider<P>(
@@ -707,8 +710,8 @@ pub async fn run_provider(
         commands,
         config,
         secrets: _secrets,
-        host_xkey,
-        provider_xkey,
+        host_public_xkey: host_xkey,
+        provider_private_xkey: provider_xkey,
     } = init_state;
 
     let connection = ProviderConnection::new(
@@ -916,8 +919,8 @@ impl ProviderConnection {
         lattice: String,
         host_id: String,
         config: HashMap<String, String>,
-        provider_xkey: XKey,
-        host_xkey: XKey,
+        provider_private_xkey: XKey,
+        host_public_xkey: XKey,
     ) -> ProviderInitResult<ProviderConnection> {
         Ok(ProviderConnection {
             source_links: Arc::default(),
@@ -927,8 +930,8 @@ impl ProviderConnection {
             host_id,
             provider_id,
             config,
-            provider_xkey: Arc::new(provider_xkey),
-            host_xkey: Arc::new(host_xkey),
+            provider_xkey: Arc::new(provider_private_xkey),
+            host_xkey: Arc::new(host_public_xkey),
         })
     }
 
