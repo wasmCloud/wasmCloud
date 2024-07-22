@@ -25,7 +25,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Explain conventional commits in comment
-        uses: marocchino/sticky-pull-request-comment@766e73518ff09dbf614ce65ec4ed645c267b97ce
+        uses: marocchino/sticky-pull-request-comment@44e0bad81007ecff41ba26d1cbf49a0267d28e9d
         with:
           # Since lint-conventional-commits runs on pull requests, we should have exactly one
           # pull request on the original workflow run, which we can reference the number of
