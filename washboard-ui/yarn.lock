@@ -2805,7 +2805,7 @@ __metadata:
     eslint-config-turbo: "npm:^1.13.4"
     eslint-config-xo: "npm:^0.45.0"
     eslint-config-xo-react: "npm:^0.27.0"
-    eslint-config-xo-typescript: "npm:^4.0.0"
+    eslint-config-xo-typescript: "npm:^5.0.0"
     eslint-import-resolver-typescript: "npm:^3.6.1"
     eslint-plugin-ava: "npm:^14.0.0"
     eslint-plugin-eslint-comments: "npm:^3.2.0"
@@ -4530,15 +4530,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-config-xo-typescript@npm:^4.0.0":
-  version: 4.0.0
-  resolution: "eslint-config-xo-typescript@npm:4.0.0"
+"eslint-config-xo-typescript@npm:^5.0.0":
+  version: 5.0.0
+  resolution: "eslint-config-xo-typescript@npm:5.0.0"
   peerDependencies:
-    "@typescript-eslint/eslint-plugin": ">=7.0.2"
-    "@typescript-eslint/parser": ">=7.0.2"
+    "@typescript-eslint/eslint-plugin": ">=7.16.0"
+    "@typescript-eslint/parser": ">=7.16.0"
     eslint: ">=8.56.0"
     typescript: ">=5.0.0"
-  checksum: 10/9acc550366d0f6c146f853fe844192e3d15bbe5d6299db649b5433cb88c8d5a6e883e3701e67e352cd74c307975424311ed08f9666d885152ee9bf39c6cede3c
+  checksum: 10/508e13a030c39186ff80a1666de369fc6af3aaf6f86243d20be9dfa1dd445841f7fc70eee6527504b9da74c2ff2c5739ce70ad6c8e103e71a64789b21788c6b3
   languageName: node
   linkType: hard
 
