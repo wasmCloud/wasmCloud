@@ -77,6 +77,7 @@ Iterate:
   call         Invoke a simple function on a component running in a wasmCloud host
   label        Label (or un-label) a host with a key=value label pair
   config       Create configuration for components, capability providers and links
+  secrets      Create secret references for components, capability providers and links
 
 Publish:
   pull         Pull an artifact from an OCI compliant registry
@@ -188,7 +189,7 @@ enum CliCommand {
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
     /// Manage secret references
-    #[clap(name = "secrets", subcommand)]
+    #[clap(name = "secrets", alias = "secret", subcommand)]
     Secrets(SecretsCliCommand),
     /// Spy on all invocations a component sends and receives
     #[clap(name = "spy")]

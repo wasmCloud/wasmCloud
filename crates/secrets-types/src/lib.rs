@@ -1,4 +1,4 @@
-use anyhow::ensure;
+use anyhow::{ensure, Context as _};
 use async_trait::async_trait;
 use nkeys::XKey;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,10 @@ pub const RESPONSE_XKEY: &str = "Server-Response-Xkey";
 /// This is used to inform wadm or anything else that is consuming the secret about how to
 /// deserialize the payload.
 pub const SECRET_TYPE: &str = "v1.secret.wasmcloud.dev";
+
+/// The type of secret policy.
+/// This is primarily used to version the policy format.
+pub const SECRET_POLICY_TYPE: &str = "secret-reference.wasmcloud.dev/v1alpha1";
 
 /// The prefix for all secret keys in the config store
 pub const SECRET_PREFIX: &str = "SECRET";
@@ -134,17 +138,39 @@ pub struct Secret {
 }
 
 /// The representation of a secret reference in the config store.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SecretConfig {
-    pub backend: String,
-    pub key: String,
-    pub version: Option<String>,
+    backend: String,
+    key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    policy_properties: HashMap<String, String>,
 
     /// The type of secret.
     /// This is used to inform wadm or anything else that is consuming the secret about how to
     /// deserialize the payload.
     #[serde(rename = "type")]
-    pub secret_type_identifier: String,
+    secret_type_identifier: String,
+}
+
+impl SecretConfig {
+    pub fn new(
+        backend: String,
+        key: String,
+        version: Option<String>,
+        policy_properties: HashMap<String, String>,
+    ) -> Self {
+        let mut properties_with_backend = policy_properties;
+        properties_with_backend.insert("backend".to_string(), backend.clone());
+        Self {
+            backend,
+            key,
+            version,
+            policy_properties: properties_with_backend,
+            secret_type_identifier: SECRET_TYPE.to_string(),
+        }
+    }
 }
 
 /// Helper function to convert a SecretConfig into a HashMap. This is only intended to be used by
@@ -154,13 +180,27 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
     type Error = anyhow::Error;
 
     fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
-        let mut map = HashMap::new();
-        map.insert("type".to_string(), SECRET_TYPE.to_string());
-        map.insert("backend".to_string(), self.backend);
-        map.insert("key".to_string(), self.key);
+        let mut map = HashMap::from([
+            ("type".into(), SECRET_TYPE.into()),
+            ("backend".into(), self.backend),
+            ("key".into(), self.key),
+        ]);
         if let Some(version) = self.version {
             map.insert("version".to_string(), version);
         }
+        let policy_properties = HashMap::from([
+            ("type".to_string(), SECRET_POLICY_TYPE.to_string()),
+            (
+                "properties".to_string(),
+                serde_json::to_string(&self.policy_properties)
+                    .context("failed to serialize policy_properties map as string")?,
+            ),
+        ]);
+        map.insert(
+            "policy_properties".to_string(),
+            serde_json::to_string(&policy_properties)
+                .context("failed to serialize policy_properties map as string")?,
+        );
         Ok(map)
     }
 }

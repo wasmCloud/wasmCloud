@@ -39,7 +39,6 @@ regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
-wasmcloud-secrets-types = { workspace = true }
 sanitize-filename = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -80,6 +79,7 @@ wash-lib = { workspace = true, features = [
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
+wasmcloud-secrets-types = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
 wrpc-interface-http = { workspace = true }
