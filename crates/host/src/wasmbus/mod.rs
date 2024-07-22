@@ -2103,21 +2103,12 @@ impl Host {
 
             // Prepare startup links by generating the source and target configs. Note that because the provider may be the source
             // or target of a link, we need to iterate over all links to find the ones that involve the provider.
-            let provider_links: Vec<InterfaceLinkDefinition> = self
-                .links
-                .read()
-                .await
+            let all_links = self.links.read().await;
+            let provider_links = all_links
                 .values()
                 .flatten()
-                .filter_map(|link| {
-                    if link.source_id == provider_id || link.target == provider_id {
-                        Some(link.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let link_definitions = stream::iter(provider_links.iter())
+                .filter(|link| link.source_id == provider_id || link.target == provider_id);
+            let link_definitions = stream::iter(provider_links)
                 .filter_map(|link| async {
                     if link.source_id == provider_id || link.target == provider_id {
                         match self
@@ -2566,9 +2557,7 @@ impl Host {
             interface_link_definition
                 .source_config
                 .iter()
-                .chain(&interface_link_definition.target_config)
-                .map(|s| s.to_string())
-                .collect(),
+                .chain(&interface_link_definition.target_config),
         )
         .await?;
 
@@ -2955,7 +2944,7 @@ impl Host {
                 .iter()
                 .any(|c| c.starts_with(SECRET_PREFIX)))
         {
-            trace!("link contains secrets and is not backwards compatible, skipping");
+            debug!("link contains secrets and is not backwards compatible, skipping");
             return Ok(());
         }
         let Ok(provider_link) = self
@@ -3154,6 +3143,8 @@ impl Host {
 
         // Compute all new links that do not exist in the host map, which we'll use to
         // publish to any running providers that are the source or target of the link.
+        // Computing this ahead of time is a tradeoff to hold only one lock at the cost of
+        // allocating an extra Vec. This may be a good place to optimize allocations.
         let new_links = {
             let all_links = self.links.read().await;
             spec.links
@@ -3177,7 +3168,7 @@ impl Host {
         };
 
         {
-            // Acquire lock once in this block to avoid continually trying to acquire it
+            // Acquire lock once in this block to avoid continually trying to acquire it.
             let providers = self.providers.read().await;
             // For every new link, if a provider is running on this host as the source or target,
             // send the link to the provider for handling based on the xkey public key.
@@ -3359,37 +3350,40 @@ impl Host {
     ///
     /// For any configuration that starts with `SECRET_`, the configuration is expected to be a secret reference.
     /// For any other configuration, the configuration is expected to be a [`HashMap<String, String>`].
-    async fn validate_config(&self, config_names: Vec<String>) -> anyhow::Result<()> {
+    async fn validate_config<I>(&self, config_names: I) -> anyhow::Result<()>
+    where
+        I: IntoIterator<Item: AsRef<str>>,
+    {
         let config_store = self.config_data.clone();
-        let validation_errors = futures::future::join_all(
-            config_names.iter().map(|config_name| {
+        let validation_errors =
+            futures::future::join_all(config_names.into_iter().map(|config_name| {
                 let config_store = config_store.clone();
+                let config_name = config_name.as_ref().to_string();
                 async move {
-                    match config_store.get(config_name).await {
-                        Ok(Some(secret)) if config_name.starts_with(SECRET_PREFIX) => serde_json::from_slice::<crate::secrets::SecretReference>(&secret)
-                            .map(|_| ())
-                            .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {config_name} is a secret reference and not configuration")),
-                        Ok(Some(config)) => serde_json::from_slice::<HashMap<String, String>>(&config)
-                            .map(|_| ())
-                            .map_err(|_| anyhow::anyhow!("failed to deserialize config from config store, ensure {config_name} is a valid string -> string map")),
-                        Ok(None) => bail!("Configuration {config_name} not found in config store"),
-                        Err(e) => bail!(e),
+                    match config_store.get(&config_name).await {
+                        Ok(Some(_)) => None,
+                        Ok(None) if config_name.starts_with(SECRET_PREFIX) => Some(format!(
+                            "Secret reference {config_name} not found in config store"
+                        )),
+                        Ok(None) => Some(format!(
+                            "Configuration {config_name} not found in config store"
+                        )),
+                        Err(e) => Some(e.to_string()),
                     }
                 }
-            }),
-        )
-        .await;
+            }))
+            .await;
 
-        let errors = validation_errors
+        // NOTE(brooksmtownsend): Not using `join` here because it requires a `String` and we
+        // need to flatten out the `None` values.
+        let validation_errors = validation_errors
             .into_iter()
-            .filter_map(|res| res.err())
-            .collect::<Vec<_>>();
-        if !errors.is_empty() {
-            let mut error_chain = anyhow::anyhow!("failed to validate link config");
-            for error in errors {
-                error_chain = error_chain.context(error);
-            }
-            return Err(error_chain);
+            .flatten()
+            .fold(String::new(), |acc, e| acc + &e + ". ");
+        if !validation_errors.is_empty() {
+            bail!(format!(
+                "Failed to validate configuration and secrets. {validation_errors}",
+            ));
         }
 
         Ok(())
@@ -3448,18 +3442,22 @@ impl Host {
         // difference between an empty map and an encrypted empty map. To avoid this, we explicitly handle
         // the case where the map is empty.
         let source_secrets = if source_secrets_map.is_empty() {
-            Vec::with_capacity(0)
+            None
         } else {
-            serde_json::to_vec(&source_secrets_map)
-                .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
-                .context("failed to serialize and encrypt source secrets")??
+            Some(
+                serde_json::to_vec(&source_secrets_map)
+                    .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
+                    .context("failed to serialize and encrypt source secrets")??,
+            )
         };
         let target_secrets = if target_secrets_map.is_empty() {
-            Vec::with_capacity(0)
+            None
         } else {
-            serde_json::to_vec(&target_secrets_map)
-                .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
-                .context("failed to serialize and encrypt target secrets")??
+            Some(
+                serde_json::to_vec(&target_secrets_map)
+                    .map(|secrets| self.secrets_xkey.seal(&secrets, provider_xkey))
+                    .context("failed to serialize and encrypt target secrets")??,
+            )
         };
 
         Ok(wasmcloud_core::InterfaceLinkDefinition {

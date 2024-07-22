@@ -40,11 +40,11 @@ pub struct InterfaceLinkDefinition {
     /// The secrets to give to the source of this link
     /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub source_secrets: Vec<u8>,
+    pub source_secrets: Option<Vec<u8>>,
     /// The secrets to give to the target of this link
     /// Should decrypt as a [`HashMap<String, SecretValue>`]
     #[serde(default)]
-    pub target_secrets: Vec<u8>,
+    pub target_secrets: Option<Vec<u8>>,
 }
 
 // Trait implementations that ensure we zeroize secrets when they are dropped
