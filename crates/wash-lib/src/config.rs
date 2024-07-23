@@ -179,7 +179,7 @@ pub async fn create_nats_client_from_opts(
     seed: Option<String>,
     credsfile: Option<PathBuf>,
     tls_ca_file: Option<PathBuf>,
-) -> Result<async_nats::Client> {
+) -> Result<Client> {
     let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 

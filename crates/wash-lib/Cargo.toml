@@ -28,7 +28,7 @@ cli = [
     "indicatif",
     "path-absolutize",
 ]
-nats = ["async-nats", "wadm-types"]
+nats = ["dep:async-nats", "wadm-types"]
 docs = ["wasmcloud-component-adapters/docs"]
 plugin = ["wasmtime", "wasmtime-wasi", "wasmtime-wasi-http"]
 
@@ -38,7 +38,7 @@ features = ["start", "parser", "nats", "docs"]
 [dependencies]
 anyhow = { workspace = true }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
-async-nats = { version = "0.33", optional = true } # TODO: Use workspace version once https://github.com/nats-io/nats.rs/pull/1267 resolved to use in wasmCloud
+async-nats = { version = "0.33", optional = true } # TODO: use workspace version
 bytes = { workspace = true, features = ["serde"] }
 cargo_metadata = { workspace = true }
 cargo_toml = { workspace = true }

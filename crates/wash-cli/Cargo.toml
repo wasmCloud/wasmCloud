@@ -17,7 +17,8 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
-async-nats = { version = "0.33" } # TODO: Use workspace version once https://github.com/nats-io/nats.rs/pull/1267 resolved to use in wasmCloud
+async-nats = { workspace = true }
+async-nats-0_33 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["std", "derive", "env", "string"] }
 clap_complete = { workspace = true }
@@ -82,6 +83,7 @@ wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
+wit-bindgen-wrpc = { workspace = true }
 wrpc-interface-http = { workspace = true }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
@@ -95,6 +97,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
+wat = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }
