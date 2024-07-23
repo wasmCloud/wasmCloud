@@ -1,7 +1,14 @@
 [package]
 name = "secrets-nats-kv"
 version = "0.1.0"
-edition = "2021"
+readme = "README.md"
+description = "A secrets backend for wasmCloud that uses NATS as a key-value store."
+categories = ["wasmcloud", "secrets", "cryptography"]
+keywords = ["webassembly", "wasmcloud", "nats", "cli", "kv"]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "secrets_nats_kv"
