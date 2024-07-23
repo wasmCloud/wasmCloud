@@ -129,11 +129,7 @@ impl Manager {
         );
 
         // If we don't have an entity JWT, we can't provide its identity to the secrets backend
-        let Some(entity_jwt) = entity_jwt else {
-            bail!(
-                "entity did not have an embedded JWT, required to fetch secrets (was this entity signed during build?)"
-            );
-        };
+        let entity_jwt = entity_jwt.context("entity did not have an embedded JWT, required to fetch secrets (was this entity signed during build?)")?;
 
         let secrets = stream::iter(secret_names.into_iter())
             // Fetch the secret reference from the config store

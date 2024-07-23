@@ -2935,24 +2935,22 @@ impl Host {
     ) -> anyhow::Result<()> {
         // Only attempt to publish the backwards-compatible provider link definition if the link
         // does not contain any secret values.
-        if !(link
+        let source_config_contains_secret = link
             .source_config
             .iter()
-            .any(|c| c.starts_with(SECRET_PREFIX))
-            || link
-                .target_config
-                .iter()
-                .any(|c| c.starts_with(SECRET_PREFIX)))
-        {
+            .any(|c| c.starts_with(SECRET_PREFIX));
+        let target_config_contains_secret = link
+            .target_config
+            .iter()
+            .any(|c| c.starts_with(SECRET_PREFIX));
+        if source_config_contains_secret || target_config_contains_secret {
             debug!("link contains secrets and is not backwards compatible, skipping");
             return Ok(());
         }
-        let Ok(provider_link) = self
+        let provider_link = self
             .resolve_link_config(link.clone(), None, None, &XKey::new())
             .await
-        else {
-            bail!("failed to resolve link config");
-        };
+            .context("failed to resolve link config")?;
         let lattice = &self.host_config.lattice;
         let payload: Bytes = serde_json::to_vec(&provider_link)
             .context("failed to serialize provider link definition")?
@@ -3006,7 +3004,7 @@ impl Host {
                 &provider.xkey,
             )
             .await
-            .context("failed to resolve link config")?;
+            .context("failed to resolve link config and secrets")?;
         let lattice = &self.host_config.lattice;
         let payload: Bytes = serde_json::to_vec(&provider_link)
             .context("failed to serialize provider link definition")?
