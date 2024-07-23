@@ -71,7 +71,7 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
         .get("backend")
         .is_some_and(|b| b == "baobun"));
 
-    assert!(retrieved_secret.contains_key("version"));
+    assert!(!retrieved_secret.contains_key("version"));
 
     Ok(())
 }
