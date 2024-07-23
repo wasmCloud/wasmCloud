@@ -43,46 +43,25 @@ impl NatsKvSecretsBackend {
     }
 
     pub async fn put_secret(&self, secret: Secret) -> Result<()> {
-        let request_xkey = nkeys::XKey::new();
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert(
-            wasmcloud_secrets_types::WASMCLOUD_HOST_XKEY,
-            request_xkey
-                .public_key()
-                .parse::<async_nats::HeaderValue>()
-                .context("Should be able to parse header as value")?,
-        );
-
-        // NOTE: This is just demonstrative that you only need the public key to seal the secret
-        let transit_xkey_pub = nkeys::XKey::from_public_key(&self.transit_xkey.public_key())
-            .context("public key to be valid")?;
-        let value = serde_json::to_string(&secret)?;
-        let v = request_xkey
-            .seal(value.as_bytes(), &transit_xkey_pub)
-            .context("should be able to seal the secret")?;
-        let resp = self
-            .nats_client
-            .request_with_headers(self.topic("put_secret"), headers, v.into())
-            .await?;
-
-        let put_resp: serde_json::Value =
-            serde_json::from_slice(&resp.payload).context("should be able to parse response")?;
-        assert_eq!(put_resp["revision"], 1);
+        secrets_nats_kv::client::put_secret(
+            &self.nats_client,
+            &self.subject_base,
+            &self.transit_xkey,
+            secret,
+        )
+        .await?;
 
         Ok(())
     }
 
     pub async fn add_mapping(&self, public_key: &str, secrets: HashSet<String>) -> Result<()> {
-        let payload =
-            serde_json::to_string(&secrets).context("should be able to serialize secrets")?;
-        let response = self
-            .nats_client
-            .request(
-                format!("{}.{}", self.topic("add_mapping"), public_key),
-                payload.into(),
-            )
-            .await?;
-        assert_eq!(response.payload.to_vec(), b"ok");
+        secrets_nats_kv::client::add_mapping(
+            &self.nats_client,
+            &self.subject_base,
+            public_key,
+            secrets,
+        )
+        .await?;
 
         Ok(())
     }
@@ -95,6 +74,7 @@ impl NatsKvSecretsBackend {
                     .unwrap_or("./target/debug/secrets-nats-kv"),
             )
             .args([
+                "run",
                 "--encryption-xkey-seed",
                 &self
                     .encryption_xkey
