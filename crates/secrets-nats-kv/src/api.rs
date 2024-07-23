@@ -11,6 +11,7 @@ use async_nats::{
 };
 use async_trait::async_trait;
 use backoff::{future::retry, Error as BackoffError, ExponentialBackoffBuilder};
+use bytes::Bytes;
 use futures::StreamExt;
 use nkeys::XKey;
 use std::{collections::HashSet, time::Duration};
@@ -117,6 +118,7 @@ impl Api {
             return;
         }
 
+        // SAFETY: We just checked that headers is not None above
         let headers = &msg.headers.clone().unwrap();
         let host_key = match headers.get(WASMCLOUD_HOST_XKEY) {
             None => {
@@ -266,7 +268,7 @@ impl Api {
         let response = self.get(secret_req).await;
         match response {
             Ok(resp) => {
-                let encoded = serde_json::to_vec(&resp).unwrap();
+                let encoded: Bytes = resp.into();
                 let encryption_key = XKey::new();
                 let encrypted = match encryption_key.seal(&encoded, &k) {
                     Ok(e) => e,
@@ -291,7 +293,10 @@ impl Api {
                     .await;
             }
             Err(e) => {
-                let _ = self.client.publish(reply, e.to_string().into()).await;
+                let _ = self
+                    .client
+                    .publish(reply, SecretResponse::from(e).into())
+                    .await;
             }
         }
     }
