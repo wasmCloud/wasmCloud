@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
 use anyhow::{ensure, Context};
+
+use crate::{PutSecretError, PutSecretResponse};
 
 /// Helper function wrapper around [`put_secret`] that allows putting multiple secrets in the secret store.
 /// See the documentation for [`put_secret`] for more information.
@@ -50,11 +54,73 @@ pub async fn put_secret(
     let v = request_xkey
         .seal(value.as_bytes(), transit_xkey)
         .expect("should be able to encrypt the secret");
-    nats_client
+    let response = nats_client
         .request_with_headers(
             format!("{subject_base}.v0.nats-kv.put_secret"),
             headers,
             v.into(),
+        )
+        .await?;
+
+    let put_secret_response = serde_json::from_slice::<PutSecretResponse>(&response.payload)
+        .context("failed to deserialize put secret response")?;
+    put_secret_response.error.map_or(Ok(()), |e| match e {
+        PutSecretError::DecryptionError => Err(anyhow::anyhow!(e)
+            .context("Error decrypting secret. Ensure the transit xkey is the same as the one provided to the backend")),
+        _ => Err(anyhow::anyhow!(e)),
+    })
+}
+
+/// Add the allowed secrets a given public key is allowed to access
+///
+/// # Arguments
+/// - `nats_client` - the NATS client connected to a server that the secret store is listening on
+/// - `subject_base` - the base subject to use for requests to the secret store
+/// - `public_key` - the identity public key of the entity that is allowed to access the secrets
+/// - `secrets` - the names of the secrets that the public key is allowed to access
+pub async fn add_mapping(
+    nats_client: &async_nats::Client,
+    subject_base: &str,
+    public_key: &str,
+    secrets: HashSet<String>,
+) -> anyhow::Result<()> {
+    ensure!(!subject_base.is_empty(), "subject base cannot be empty");
+    ensure!(!public_key.is_empty(), "subject base cannot be empty");
+
+    nats_client
+        .request(
+            format!("{subject_base}.v0.nats-kv.add_mapping.{public_key}"),
+            serde_json::to_vec(&secrets)
+                .context("failed to serialize set of secrets")?
+                .into(),
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Remove allowed secrets a given public key is allowed to access
+///
+/// # Arguments
+/// - `nats_client` - the NATS client connected to a server that the secret store is listening on
+/// - `subject_base` - the base subject to use for requests to the secret store
+/// - `public_key` - the identity public key of the entity that is allowed to access the secrets
+/// - `secrets` - the names of the secrets that the public key is allowed to access
+pub async fn remove_mapping(
+    nats_client: &async_nats::Client,
+    subject_base: &str,
+    public_key: &str,
+    secrets: HashSet<String>,
+) -> anyhow::Result<()> {
+    ensure!(!subject_base.is_empty(), "subject base cannot be empty");
+    ensure!(!public_key.is_empty(), "subject base cannot be empty");
+
+    nats_client
+        .request(
+            format!("{subject_base}.v0.nats-kv.remove_mapping.{public_key}"),
+            serde_json::to_vec(&secrets)
+                .context("failed to serialize set of secrets")?
+                .into(),
         )
         .await?;
 

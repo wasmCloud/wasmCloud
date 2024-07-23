@@ -25,8 +25,8 @@ const OPERATION_INDEX: usize = 3;
 
 /// The `Api` struct implements the functionality of this secrets backend.
 pub struct Api {
-    /// The server's public XKey
-    server_xkey: XKey,
+    /// The server's public XKey, used to decrypt secrets sent to the server.
+    server_transit_xkey: XKey,
     /// The encryption key used to encrypt secrets in NATS KV.
     /// This _must_ always be the same value after the first time a secret is written otherwise you
     /// will *not* able to decrypt it!
@@ -133,7 +133,7 @@ impl Api {
         };
 
         let k = XKey::from_public_key(host_key.as_str()).unwrap();
-        let payload = match self.server_xkey.open(payload, &k) {
+        let payload = match self.server_transit_xkey.open(payload, &k) {
             Ok(p) => p,
             Err(_e) => {
                 let _ = self
@@ -236,7 +236,7 @@ impl Api {
         };
 
         let k = XKey::from_public_key(host_key.as_str()).unwrap();
-        let payload = match self.server_xkey.open(&payload, &k) {
+        let payload = match self.server_transit_xkey.open(&payload, &k) {
             Ok(p) => p,
             Err(_e) => {
                 let _ = self
@@ -555,7 +555,7 @@ impl Api {
         api_version: String,
     ) -> Self {
         Self {
-            server_xkey,
+            server_transit_xkey: server_xkey,
             encryption_xkey,
             client,
             subject_base,
@@ -677,7 +677,7 @@ impl SecretsServer for Api {
     }
 
     fn server_xkey(&self) -> XKey {
-        let xkey = XKey::from_public_key(self.server_xkey.public_key().as_str()).unwrap();
+        let xkey = XKey::from_public_key(self.server_transit_xkey.public_key().as_str()).unwrap();
         xkey
     }
 }
