@@ -1,12 +1,12 @@
 #!/bin/bash
 
-echo "Building NATS KV setup utility..."
-pushd ./secret-setup
+echo "Building wasmCloud ..."
+pushd ../../../
 cargo build
 popd
 
-echo "Building wasmCloud ..."
-pushd ../../../
+echo "Building NATS KV secrets backend..."
+pushd ../../../crates/secrets-nats-kv
 cargo build
 popd
 

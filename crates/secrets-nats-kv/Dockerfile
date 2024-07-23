@@ -24,3 +24,4 @@ COPY --from=builder /app/target/release/secrets-nats-kv .
 
 # Set the entrypoint
 ENTRYPOINT ["./secrets-nats-kv"]
+CMD ["run"]

@@ -4,25 +4,24 @@ echo "Starting docker compose infrastructure ..."
 subject_base=wasmcloud.secrets
 encryption_key=$(nk -gen x25519)
 transit_key=$(nk -gen x25519)
-ENCRYPTION_KEY=$encryption_key TRANSIT_KEY=$transit_key SUBJECT_BASE=$subject_base docker compose up -d
+ENCRYPTION_XKEY_SEED=$encryption_key TRANSIT_XKEY_SEED=$transit_key docker compose up -d
 
-echo "Putting secrets and mappings in NATS KV ..."
 sleep 5
-pushd ./secret-setup
-cargo run -- $transit_key
-popd > /dev/null
+echo "Putting secrets and mappings in NATS KV ..."
 component_key=$(wash inspect ./component-keyvalue-counter-auth/build/component_keyvalue_counter_auth_s.wasm -o json | jq -r '.component')
-component_mapping="[\"api_password\"]"
 provider_key=$(wash inspect ./provider-keyvalue-redis-auth/build/wasmcloud-example-auth-kvredis.par.gz -o json | jq -r '.service')
-provider_mapping="[\"redis_password\", \"default_redis_password\"]"
-nats req "$subject_base.v0.nats-kv.add_mapping.$provider_key" "$provider_mapping"
-nats req "$subject_base.v0.nats-kv.add_mapping.$component_key" "$component_mapping"
+pushd ../../../crates/secrets-nats-kv > /dev/null
+TRANSIT_XKEY_SEED=$transit_key cargo run -- put api_password --string opensesame
+TRANSIT_XKEY_SEED=$transit_key cargo run -- put redis_password --string sup3rS3cr3tP4ssw0rd
+TRANSIT_XKEY_SEED=$transit_key cargo run -- put default_redis_password --string sup3rS3cr3tP4ssw0rd
+cargo run -- add-mapping $component_key --secret api_password
+cargo run -- add-mapping $provider_key --secret redis_password --secret default_redis_password
+popd > /dev/null
 
 echo "Starting wasmCloud ..."
 pushd ../../../ > /dev/null
 cargo run -- --secrets-topic $subject_base \
-    --allow-file-load \
-    --log-level debug &
+    --allow-file-load &
 
 popd > /dev/null
 
@@ -43,11 +42,11 @@ wash start component file://$(pwd)/component-keyvalue-counter-auth/build/compone
     --max-instances 100
 
 # Link for HTTP and keyvalue
-wash config put SECRET_api_password key=redis_password backend=nats-kv
+wash config put SECRET_redis_password key=redis_password backend=nats-kv
 wash config put redis_url url=127.0.0.1:6379
 wash link put kvcounter-auth kvredis-auth wasi keyvalue \
     --interface atomics \
-    --target-config SECRET_api_password \
+    --target-config SECRET_redis_password \
     --target-config redis_url
 wash config put default_http address=0.0.0.0:8080
 wash link put http-server kvcounter-auth wasi http \
@@ -67,7 +66,7 @@ sleep 5
 # and not transmit the secret in plaintext
 wash link put other-kvcounter-auth kvredis-auth wasi keyvalue \
     --interface atomics \
-    --target-config SECRET_api_password \
+    --target-config SECRET_redis_password \
     --target-config redis_url
 
 echo "Now send requests to localhost:8080 ..."
