@@ -12,7 +12,7 @@ cargo install --path .
 
 ### Running the secrets backend
 
-Run the binary using the `run` subcommand, supplying xkey private keys to use for encryption and transit. You can generate xkeys using `wash keys gen x25519` or the [nk CLI](https://docs.nats.io/using-nats/nats-tools/nk). All other arguments are optional for configuring the topic prefix to listen on, the bucket to store secrets in, etc.
+Run the binary using the `run` subcommand, supplying xkey private keys to use for encryption and transit. You can generate xkeys using `wash keys gen curve` or the [nk CLI](https://docs.nats.io/using-nats/nats-tools/nk). All other arguments are optional for configuring the topic prefix to listen on, the bucket to store secrets in, etc.
 
 ⚠️ These keys are samples to show proper usage and should not be used for your own backend.
 
