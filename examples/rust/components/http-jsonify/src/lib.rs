@@ -20,7 +20,7 @@
 //!
 #![allow(clippy::missing_safety_doc)]
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 
 wit_bindgen::generate!();
 
@@ -42,7 +42,7 @@ const MAX_READ_BYTES: u32 = 2048;
 const MAX_WRITE_BYTES: usize = 4096;
 
 impl Guest for Component {
-    fn handle(request: IncomingRequest, outparam: ResponseOutparam) {
+    fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
         // Read the path & query from the request
         let path_with_query = request
             .path_with_query()
@@ -79,7 +79,7 @@ impl Guest for Component {
             .expect("failed to send response body");
 
         // Set the response to be used
-        ResponseOutparam::set(outparam, Ok(outgoing_response));
+        ResponseOutparam::set(response_out, Ok(outgoing_response));
     }
 }
 
@@ -98,8 +98,15 @@ impl IncomingRequest {
             .map_err(|()| anyhow!("failed to build stream for incoming request body"))?;
         let mut buf = Vec::<u8>::with_capacity(MAX_READ_BYTES as usize);
         loop {
-            match incoming_req_body_stream.blocking_read(MAX_READ_BYTES as u64) {
-                Ok(bytes) => buf.extend(bytes),
+            match incoming_req_body_stream.read(MAX_READ_BYTES as u64) {
+                Ok(bytes) if bytes.is_empty() => break,
+                Ok(bytes) => {
+                    ensure!(
+                        bytes.len() <= MAX_READ_BYTES as usize,
+                        "read more bytes than requested"
+                    );
+                    buf.extend(bytes);
+                }
                 Err(StreamError::Closed) => break,
                 Err(e) => bail!("failed to read bytes: {e}"),
             }
