@@ -7011,6 +7011,7 @@ dependencies = [
  "reqwest 0.12.5",
  "rmp-serde",
  "rustversion",
+ "secrets-nats-kv",
  "serde",
  "serde_bytes",
  "serde_json",

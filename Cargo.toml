@@ -150,6 +150,7 @@ redis = { workspace = true, features = [
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 rmp-serde = { workspace = true }
 rustversion = { workspace = true }
+secrets-nats-kv = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
@@ -272,6 +273,7 @@ rustls-pemfile = { version = "2", default-features = false }
 rustversion = { version = "1.0", default-features = false }
 sanitize-filename = { version = "0.4", default-features = false }
 secrecy = { version = "0.8", default-features = false }
+secrets-nats-kv = { version = "0.1", path = "crates/secrets-nats-kv", default-features = false }
 semver = { version = "1", default-features = false }
 serde = { version = "1", default-features = false }
 serde-transcode = { version = "1", default-features = false }
