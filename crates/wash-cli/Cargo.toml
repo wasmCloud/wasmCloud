@@ -29,7 +29,7 @@ http = { workspace = true }
 humantime.workspace = true
 indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
-nkeys = { workspace = true }
+nkeys = { workspace = true, features = ["xkeys"] }
 notify = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, features = ["rustls-tls"] }
