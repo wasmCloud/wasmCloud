@@ -13,9 +13,6 @@ function handle(req: IncomingRequest, resp: ResponseOutparam) {
   // Start building an outgoing response
   const outgoingResponse = new OutgoingResponse(new Fields());
 
-  // Set the created response
-  ResponseOutparam.set(resp, { tag: 'ok', val: outgoingResponse });
-
   // Access the outgoing response body
   let outgoingBody = outgoingResponse.body();
   {
@@ -33,6 +30,8 @@ function handle(req: IncomingRequest, resp: ResponseOutparam) {
   outgoingResponse.setStatusCode(200);
   // Finish the response body
   OutgoingBody.finish(outgoingBody, undefined);
+  // Set the created response
+  ResponseOutparam.set(resp, { tag: 'ok', val: outgoingResponse });
 }
 
 export const incomingHandler = {
