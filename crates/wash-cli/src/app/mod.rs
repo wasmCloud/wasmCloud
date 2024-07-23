@@ -258,7 +258,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
 }
 
 pub(crate) async fn deploy_model_from_manifest(
-    client: &async_nats::Client,
+    client: &async_nats_0_33::Client,
     lattice: Option<String>,
     manifest: AppManifest,
     version: Option<String>,
