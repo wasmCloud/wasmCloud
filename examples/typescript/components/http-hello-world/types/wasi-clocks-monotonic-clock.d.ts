@@ -1,4 +1,4 @@
-// https://github.com/bytecodealliance/jco/blob/b703b2850d3170d786812a56f40456870c780311/packages/preview2-shim/types/interfaces/wasi-io-error.d.ts
+// https://github.com/bytecodealliance/jco/blob/b703b2850d3170d786812a56f40456870c780311/packages/preview2-shim/types/interfaces/wasi-clocks-monotonic-clock.d.ts
 export namespace WasiClocksMonotonicClock {
   /**
    * Read the current value of the clock.
