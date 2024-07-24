@@ -11,7 +11,8 @@ spec:
       type: component
       properties:
         # NOTE: If the file at the relative path below is missing, run `wash build`
-        image: file://./build/keyvalue_messaging_s.wasm
+        # image: file://./build/keyvalue_messaging_s.wasm
+        image: ghcr.io/wasmcloud/components/keyvalue-messaging-rust:0.1.0
         id: kv-demo
         config:
           - name: nats-kv-example
@@ -60,9 +61,8 @@ spec:
     - name: nats-kv
       type: capability
       properties:
-        #image: ghcr.io/wasmcloud/provider-keyvalue-nats:0.1.0
-        # NOTE: For the purpose of running this example, prior to the PR merge, a local archive using `wash par create` was used
-        image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
+        # image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.1.0
         # # NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
         # config:
         #   - name: nats-connection
