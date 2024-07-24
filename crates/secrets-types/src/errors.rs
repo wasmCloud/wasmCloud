@@ -38,6 +38,8 @@ pub enum GetSecretError {
     InvalidPayload,
     #[error("Invalid headers")]
     InvalidHeaders,
+    #[error("Error processing policies: ${0}")]
+    PolicyError(String),
     #[error("Encountered an unknown error fetching secret: {0}")]
     Other(String),
 }
