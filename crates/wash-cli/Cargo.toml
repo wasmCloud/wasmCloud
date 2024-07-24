@@ -17,6 +17,11 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
+# We use a separate version of async-nats that has some code that isn't upstream
+# to support the needs of wRPC libraries.
+#
+# TODO: Unify upstream async-nats and wrpc-nats if/when https://github.com/nats-io/nats.rs/pull/1267 
+# or something similar is implemented
 async-nats = { workspace = true }
 async-nats-0_33 = { workspace = true }
 bytes = { workspace = true }
