@@ -138,7 +138,8 @@ impl Manager {
             .then(|secret_name| async move {
                 match self.config_store.get(&secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
-                        .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
+                        .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration"))
+                        .map(|secret_ref| (secret_name.trim_start_matches(SECRET_PREFIX).to_string(), secret_ref)),
                     Ok(None) => bail!(
                         "Secret reference {secret_name} not found in config store"
                     ),
@@ -146,17 +147,18 @@ impl Manager {
                 }
             })
             // Retrieve the actual secret from the secrets backend
-            .and_then(|secret_ref| async move {
+            .and_then(|(secret_name, secret_ref)| async move {
                 let secrets_client = self
                     .get_or_create_secrets_client(&secret_ref.backend)
                     .await?;
-                let application = Application{
+                let application = Application {
+                    // We pass an empty string if the entity doesn't belong to an application
                     name: application.cloned().unwrap_or_default(),
-                    policy: secret_ref.policy_properties.clone(),
+                    policy: secret_ref.policy_properties,
                 };
                 let request = SecretRequest {
-                    name: secret_ref.key.clone(),
-                    version: secret_ref.version.clone(),
+                    name: secret_ref.key,
+                    version: secret_ref.version,
                     context: Context {
                         entity_jwt: entity_jwt.to_string(),
                         host_jwt: host_jwt.to_string(),
@@ -166,32 +168,32 @@ impl Manager {
                 secrets_client
                     .get(request, nkeys::XKey::new())
                     .await
+                    .map(|secret| (secret_name, secret))
                     .map_err(|e| anyhow::anyhow!(e))
             })
             // Build the map of secrets depending on if the secret is a string or bytes
-            .try_fold(HashMap::new(), |mut secrets, secret_result| async move {
+            .try_fold(HashMap::new(), |mut secrets, (secret_name, secret_result)| async move {
                 match secret_result {
+                    // NOTE(brooksmtownsend): We create this map using the `secret_name` passed in on from the secret reference
+                    // because that's the name that the component/provider will use to look up the secret.
                     WasmcloudSecret {
-                        name,
                         string_secret: Some(string_secret),
                         ..
                     } => secrets.insert(
-                        name.clone(),
+                        secret_name,
                         Secret::new(SecretValue::String(string_secret)),
                     ),
                     WasmcloudSecret {
-                        name,
                         binary_secret: Some(binary_secret),
                         ..
                     } => {
-                        secrets.insert(name.clone(), Secret::new(SecretValue::Bytes(binary_secret)))
+                        secrets.insert(secret_name, Secret::new(SecretValue::Bytes(binary_secret)))
                     }
                     WasmcloudSecret {
-                        name,
                         string_secret: None,
                         binary_secret: None,
                         ..
-                    } => return Err(anyhow::anyhow!("secret {name} did not contain a value")),
+                    } => return Err(anyhow::anyhow!("secret {secret_name} did not contain a value")),
                 };
                 Ok(secrets)
             })
