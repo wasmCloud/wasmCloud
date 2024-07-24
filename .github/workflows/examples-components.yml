@@ -12,6 +12,7 @@ on:
       - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
+      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
   pull_request:
     branches: [main]
@@ -109,6 +110,9 @@ jobs:
           - name: "http-keyvalue-counter"
             lang: "rust"
             wasm-bin: "http_keyvalue_counter_s.wasm"
+          - name: "keyvalue-messaging"
+            lang: "rust"
+            wasm-bin: "keyvalue_messaging_s.wasm"
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
@@ -207,6 +211,9 @@ jobs:
           - name: "http-keyvalue-counter"
             lang: "rust"
             wasm-bin: "http_keyvalue_counter_s.wasm"
+          - name: "keyvalue-messaging"
+            lang: "rust"
+            wasm-bin: "keyvalue_messaging_s.wasm"
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
