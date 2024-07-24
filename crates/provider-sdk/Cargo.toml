@@ -2,6 +2,7 @@
 name = "wasmcloud-provider-sdk"
 version = "0.6.0"
 description = "wasmCloud provider SDK"
+readme = "README.md"
 
 authors.workspace = true
 categories.workspace = true
