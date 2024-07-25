@@ -5,7 +5,7 @@ use wasmcloud_secrets_types::{
 };
 
 /// Default API version of the secrets API implementation in wasmCloud
-const DEFAULT_API_VERSION: &str = "v0";
+const DEFAULT_API_VERSION: &str = "v1alpha1";
 
 /// Errors that can be returned during creation/use of a [`Client`]
 #[derive(Debug, thiserror::Error)]
