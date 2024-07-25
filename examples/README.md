@@ -26,11 +26,11 @@ You can get started quickly by trying out of our example projects:
 | Golang ([TinyGo][tinygo]) | [`./golang/components/http-hello-world`](./golang/components/http-hello-world)         |                                                                 |
 | Golang ([TinyGo][tinygo]) | [`./golang/components/http-echo-tinygo`](./golang/components/http-echo-tinygo)         |                                                                 |
 | [Python][python]          | [`./python/components/http-hello-world`](./golang/components/http-hello-world)         |                                                                 |
-| [Rust][rust]              | [`./rust/components/echo-messaging`](./golang/components/echo-messaging)               | `ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0`        |
-| [Rust][rust]              | [`./rust/components/blobby`](./golang/components/blobby)                               | `ghcr.io/wasmcloud/components/blobby-rust:0.4.0`                |
-| [Rust][rust]              | [`./rust/components/http-hello-world`](./golang/components/http-hello-world)           | `ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0`      |
-| [Rust][rust]              | [`./rust/components/http-jsonify`](./golang/components/http-jsonify)                   | `ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1`          |
-| [Rust][rust]              | [`./rust/components/http-keyvalue-counter`](./golang/components/http-keyvalue-counter) | `ghcr.io/wasmcloud/components/http-keyvalue-counter-rust:0.1.0` |
+| [Rust][rust]              | [`./rust/components/echo-messaging`](./rust/components/echo-messaging)               | `ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0`        |
+| [Rust][rust]              | [`./rust/components/blobby`](./rust/components/blobby)                               | `ghcr.io/wasmcloud/components/blobby-rust:0.4.0`                |
+| [Rust][rust]              | [`./rust/components/http-hello-world`](./rust/components/http-hello-world)           | `ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0`      |
+| [Rust][rust]              | [`./rust/components/http-jsonify`](./rust/components/http-jsonify)                   | `ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1`          |
+| [Rust][rust]              | [`./rust/components/http-keyvalue-counter`](./rust/components/http-keyvalue-counter) | `ghcr.io/wasmcloud/components/http-keyvalue-counter-rust:0.1.0` |
 
 Start components with `wash`, either from file or OCI reference (if available):
 
