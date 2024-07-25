@@ -17,7 +17,7 @@ use wasmcloud_secrets_types::{Application, Context, Secret as WasmcloudSecret, S
 /// The prefix in the CONFIGDATA bucket for secret references
 pub const SECRET_PREFIX: &str = "SECRET_";
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct SecretReference {
     /// The backend to use for retrieving the secret.
     pub backend: String,
@@ -26,8 +26,9 @@ pub(crate) struct SecretReference {
     /// The version of the secret to retrieve. If not supplied, the latest version will be used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The policy that defines configuration options for the backend.
-    pub policy_properties: String,
+    /// The policy that defines configuration options for the backend. This is a serialized
+    /// JSON object that will be passed to the backend for policy evaluation.
+    pub policy: String,
 }
 
 #[derive(Debug)]
@@ -154,7 +155,7 @@ impl Manager {
                 let application = Application {
                     // We pass an empty string if the entity doesn't belong to an application
                     name: application.cloned().unwrap_or_default(),
-                    policy: secret_ref.policy_properties,
+                    policy: secret_ref.policy,
                 };
                 let request = SecretRequest {
                     name: secret_ref.key,
