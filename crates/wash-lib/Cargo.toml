@@ -1,7 +1,7 @@
 [package]
 name = "wash-lib"
 version = "0.22.1"
-categories = ["wasm", "wasmcloud"]
+categories = ["wasm"]
 description = "wasmCloud Shell (wash) libraries"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]
 readme = "README.md"
