@@ -250,10 +250,10 @@ fn wasmcloud_url(version: &str) -> String {
     #[cfg(target_os = "macos")]
     let os = "apple-darwin";
 
-    #[cfg(all(target_os = "linux", not(target_arch = "riscv64gc")))]
+    #[cfg(all(target_os = "linux", not(target_arch = "riscv64")))]
     let os = "unknown-linux-musl";
 
-    #[cfg(all(target_os = "linux", target_arch = "riscv64gc"))]
+    #[cfg(all(target_os = "linux", target_arch = "riscv64"))]
     let os = "unknown-linux-gnu";
 
     #[cfg(target_os = "windows")]
