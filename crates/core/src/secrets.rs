@@ -11,6 +11,30 @@ pub enum SecretValue {
     Bytes(Vec<u8>),
 }
 
+impl SecretValue {
+    /// Utility function for retrieving a string slice from this [`SecretValue`], if possible.
+    ///
+    /// If the secret does not contain a string, `None` is returned
+    #[must_use]
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            SecretValue::String(s) => Some(s),
+            SecretValue::Bytes(_) => None,
+        }
+    }
+
+    /// Utility function for retrieving bytes from this [`SecretValue`], if possible.
+    ///
+    /// If the secret does not contain bytes, `None` is returned
+    #[must_use]
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            SecretValue::String(_) => None,
+            SecretValue::Bytes(b) => Some(b),
+        }
+    }
+}
+
 /// Debug implementation that doesn't log the secret value
 impl Debug for SecretValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
