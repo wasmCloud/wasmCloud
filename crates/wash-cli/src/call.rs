@@ -453,9 +453,7 @@ async fn wrpc_invoke_simple(
     function_name: &str,
     timeout_ms: u64,
 ) -> Result<CommandOutput> {
-    let result = tokio::time::timeout(
-       std::time::Duration::from_millis(timeout_ms),
-       client
+    let result = client
            .timeout(Duration::from_millis(timeout_ms))
            .invoke_values_blocking::<_, ((),), (String,)>(
                Some(gen_wash_call_headers()),
@@ -464,9 +462,8 @@ async fn wrpc_invoke_simple(
                ((),),
                &[[]; 0],
            )
-   )
    .await
-   .context("Timeout while invoking component, ensure component {component_id} is running in lattice {lattice}")?;
+   .with_context(|| format!("timed out invoking component, is component [{component_id}] running in lattice [{lattice}]?"));
 
     match result {
        Ok((result,)) => {
