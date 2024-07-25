@@ -35,7 +35,7 @@
 use core::str::FromStr as _;
 use core::time::Duration;
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -365,6 +365,22 @@ impl HttpServerCore {
 
         let task_handle = handle.clone();
         let target = target.to_owned();
+        let socket = match &addr {
+            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
+            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+        }
+        .context("Unable to open socket")?;
+        // Copied this option from
+        // https://github.com/bytecodealliance/wasmtime/blob/05095c18680927ce0cf6c7b468f9569ec4d11bd7/src/commands/serve.rs#L319.
+        // This does increase throughput by 10-15% which is why we're creating the socket. We're
+        // using the tokio one because it exposes the `reuseaddr` option.
+        socket
+            .set_reuseaddr(!cfg!(windows))
+            .context("Error when setting socket to reuseaddr")?;
+        socket.bind(addr).context("Unable to bind to address")?;
+        let listener = socket.listen(1024).context("unable to listen on socket")?;
+        let listener = listener.into_std().context("Unable to get listener")?;
+
         let task = if let Tls {
             cert_file: Some(crt),
             priv_key_file: Some(key),
@@ -376,7 +392,7 @@ impl HttpServerCore {
                 .context("failed to construct TLS config")?;
 
             tokio::spawn(async move {
-                if let Err(e) = axum_server::bind_rustls(addr, tls)
+                if let Err(e) = axum_server::from_tcp_rustls(listener, tls)
                     .handle(task_handle)
                     .serve(
                         service
@@ -396,7 +412,7 @@ impl HttpServerCore {
             debug!(?addr, "bind HTTP listener");
 
             tokio::spawn(async move {
-                if let Err(e) = axum_server::bind(addr)
+                if let Err(e) = axum_server::from_tcp(listener)
                     .handle(task_handle)
                     .serve(
                         service
