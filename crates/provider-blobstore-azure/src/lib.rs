@@ -15,8 +15,8 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, instrument, warn};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
-    serve_provider_exports, Context, LinkConfig, Provider,
+    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
+    run_provider, serve_provider_exports, Context, HostData, LinkConfig, Provider,
 };
 
 use config::StorageConfig;
@@ -58,19 +58,20 @@ impl Provider for BlobstoreAzblobProvider {
         &self,
         link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let config = match StorageConfig::from_values(link_config.config) {
+        let config = match StorageConfig::from_link_config(&link_config) {
             Ok(v) => v,
             Err(e) => {
                 error!(error = %e, source_id = %link_config.source_id, "failed to read storage config");
                 return Err(e);
             }
         };
-        let link =
-            BlobServiceClient::builder(config.storage_account.clone(), config.configure_az())
+
+        let client =
+            BlobServiceClient::builder(config.storage_account.clone(), config.access_key())
                 .blob_service_client();
 
         let mut update_map = self.config.write().await;
-        update_map.insert(link_config.source_id.to_string(), link);
+        update_map.insert(link_config.source_id.to_string(), client);
 
         Ok(())
     }
@@ -88,10 +89,12 @@ impl Provider for BlobstoreAzblobProvider {
 
 impl BlobstoreAzblobProvider {
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            "blobstore-azure-provider",
-            std::env::var_os("PROVIDER_BLOBSTORE_AZURE_FLAMEGRAPH_PATH")
-        );
+        let HostData { config, .. } = load_host_data().context("failed to load host data")?;
+        let flamegraph_path = config
+            .get("FLAMEGRAPH_PATH")
+            .map(String::from)
+            .or_else(|| std::env::var("PROVIDER_BLOBSTORE_AZURE_FLAMEGRAPH_PATH").ok());
+        initialize_observability!("blobstore-azure-provider", flamegraph_path);
 
         let provider = Self::default();
         let shutdown = run_provider(provider.clone(), "blobstore-azure-provider")
