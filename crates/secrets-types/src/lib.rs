@@ -16,11 +16,11 @@ pub const RESPONSE_XKEY: &str = "Server-Response-Xkey";
 /// The type of secret.
 /// This is used to inform wadm or anything else that is consuming the secret about how to
 /// deserialize the payload.
-pub const SECRET_TYPE: &str = "v1.secret.wasmcloud.dev";
+pub const SECRET_TYPE: &str = "secret.wasmcloud.dev/v1alpha1";
 
-/// The type of secret policy.
-/// This is primarily used to version the policy format.
-pub const SECRET_POLICY_TYPE: &str = "secret-reference.wasmcloud.dev/v1alpha1";
+/// The type of the properties in the secret policy.
+/// This is primarily used to version the policy properties format.
+pub const SECRET_POLICY_PROPERTIES_TYPE: &str = "properties.secret.wasmcloud.dev/v1alpha1";
 
 /// The prefix for all secret keys in the config store
 pub const SECRET_PREFIX: &str = "SECRET";
@@ -33,7 +33,6 @@ pub struct Context {
     /// The host's signed JWT.
     pub host_jwt: String,
     /// The application the entity belongs to.
-    /// TODO: should this also be a JWT, but signed by the host?
     pub application: Application,
 }
 
@@ -119,7 +118,9 @@ impl Context {
 /// default to retrieving the latest version of the secret.
 #[derive(Serialize, Deserialize)]
 pub struct SecretRequest {
-    // The name of the secret
+    /// An identifier of the secret as stored in the secret store. This could
+    /// be a key, a path, or any other identifier that the secret store uses to
+    /// retrieve the secret.
     pub name: String,
     // The version of the secret
     pub version: Option<String>,
@@ -139,6 +140,9 @@ pub struct SecretResponse {
 /// A secret that can be either a string or binary value.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Secret {
+    /// An identifier of the secret as stored in the secret store. This could
+    /// be a key, a path, or any other identifier that the secret store uses to
+    /// retrieve the secret.
     pub name: String,
     pub version: String,
     pub string_secret: Option<String>,
@@ -169,13 +173,11 @@ impl SecretConfig {
         version: Option<String>,
         policy_properties: HashMap<String, String>,
     ) -> Self {
-        let mut properties_with_backend = policy_properties;
-        properties_with_backend.insert("backend".to_string(), backend.clone());
         Self {
             backend,
             key,
             version,
-            policy_properties: properties_with_backend,
+            policy_properties,
             secret_type_identifier: SECRET_TYPE.to_string(),
         }
     }
@@ -187,6 +189,16 @@ impl SecretConfig {
 impl TryInto<HashMap<String, String>> for SecretConfig {
     type Error = anyhow::Error;
 
+    /// Convert this SecretConfig into a HashMap of the form:
+    /// ```json
+    /// {
+    ///   "type": "secret.wasmcloud.dev/v1alpha1",
+    ///   "backend": "baobun",
+    ///   "key": "/path/to/secret",
+    ///   "version": "vX.Y.Z",
+    ///   "policy": "{\"type\":\"properties.secret.wasmcloud.dev/v1alpha1\",\"properties\":{\"key\":\"value\"}}
+    /// }
+    /// ```
     fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
         let mut map = HashMap::from([
             ("type".into(), SECRET_TYPE.into()),
@@ -196,19 +208,19 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
         if let Some(version) = self.version {
             map.insert("version".to_string(), version);
         }
-        let policy_properties = HashMap::from([
-            ("type".to_string(), SECRET_POLICY_TYPE.to_string()),
+
+        let policy = HashMap::from([
+            (
+                "type".to_string(),
+                serde_json::Value::String(SECRET_POLICY_PROPERTIES_TYPE.to_string()),
+            ),
             (
                 "properties".to_string(),
-                serde_json::to_string(&self.policy_properties)
-                    .context("failed to serialize policy_properties map as string")?,
+                serde_json::to_value(&self.policy_properties)
+                    .context("failed to serialize policy properties")?,
             ),
         ]);
-        map.insert(
-            "policy_properties".to_string(),
-            serde_json::to_string(&policy_properties)
-                .context("failed to serialize policy_properties map as string")?,
-        );
+        map.insert("policy".to_string(), serde_json::to_string(&policy)?);
         Ok(map)
     }
 }
