@@ -152,18 +152,17 @@ impl Manager {
                 let secrets_client = self
                     .get_or_create_secrets_client(&secret_ref.backend)
                     .await?;
-                let application = Application {
-                    // We pass an empty string if the entity doesn't belong to an application
-                    name: application.cloned().unwrap_or_default(),
-                    policy: secret_ref.policy,
-                };
                 let request = SecretRequest {
                     name: secret_ref.key,
                     version: secret_ref.version,
                     context: Context {
                         entity_jwt: entity_jwt.to_string(),
                         host_jwt: host_jwt.to_string(),
-                        application,
+                        application: Application {
+                            // We pass an empty string if the entity doesn't belong to an application
+                            name: application.cloned().unwrap_or_default(),
+                            policy: secret_ref.policy,
+                        },
                     },
                 };
                 secrets_client

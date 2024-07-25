@@ -34,7 +34,7 @@ pub async fn assert_put_secret_reference(
         ("key".to_string(), key.to_string()),
         (
             "policy".to_string(),
-            serde_json::json!({"type": "policy.secrets.wasmcloud.dev/v1alpha1", "properties": {"configuration": "value"}}).to_string(),
+            serde_json::json!({"type": "properties.secrets.wasmcloud.dev/v1alpha1", "properties": {"configuration": "value"}}).to_string(),
         ),
     ]);
     if let Some(version) = version {
