@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
@@ -131,12 +130,12 @@ pub async fn handle_command(
         .lattice
         .clone()
         .unwrap_or_else(|| DEFAULT_LATTICE.to_string());
-    let prefix = Arc::new(format!("{}.{component_id}", &lattice));
 
     let nc = create_client_from_opts_wrpc(&opts)
         .await
         .context("failed to create async nats client")?;
-    let wrpc_client = wrpc_transport_nats::Client::new(nc, prefix.as_str(), None);
+    let wrpc_client =
+        wrpc_transport_nats::Client::new(nc, format!("{}.{component_id}", &lattice), None);
 
     let (namespace, package, interface, name) = parse_wit_meta_from_operation(&function).context(
         "Invalid function supplied. Must be in the form of `namespace:package/interface.function`",
