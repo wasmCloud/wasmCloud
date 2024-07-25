@@ -28,13 +28,14 @@ pub async fn assert_put_secret_reference(
     key: &str,
     backend: &str,
     version: Option<String>,
+    properties: HashMap<String, String>,
 ) -> Result<()> {
     let mut config = HashMap::from([
         ("backend".to_string(), backend.to_string()),
         ("key".to_string(), key.to_string()),
         (
             "policy".to_string(),
-            serde_json::json!({"type": "properties.secrets.wasmcloud.dev/v1alpha1", "properties": {"configuration": "value"}}).to_string(),
+            serde_json::json!({"type": "properties.secrets.wasmcloud.dev/v1alpha1", "properties": properties}).to_string(),
         ),
     ]);
     if let Some(version) = version {

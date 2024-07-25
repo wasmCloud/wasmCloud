@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{ensure, Context};
 use clap::{Parser, Subcommand};
 use nkeys::XKey;
+use secrets_nats_kv::client::SECRETS_API_VERSION;
 use secrets_nats_kv::Api;
 
 use secrets_nats_kv::client;
@@ -55,7 +56,7 @@ struct RunCommand {
     #[clap(long, default_value = "127.0.0.1:4222")]
     nats_address: String,
     /// The API version to use for the secrets backend
-    #[clap(long, default_value = "v1alpha1")]
+    #[clap(long, default_value = SECRETS_API_VERSION)]
     secrets_api_version: String,
 }
 

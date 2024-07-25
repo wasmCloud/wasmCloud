@@ -148,7 +148,7 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
             application: Application {
-                name: "test".to_string(),
+                name: Some("test".to_string()),
                 policy: "".to_string(),
             },
         },
@@ -256,7 +256,7 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
             application: Application {
-                name: "test".to_string(),
+                name: Some("test".to_string()),
                 policy: "".to_string(),
             },
         },

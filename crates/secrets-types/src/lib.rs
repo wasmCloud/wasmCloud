@@ -8,6 +8,9 @@ use wascap::jwt::{validate_token, CapabilityProvider, Component, Host};
 mod errors;
 pub use crate::errors::*;
 
+/// The version of the secrets API
+pub const SECRET_API_VERSION: &str = "v1alpha1";
+
 /// The key of a NATS header containing the wasmCloud host's public xkey used to encrypt a secret request.
 /// It is also used to encrypt the response so that only the requestor can decrypt it.
 pub const WASMCLOUD_HOST_XKEY: &str = "WasmCloud-Host-Xkey";
@@ -32,7 +35,7 @@ pub struct Context {
     pub entity_jwt: String,
     /// The host's signed JWT.
     pub host_jwt: String,
-    /// The application the entity belongs to.
+    /// Information about the application that the entity belongs to.
     pub application: Application,
 }
 
@@ -41,7 +44,7 @@ pub struct Context {
 pub struct Application {
     /// The name of the application.
     #[serde(default)]
-    pub name: String,
+    pub name: Option<String>,
 
     /// The policy used define the application's access to secrets.
     /// This meant to be a JSON string that can be deserialized by a secrets backend
@@ -118,9 +121,10 @@ impl Context {
 /// default to retrieving the latest version of the secret.
 #[derive(Serialize, Deserialize)]
 pub struct SecretRequest {
-    /// An identifier of the secret as stored in the secret store. This could
-    /// be a key, a path, or any other identifier that the secret store uses to
-    /// retrieve the secret.
+    /// An identifier of the secret as stored in the secret store.
+    ///
+    /// A `SecretRequest` can be a key, path, or any other identifier that the secret store uses to
+    /// retrieve a secret.
     pub name: String,
     // The version of the secret
     pub version: Option<String>,
@@ -140,8 +144,9 @@ pub struct SecretResponse {
 /// A secret that can be either a string or binary value.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Secret {
-    /// An identifier of the secret as stored in the secret store. This could
-    /// be a key, a path, or any other identifier that the secret store uses to
+    /// An identifier of the secret as stored in the secret store.
+    ///
+    /// A `Secret` can be a key, path, or any other identifier that the secret store uses to
     /// retrieve the secret.
     pub name: String,
     pub version: String,
@@ -220,7 +225,10 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
                     .context("failed to serialize policy properties")?,
             ),
         ]);
-        map.insert("policy".to_string(), serde_json::to_string(&policy)?);
+        map.insert(
+            "policy".to_string(),
+            serde_json::to_string(&policy).context("failed to serialize policy string")?,
+        );
         Ok(map)
     }
 }

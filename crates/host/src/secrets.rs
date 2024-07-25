@@ -139,7 +139,7 @@ impl Manager {
             .then(|secret_name| async move {
                 match self.config_store.get(&secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
-                        .map_err(|_| anyhow::anyhow!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration"))
+                        .with_context(|| format!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration"))
                         .map(|secret_ref| (secret_name.trim_start_matches(SECRET_PREFIX).to_string(), secret_ref)),
                     Ok(None) => bail!(
                         "Secret reference {secret_name} not found in config store"
@@ -160,7 +160,7 @@ impl Manager {
                         host_jwt: host_jwt.to_string(),
                         application: Application {
                             // We pass an empty string if the entity doesn't belong to an application
-                            name: application.cloned().unwrap_or_default(),
+                            name: application.cloned(),
                             policy: secret_ref.policy,
                         },
                     },
@@ -193,7 +193,7 @@ impl Manager {
                         string_secret: None,
                         binary_secret: None,
                         ..
-                    } => return Err(anyhow::anyhow!("secret {secret_name} did not contain a value")),
+                    } => bail!("secret {secret_name} did not contain a value"),
                 };
                 Ok(secrets)
             })

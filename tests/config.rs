@@ -233,7 +233,15 @@ async fn config_e2e() -> anyhow::Result<()> {
     )
     .await?;
     // Put secret for second component
-    assert_put_secret_reference(&ctl_client, "ponger", "ponger", "nats-kv", None).await?;
+    assert_put_secret_reference(
+        &ctl_client,
+        "ponger",
+        "ponger",
+        "nats-kv",
+        None,
+        HashMap::with_capacity(0),
+    )
+    .await?;
     // Scale ponger
     assert_scale_component(
         &ctl_client,
