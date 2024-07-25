@@ -55,7 +55,7 @@ struct RunCommand {
     #[clap(long, default_value = "127.0.0.1:4222")]
     nats_address: String,
     /// The API version to use for the secrets backend
-    #[clap(long, default_value = "v0")]
+    #[clap(long, default_value = "v1alpha1")]
     secrets_api_version: String,
 }
 

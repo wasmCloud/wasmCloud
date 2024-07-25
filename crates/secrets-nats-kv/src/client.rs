@@ -56,7 +56,7 @@ pub async fn put_secret(
         .expect("should be able to encrypt the secret");
     let response = nats_client
         .request_with_headers(
-            format!("{subject_base}.v0.nats-kv.put_secret"),
+            format!("{subject_base}.v1alpha1.nats-kv.put_secret"),
             headers,
             v.into(),
         )
@@ -89,7 +89,7 @@ pub async fn add_mapping(
 
     nats_client
         .request(
-            format!("{subject_base}.v0.nats-kv.add_mapping.{public_key}"),
+            format!("{subject_base}.v1alpha1.nats-kv.add_mapping.{public_key}"),
             serde_json::to_vec(&secrets)
                 .context("failed to serialize set of secrets")?
                 .into(),
@@ -117,7 +117,7 @@ pub async fn remove_mapping(
 
     nats_client
         .request(
-            format!("{subject_base}.v0.nats-kv.remove_mapping.{public_key}"),
+            format!("{subject_base}.v1alpha1.nats-kv.remove_mapping.{public_key}"),
             serde_json::to_vec(&secrets)
                 .context("failed to serialize set of secrets")?
                 .into(),
