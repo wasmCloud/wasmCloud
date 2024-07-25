@@ -72,7 +72,7 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
 
     let policy_properties: HashMap<String, String> =
         serde_json::from_value(properties).context("properties should be a JSON object")?;
-    assert_eq!(policy_properties.len(), 0);
+    assert!(policy_properties.is_empty());
 
     assert!(!retrieved_secret.contains_key("version"));
 
@@ -82,7 +82,6 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
     let wash_instance = TestWashInstance::create().await?;
-    // Create a new secret reference
     let opts = CliConnectionOpts {
         ctl_port: Some(wash_instance.nats_port.to_string()),
         ..Default::default()
