@@ -116,6 +116,6 @@ impl NatsKvSecretsBackend {
     }
 
     fn topic(&self, operation: &str) -> String {
-        format!("wasmcloud.secretsv1alpha1nats-kv.{}", operation)
+        format!("wasmcloud.secrets.v1alpha1.nats-kv.{}", operation)
     }
 }
