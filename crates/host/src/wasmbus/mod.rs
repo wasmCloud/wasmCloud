@@ -29,7 +29,7 @@ use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{interval_at, Instant};
+use tokio::time::{interval_at, timeout, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
@@ -1272,15 +1272,16 @@ impl Host {
                                                 tasks.spawn(async move {
                                                     let _permit = permit;
                                                     debug!("handling invocation");
-                                                    match fut.await {
-                                                        Ok(()) => {
-                                                            debug!("successfully handled invocation");
-                                                            Ok(())
+                                                    match timeout(max_execution_time, fut).await {
+                                                        Ok(Err(err)) => {
+                                                            error!(?err, "component handler error");
                                                         },
                                                         Err(err) => {
-                                                            warn!(?err, "failed to handle invocation");
-                                                            Err(err)
+                                                            error!(?err, "component handler timed out");
                                                         },
+                                                        Ok(_) => {
+                                                            debug!("successfully handled invocation")
+                                                          },
                                                     }
                                                 });
                                             }

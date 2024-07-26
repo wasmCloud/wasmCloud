@@ -8,7 +8,7 @@ use common::nats::start_nats;
 
 /// Ensure the code from the quickstart example works
 ///
-/// This test is ignored by default as is requires a NATS server running in the background.
+/// This test is ignored by default as it requires a NATS server running in the background.
 #[tokio::test]
 #[ignore]
 async fn test_quickstart() -> Result<()> {

@@ -1,0 +1,10 @@
+[package]
+name = "http-component-export-timeout"
+edition = "2021"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmcloud-component = "0.2.0"

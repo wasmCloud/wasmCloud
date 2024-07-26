@@ -48,6 +48,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
             policy_timeout_ms: Some(Duration::from_millis(100)),
         }),
         None,
+        None,
     )
     .await
     .context("failed to start test host")?;

@@ -4,6 +4,7 @@ members = [
     "interfaces-reactor",
     "pinger-config-component",
     "ponger-config-component",
+    "http-component-export-timeout",
 ]
 resolver = "2"
 
