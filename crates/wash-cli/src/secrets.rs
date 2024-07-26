@@ -62,7 +62,15 @@ pub async fn handle_command(
             policy_properties,
         } => {
             let policy_property_map = input_vec_to_hashmap(policy_properties)?;
-            let secret_config = SecretConfig::new(backend, key, version, policy_property_map);
+            let secret_config = SecretConfig::new(
+                backend,
+                key,
+                version,
+                policy_property_map
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect(),
+            );
             trace!(?secret_config, "Putting secret config");
             let values: HashMap<String, String> = secret_config.try_into()?;
 

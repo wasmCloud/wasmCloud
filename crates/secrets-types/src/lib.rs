@@ -1,7 +1,7 @@
 use anyhow::{ensure, Context as _};
 use async_trait::async_trait;
 use nkeys::XKey;
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use wascap::jwt::{validate_token, CapabilityProvider, Component, Host};
 
@@ -155,20 +155,23 @@ pub struct Secret {
 }
 
 /// The representation of a secret reference in the config store.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct SecretConfig {
-    backend: String,
-    key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    policy_properties: HashMap<String, String>,
+    /// The backend to use for retrieving the secret.
+    pub backend: String,
+    /// The key to use for retrieving the secret from the backend.
+    pub key: String,
+    /// The version of the secret to retrieve. If not supplied, the latest version will be used.
+    pub version: Option<String>,
+    /// The policy that defines configuration options for the backend. This is a serialized
+    /// JSON object that will be passed to the backend as a string for policy evaluation.
+    pub policy: Policy,
 
+    // NOTE: Should be serialized/deserialized as "type" in JSON
     /// The type of secret.
     /// This is used to inform wadm or anything else that is consuming the secret about how to
     /// deserialize the payload.
-    #[serde(rename = "type")]
-    secret_type_identifier: String,
+    pub secret_type: String,
 }
 
 impl SecretConfig {
@@ -176,14 +179,122 @@ impl SecretConfig {
         backend: String,
         key: String,
         version: Option<String>,
-        policy_properties: HashMap<String, String>,
+        policy_properties: HashMap<String, serde_json::Value>,
     ) -> Self {
         Self {
             backend,
             key,
             version,
-            policy_properties,
-            secret_type_identifier: SECRET_TYPE.to_string(),
+            policy: Policy::new(policy_properties),
+            secret_type: SECRET_TYPE.to_string(),
+        }
+    }
+
+    /// Given an entity JWT, host JWT, and optional application name, convert this SecretConfig
+    /// into a SecretRequest that can be used to fetch the secret from a secrets backend.
+    ///
+    /// This is not a true [`TryInto`] implementation as we need additional information to create
+    /// the [`SecretRequest`]. This returns an error if the policy field cannot be serialized to a JSON
+    /// string.
+    pub fn try_into_request(
+        self,
+        entity_jwt: &str,
+        host_jwt: &str,
+        application_name: Option<&String>,
+    ) -> Result<SecretRequest, anyhow::Error> {
+        Ok(SecretRequest {
+            name: self.key,
+            version: self.version,
+            context: Context {
+                entity_jwt: entity_jwt.to_string(),
+                host_jwt: host_jwt.to_string(),
+                application: Application {
+                    name: application_name.cloned(),
+                    policy: serde_json::to_string(&self.policy)
+                        .context("failed to serialize secret policy as string")?,
+                },
+            },
+        })
+    }
+}
+
+// We need full impls of serialize and deserialize because we have to handle the custom error case
+// when serializing the policy to JSON
+impl Serialize for SecretConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let field_count = if self.version.is_some() { 5 } else { 4 };
+        let mut state = serializer.serialize_struct("SecretReference", field_count)?;
+        state.serialize_field("backend", &self.backend)?;
+        state.serialize_field("key", &self.key)?;
+        if let Some(v) = self.version.as_ref() {
+            state.serialize_field("version", v)?;
+        }
+
+        // Serialize policy to JSON string
+        let policy_json = serde_json::to_string(&self.policy).map_err(serde::ser::Error::custom)?;
+        state.serialize_field("policy", &policy_json)?;
+        state.serialize_field("type", &self.secret_type)?;
+
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Helper {
+            backend: String,
+            key: String,
+            version: Option<String>,
+            policy: String,
+            #[serde(rename = "type")]
+            ty: String,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+
+        // Deserialize policy from JSON string
+        let policy: Policy =
+            serde_json::from_str(&helper.policy).map_err(serde::de::Error::custom)?;
+
+        Ok(SecretConfig {
+            backend: helper.backend,
+            key: helper.key,
+            version: helper.version,
+            policy,
+            secret_type: helper.ty,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Policy {
+    #[serde(rename = "type")]
+    policy_type: String,
+    properties: HashMap<String, serde_json::Value>,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            policy_type: SECRET_POLICY_PROPERTIES_TYPE.to_string(),
+            properties: Default::default(),
+        }
+    }
+}
+
+impl Policy {
+    /// Returns a new policy with the specified properties
+    pub fn new(properties: HashMap<String, serde_json::Value>) -> Self {
+        Self {
+            properties,
+            ..Default::default()
         }
     }
 }
@@ -206,7 +317,7 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
     /// ```
     fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
         let mut map = HashMap::from([
-            ("type".into(), SECRET_TYPE.into()),
+            ("type".into(), self.secret_type),
             ("backend".into(), self.backend),
             ("key".into(), self.key),
         ]);
@@ -214,20 +325,9 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
             map.insert("version".to_string(), version);
         }
 
-        let policy = HashMap::from([
-            (
-                "type".to_string(),
-                serde_json::Value::String(SECRET_POLICY_PROPERTIES_TYPE.to_string()),
-            ),
-            (
-                "properties".to_string(),
-                serde_json::to_value(&self.policy_properties)
-                    .context("failed to serialize policy properties")?,
-            ),
-        ]);
         map.insert(
             "policy".to_string(),
-            serde_json::to_string(&policy).context("failed to serialize policy string")?,
+            serde_json::to_string(&self.policy).context("failed to serialize policy string")?,
         );
         Ok(map)
     }
