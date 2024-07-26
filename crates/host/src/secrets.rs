@@ -13,9 +13,6 @@ use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
 use wasmcloud_secrets_types::{Secret as WasmcloudSecret, SecretConfig};
 
-/// The prefix in the CONFIGDATA bucket for secret references
-pub const SECRET_PREFIX: &str = "SECRET_";
-
 #[derive(Debug)]
 /// A manager for fetching secrets from a secret store, caching secrets clients for efficiency.
 pub struct Manager {
@@ -124,8 +121,7 @@ impl Manager {
             .then(|secret_name| async move {
                 match self.config_store.get(&secret_name).await {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretConfig>(&secret)
-                        .with_context(|| format!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration"))
-                        .map(|secret_ref| (secret_name.trim_start_matches(SECRET_PREFIX).to_string(), secret_ref)),
+                        .with_context(|| format!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
                     Ok(None) => bail!(
                         "Secret reference {secret_name} not found in config store"
                     ),
@@ -133,11 +129,12 @@ impl Manager {
                 }
             })
             // Retrieve the actual secret from the secrets backend
-            .and_then(|(secret_name, secret_ref)| async move {
+            .and_then(|secret_config| async move {
                 let secrets_client = self
-                    .get_or_create_secrets_client(&secret_ref.backend)
+                    .get_or_create_secrets_client(&secret_config.backend)
                     .await?;
-                let request = secret_ref.try_into_request(entity_jwt, host_jwt, application).context("failed to create secret request")?;
+                let secret_name = secret_config.name.clone();
+                let request = secret_config.try_into_request(entity_jwt, host_jwt, application).context("failed to create secret request")?;
                 secrets_client
                     .get(request, nkeys::XKey::new())
                     .await

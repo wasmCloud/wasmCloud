@@ -62,7 +62,9 @@ pub async fn handle_command(
             policy_properties,
         } => {
             let policy_property_map = input_vec_to_hashmap(policy_properties)?;
+            let secret_name = name.clone();
             let secret_config = SecretConfig::new(
+                secret_name,
                 backend,
                 key,
                 version,
@@ -74,19 +76,19 @@ pub async fn handle_command(
             trace!(?secret_config, "Putting secret config");
             let values: HashMap<String, String> = secret_config.try_into()?;
 
-            put_config(opts, &format_secret_name(&name), values, output_kind).await
+            put_config(opts, &secret_configdata_key(&name), values, output_kind).await
         }
         SecretsCliCommand::GetCommand { opts, name } => {
-            get_config(opts, &format_secret_name(&name), output_kind).await
+            get_config(opts, &secret_configdata_key(&name), output_kind).await
         }
         SecretsCliCommand::DelCommand { opts, name } => {
-            delete_config(opts, &format_secret_name(&name), output_kind).await
+            delete_config(opts, &secret_configdata_key(&name), output_kind).await
         }
     }
 }
 
 /// Ensures the secret name is prefixed by `SECRET_`
-fn format_secret_name(name: &str) -> String {
+fn secret_configdata_key(name: &str) -> String {
     if is_secret(name) {
         name.to_string()
     } else {

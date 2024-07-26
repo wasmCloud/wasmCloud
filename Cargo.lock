@@ -7604,6 +7604,7 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.7.0",
  "wasmcloud-host",
+ "wasmcloud-secrets-types",
 ]
 
 [[package]]

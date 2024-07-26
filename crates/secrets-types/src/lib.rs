@@ -155,8 +155,10 @@ pub struct Secret {
 }
 
 /// The representation of a secret reference in the config store.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretConfig {
+    /// The name of the secret when referred to by a component or provider.
+    pub name: String,
     /// The backend to use for retrieving the secret.
     pub backend: String,
     /// The key to use for retrieving the secret from the backend.
@@ -176,12 +178,14 @@ pub struct SecretConfig {
 
 impl SecretConfig {
     pub fn new(
+        name: String,
         backend: String,
         key: String,
         version: Option<String>,
         policy_properties: HashMap<String, serde_json::Value>,
     ) -> Self {
         Self {
+            name,
             backend,
             key,
             version,
@@ -218,6 +222,42 @@ impl SecretConfig {
     }
 }
 
+/// Helper function to convert a SecretConfig into a HashMap. This is only intended to be used by
+/// wash or anything else that needs to interact directly with the config KV bucket to manipulate
+/// secrets.
+impl TryInto<HashMap<String, String>> for SecretConfig {
+    type Error = anyhow::Error;
+
+    /// Convert this SecretConfig into a HashMap of the form:
+    /// ```json
+    /// {
+    ///   "name": "secret-name",
+    ///   "type": "secret.wasmcloud.dev/v1alpha1",
+    ///   "backend": "baobun",
+    ///   "key": "/path/to/secret",
+    ///   "version": "vX.Y.Z",
+    ///   "policy": "{\"type\":\"properties.secret.wasmcloud.dev/v1alpha1\",\"properties\":{\"key\":\"value\"}}"
+    /// }
+    /// ```
+    fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
+        let mut map = HashMap::from([
+            ("name".into(), self.name),
+            ("type".into(), self.secret_type),
+            ("backend".into(), self.backend),
+            ("key".into(), self.key),
+        ]);
+        if let Some(version) = self.version {
+            map.insert("version".to_string(), version);
+        }
+
+        map.insert(
+            "policy".to_string(),
+            serde_json::to_string(&self.policy).context("failed to serialize policy string")?,
+        );
+        Ok(map)
+    }
+}
+
 // We need full impls of serialize and deserialize because we have to handle the custom error case
 // when serializing the policy to JSON
 impl Serialize for SecretConfig {
@@ -225,8 +265,9 @@ impl Serialize for SecretConfig {
     where
         S: Serializer,
     {
-        let field_count = if self.version.is_some() { 5 } else { 4 };
+        let field_count = if self.version.is_some() { 6 } else { 5 };
         let mut state = serializer.serialize_struct("SecretReference", field_count)?;
+        state.serialize_field("name", &self.name)?;
         state.serialize_field("backend", &self.backend)?;
         state.serialize_field("key", &self.key)?;
         if let Some(v) = self.version.as_ref() {
@@ -249,6 +290,7 @@ impl<'de> Deserialize<'de> for SecretConfig {
     {
         #[derive(Deserialize)]
         struct Helper {
+            name: String,
             backend: String,
             key: String,
             version: Option<String>,
@@ -264,6 +306,7 @@ impl<'de> Deserialize<'de> for SecretConfig {
             serde_json::from_str(&helper.policy).map_err(serde::de::Error::custom)?;
 
         Ok(SecretConfig {
+            name: helper.name,
             backend: helper.backend,
             key: helper.key,
             version: helper.version,
@@ -299,40 +342,6 @@ impl Policy {
     }
 }
 
-/// Helper function to convert a SecretConfig into a HashMap. This is only intended to be used by
-/// wash or anything else that needs to interact directly with the config KV bucket to manipulate
-/// secrets.
-impl TryInto<HashMap<String, String>> for SecretConfig {
-    type Error = anyhow::Error;
-
-    /// Convert this SecretConfig into a HashMap of the form:
-    /// ```json
-    /// {
-    ///   "type": "secret.wasmcloud.dev/v1alpha1",
-    ///   "backend": "baobun",
-    ///   "key": "/path/to/secret",
-    ///   "version": "vX.Y.Z",
-    ///   "policy": "{\"type\":\"properties.secret.wasmcloud.dev/v1alpha1\",\"properties\":{\"key\":\"value\"}}
-    /// }
-    /// ```
-    fn try_into(self) -> Result<HashMap<String, String>, Self::Error> {
-        let mut map = HashMap::from([
-            ("type".into(), self.secret_type),
-            ("backend".into(), self.backend),
-            ("key".into(), self.key),
-        ]);
-        if let Some(version) = self.version {
-            map.insert("version".to_string(), version);
-        }
-
-        map.insert(
-            "policy".to_string(),
-            serde_json::to_string(&self.policy).context("failed to serialize policy string")?,
-        );
-        Ok(map)
-    }
-}
-
 #[async_trait]
 pub trait SecretsServer {
     // Returns the secret value for the given secret name
@@ -340,4 +349,41 @@ pub trait SecretsServer {
 
     // Returns the server's public XKey
     fn server_xkey(&self) -> XKey;
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+    #[test]
+    fn test_secret_config_hashmap_try_into() {
+        let properties = HashMap::from([(
+            String::from("key"),
+            serde_json::Value::String("value".to_string()),
+        )]);
+        let secret_config = crate::SecretConfig::new(
+            "name".to_string(),
+            "backend".to_string(),
+            "key".to_string(),
+            Some("version".to_string()),
+            properties,
+        );
+
+        let map: HashMap<String, String> = secret_config
+            .clone()
+            .try_into()
+            .expect("should be able to convert to hashmap");
+
+        assert_eq!(map.get("name"), Some(&secret_config.name));
+        assert_eq!(map.get("type"), Some(&secret_config.secret_type));
+        assert_eq!(map.get("backend"), Some(&secret_config.backend));
+        assert_eq!(map.get("key"), Some(&secret_config.key));
+        assert_eq!(map.get("version"), secret_config.version.as_ref());
+        assert_eq!(
+            map.get("policy"),
+            Some(
+                &serde_json::to_string(&secret_config.policy)
+                    .expect("should be able to serialize policy")
+            )
+        );
+    }
 }

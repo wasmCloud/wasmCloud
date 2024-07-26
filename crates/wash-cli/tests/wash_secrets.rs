@@ -110,7 +110,10 @@ async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
     .await?
     .map;
 
-    assert_eq!(retrieved_secret.len(), 5);
+    assert_eq!(retrieved_secret.len(), 6);
+    assert!(retrieved_secret
+        .get("name")
+        .is_some_and(|n| n == "mysecret"));
     assert!(retrieved_secret
         .get("backend")
         .is_some_and(|b| b == "baobuns"));

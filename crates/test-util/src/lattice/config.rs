@@ -30,17 +30,15 @@ pub async fn assert_put_secret_reference(
     version: Option<String>,
     properties: HashMap<String, String>,
 ) -> Result<()> {
-    let mut config = HashMap::from([
-        ("backend".to_string(), backend.to_string()),
-        ("key".to_string(), key.to_string()),
-        (
-            "policy".to_string(),
-            serde_json::json!({"type": "properties.secrets.wasmcloud.dev/v1alpha1", "properties": properties}).to_string(),
-        ),
-    ]);
-    if let Some(version) = version {
-        config.insert("version".to_string(), version.to_string());
-    }
+    let secret_config = wasmcloud_secrets_types::SecretConfig::new(
+        name.as_ref().to_string(),
+        backend.to_string(),
+        key.to_string(),
+        version,
+        properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
+    );
+
+    let config: HashMap<String, String> = secret_config.try_into()?;
 
     assert_config_put(client, format!("SECRET_{}", name.as_ref()), config).await
 }
