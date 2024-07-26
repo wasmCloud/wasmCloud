@@ -40,8 +40,8 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
     .await?
     .map;
 
-    assert_eq!(retrieved_secret.len(), 4);
-
+    assert_eq!(retrieved_secret.len(), 5);
+    assert!(retrieved_secret.get("name").is_some_and(|n| n == "foobar"));
     assert!(retrieved_secret
         .get("backend")
         .is_some_and(|b| b == "baobun"));
