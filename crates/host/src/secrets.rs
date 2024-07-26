@@ -7,29 +7,14 @@ use async_nats::{jetstream::kv::Store, Client};
 use futures::stream;
 use futures::stream::{StreamExt, TryStreamExt};
 use secrecy::Secret;
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_secrets_client::Client as WasmcloudSecretsClient;
-use wasmcloud_secrets_types::{Application, Context, Secret as WasmcloudSecret, SecretRequest};
+use wasmcloud_secrets_types::{Secret as WasmcloudSecret, SecretConfig};
 
 /// The prefix in the CONFIGDATA bucket for secret references
 pub const SECRET_PREFIX: &str = "SECRET_";
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub(crate) struct SecretReference {
-    /// The backend to use for retrieving the secret.
-    pub backend: String,
-    /// The key to use for retrieving the secret from the backend.
-    pub key: String,
-    /// The version of the secret to retrieve. If not supplied, the latest version will be used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// The policy that defines configuration options for the backend. This is a serialized
-    /// JSON object that will be passed to the backend for policy evaluation.
-    pub policy: String,
-}
 
 #[derive(Debug)]
 /// A manager for fetching secrets from a secret store, caching secrets clients for efficiency.
@@ -138,7 +123,7 @@ impl Manager {
             // Fetch the secret reference from the config store
             .then(|secret_name| async move {
                 match self.config_store.get(&secret_name).await {
-                    Ok(Some(secret)) => serde_json::from_slice::<SecretReference>(&secret)
+                    Ok(Some(secret)) => serde_json::from_slice::<SecretConfig>(&secret)
                         .with_context(|| format!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration"))
                         .map(|secret_ref| (secret_name.trim_start_matches(SECRET_PREFIX).to_string(), secret_ref)),
                     Ok(None) => bail!(
@@ -152,19 +137,7 @@ impl Manager {
                 let secrets_client = self
                     .get_or_create_secrets_client(&secret_ref.backend)
                     .await?;
-                let request = SecretRequest {
-                    name: secret_ref.key,
-                    version: secret_ref.version,
-                    context: Context {
-                        entity_jwt: entity_jwt.to_string(),
-                        host_jwt: host_jwt.to_string(),
-                        application: Application {
-                            // We pass an empty string if the entity doesn't belong to an application
-                            name: application.cloned(),
-                            policy: secret_ref.policy,
-                        },
-                    },
-                };
+                let request = secret_ref.try_into_request(entity_jwt, host_jwt, application).context("failed to create secret request")?;
                 secrets_client
                     .get(request, nkeys::XKey::new())
                     .await
