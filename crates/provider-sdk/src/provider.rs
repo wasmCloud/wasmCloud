@@ -257,15 +257,15 @@ async fn subscribe_link_put(
             match serde_json::from_slice::<InterfaceLinkDefinition>(&msg.payload) {
                 Ok(ld) => {
                     let span = tracing::Span::current();
-                    span.record("source_id", &tracing::field::display(&ld.source_id));
-                    span.record("target", &tracing::field::display(&ld.target));
-                    span.record("wit_namespace", &tracing::field::display(&ld.wit_namespace));
-                    span.record("wit_package", &tracing::field::display(&ld.wit_package));
+                    span.record("source_id", tracing::field::display(&ld.source_id));
+                    span.record("target", tracing::field::display(&ld.target));
+                    span.record("wit_namespace", tracing::field::display(&ld.wit_namespace));
+                    span.record("wit_package", tracing::field::display(&ld.wit_package));
                     span.record(
                         "wit_interfaces",
-                        &tracing::field::display(&ld.interfaces.join(",")),
+                        tracing::field::display(&ld.interfaces.join(",")),
                     );
-                    span.record("link_name", &tracing::field::display(&ld.name));
+                    span.record("link_name", tracing::field::display(&ld.name));
                     let (tx, rx) = oneshot::channel();
                     if let Err(err) = link_put_tx.send((ld, tx)).await {
                         error!(%err, "failed to send link put request");
