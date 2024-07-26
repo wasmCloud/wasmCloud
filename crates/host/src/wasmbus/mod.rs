@@ -37,7 +37,7 @@ use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{interval_at, timeout_at, Instant};
+use tokio::time::{interval_at, timeout, timeout_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
@@ -1220,7 +1220,15 @@ impl Host {
                                                 let permit = permits.acquire_owned().await;
                                                 tasks.spawn(async move {
                                                     let _permit = permit;
-                                                    fut.await
+                                                    match timeout(max_execution_time, fut).await {
+                                                        Ok(Err(err)) => {
+                                                            error!(?err, "component handler error");
+                                                        },
+                                                        Err(err) => {
+                                                            error!(?err, "component handler timed out");
+                                                        },
+                                                        Ok(_) => {},
+                                                    }
                                                 });
                                             }
                                             Err(err) => {
