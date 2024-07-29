@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::env;
 
 use anyhow::{Context, Result};
+use tracing::warn;
 use url::Url;
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
 
 use crate::TOKEN_REFRESH_INTERVAL;
 
@@ -47,7 +49,29 @@ impl Default for Config {
 }
 
 impl Config {
-    /// initialize from linkdef values, environment, and defaults
+    /// Initialize from a [`LinkConfig`]
+    pub fn from_link_config(link_config: &LinkConfig) -> Result<Config> {
+        let mut map = HashMap::clone(link_config.config);
+
+        // Attempt to retrieve the vault token from secrets
+        if let Some(token) = env::var("VAULT_TOKEN").ok().or_else(|| {
+            link_config
+                .secrets
+                .get("token")
+                .and_then(SecretValue::as_string)
+                .map(String::from)
+        }) {
+            map.insert("VAULT_TOKEN".into(), token);
+        } else {
+            warn!("Secret value [token] (ENV: VAULT_TOKEN) was not found in env or secrets. Please prefer ENV variables or secrets for sensitive values.")
+        }
+
+        Self::from_values(&map)
+    }
+
+    /// Initialize from linkdef values, environment, and defaults
+    ///
+    /// NOTE: Prefer [`Self::from_link_config`] rather than this method directly
     pub fn from_values(values: &HashMap<String, String>) -> Result<Config> {
         let addr = env::var("VAULT_ADDR")
             .ok()
