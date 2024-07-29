@@ -8,6 +8,7 @@ on:
       - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
       - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+*
       - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
@@ -98,6 +99,9 @@ jobs:
           - name: "echo-messaging"
             lang: "rust"
             wasm-bin: "echo_messaging_s.wasm"
+          - name: "ferris-says"
+            lang: "rust"
+            wasm-bin: "ferris_says_s.wasm"
           - name: "http-blobstore"
             lang: "rust"
             wasm-bin: "http_blobstore_s.wasm"
@@ -199,6 +203,9 @@ jobs:
           - name: "echo-messaging"
             lang: "rust"
             wasm-bin: "echo_messaging_s.wasm"
+          - name: "ferris-says"
+            lang: "rust"
+            wasm-bin: "ferris_says_s.wasm"
           - name: "http-blobstore"
             lang: "rust"
             wasm-bin: "http_blobstore_s.wasm"
