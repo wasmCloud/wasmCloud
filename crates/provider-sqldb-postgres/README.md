@@ -100,7 +100,6 @@ New named configuration can be specified by using `wash config put`.
 | `POSTGRES_HOST`         | `localhost` | Postgres cluster hostname                                 |
 | `POSTGRES_PORT`         | `5432`      | Postgres cluster port                                     |
 | `POSTGRES_USERNAME`     | `postgres`  | Postgres cluster username                                 |
-| `POSTGRES_PASSWORD`     | `postgres`  | Postgres cluster password                                 |
 | `POSTGRES_TLS_REQUIRED` | `false`     | Whether TLS should be required for al managed connections |
 
 Once named configuration with the keys above is created, it can be referenced as `target_config` for a link to this provider.
@@ -124,6 +123,46 @@ For example, the following WADM manifest fragment:
         interfaces: [query]
         target_config:
           - name: default-postgres
+```
+
+The `querier` component in the snippet above specifies a link to a `sqldb-postgres` target, with `target_config` that is only specifies `name` (no `properties`).
+
+> [!WARNING]
+> While `POSTGRES_PASSWORD` can be specified as named configuration, it should be specified as a secret.
+>
+> In a future version, this will be required.
+
+## 🔐 Secret Settings
+
+While most values can be specified via named configuration, sensitive values like the `POSTGRES_PASSWORD` should be speicified via *secrets*.
+
+New secrets be specified by using `wash secrets put`.
+
+| Property                | Example     | Description                                               |
+| ----------------------- | ----------- | --------------------------------------------------------- |
+| `POSTGRES_PASSWORD`     | `postgres`  | Postgres cluster password                                 |
+
+Once a secret has been created, it can be referenced in the link to the provider.
+
+For example, the following WADM manifest fragment:
+
+```yaml
+- name: querier
+  type: component
+  properties:
+    image: file://./build/sqldb_postgres_query_s.wasm
+  traits:
+    - type: spreadscaler
+      properties:
+        replicas: 1
+    - type: link
+      properties:
+        target: sqldb-postgres
+        namespace: wasmcloud
+        package: postgres
+        interfaces: [query]
+        target_secrets:
+          - name: default-postgres-secrets
 ```
 
 The `querier` component in the snippet above specifies a link to a `sqldb-postgres` target, with `target_config` that is only specifies `name` (no `properties`).
