@@ -1,6 +1,6 @@
 name = "HTTP Server"
 language = "rust"
-version = "0.21.1"
+version = "0.22.0"
 type = "provider"
 
 [rust]
