@@ -2858,7 +2858,7 @@ __metadata:
     "@types/eslint": "npm:~8.56.10"
     "@wasmcloud/eslint-config": "workspace:^"
     "@wasmcloud/tsconfig": "workspace:^"
-    nats.ws: "npm:^1.29.0"
+    nats.ws: "npm:^1.29.1"
     tsup: "npm:^8.2.2"
     type-fest: "npm:^4.23.0"
   peerDependencies:
@@ -2963,8 +2963,8 @@ __metadata:
     eslint-plugin-unicorn: "npm:^52.0.0"
     execa: "npm:^9.3.0"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.414.0"
-    nats.ws: "npm:^1.29.0"
+    lucide-react: "npm:^0.417.0"
+    nats.ws: "npm:^1.29.1"
     pino: "npm:^9.3.1"
     postcss: "npm:^8.4.39"
     prettier: "npm:^3.3.3"
@@ -6492,12 +6492,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.414.0":
-  version: 0.414.0
-  resolution: "lucide-react@npm:0.414.0"
+"lucide-react@npm:^0.417.0":
+  version: 0.417.0
+  resolution: "lucide-react@npm:0.417.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10/d2524481f14f690e15add2a517d5bcda1432029ae212e82fa8e8624bec0501f8131514d0a03519a60d9d543252f33d8ab0e7a592dee365ec9cc49fe403d5ff1b
+  checksum: 10/0f4c68b894903f0fd6b5102ca35311d0866de3ff68157ff9e0d1fa14744928613c920394742fc3511ca50f656d63508d98bb3f6b280149d7bbe33900e084f5f8
   languageName: node
   linkType: hard
 
@@ -6733,15 +6733,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nats.ws@npm:^1.29.0":
-  version: 1.29.0
-  resolution: "nats.ws@npm:1.29.0"
+"nats.ws@npm:^1.29.1":
+  version: 1.29.1
+  resolution: "nats.ws@npm:1.29.1"
   dependencies:
     nkeys.js: "npm:1.1.0"
   dependenciesMeta:
     nkeys.js:
       optional: true
-  checksum: 10/0e46c2b8c57e622a2afb09f76d7c1b8e81e885d05b16df099b0f42e7d653ee7e10218e0805bea70398d116df7d45c487091d20976cb063669b311ac8661c2224
+  checksum: 10/ffb210e84caadff2238d4387f7bc2b9abc6d533a065f45f1c836f86a30ccb0f980bab764ef7f8365e1ff09e682a24aff30edbb961bd98cb030bac204f5ac52a1
   languageName: node
   linkType: hard
 
