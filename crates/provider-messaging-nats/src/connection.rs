@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
+use wasmcloud_provider_sdk::{core::secrets::SecretValue, LinkConfig};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 
@@ -102,7 +104,42 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
+    /// Create a [`ConnectionConfig`] from a given [`LinkConfig`]
+    pub fn from_link_config(
+        LinkConfig {
+            secrets, config, ..
+        }: &LinkConfig,
+    ) -> Result<ConnectionConfig> {
+        let mut map = HashMap::clone(config);
+
+        if let Some(jwt) = secrets
+            .get(CONFIG_NATS_CLIENT_JWT)
+            .and_then(SecretValue::as_string)
+            .or_else(|| {
+                warn!("secret value [{CONFIG_NATS_CLIENT_JWT}] was found not found in secrets. Prefer using secrets for sensitive values.");
+                config.get(CONFIG_NATS_CLIENT_JWT).map(String::as_str)
+            })
+        {
+            map.insert(CONFIG_NATS_CLIENT_JWT.into(), jwt.to_string());
+        }
+
+        if let Some(seed) = secrets
+            .get(CONFIG_NATS_CLIENT_SEED)
+            .and_then(SecretValue::as_string)
+            .or_else(|| {
+                warn!("secret value [{CONFIG_NATS_CLIENT_SEED}] was found not found in secrets. Prefer using secrets for sensitive values.");
+                config.get(CONFIG_NATS_CLIENT_SEED).map(String::as_str)
+            })
+        {
+            map.insert(CONFIG_NATS_CLIENT_SEED.into(), seed.to_string());
+        }
+
+        Self::from_map(&map)
+    }
+
     /// Construct configuration Struct from the passed hostdata config
+    ///
+    /// NOTE: Prefer [`Self::from_link_config`] rather than this method directly
     pub fn from_map(values: &HashMap<String, String>) -> Result<ConnectionConfig> {
         let mut config = ConnectionConfig::default();
 

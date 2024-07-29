@@ -273,15 +273,14 @@ impl Provider for NatsMessagingProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
-            source_id, config, ..
-        }: LinkConfig<'_>,
+        link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let config = if config.is_empty() {
+        let LinkConfig { source_id, .. } = link_config;
+        let config = if link_config.config.is_empty() {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
-            match ConnectionConfig::from_map(config) {
+            match ConnectionConfig::from_link_config(&link_config) {
                 Ok(cc) => self.default_config.merge(&ConnectionConfig {
                     subscriptions: Vec::new(),
                     ..cc
