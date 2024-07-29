@@ -104,18 +104,19 @@ For more information on what you can do with the component, see the [`http-keyva
 
 [wasmcloud-docs-wash-app-deploy]: https://wasmcloud.com/docs/cli/app#deploy
 
-## Link Definition Configuration Settings
+## Link Definition Secret Settings
 
-The following is a list of configuration settings available in the link definition.
-
-| Name  | Description                                                                                                                                                                                                    |
-|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Name  | Description                                                                                                                                                                                                |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `URL` | The connection string for the Redis database. Note that all authentication information must also be contained in this URL. The URL _must_ start with the `redis://` scheme. (ex. `redis://127.0.0.1:6379`) |
 
 > ![WARNING]
 > Putting sensitive configuration values in WADM files should be avoided.
 >
-> Please use [named configuration][wasmcloud-docs-named-config] to safely provide sensitive values to providers.
-> (i.e. specifying *only* the configuration name in `wadm.yaml` and ensuring to run `wash config put` separately).
+> Please use the secrets feature to provide sensitive values like a Redis connection URL
+> (i.e. specifying the secret name in `wadm.yaml` and ensuring to run `wash secret put` separately).
+>
+> While this provider will still accept `URL` values from [named configuration][wasmcloud-docs-named-config] for the
+> sake of backwards compatibility, such functionality will be removed in a future version.
 
 [wasmcloud-docs-named-config]: https://wasmcloud.com/docs/developer/components/configure#supplying-multiple-configurations
