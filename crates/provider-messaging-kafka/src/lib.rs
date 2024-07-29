@@ -114,17 +114,35 @@ impl KafkaMessagingProvider {
 /// Extract hostnames (separated by commas, found under key [`KAFKA_HOSTS_CONFIG_KEY`]) from config hashmap
 ///
 /// If no hostnames are found [`DEFAULT_HOST`] is split (by ',') and returned.
-fn extract_hosts_from_config(config: &HashMap<String, String>) -> Vec<String> {
+fn extract_hosts_from_link_config(link_config: &LinkConfig) -> Vec<String> {
     // Collect comma separated hosts into a Vec<String>
-    config
+    //
+    // This value could come from either secrets or regular config (for backwards compat)
+    // but we want to make sure we warn if it is pulled from config.
+    let maybe_hosts = link_config
+        .secrets
         .iter()
         .find_map(|(k, v)| {
-            if *k == KAFKA_HOSTS_CONFIG_KEY {
-                Some(v.to_string())
-            } else {
-                None
+            match (k, v.as_string()) {
+                (k, Some(v)) if *k == KAFKA_HOSTS_CONFIG_KEY  => Some(String::from(v)),
+                _ => None,
             }
         })
+    .or_else(|| {
+        warn!("secret value [{KAFKA_HOSTS_CONFIG_KEY}] was not found in secrets. Prefer storing sensitive values in secrets");
+        link_config
+            .config
+            .iter()
+            .find_map(|(k, v)| {
+                if *k == KAFKA_HOSTS_CONFIG_KEY {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
+    });
+
+    maybe_hosts
         .unwrap_or_else(|| DEFAULT_HOST.to_string())
         .trim()
         .split(',')
@@ -152,19 +170,16 @@ fn extract_topic_from_config(config: &HashMap<String, String>) -> &str {
 impl Provider for KafkaMessagingProvider {
     /// Called when this provider is linked to, when the provider is the *target* of the link.
     #[instrument(skip_all, fields(source_id))]
-    async fn receive_link_config_as_target(
-        &self,
-        LinkConfig {
+    async fn receive_link_config_as_target(&self, link_config: LinkConfig<'_>) -> Result<()> {
+        let LinkConfig {
             link_name,
             source_id,
             config,
             ..
-        }: LinkConfig<'_>,
-    ) -> Result<()> {
+        } = link_config;
         debug!(link_name, source_id, "receiving link as target");
-
         // Collect various values from config (if present)
-        let hosts = extract_hosts_from_config(config);
+        let hosts = extract_hosts_from_link_config(&link_config);
         let topic = extract_topic_from_config(config);
         let consumer_group = config
             .get(KAFKA_CONSUMER_GROUP_CONFIG_KEY)
