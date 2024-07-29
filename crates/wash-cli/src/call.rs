@@ -174,8 +174,8 @@ pub async fn handle_command(
         _ => {
             wrpc_invoke_simple(
                 wrpc_client,
-                &component_id,
                 &lattice,
+                &component_id,
                 &instance,
                 &name,
                 opts.timeout_ms,
