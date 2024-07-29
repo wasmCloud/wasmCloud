@@ -6809,7 +6809,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "wat",
  "weld-codegen",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.27.0",
  "wit-bindgen-go",
  "wit-component 0.212.0",
  "wit-parser 0.212.0",
@@ -7683,6 +7683,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmparser"
+version = "0.214.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5309c1090e3e84dad0d382f42064e9933fdaedb87e468cc239f0eabea73ddcb6"
+dependencies = [
+ "ahash",
+ "bitflags 2.5.0",
+ "hashbrown 0.14.3",
+ "indexmap 2.2.6",
+ "semver",
+]
+
+[[package]]
 name = "wasmprinter"
 version = "0.209.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8356,7 +8369,7 @@ dependencies = [
  "heck 0.5.0",
  "wasm-encoder 0.212.0",
  "wasm-metadata 0.212.0",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.27.0",
  "wit-component 0.212.0",
 ]
 
@@ -8372,6 +8385,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-bindgen-core"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e3fd9b11c16b9888c1bd159130b1b3487da913c45dbd34d408bfdf81f8a865a"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "wit-parser 0.214.0",
+]
+
+[[package]]
 name = "wit-bindgen-go"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8380,7 +8404,7 @@ dependencies = [
  "anyhow",
  "heck 0.5.0",
  "wit-bindgen-c",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.27.0",
 ]
 
 [[package]]
@@ -8404,7 +8428,7 @@ dependencies = [
  "prettyplease",
  "syn 2.0.71",
  "wasm-metadata 0.212.0",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.27.0",
  "wit-component 0.212.0",
 ]
 
@@ -8419,15 +8443,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.71",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.27.0",
  "wit-bindgen-rust",
 ]
 
 [[package]]
 name = "wit-bindgen-wrpc"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2a279972fad8dcc51a8a12846d3b5ce3f8ac01f8b4a876472cff5b810758fd5"
+checksum = "a473f1eb39792ec6104f63a6f8931eab8704da52586610176391ec47d28fb11f"
 dependencies = [
  "anyhow",
  "bitflags 2.5.0",
@@ -8443,28 +8467,28 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc-rust"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d77d9d33061f64461ceb6500fefa3797fc6650f3a08856248fcf25ff4059ac2"
+checksum = "61b331f988e944340b48faefea1292bffb53afe8d44f01793cd4c9755f053c9a"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.28.0",
  "wrpc-introspect",
 ]
 
 [[package]]
 name = "wit-bindgen-wrpc-rust-macro"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffb92194f20eb6f439e4a0c8b55a41dc54cdcc10595f58c0c7f4ddcded0806f2"
+checksum = "31e5fecfc5be94a496dd52d282f31361054cef72fdbd1ae67cb4eac547984ee2"
 dependencies = [
  "anyhow",
  "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.71",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.28.0",
  "wit-bindgen-wrpc-rust",
 ]
 
@@ -8557,6 +8581,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-parser"
+version = "0.214.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "681d526d6ea42e28f9afe9eae2b50e0b0a627aef8822c75eb04078db84d03e57"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.2.6",
+ "log",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "unicode-xid",
+ "wasmparser 0.214.0",
+]
+
+[[package]]
 name = "wrpc-interface-http"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8579,11 +8621,11 @@ dependencies = [
 
 [[package]]
 name = "wrpc-introspect"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c1c36a5aee0733c542b79e748c0ac0da3923264559bf3eb1b9be3389a7d1b0d"
+checksum = "24a340a18546f5e31d63eec0c0eda33092412564044efa557d03227630a80dab"
 dependencies = [
- "wit-parser 0.212.0",
+ "wit-parser 0.214.0",
 ]
 
 [[package]]
