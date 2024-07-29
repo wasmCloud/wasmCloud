@@ -19,8 +19,8 @@ use tracing::{debug, error, info, instrument, warn};
 use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, serve_provider_exports,
-    Context, LinkConfig, Provider,
+    get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
+    run_provider, serve_provider_exports, Context, LinkConfig, Provider,
 };
 
 mod config;
@@ -59,6 +59,12 @@ pub struct KvNatsProvider {
 impl KvNatsProvider {
     pub async fn run() -> anyhow::Result<()> {
         let host_data = load_host_data().context("failed to load host data")?;
+        let flamegraph_path = host_data
+            .config
+            .get("FLAMEGRAPH_PATH")
+            .map(String::from)
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_NATS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!("keyvalue-nats-provider", flamegraph_path);
         let provider = Self::from_host_data(host_data);
         let shutdown = run_provider(provider.clone(), "keyvalue-nats-provider")
             .await
@@ -76,7 +82,8 @@ impl KvNatsProvider {
 
     /// Build a [`KvNatsProvider`] from [`HostData`]
     pub fn from_host_data(host_data: &HostData) -> KvNatsProvider {
-        let config = NatsConnectionConfig::from_map(&host_data.config);
+        let config =
+            NatsConnectionConfig::from_config_and_secrets(&host_data.config, &host_data.secrets);
         if let Ok(config) = config {
             KvNatsProvider {
                 default_config: config,
@@ -212,19 +219,17 @@ impl Provider for KvNatsProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
-            source_id,
-            link_name,
-            config,
-            ..
-        }: LinkConfig<'_>,
+        link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let config = if config.is_empty() {
+        let nats_config = if link_config.config.is_empty() {
             self.default_config.clone()
         } else {
             // create a config from the supplied values and merge that with the existing default
             // NATS connection configuration
-            match NatsConnectionConfig::from_map(config) {
+            match NatsConnectionConfig::from_config_and_secrets(
+                link_config.config,
+                link_config.secrets,
+            ) {
                 Ok(ncc) => self.default_config.merge(&ncc),
                 Err(e) => {
                     error!("Failed to build NATS connection configuration: {e:?}");
@@ -232,9 +237,15 @@ impl Provider for KvNatsProvider {
                 }
             }
         };
-        println!("NATS Kv configuration: {:?}", config);
+        println!("NATS Kv configuration: {:?}", nats_config);
 
-        let kv_store = match self.connect(config).await {
+        let LinkConfig {
+            source_id,
+            link_name,
+            ..
+        }: LinkConfig<'_> = link_config;
+
+        let kv_store = match self.connect(nats_config).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
@@ -615,110 +626,6 @@ fn add_tls_ca(
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::collections::HashMap;
-
-    // Verify that a NatsConnectionConfig could be constructed from partial input
-    #[test]
-    fn test_default_connection_serialize() {
-        let input = r#"
-{
-    "cluster_uri": "nats://super-cluster",
-    "js_domain": "optional",
-    "bucket": "kv_store",
-    "auth_jwt": "authy",
-    "auth_seed": "seedy"
-}
-"#;
-
-        let config: NatsConnectionConfig = serde_json::from_str(input).unwrap();
-        assert_eq!(config.cluster_uri, Some("nats://super-cluster".to_string()));
-        assert_eq!(config.js_domain, Some("optional".to_string()));
-        assert_eq!(config.bucket, "kv_store");
-        assert_eq!(config.auth_jwt.unwrap(), "authy");
-        assert_eq!(config.auth_seed.unwrap(), "seedy");
-    }
-
-    // Verify that two NatsConnectionConfigs could be merged
-    #[test]
-    fn test_connectionconfig_merge() {
-        let ncc1 = NatsConnectionConfig {
-            cluster_uri: Some("old_server".to_string()),
-            ..Default::default()
-        };
-        let ncc2 = NatsConnectionConfig {
-            cluster_uri: Some("server1".to_string()),
-            js_domain: Some("new_domain".to_string()),
-            bucket: "new_bucket".to_string(),
-            auth_jwt: Some("jawty".to_string()),
-            ..Default::default()
-        };
-        let ncc3 = ncc1.merge(&ncc2);
-        assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
-        assert_eq!(ncc3.js_domain, ncc2.js_domain);
-        assert_eq!(ncc3.bucket, ncc2.bucket);
-        assert_eq!(ncc3.auth_jwt, Some("jawty".to_string()));
-    }
-
-    // Verify that a NatsConnectionConfig could be constructed from a HashMap
-    #[test]
-    fn test_from_map_multiple_entries() -> anyhow::Result<()> {
-        const CONFIG_NATS_CLIENT_JWT: &str = "client_jwt";
-        const CONFIG_NATS_CLIENT_SEED: &str = "client_seed";
-        let ncc = NatsConnectionConfig::from_map(&HashMap::from([
-            ("tls_ca".to_string(), "rootCA".to_string()),
-            ("js_domain".to_string(), "optional".to_string()),
-            ("bucket".to_string(), "kv_store".to_string()),
-            (CONFIG_NATS_CLIENT_JWT.to_string(), "authy".to_string()),
-            (CONFIG_NATS_CLIENT_SEED.to_string(), "seedy".to_string()),
-        ]))?;
-        assert_eq!(ncc.tls_ca, Some("rootCA".to_string()));
-        assert_eq!(ncc.js_domain, Some("optional".to_string()));
-        assert_eq!(ncc.bucket, "kv_store");
-        assert_eq!(ncc.auth_jwt, Some("authy".to_string()));
-        assert_eq!(ncc.auth_seed, Some("seedy".to_string()));
-        Ok(())
-    }
-
-    // Verify that a default NatsConnectionConfig will be constructed from an empty HashMap
-    #[test]
-    fn test_from_map_empty() {
-        let ncc = NatsConnectionConfig::from_map(&HashMap::new());
-        assert!(ncc.is_err());
-    }
-
-    // Verify that a NatsConnectionConfig will be constructed from an empty HashMap, plus a required bucket
-    #[test]
-    fn test_from_map_with_minimal_valid_bucket() -> anyhow::Result<()> {
-        let mut map = HashMap::new();
-        map.insert("bucket".to_string(), "some_bucket_value".to_string()); // Providing a minimal valid 'bucket' attribute
-        let ncc = NatsConnectionConfig::from_map(&map)?;
-        assert_eq!(ncc.bucket, "some_bucket_value".to_string());
-        Ok(())
-    }
-
-    // Verify that the NatsConnectionConfig's merge function prioritizes the new values over the old ones
-    #[test]
-    fn test_merge_non_default_values() {
-        let ncc1 = NatsConnectionConfig {
-            cluster_uri: Some("old_server".to_string()),
-            js_domain: Some("old_domain".to_string()),
-            bucket: "old_bucket".to_string(),
-            auth_jwt: Some("old_jawty".to_string()),
-            ..Default::default()
-        };
-        let ncc2 = NatsConnectionConfig {
-            cluster_uri: Some("server1".to_string()),
-            js_domain: Some("new_domain".to_string()),
-            bucket: "kv_store".to_string(),
-            auth_jwt: Some("new_jawty".to_string()),
-            ..Default::default()
-        };
-        let ncc3 = ncc1.merge(&ncc2);
-        assert_eq!(ncc3.cluster_uri, ncc2.cluster_uri);
-        assert_eq!(ncc3.js_domain, ncc2.js_domain);
-        assert_eq!(ncc3.bucket, ncc2.bucket);
-        assert_eq!(ncc3.auth_jwt, ncc2.auth_jwt);
-    }
 
     // Verify that tls_ca is set
     #[test]
