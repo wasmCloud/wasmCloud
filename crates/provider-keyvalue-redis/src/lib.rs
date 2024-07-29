@@ -18,7 +18,6 @@ use redis::aio::ConnectionManager;
 use redis::{Cmd, FromRedisValue};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
-use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
     Provider,
@@ -69,14 +68,14 @@ impl KvRedisProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            KvRedisProvider::name(),
-            std::env::var_os("PROVIDER_KV_REDIS_FLAMEGRAPH_PATH")
-        );
-
-        let HostData { config, .. } = load_host_data().context("failed to load host data")?;
-        let provider = KvRedisProvider::new(config.clone());
-
+        let host_data = load_host_data().context("failed to load host data")?;
+        let flamegraph_path = host_data
+            .config
+            .get("FLAMEGRAPH_PATH")
+            .map(String::from)
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_REDIS_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path);
+        let provider = KvRedisProvider::new(host_data.config.clone());
         let shutdown = run_provider(provider.clone(), KvRedisProvider::name())
             .await
             .context("failed to run provider")?;
@@ -316,15 +315,24 @@ impl Provider for KvRedisProvider {
         LinkConfig {
             source_id,
             config,
+            secrets,
             link_name,
             ..
         }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let conn = if let Some(url) = config
+        let url = secrets
             .keys()
             .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
             .and_then(|url_key| config.get(url_key))
-        {
+            .or_else(|| {
+                warn!("redis connection URLs can be sensitive. Please consider using secrets to pass this value");
+                config
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case(CONFIG_REDIS_URL_KEY))
+                    .and_then(|url_key| config.get(url_key))
+            });
+
+        let conn = if let Some(url) = url {
             match redis::Client::open(url.to_string()) {
                 Ok(client) => match client.get_connection_manager().await {
                     Ok(conn) => {
