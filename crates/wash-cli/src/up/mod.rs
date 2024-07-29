@@ -322,8 +322,8 @@ impl WasmcloudOpts {
 #[derive(Parser, Debug, Clone)]
 pub struct WadmOpts {
     /// wadm version to download, e.g. `v0.4.0`. See https://github.com/wasmCloud/wadm/releases for releases
-    #[clap(long = "wadm-version", default_value = WADM_VERSION, env = "WADM_VERSION")]
-    pub wadm_version: String,
+    #[clap(long = "wadm-version", env = "WADM_VERSION")]
+    pub wadm_version: Option<String>,
 
     /// If enabled, wadm will not be downloaded or run as a part of the up command
     #[clap(long = "disable-wadm")]
@@ -512,8 +512,11 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             .into_std()
             .await;
 
-        let wadm_path =
-            install_patch_or_default_wadm_version(&cmd.wadm_opts.wadm_version, &install_dir).await;
+        let wadm_version: String = match cmd.wadm_opts.wadm_version {
+            Some(version) => version.to_string(),
+            None => WADM_VERSION.to_string(),
+        };
+        let wadm_path = install_patch_or_default_wadm_version(&wadm_version, &install_dir).await;
 
         match wadm_path {
             Ok(path) => {
@@ -526,7 +529,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
                 }
             }
             Err(e) => {
-                let wadm_version: String = cmd.wadm_opts.wadm_version.clone();
+                let wadm_version: String = wadm_version.to_string();
                 eprintln!("🟨 Couldn't download wadm {wadm_version}: {e}");
                 if e.to_string().contains("Text file busy") {
                     eprintln!("🛟 Please ensure there aren't any leftover wadm processes");
