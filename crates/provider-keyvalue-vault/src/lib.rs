@@ -15,7 +15,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
 use wasmcloud_provider_sdk::{
-    get_connection, propagate_trace_for_ctx, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
+    Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -184,11 +185,13 @@ impl KvVaultProvider {
     }
 
     pub async fn run() -> anyhow::Result<()> {
-        initialize_observability!(
-            KvVaultProvider::name(),
-            std::env::var_os("PROVIDER_KV_VAULT_FLAMEGRAPH_PATH")
-        );
-
+        let host_data = load_host_data().context("failed to load host data")?;
+        let flamegraph_path = host_data
+            .config
+            .get("FLAMEGRAPH_PATH")
+            .map(String::from)
+            .or_else(|| std::env::var("PROVIDER_KEYVALUE_VAULT_FLAMEGRAPH_PATH").ok());
+        initialize_observability!(Self::name(), flamegraph_path);
         let provider = Self::default();
         let shutdown = run_provider(provider.clone(), KvVaultProvider::name())
             .await
@@ -403,20 +406,20 @@ impl Provider for KvVaultProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let LinkConfig {
             source_id,
             link_name,
-            config,
             ..
-        }: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
+        } = link_config;
         debug!(
            %source_id,
            %link_name,
             "adding link for component",
         );
 
-        let config = match Config::from_values(config) {
+        let config = match Config::from_link_config(&link_config) {
             Ok(config) => config,
             Err(e) => {
                 error!(
