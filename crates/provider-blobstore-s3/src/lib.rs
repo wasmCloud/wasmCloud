@@ -41,6 +41,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument, warn};
+use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
@@ -107,25 +108,43 @@ pub struct StsAssumeRoleConfig {
 
 impl StorageConfig {
     /// initialize from linkdef values
-    pub async fn from_values(values: &HashMap<String, String>) -> Result<StorageConfig> {
-        let mut config = if let Some(config_b64) = values.get("config_b64") {
+    pub async fn from_link_config(
+        LinkConfig {
+            config, secrets, ..
+        }: &LinkConfig<'_>,
+    ) -> Result<StorageConfig> {
+        let mut storage_config = if let Some(config_b64) = secrets
+            .get("config_b64")
+            .and_then(SecretValue::as_string)
+            .or_else(|| config.get("config_b64").map(String::as_str))
+        {
+            if secrets.get("config_b64").is_none() {
+                warn!("secret value [config_b64] was not found, but present in configuration. Please prefer using secrets for sensitive values.");
+            }
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(config_b64.as_bytes())
                 .context("invalid base64 encoding")?;
             serde_json::from_slice::<StorageConfig>(&bytes).context("corrupt config_b64")?
-        } else if let Some(config) = values.get("config_json") {
-            serde_json::from_str::<StorageConfig>(config).context("corrupt config_json")?
+        } else if let Some(encoded) = secrets
+            .get("config_json")
+            .and_then(SecretValue::as_string)
+            .or_else(|| config.get("config_json").map(String::as_str))
+        {
+            if secrets.get("config_json").is_none() {
+                warn!("secret value [config_json] was not found, but was present in configuration. Please prefer using secrets for sensitive values.");
+            }
+            serde_json::from_str::<StorageConfig>(encoded).context("corrupt config_json")?
         } else {
             StorageConfig::default()
         };
 
         // If a top level BUCKET_REGION was specified config, use it
-        if let Some(region) = values.get("BUCKET_REGION") {
-            config.bucket_region = Some(region.into());
+        if let Some(region) = config.get("BUCKET_REGION") {
+            storage_config.bucket_region = Some(region.into());
         }
 
         if let Ok(arn) = env::var("AWS_ROLE_ARN") {
-            let mut sts_config = config.sts_config.unwrap_or_default();
+            let mut sts_config = storage_config.sts_config.unwrap_or_default();
             sts_config.role = arn;
             if let Ok(region) = env::var("AWS_ROLE_REGION") {
                 sts_config.region = Some(region);
@@ -136,15 +155,15 @@ impl StorageConfig {
             if let Ok(external_id) = env::var("AWS_ROLE_EXTERNAL_ID") {
                 sts_config.external_id = Some(external_id);
             }
-            config.sts_config = Some(sts_config);
+            storage_config.sts_config = Some(sts_config);
         }
 
         if let Ok(endpoint) = env::var("AWS_ENDPOINT") {
-            config.endpoint = Some(endpoint);
+            storage_config.endpoint = Some(endpoint);
         }
 
         // aliases are added from linkdefs in StorageClient::new()
-        Ok(config)
+        Ok(storage_config)
     }
 }
 
@@ -888,7 +907,7 @@ impl Provider for BlobstoreS3Provider {
         link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         // Build storage config
-        let config = match StorageConfig::from_values(link_config.config).await {
+        let config = match StorageConfig::from_link_config(&link_config).await {
             Ok(v) => v,
             Err(e) => {
                 error!(error = %e, %link_config.source_id, "failed to build storage config");
