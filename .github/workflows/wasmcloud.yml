@@ -365,6 +365,8 @@ jobs:
 
   docker:
     runs-on: ubuntu-22.04-16-cores
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
     needs:
       - build-bin
       - test-linux
