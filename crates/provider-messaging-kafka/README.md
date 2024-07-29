@@ -19,8 +19,17 @@ It exposes publish and subscribe functionality to components to operate on Kafka
 | `consumer_group`      | Consumer group to use when consuming messages                                                                                                                                                                                                                              |
 | `consumer_partitions` | Comma delimited list of partitions to use when subscribing to the topic specified by the link.                                                                                                                                                                             |
 | `producer_partitions` | Comma delimited list of partitions to use when handling `publish` calls from components (unrelated to the subscription topic)                                                                                                                                              |
+> [!WARNING]
+> While `hosts` *can* be provided as named configuration, it *should* be provided as a secret, since
+> bootstrap server hosts may be considered or contain sensitive information.
+>
+> While both named config and secrets are currently allowed, in a future version sensitive fields *must* be supplied via secrets. 
 
+## Secrets
 
+| Property              | Description                                                                                                                                                                                                                                                                |
+|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hosts`               | A comma-separated list of bootstrap server hosts. For example, `HOSTS=127.0.0.1:9092,127.0.0.1:9093`. A single value is accepted as well, and the default value is the Kafka default of `127.0.0.1:9092`. This will be used for both the consumer and producer connections |
                                                                                                          |
 
 ## Limitations
