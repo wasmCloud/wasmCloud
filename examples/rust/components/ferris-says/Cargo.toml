@@ -1,0 +1,16 @@
+[package]
+name = "ferris-says"
+edition = "2021"
+version = "0.1.0"
+description = """
+Example component that takes an invocation and returns a ferris-says (cowsay-like) formatted string
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.27", features = ["default"] }
+ferris-says = { version = "0.3.1" }

@@ -1,0 +1,10 @@
+package wasmcloud:example-ferris-says;
+
+interface invoke {
+  say: func() -> string;          
+  say-phrase: func(phrase: string) -> string;          
+}
+
+world example-ferris-says {
+  export invoke;
+}
