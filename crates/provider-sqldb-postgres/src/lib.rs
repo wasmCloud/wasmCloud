@@ -28,7 +28,7 @@ use bindings::{
 };
 
 mod config;
-use config::{parse_prefixed_config_from_map, ConnectionCreateOptions};
+use config::{extract_prefixed_conn_config, ConnectionCreateOptions};
 
 use wasmcloud_provider_sdk::Context;
 
@@ -201,12 +201,10 @@ impl Provider for PostgresProvider {
     #[instrument(level = "debug", skip_all, fields(source_id))]
     async fn receive_link_config_as_target(
         &self,
-        LinkConfig {
-            source_id, config, ..
-        }: LinkConfig<'_>,
+        link_config @ LinkConfig { source_id, .. }: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
         // Attempt to parse a configuration from the map with the prefix POSTGRES_
-        let Some(db_cfg) = parse_prefixed_config_from_map("POSTGRES_", config) else {
+        let Some(db_cfg) = extract_prefixed_conn_config("POSTGRES_", &link_config) else {
             // If we failed to find a config on the link, then we
             warn!(source_id, "no link-level DB configuration");
             return Ok(());
