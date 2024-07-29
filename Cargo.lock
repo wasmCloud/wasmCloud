@@ -6336,7 +6336,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -6737,8 +6737,8 @@ dependencies = [
  "which",
  "wit-bindgen-wrpc",
  "wrpc-interface-http",
- "wrpc-transport 0.26.6",
- "wrpc-transport-nats 0.22.2",
+ "wrpc-transport 0.26.7",
+ "wrpc-transport-nats 0.22.3",
 ]
 
 [[package]]
@@ -7059,8 +7059,8 @@ dependencies = [
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport 0.26.6",
- "wrpc-transport-nats 0.22.2",
+ "wrpc-transport 0.26.7",
+ "wrpc-transport-nats 0.22.3",
 ]
 
 [[package]]
@@ -7242,8 +7242,8 @@ dependencies = [
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types",
  "wasmcloud-tracing",
- "wrpc-transport 0.26.6",
- "wrpc-transport-nats 0.22.2",
+ "wrpc-transport 0.26.7",
+ "wrpc-transport-nats 0.22.3",
 ]
 
 [[package]]
@@ -7279,7 +7279,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -7297,7 +7297,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -7322,7 +7322,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -7345,7 +7345,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "webpki-roots 0.26.3",
  "wrpc-interface-http",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -7503,8 +7503,8 @@ dependencies = [
  "wasmcloud-core 0.7.0",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport 0.26.6",
- "wrpc-transport-nats 0.22.2",
+ "wrpc-transport 0.26.7",
+ "wrpc-transport-nats 0.22.3",
 ]
 
 [[package]]
@@ -7570,7 +7570,7 @@ dependencies = [
  "wit-parser 0.212.0",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -8437,7 +8437,7 @@ dependencies = [
  "tracing",
  "wasm-tokio",
  "wit-bindgen-wrpc-rust-macro",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -8573,7 +8573,7 @@ dependencies = [
  "tracing",
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -8603,7 +8603,7 @@ dependencies = [
  "wasmtime-wasi",
  "wit-parser 0.212.0",
  "wrpc-introspect",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
@@ -8626,9 +8626,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.26.6"
+version = "0.26.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d66d564c9b76dae2741abd3ad3cfa9438af1199687a0bbe7e2bda0dab6164513"
+checksum = "3e21c6cfe39b527477c0b30d7deb71fa6843972296a7516d2f8de15426376f0b"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8659,9 +8659,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91b3f2afda44adac39cadf9a9e15b136e5de9c7b6fede55b6fbfa97ca912a6c9"
+checksum = "87731a7eb3f5201548239f229c3334341d43afa9a6363cb80546e1e976895f90"
 dependencies = [
  "anyhow",
  "async-nats-wrpc",
@@ -8671,7 +8671,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasm-tokio",
- "wrpc-transport 0.26.6",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]
