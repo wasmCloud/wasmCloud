@@ -47,7 +47,7 @@ spec:
     - name: http
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.21.0
+        image: ghcr.io/wasmcloud/http-server:0.22.0
       traits:
         # Link the httpserver to the component, and configure the HTTP server
         # to listen on port 8080 for incoming requests
