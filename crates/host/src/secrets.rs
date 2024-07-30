@@ -123,7 +123,7 @@ impl Manager {
                     Ok(Some(secret)) => serde_json::from_slice::<SecretConfig>(&secret)
                         .with_context(|| format!("failed to deserialize secret reference from config store, ensure {secret_name} is a secret reference and not configuration")),
                     Ok(None) => bail!(
-                        "Secret reference {secret_name} not found in config store"
+                        "Secret config {secret_name} not found in config store, could not create secret request"
                     ),
                     Err(e) => bail!(e),
                 }
