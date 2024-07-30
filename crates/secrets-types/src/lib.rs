@@ -123,9 +123,10 @@ impl Context {
 pub struct SecretRequest {
     /// An identifier of the secret as stored in the secret store.
     ///
-    /// A `SecretRequest` can be a key, path, or any other identifier that the secret store uses to
+    /// This can be a key, path, or any other identifier that the secret store uses to
     /// retrieve a secret.
-    pub name: String,
+    pub key: String,
+    pub field: Option<String>,
     // The version of the secret
     pub version: Option<String>,
     pub context: Context,
@@ -163,6 +164,8 @@ pub struct SecretConfig {
     pub backend: String,
     /// The key to use for retrieving the secret from the backend.
     pub key: String,
+    /// The field to retrieve from the secret. If not supplied, the entire secret will be returned.
+    pub field: Option<String>,
     /// The version of the secret to retrieve. If not supplied, the latest version will be used.
     pub version: Option<String>,
     /// The policy that defines configuration options for the backend. This is a serialized
@@ -181,6 +184,7 @@ impl SecretConfig {
         name: String,
         backend: String,
         key: String,
+        field: Option<String>,
         version: Option<String>,
         policy_properties: HashMap<String, serde_json::Value>,
     ) -> Self {
@@ -188,6 +192,7 @@ impl SecretConfig {
             name,
             backend,
             key,
+            field,
             version,
             policy: Policy::new(policy_properties),
             secret_type: SECRET_TYPE.to_string(),
@@ -207,7 +212,8 @@ impl SecretConfig {
         application_name: Option<&String>,
     ) -> Result<SecretRequest, anyhow::Error> {
         Ok(SecretRequest {
-            name: self.key,
+            key: self.key,
+            field: self.field,
             version: self.version,
             context: Context {
                 entity_jwt: entity_jwt.to_string(),
@@ -246,6 +252,9 @@ impl TryInto<HashMap<String, String>> for SecretConfig {
             ("backend".into(), self.backend),
             ("key".into(), self.key),
         ]);
+        if let Some(field) = self.field {
+            map.insert("field".to_string(), field);
+        }
         if let Some(version) = self.version {
             map.insert("version".to_string(), version);
         }
@@ -293,6 +302,7 @@ impl<'de> Deserialize<'de> for SecretConfig {
             name: String,
             backend: String,
             key: String,
+            field: Option<String>,
             version: Option<String>,
             policy: String,
             #[serde(rename = "type")]
@@ -309,6 +319,7 @@ impl<'de> Deserialize<'de> for SecretConfig {
             name: helper.name,
             backend: helper.backend,
             key: helper.key,
+            field: helper.field,
             version: helper.version,
             policy,
             secret_type: helper.ty,
@@ -364,6 +375,7 @@ mod test {
             "name".to_string(),
             "backend".to_string(),
             "key".to_string(),
+            Some("field".to_string()),
             Some("version".to_string()),
             properties,
         );
@@ -377,6 +389,7 @@ mod test {
         assert_eq!(map.get("type"), Some(&secret_config.secret_type));
         assert_eq!(map.get("backend"), Some(&secret_config.backend));
         assert_eq!(map.get("key"), Some(&secret_config.key));
+        assert_eq!(map.get("field"), secret_config.field.as_ref());
         assert_eq!(map.get("version"), secret_config.version.as_ref());
         assert_eq!(
             map.get("policy"),
