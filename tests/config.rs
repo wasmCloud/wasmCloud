@@ -239,6 +239,7 @@ async fn config_e2e() -> anyhow::Result<()> {
         "ponger",
         "nats-kv",
         None,
+        None,
         HashMap::with_capacity(0),
     )
     .await?;
