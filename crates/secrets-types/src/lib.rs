@@ -145,11 +145,6 @@ pub struct SecretResponse {
 /// A secret that can be either a string or binary value.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Secret {
-    /// An identifier of the secret as stored in the secret store.
-    ///
-    /// A `Secret` can be a key, path, or any other identifier that the secret store uses to
-    /// retrieve the secret.
-    pub name: String,
     pub version: String,
     pub string_secret: Option<String>,
     pub binary_secret: Option<Vec<u8>>,
