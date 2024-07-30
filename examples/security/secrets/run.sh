@@ -58,7 +58,7 @@ wash config put SECRET_default_redis_password key=default_redis_password backend
 wash start provider file://$(pwd)/provider-keyvalue-redis-auth/build/wasmcloud-example-auth-kvredis.par.gz kvredis-auth \
     --host-id $host_id \
     --config SECRET_default_redis_password
-wash start provider ghcr.io/wasmcloud/http-server:0.21.0 http-server
+wash start provider ghcr.io/wasmcloud/http-server:0.22.0 http-server
 
 sleep 5
 

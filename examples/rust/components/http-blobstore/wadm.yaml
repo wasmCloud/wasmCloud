@@ -55,7 +55,7 @@ spec:
         # (and ensure that you've used `wash par crate` to create the par file below)
         #
         # image: file://../../../../crates/provider-http-server/provider-http-server.par.gz
-        image: ghcr.io/wasmcloud/http-server:0.21.0
+        image: ghcr.io/wasmcloud/http-server:0.22.0
       traits:
         # Since this HTTP server capability provider calls the `http-blobstore` component, we establish
         # a unidirectional link from this `httpserer` provider (the "source")
