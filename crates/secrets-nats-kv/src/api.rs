@@ -622,7 +622,7 @@ impl SecretsServer for Api {
         let values: HashSet<String> = serde_json::from_slice(&entry.unwrap())
             .map_err(|e| GetSecretError::UpstreamError(e.to_string()))?;
 
-        if !values.contains(&request.name) {
+        if !values.contains(&request.key) {
             return Err(GetSecretError::Unauthorized);
         }
 
@@ -634,16 +634,16 @@ impl SecretsServer for Api {
 
         let entry = match &request.version {
             Some(v) => {
-                let revision = str::parse::<u64>(v).unwrap();
+                let revision = str::parse::<u64>(v).map_err(|_| GetSecretError::InvalidRequest)?;
 
                 let mut key_hist = secrets
-                    .history(&request.name)
+                    .history(&request.key)
                     .await
                     .map_err(|e| GetSecretError::UpstreamError(e.to_string()))?;
                 find_key_rev(&mut key_hist, revision).await
             }
             None => secrets
-                .entry(&request.name)
+                .entry(&request.key)
                 .await
                 .map_err(|e| GetSecretError::UpstreamError(e.to_string()))?,
         };
