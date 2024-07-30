@@ -4,7 +4,7 @@ use anyhow::{ensure, Context};
 
 pub const SECRETS_API_VERSION: &str = "v1alpha1";
 
-use crate::{PutSecretError, PutSecretResponse};
+use crate::{PutSecretError, PutSecretRequest, PutSecretResponse};
 
 /// Helper function wrapper around [`put_secret`] that allows putting multiple secrets in the secret store.
 /// See the documentation for [`put_secret`] for more information.
@@ -14,7 +14,7 @@ pub async fn put_secrets(
     nats_client: &async_nats::Client,
     subject_base: &str,
     transit_xkey: &nkeys::XKey,
-    secrets: Vec<wasmcloud_secrets_types::Secret>,
+    secrets: Vec<PutSecretRequest>,
 ) -> Vec<anyhow::Result<()>> {
     futures::future::join_all(
         secrets
@@ -35,7 +35,7 @@ pub async fn put_secret(
     nats_client: &async_nats::Client,
     subject_base: &str,
     transit_xkey: &nkeys::XKey,
-    secret: wasmcloud_secrets_types::Secret,
+    secret: PutSecretRequest,
 ) -> anyhow::Result<()> {
     ensure!(
         !(secret.binary_secret.is_some() && secret.string_secret.is_some()),

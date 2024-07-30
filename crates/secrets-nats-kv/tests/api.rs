@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use async_nats::{jetstream, Client};
 use nkeys::{KeyPair, XKey};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use secrets_nats_kv::{Api, PutSecretResponse};
+use secrets_nats_kv::{Api, PutSecretRequest, PutSecretResponse};
 use std::collections::HashMap;
 use wascap::jwt::{Claims, ClaimsBuilder, Component, Host};
-use wasmcloud_secrets_types::{Application, Context, Secret, SecretRequest, WASMCLOUD_HOST_XKEY};
+use wasmcloud_secrets_types::{Application, Context, SecretRequest, WASMCLOUD_HOST_XKEY};
 
 const SUBJECT_BASE: &str = "kvstore_test";
 const NAME_BASE: &str = "nats-kv";
@@ -94,8 +94,8 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
     // Give the server some time to start
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let value = Secret {
-        name: "test".to_string(),
+    let value = PutSecretRequest {
+        key: "test".to_string(),
         string_secret: Some("value".to_string()),
         ..Default::default()
     };
@@ -192,8 +192,8 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
     // Give the server some time to start
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    let value = Secret {
-        name: "test".to_string(),
+    let value = PutSecretRequest {
+        key: "test".to_string(),
         string_secret: Some("value".to_string()),
         ..Default::default()
     };
