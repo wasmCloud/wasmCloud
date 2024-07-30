@@ -27,6 +27,7 @@ pub async fn assert_put_secret_reference(
     name: impl AsRef<str>,
     key: &str,
     backend: &str,
+    field: Option<String>,
     version: Option<String>,
     properties: HashMap<String, String>,
 ) -> Result<()> {
@@ -34,6 +35,7 @@ pub async fn assert_put_secret_reference(
         name.as_ref().to_string(),
         backend.to_string(),
         key.to_string(),
+        field,
         version,
         properties.into_iter().map(|(k, v)| (k, v.into())).collect(),
     );
