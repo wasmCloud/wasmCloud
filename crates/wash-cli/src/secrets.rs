@@ -21,6 +21,9 @@ pub enum SecretsCliCommand {
         /// The key to use for retrieving the secret from the backend.
         #[clap(name = "key")]
         key: String,
+        /// The field to use for retrieving the secret from the backend.
+        #[clap(long = "field")]
+        field: Option<String>,
         /// The version of the secret to retrieve. If not supplied, the latest version will be used.
         #[clap(short = 'v', long = "version")]
         version: Option<String>,
@@ -58,6 +61,7 @@ pub async fn handle_command(
             name,
             backend,
             key,
+            field,
             version,
             policy_properties,
         } => {
@@ -67,6 +71,7 @@ pub async fn handle_command(
                 secret_name,
                 backend,
                 key,
+                field,
                 version,
                 policy_property_map
                     .into_iter()

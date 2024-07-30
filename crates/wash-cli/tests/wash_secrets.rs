@@ -22,6 +22,7 @@ async fn test_secret_put_and_get() -> anyhow::Result<()> {
         name: "foobar".to_string(),
         backend: "baobun".to_string(),
         key: "path/to/secret".to_string(),
+        field: None,
         version: None,
         policy_properties: vec![],
     };
@@ -92,6 +93,7 @@ async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
         name: "mysecret".to_string(),
         backend: "baobuns".to_string(),
         key: "secrets/path/v2/mine".to_string(),
+        field: Some("myfield".to_string()),
         version: Some("v1.0.0".to_string()),
         policy_properties: vec!["role=operator".to_string(), "app_id=1234".to_string()],
     };
@@ -110,7 +112,7 @@ async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
     .await?
     .map;
 
-    assert_eq!(retrieved_secret.len(), 6);
+    assert_eq!(retrieved_secret.len(), 7);
     assert!(retrieved_secret
         .get("name")
         .is_some_and(|n| n == "mysecret"));
@@ -120,6 +122,9 @@ async fn test_secret_put_and_get_complex() -> anyhow::Result<()> {
     assert!(retrieved_secret
         .get("key")
         .is_some_and(|k| k == "secrets/path/v2/mine"));
+    assert!(retrieved_secret
+        .get("field")
+        .is_some_and(|f| f == "myfield"));
     assert!(retrieved_secret
         .get("version")
         .is_some_and(|k| k == "v1.0.0"));
