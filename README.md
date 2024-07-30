@@ -1,7 +1,7 @@
-[![Documentation](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
-[![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud)](https://landscape.cncf.io/?selected=wasm-cloud)
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
-![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)<br />
+[![Homepage and Documentation](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
+[![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)](https://landscape.cncf.io/?selected=wasm-cloud&item=orchestration-management--scheduling-orchestration--wasmcloud)
+![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)
 [![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6363/badge)](https://bestpractices.coreinfrastructure.org/projects/6363)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/wasmcloud/wasmcloud/badge)](https://securityscorecards.dev/viewer/?uri=github.com/wasmcloud/wasmcloud)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/wasmcloud-chart)](https://artifacthub.io/packages/search?repo=wasmcloud-chart)
@@ -13,18 +13,9 @@
 
 ![wasmCloud logo](https://raw.githubusercontent.com/wasmCloud/branding/main/02.Horizontal%20Version/Pixel/PNG/Wasmcloud.Logo-Hrztl_Color.png)
 
-wasmCloud is a **universal application platform** that helps you build and run globally distributed WebAssembly applications on any cloud or edge. Our goal is to make development more joyful and efficient by giving developers the tools to write only the code that matters—and making it easy to run that code anywhere.
+wasmCloud is an open source Cloud Native Computing Foundation (CNCF) project that enables teams to build, manage, and scale polyglot Wasm apps across any cloud, K8s, or edge.
 
-wasmCloud leverages WebAssembly's security, portability, and performance to compose applications from tiny, independent building blocks.These building blocks are managed declaratively and reconfigurable at runtime. You shouldn't need to recompile your whole app to upgrade a database client or patch a vulnerability and you shouldn't need to recompile anything to move your app from development to production.
-
-wasmCloud is designed around the following core tenets:
-
-- Distributed from day one
-- Run anywhere and everywhere
-- Secure by default
-- Faster iteration and lower maintenance
-
-**Move from concept to production without changing your design, architecture, or your programming environment.**
+wasmCloud offers faster development cycles with reusable, polyglot components and centrally maintainable apps, allowing platform teams to manage thousands of diverse applications. It integrates seamlessly with existing stacks like Kubernetes and cloud providers, while providing portability across different operating systems and architectures without new builds. With custom capabilities, scale-to-zero, fault-tolerant features, and deployment across clouds, wasmCloud enables secure, reliable, and scalable applications without vendor lock-in.
 
 # Getting Started
 
@@ -60,20 +51,11 @@ curl localhost:8080
 
 ### 👟 Runnable examples
 
-wasmCloud is based on and implements [WASI 0.2 (aka the Component Model)][wasi-pt2]. WebAssembly Components that run on wasmCloud consume interfaces defined in [WIT][wit].
-
 Want to get something running quickly? Check out the [`examples` directory of this repository](./examples). Examples are organized by programming language so you can easily find samples in your language of choice.
-
-[wasi-pt2]: https://github.com/WebAssembly/WASI/blob/main/preview2/README.md
-[wit]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
-
-### 💥 Awesome wasmCloud
-
-For even more examples, check out [awesome projects](./awesome-wasmcloud) using wasmCloud from our community members!
 
 # 🗺️ Roadmap and Vision
 
-We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](https://wasmcloud.com/docs/roadmap) for more information, and the [wasmCloud Roadmap project](https://github.com/orgs/wasmCloud/projects/7/views/3) to see the status of new features.
+wasmCloud is a community-led project and plans quarterly roadmaps in community meetings. Please check out the [latest roadmap](https://wasmcloud.com/docs/roadmap) for more information, and the [wasmCloud Roadmap project](https://github.com/orgs/wasmCloud/projects/7/views/11) to see the status of new features, improvements, bug fixes, and documentation.
 
 ## Releases
 
@@ -99,53 +81,32 @@ We host our own [community slack](https://slack.wasmcloud.com) for all community
 
 ## 📚 Reference Documentation
 
-wasmCloud uses some terminology you might not be familiar with. Check out the [concepts](https://wasmcloud.com/docs/concepts/interface-driven-development) section of our docs for a deeper dive.
+wasmCloud uses some terminology you might not be familiar with. Check out the [platform overview](https://wasmcloud.com/docs/concepts/) section of our docs for a deeper dive.
 
 ---
 
-## RPC Framework
+## RPC Framework (wRPC)
 
-wasmCloud uses an [RPC API](https://wasmcloud.com/docs/hosts/lattice-protocols/rpc) to enable seamless communication among the host runtime, components, and providers.
-
----
-
-## Declarative Deployments
-
-The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://github.com/wasmCloud/wadm) uses the Open Application Model to define and deploy application specifications.
+wasmCloud uses [wRPC](https://github.com/bytecodealliance/wrpc), [Component-native](https://component-model.bytecodealliance.org/) transport-agnostic RPC protocol and framework based on [WebAssembly Interface Types (WIT)](https://component-model.bytecodealliance.org/design/wit.html) to enable seamless communication among the host runtime, components, and providers. wRPC is a [Bytecode Alliance](https://bytecodealliance.org/) hosted project.
 
 ---
 
-## Host Runtimes
+## Wasm-native Orchestration & Declarative Deployments
 
-### 🦀 Rust Runtime
-
-wasmCloud's [standard runtime](./crates/runtime) is built in Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
-
-### 🕸 JavaScript Runtime (`Experimental`)
-
-For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js)
+The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://github.com/wasmCloud/wadm) is a Wasm-native orchestrator for managing and scaling declarative wasmCloud applications. Applications are defined using the [Open Application Model](https://oam.dev/) format.
 
 ---
 
-## SDKs and libraries
+## Language Support & SDKs
 
-### Rust Provider SDK
+wasmCloud is compatible with any language that supports the [WebAssembly Component Model](https://component-model.bytecodealliance.org/language-support.html). We provide first-party examples in [Rust](./examples/rust/), [Go](./examples/golang/), [Python](./examples/python), and [TypeScript](./examples/typescript/). If your language isn't listed yet, let us know with the [language support form](https://share.hsforms.com/1cedPVcwwQd6dQePZ3BWccQccyup).
 
-wasmCloud provides an [SDK](./crates/provider-sdk) for building capability providers in Rust.
+### Capability Provider SDK
 
-### Provider Archive
+wasmCloud provides the following SDKs for creating capability providers; native executable host plugins for extending wasmCloud with custom implementations or custom capabilities:
 
-[`provider-archive`](./crates/provider-archive) is a crate used to create Provider Archive (PAR) files. PARs are used to store, retrieve, and sign capability providers. Today, capability providers are distributed as binary files and run as system processes. In the future, wasmCloud aims to build capability providers as WebAssembly Components, which will remove the need for Provider Archives.
-
-### `wasmcloud_component` (`Experimental`)
-
-[`wasmcloud_component`](./crates/component) is a wasmCloud component library written in Rust which facilitates building of wasmCloud components.
-
-The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_component` (and back) with minimal or no code changes.
-
-### wascap
-
-[`wascap`](./crates/wascap) is a low-level library used to insert and retrieve [claims](https://wasmcloud.com/docs/hosts/security#claims) on components and providers. Claims are part of wasmCloud's zero-trust security model.
+1. [Rust provider-sdk](./crates/provider-sdk), with a [custom template provider](./examples/rust/providers/custom-template/) built for getting started quickly
+1. [Golang provider-sdk-go](https://github.com/wasmCloud/provider-sdk-go), with a [custom template provider](./examples/golang/providers/custom-template/) built for getting started quickly
 
 ---
 
