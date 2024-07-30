@@ -1,6 +1,7 @@
 name: example-components
 
 on:
+  merge_group:
   push:
     branches:
       - main
@@ -42,7 +43,7 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - 0.28.1
+          - 0.29.2
           - current
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
@@ -78,7 +79,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.28.1
+          - 0.29.2
           - current
         project:
           # Golang example components
@@ -187,7 +188,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.28.1
+          - 0.29.2
         project:
           # Rust example components (to publish)
           - name: "blobby"
