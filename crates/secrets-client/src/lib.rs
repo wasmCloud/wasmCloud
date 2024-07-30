@@ -30,7 +30,7 @@ pub enum SecretClientError {
     OpenSecretResponse(nkeys::error::Error),
     #[error("failed to deserialize secret response: {0}")]
     DeserializeSecretResponse(serde_json::error::Error),
-    #[error("unexpected server error: {0}")]
+    #[error("server error: {0}")]
     Server(String),
     #[error("missing secret: {0}")]
     MissingSecret(String),
@@ -160,7 +160,7 @@ impl Client {
         sr.secret.ok_or_else(|| {
             SecretClientError::MissingSecret(format!(
                 "no secret found with name [{}]",
-                secret_request.name
+                secret_request.key
             ))
         })
     }
