@@ -143,7 +143,8 @@ async fn integration_test_kvstore_put_secret() -> anyhow::Result<()> {
         .build();
 
     let request = SecretRequest {
-        name: "test".to_string(),
+        key: "test".to_string(),
+        field: None,
         context: Context {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
@@ -251,7 +252,8 @@ async fn integration_test_kvstore_version() -> anyhow::Result<()> {
         .build();
 
     let request = SecretRequest {
-        name: "test".to_string(),
+        key: "test".to_string(),
+        field: None,
         context: Context {
             entity_jwt: encoded,
             host_jwt: claims.encode(&account)?,
