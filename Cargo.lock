@@ -7576,7 +7576,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-nats-wrpc",
  "nkeys 0.4.3",
@@ -7587,7 +7587,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
