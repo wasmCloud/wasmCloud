@@ -2,6 +2,14 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Serialize, Deserialize, Default)]
+pub struct PutSecretRequest {
+    pub key: String,
+    pub version: String,
+    pub string_secret: Option<String>,
+    pub binary_secret: Option<Vec<u8>>,
+}
+
 /// The response to a `put_secret` operation.
 /// This response contains the revision number of the secret that was just written.
 #[derive(Serialize, Deserialize, Debug, Default)]

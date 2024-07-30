@@ -8,6 +8,7 @@ use async_nats::jetstream;
 use common::secrets::NatsKvSecretsBackend;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
+use secrets_nats_kv::PutSecretRequest;
 use test_components::{
     RUST_PINGER_CONFIG_COMPONENT_PREVIEW2_SIGNED, RUST_PONGER_CONFIG_COMPONENT_PREVIEW2_SIGNED,
 };
@@ -173,8 +174,8 @@ async fn config_e2e() -> anyhow::Result<()> {
     nats_kv_secrets_backend.ensure_build().await?;
     let secrets_backend_server = nats_kv_secrets_backend.start().await?;
     nats_kv_secrets_backend
-        .put_secret(wasmcloud_secrets_types::Secret {
-            name: "ponger".to_string(),
+        .put_secret(PutSecretRequest {
+            key: "ponger".to_string(),
             string_secret: Some("sup3rs3cr3t-v4lu3".to_string()),
             ..Default::default()
         })

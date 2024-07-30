@@ -149,7 +149,7 @@ impl Api {
             }
         };
 
-        let secret: Secret = match serde_json::from_slice(&payload) {
+        let secret: PutSecretRequest = match serde_json::from_slice(&payload) {
             Ok(s) => s,
             Err(e) => {
                 let _ = self.client.publish(reply, e.to_string().into()).await;
@@ -184,7 +184,7 @@ impl Api {
             return;
         };
 
-        match store.put(secret.name, encrypted_value.into()).await {
+        match store.put(secret.key, encrypted_value.into()).await {
             Ok(revision) => {
                 let resp = PutSecretResponse::from(revision);
                 let _ = self
@@ -655,7 +655,6 @@ impl SecretsServer for Api {
         let entry = entry.unwrap();
 
         let mut secret = Secret {
-            name: entry.key,
             version: entry.revision.to_string(),
             ..Default::default()
         };

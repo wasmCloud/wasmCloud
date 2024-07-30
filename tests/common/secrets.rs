@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use async_nats::Client;
+use secrets_nats_kv::PutSecretRequest;
 use std::{collections::HashSet, process::Output, time::Duration};
-
-use wasmcloud_secrets_types::Secret;
 
 use super::BackgroundServer;
 
@@ -42,7 +41,7 @@ impl NatsKvSecretsBackend {
         res.map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub async fn put_secret(&self, secret: Secret) -> Result<()> {
+    pub async fn put_secret(&self, secret: PutSecretRequest) -> Result<()> {
         secrets_nats_kv::client::put_secret(
             &self.nats_client,
             &self.subject_base,

@@ -7,6 +7,7 @@ use secrets_nats_kv::client::SECRETS_API_VERSION;
 use secrets_nats_kv::Api;
 
 use secrets_nats_kv::client;
+use secrets_nats_kv::PutSecretRequest;
 
 #[derive(Parser)]
 #[command(about, version, name = "secrets-nats-kv")]
@@ -184,8 +185,8 @@ async fn put(args: PutCommand) -> anyhow::Result<()> {
         .transpose()?;
 
     let name = args.name.clone();
-    let secret = wasmcloud_secrets_types::Secret {
-        name,
+    let secret = PutSecretRequest {
+        key: name,
         version: args.version.unwrap_or_default(),
         // NOTE: The clap parser will ensure that one and only one of these is present
         string_secret: args.string,
