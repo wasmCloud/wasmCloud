@@ -127,10 +127,14 @@ impl RuntimeBuilder {
             .max_memories_per_component(max_core_instances_per_component * memories_per_component)
             .total_memories(self.max_components * memories_per_component)
             .total_tables(self.max_components * tables_per_component)
-            // This means the max host memory any single component can take is 2 GB. This would be a
-            // lot, so we shouldn't need to tweak this for a while. We can always expose this option
-            // later
-            .max_memory_size(2 * 1024 * 1024)
+            // Restrict the maximum amount of linear memory that can be used by a component,
+            // which influences two things we care about:
+            //
+            // - How large of a component we can load (i.e. all components must be less than this value)
+            // - How much memory a fully loaded host carrying c components will use
+            //
+            // Note that 10MiB *is* the default value, but we are explicit here for ease of discovery
+            .max_memory_size(10 * 1024 * 1024)
             // These numbers are set to avoid page faults when trying to claim new space on linux
             .linear_memory_keep_resident(10 * 1024)
             .table_keep_resident(10 * 1024);
