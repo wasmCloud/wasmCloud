@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.3.0 (2024-07-31)
 
 <csr-id-955a6893792e86292883e76de57434616c28d380/>
 <csr-id-327975d6a83bac3199240645b0c6a4a17cf00f66/>
@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-2540b2a2776c8977e47232993b2af5086dc92e18/>
 <csr-id-5f922256e679091e6acbb3e0f39852abb840c8b0/>
 <csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
 
 ### Chore
 
@@ -86,6 +87,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
  - <csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/> mark non-exhaustive Debug impls as such
  - <csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/> remove noisy fields from instruments
+
+### Refactor
+
+ - <csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/> extract and document `InvocationStream` type
+
+### Other
+
+ - <csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/> improve documentation
+
+### Chore
+
+ - <csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/> increase max memory size to 10mb
+   This commit increases the max memory that can be addressed by a single
+   component to 10mb.
+ - <csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/> update wRPC
+ - <csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/> remove unused logging exports
+ - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
+ - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
+ - <csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/> Replace actor reference by component in runtime crate
+ - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
+   When known interfaces are accessed, we show a message that notes that
+   the target is unknown, but we can improve on that by alerting the user
+   to a possibly missing link.
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
 
 ### Chore
 
@@ -205,6 +238,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
  - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
  - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
+ - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
+ - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
+ - <csr-id-a5f9432845bcb7c8f423776fd56ef4a735fe43c7/> add `TargetEntity::lattice_id()`
+ - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
 
 ### Bug Fixes
 
@@ -234,6 +271,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
+ - <csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/> setup debug traces
+   This commit contains experimental code used to debug/replicate the
+   o11y traces for making a call with http-client & http-provider.
+   
+   Running this requires the following hackery:
+   
+   - running the docker compose for o11y
+   - (re) building dog-fetcher
+   - modifying the WADM w/ dog fetcher (done by this commit)
+   - build & create PAR for http-client
+   - build & create PAR for http-server
+   - set WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before `wash up`
+   - replacing existing wasmcloud host (in `~/.wash/downloads/v1.0.2`)
+ - <csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/> propagate traces through components
+ - <csr-id-61308b7827789d442b2508ba5347add03bdbb069/> Fixes issue with running runtime on smaller hosts
+   We found that on hosts with less then 2GB of memory (give or take a
+   little) the host would fail to start when the pooling allocator started
+   allocating virtual memory. You could get around this by setting
+   `vm_overcommit` to 1 or 2, but this is not the best experience for those
+   running in production. This fixes the issue by falling back to the
+   dynamic memory allocator if setup fails.
+   
+   We already have a plan to add some more of these tunables as options
+   for the host, but those will be added in future PRs as a feature add
 
 ### Other
 
@@ -285,13 +346,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    operations. While I was in different parts of the code I did some small
    "campfire rule" cleanups mostly of clippy lints and removal of
    clippy pedant mode.
+ - <csr-id-acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5/> add secrets store/reveal imports
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 124 commits contributed to the release over the course of 293 calendar days.
- - 120 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 143 commits contributed to the release over the course of 385 calendar days.
+ - 139 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -301,6 +363,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Increase max memory size to 10mb ([`3c414c5`](https://github.com/wasmCloud/wasmCloud/commit/3c414c52d4dfd31094b4cd2cee7e2f159cad639f))
+    - Add secrets store/reveal imports ([`acb6e9c`](https://github.com/wasmCloud/wasmCloud/commit/acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5))
+    - Update wRPC ([`8fa3faa`](https://github.com/wasmCloud/wasmCloud/commit/8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58))
+    - Improve documentation ([`78b9bc7`](https://github.com/wasmCloud/wasmCloud/commit/78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1))
+    - Extract and document `InvocationStream` type ([`9463be2`](https://github.com/wasmCloud/wasmCloud/commit/9463be2cc3dcaf2e272e5372800e65378c16217f))
+    - Remove unused logging exports ([`40874d4`](https://github.com/wasmCloud/wasmCloud/commit/40874d427a24c65746e18de44aef87cc4c3c4c13))
+    - Address clippy warnings ([`bd50166`](https://github.com/wasmCloud/wasmCloud/commit/bd50166619b8810ccdc2bcd80c33ff80d94bc909))
+    - Update to stream-based serving ([`0f70936`](https://github.com/wasmCloud/wasmCloud/commit/0f7093660a1ef09ff745daf5e1a96fd72c88984d))
+    - Pass original component instance through the context ([`0707512`](https://github.com/wasmCloud/wasmCloud/commit/070751231e5bb4891b995e992e5206b3050ecc30))
+    - Upgrade `wrpc`, `async-nats`, `wasmtime` ([`9cb1b78`](https://github.com/wasmCloud/wasmCloud/commit/9cb1b784fe7a8892d73bdb40d1172b1879fcd932))
+    - Replace actor reference by component in runtime crate ([`4bf428d`](https://github.com/wasmCloud/wasmCloud/commit/4bf428dbf693f1c91c276513e75b492e57d4d1a6))
+    - Improve error messages for missing links ([`e7c3040`](https://github.com/wasmCloud/wasmCloud/commit/e7c30405302fcccc612209335179f0bc47d8e996))
+    - Add `TargetEntity::lattice_id()` ([`a5f9432`](https://github.com/wasmCloud/wasmCloud/commit/a5f9432845bcb7c8f423776fd56ef4a735fe43c7))
+    - Setup debug traces ([`b014263`](https://github.com/wasmCloud/wasmCloud/commit/b014263cf3614995f597336bb40e51ab72bfa1c9))
+    - Propagate traces through components ([`fa1fde1`](https://github.com/wasmCloud/wasmCloud/commit/fa1fde185b47b055e511f6f2dee095e269db1651))
+    - Replace actor references by component in crates ([`20c72ce`](https://github.com/wasmCloud/wasmCloud/commit/20c72ce0ed423561ae6dbd5a91959bec24ff7cf3))
+    - Fixes issue with running runtime on smaller hosts ([`61308b7`](https://github.com/wasmCloud/wasmCloud/commit/61308b7827789d442b2508ba5347add03bdbb069))
+    - Gracefully shutdown epoch interrupt thread ([`077a28a`](https://github.com/wasmCloud/wasmCloud/commit/077a28a6567a436c99368c7eb1bd5dd2a6bc6103))
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
     - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Count epoch in a separate OS thread ([`3eb4534`](https://github.com/wasmCloud/wasmCloud/commit/3eb453405aa144599f43bbaf56197566c9f0cf0a))
@@ -426,7 +507,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Implement linkdef add/delete ([`e943eca`](https://github.com/wasmCloud/wasmCloud/commit/e943eca7512a0d96a617451e2e2af78718d0f685))
     - Implement data streaming ([`7364dd8`](https://github.com/wasmCloud/wasmCloud/commit/7364dd8afae5c8884ca923b39c5680c60d8d0e3d))
 </details>
-
-<csr-unknown>
-Uncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single test<csr-unknown/>
 

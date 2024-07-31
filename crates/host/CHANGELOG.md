@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.82.0 (2024-07-31)
 
 <csr-id-bdb519f91125c3f32f60ad9e9d1ce7bc1f147dc4/>
 <csr-id-9f1b2787255cb106d98481019d26e3208c11fc9f/>
@@ -113,6 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-45a3d3f477b48e8a79e77880950bb785175a990d/>
 <csr-id-95081cacfc3fc04911c91c32f462d643be2e12ed/>
 <csr-id-e6dd0b2809510e785f4ee4c531f5666e6ab21998/>
+<csr-id-1610702ad0f8cd3ba221c1b6b8ba2ce8fe57c6ae/>
+<csr-id-c4b82f28947f06253aa997ae65ab11ebcc507f49/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
 
 ### Chore
 
@@ -173,6 +176,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-b77767e6d3c32ceba0b4e5b421b532ac0788dc15/> rename friendly noun
  - <csr-id-5cd8afe68e4c481dcf09c9bebb125a9e4667ed1e/> refactor connection opts
  - <csr-id-478f775eb79bc955af691a7b5c7911cc36e8c98f/> made fetch arg ordering consistent
+
+### Refactor
+
+ - <csr-id-c666ef50fecc1ee248bf78d486a915ee077e3b4a/> include name with secret config
+ - <csr-id-2ea22a28ca9fd1838fc03451f33d75690fc28f2a/> move SecretConfig into crate
+ - <csr-id-b56982f437209ecaff4fa6946f8fe4c3068a62cd/> address feedback, application name optional
+ - <csr-id-388662a482442df3f74dfe8f9559fc4c07cedbe5/> collapse application field
+ - <csr-id-cfbf23226f34f3e7245a5d36cd7bb15e1796850c/> efficiency, pass optional vec secrets
+ - <csr-id-d8ad4376cb4db282047de8c4f62f6b8b907c9356/> improve error representations, cleanup
+ - <csr-id-f354008c318f49565eb023a91cd3a3781d73c36a/> light refactor from followup
+ - <csr-id-4e1d6da189ff49790d876cd244aed89114efba98/> remove extra trace_level field
+ - <csr-id-7f4cd4cf5da514bb1d10c9d064bb905de8621d8e/> improve error handling
+ - <csr-id-c30bf33f754c15122ead7f041b7d3e063dd1db33/> improve error usage of bail
+
+### Other
+
+ - <csr-id-c71f153b84e4ac4f84bdb934c9f7ca735eddd482/> add secrecy
+ - <csr-id-5225b1961038b815fe98c5250278d1aa483bdded/> fix outdated `ctl_seed` reference
+
+### Chore
+
+ - <csr-id-da461edd4e5ede0220cb9923b1d9a62808f560dc/> clarify missing secret config error
+ - <csr-id-f36471d7620fd66ff642518ae96188fef6fde5e0/> fix clippy lint
+ - <csr-id-da879d3e50d32fe1c09edcf2b58cb2db9c9e2661/> update secrets integration to use the update config structure
+   Update the secrets integration in a wasmCloud host to include
+   information about the policy that determines which backend to
+   communicate with. This is a change that comes in from wadm where the
+   policy block now contains the information about which backend to use.
+   
+   This also passes any propertes defined on the policy to the correct
+   backend, which are stored as a versioned string-encoded JSON object.
+ - <csr-id-81ab5914e7d08740eb9371c9b718f13f0419c23f/> enable `ring` feature for `async-nats`
+ - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
+ - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
+ - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
+   When known interfaces are accessed, we show a message that notes that
+   the target is unknown, but we can improve on that by alerting the user
+   to a possibly missing link.
+ - <csr-id-20a72597d17db8fcf0c70a7e9172edadcaad5b22/> improve error messages for missing links
+   When known interfaces are accessed, we show a message that notes that
+   the target is unknown, but we can improve on that by alerting the user
+   to a possibly missing link.
+ - <csr-id-d9a8c62d6fce6e71edadcf7de78cac749cf58126/> downgrade link/claims log/trace
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+ - <csr-id-88c07bf3be18da4f4afac3e7e356ddc507a6d85e/> Bump oci-distribution to 0.11.0
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
 
 ### Refactor
 
@@ -356,6 +412,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
  - <csr-id-b8c34346137edf5492fe70abeb22336a33e85bc0/> handle invocations in tasks
  - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
+ - <csr-id-a570a3565e129fc13b437327eb1ba18835c69f57/> add Host level configurability for max_execution_time by flag and env variables
+   - Introduce humantime::Duration for capturing human readable input time.
+   - Add the `--max-execution-time` flag (alias: --max-time) to wasmcloud binary and wash up command, allowing for configuration of the max execution time for the Host runtime.
+   - Set Default to 10min and Time format to Milliseconds.
+ - <csr-id-24e77b7f1f29580ca348a758302cdc6e75cc3afd/> Add support for supplying additional CA certificates to OCI and OpenTelemetry clients
+ - <csr-id-e0324d66e49be015b7b231626bc3b619d9374c91/> fetch secrets for providers and links
+ - <csr-id-773780c59dc9af93b51abdf90a4f948ff2efb326/> add secrets handler impl for strings
+ - <csr-id-c2bb9cb5e2ba1c6b055f6726e86ffc95dab90d2c/> set NATS queue group
+ - <csr-id-659cb2eace33962e3ed05d69402607233b33a951/> conflate `wasi:blobstore/container` interface with `blobstore`
+ - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
+ - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
+ - <csr-id-ed4b84661c08e43eadfce426474a49ad813ea6ec/> support ScaleComponentCommand w/ update
+ - <csr-id-e17fe933ffdc9b4e6938c4a0f2943c4813b658b1/> allow empty payloads to trigger stop_host
+ - <csr-id-a0a1b8c0c3d82feb19f42c4faa6de96b99bac13f/> add link name to wRPC invocations
+   This commit adds the "link-name" header to invocations performed by
+   the host using wRPC.
+ - <csr-id-378b7c89c8b00a5dcee76c06bc8de615dc58f8aa/> Add support for configuring grpc protocol with opentelemetry
+ - <csr-id-0aa01a92925dc12203bf9f06e13d21b7812b77eb/> Updates host to support new wasm artifact type
+   This change is entirely backwards compatible as it still supports the
+   old artifact type. I did test that this can download old and new
+   manifest types
+ - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
 
 ### Bug Fixes
 
@@ -384,6 +462,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-d9775af7c953749f37978802c690ee29838f0da6/>
 <csr-id-33ef4f34a5748e445f01148ec7d00bb0f01c1606/>
 <csr-id-7a84469dae07cd31185dbb0ad6cfd0af02d0e3a3/>
+<csr-id-3cabf109f5b986079cceb7f125f75bf53348712e/>
 
  - <csr-id-c87f3fe2654d5c874708974915bdd65f69f4afe1/> remove publish_event from stop_actor
  - <csr-id-9542e16b80c71dc7cc2f9e7175ebb25be050a242/> differentiate no config and config error
@@ -438,7 +517,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-2314f5f4d49c5b98949fe5d4a1eb692f1fad92b7/> rework host shutdown
    - Always include a timeout for graceful shutdown (e.g. if NATS
    connection dies, it will never finish)
- - <csr-id-3cabf109f5b986079cceb7f125f75bf53348712e/> handle invocation handling errors
+ - <csr-id-2695ad38f3338567de06f6a7ebc719a9421db7eb/> pass policy string directly to backend
+ - <csr-id-1914c34317b673f3b7208863ba107c579700a133/> use name instead of key for secret map
+ - <csr-id-5506c8b6eb78d8e4b793748072c4f026a4ed1863/> skip backwards-compat link with secret
+ - <csr-id-5c68c898f8bd8351f5d16226480fbbe726efc163/> check provided secrets topic for non-empty
+ - <csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/> setup debug traces
+   This commit contains experimental code used to debug/replicate the
+   o11y traces for making a call with http-client & http-provider.
+   
+   Running this requires the following hackery:
+   
+   - running the docker compose for o11y
+   - (re) building dog-fetcher
+   - modifying the WADM w/ dog fetcher (done by this commit)
+   - build & create PAR for http-client
+   - build & create PAR for http-server
+   - set WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before `wash up`
+   - replacing existing wasmcloud host (in `~/.wash/downloads/v1.0.2`)
+ - <csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/> propagate traces through components
 
 ### Other
 
@@ -566,6 +662,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-9897b90e845470faa35e8caf4816c29e6dcefd91/> use js_domain provided by cli
  - <csr-id-7d290aa08b2196a6082972a4d662bf1a93d07dec/> implement graceful provider shutdown delay
  - <csr-id-194f791c16ad6a7106393b4bcf0d0c51a70f638d/> maintain cluster issuers list
+ - <csr-id-d9281e2d54ac72e94f9afb61b3167690fe1fd89b/> encrypt link secrets, generate xkeys for providers
+ - <csr-id-2378057bbbabbfa5a2159b6621d6009396411dd7/> configure observability with trace_level option
+ - <csr-id-98b3986aca562d7f5439d3618d1eaf70f1b7e75a/> add secrets backend topic flag
 
 ### Bug Fixes (BREAKING)
 
@@ -581,9 +680,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 301 commits contributed to the release over the course of 370 calendar days.
- - 1082 days passed between releases.
- - 296 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 348 commits contributed to the release over the course of 462 calendar days.
+ - 1174 days passed between releases.
+ - 343 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -593,6 +692,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Clarify missing secret config error ([`da461ed`](https://github.com/wasmCloud/wasmCloud/commit/da461edd4e5ede0220cb9923b1d9a62808f560dc))
+    - Fix clippy lint ([`f36471d`](https://github.com/wasmCloud/wasmCloud/commit/f36471d7620fd66ff642518ae96188fef6fde5e0))
+    - Include name with secret config ([`c666ef5`](https://github.com/wasmCloud/wasmCloud/commit/c666ef50fecc1ee248bf78d486a915ee077e3b4a))
+    - Move SecretConfig into crate ([`2ea22a2`](https://github.com/wasmCloud/wasmCloud/commit/2ea22a28ca9fd1838fc03451f33d75690fc28f2a))
+    - Address feedback, application name optional ([`b56982f`](https://github.com/wasmCloud/wasmCloud/commit/b56982f437209ecaff4fa6946f8fe4c3068a62cd))
+    - Collapse application field ([`388662a`](https://github.com/wasmCloud/wasmCloud/commit/388662a482442df3f74dfe8f9559fc4c07cedbe5))
+    - Pass policy string directly to backend ([`2695ad3`](https://github.com/wasmCloud/wasmCloud/commit/2695ad38f3338567de06f6a7ebc719a9421db7eb))
+    - Use name instead of key for secret map ([`1914c34`](https://github.com/wasmCloud/wasmCloud/commit/1914c34317b673f3b7208863ba107c579700a133))
+    - Update secrets integration to use the update config structure ([`da879d3`](https://github.com/wasmCloud/wasmCloud/commit/da879d3e50d32fe1c09edcf2b58cb2db9c9e2661))
+    - Skip backwards-compat link with secret ([`5506c8b`](https://github.com/wasmCloud/wasmCloud/commit/5506c8b6eb78d8e4b793748072c4f026a4ed1863))
+    - Efficiency, pass optional vec secrets ([`cfbf232`](https://github.com/wasmCloud/wasmCloud/commit/cfbf23226f34f3e7245a5d36cd7bb15e1796850c))
+    - Improve error representations, cleanup ([`d8ad437`](https://github.com/wasmCloud/wasmCloud/commit/d8ad4376cb4db282047de8c4f62f6b8b907c9356))
+    - Encrypt link secrets, generate xkeys for providers ([`d9281e2`](https://github.com/wasmCloud/wasmCloud/commit/d9281e2d54ac72e94f9afb61b3167690fe1fd89b))
+    - Add Host level configurability for max_execution_time by flag and env variables ([`a570a35`](https://github.com/wasmCloud/wasmCloud/commit/a570a3565e129fc13b437327eb1ba18835c69f57))
+    - Light refactor from followup ([`f354008`](https://github.com/wasmCloud/wasmCloud/commit/f354008c318f49565eb023a91cd3a3781d73c36a))
+    - Remove extra trace_level field ([`4e1d6da`](https://github.com/wasmCloud/wasmCloud/commit/4e1d6da189ff49790d876cd244aed89114efba98))
+    - Configure observability with trace_level option ([`2378057`](https://github.com/wasmCloud/wasmCloud/commit/2378057bbbabbfa5a2159b6621d6009396411dd7))
+    - Add support for supplying additional CA certificates to OCI and OpenTelemetry clients ([`24e77b7`](https://github.com/wasmCloud/wasmCloud/commit/24e77b7f1f29580ca348a758302cdc6e75cc3afd))
+    - Improve error handling ([`7f4cd4c`](https://github.com/wasmCloud/wasmCloud/commit/7f4cd4cf5da514bb1d10c9d064bb905de8621d8e))
+    - Check provided secrets topic for non-empty ([`5c68c89`](https://github.com/wasmCloud/wasmCloud/commit/5c68c898f8bd8351f5d16226480fbbe726efc163))
+    - Improve error usage of bail ([`c30bf33`](https://github.com/wasmCloud/wasmCloud/commit/c30bf33f754c15122ead7f041b7d3e063dd1db33))
+    - Fetch secrets for providers and links ([`e0324d6`](https://github.com/wasmCloud/wasmCloud/commit/e0324d66e49be015b7b231626bc3b619d9374c91))
+    - Add secrets handler impl for strings ([`773780c`](https://github.com/wasmCloud/wasmCloud/commit/773780c59dc9af93b51abdf90a4f948ff2efb326))
+    - Add secrecy ([`c71f153`](https://github.com/wasmCloud/wasmCloud/commit/c71f153b84e4ac4f84bdb934c9f7ca735eddd482))
+    - Add secrets backend topic flag ([`98b3986`](https://github.com/wasmCloud/wasmCloud/commit/98b3986aca562d7f5439d3618d1eaf70f1b7e75a))
+    - Set NATS queue group ([`c2bb9cb`](https://github.com/wasmCloud/wasmCloud/commit/c2bb9cb5e2ba1c6b055f6726e86ffc95dab90d2c))
+    - Fix outdated `ctl_seed` reference ([`5225b19`](https://github.com/wasmCloud/wasmCloud/commit/5225b1961038b815fe98c5250278d1aa483bdded))
+    - Enable `ring` feature for `async-nats` ([`81ab591`](https://github.com/wasmCloud/wasmCloud/commit/81ab5914e7d08740eb9371c9b718f13f0419c23f))
+    - Address clippy warnings ([`bd50166`](https://github.com/wasmCloud/wasmCloud/commit/bd50166619b8810ccdc2bcd80c33ff80d94bc909))
+    - Update to stream-based serving ([`0f70936`](https://github.com/wasmCloud/wasmCloud/commit/0f7093660a1ef09ff745daf5e1a96fd72c88984d))
+    - Conflate `wasi:blobstore/container` interface with `blobstore` ([`659cb2e`](https://github.com/wasmCloud/wasmCloud/commit/659cb2eace33962e3ed05d69402607233b33a951))
+    - Pass original component instance through the context ([`0707512`](https://github.com/wasmCloud/wasmCloud/commit/070751231e5bb4891b995e992e5206b3050ecc30))
+    - Upgrade `wrpc`, `async-nats`, `wasmtime` ([`9cb1b78`](https://github.com/wasmCloud/wasmCloud/commit/9cb1b784fe7a8892d73bdb40d1172b1879fcd932))
+    - Support ScaleComponentCommand w/ update ([`ed4b846`](https://github.com/wasmCloud/wasmCloud/commit/ed4b84661c08e43eadfce426474a49ad813ea6ec))
+    - Improve error messages for missing links ([`e7c3040`](https://github.com/wasmCloud/wasmCloud/commit/e7c30405302fcccc612209335179f0bc47d8e996))
+    - Improve error messages for missing links ([`20a7259`](https://github.com/wasmCloud/wasmCloud/commit/20a72597d17db8fcf0c70a7e9172edadcaad5b22))
+    - Allow empty payloads to trigger stop_host ([`e17fe93`](https://github.com/wasmCloud/wasmCloud/commit/e17fe933ffdc9b4e6938c4a0f2943c4813b658b1))
+    - Add link name to wRPC invocations ([`a0a1b8c`](https://github.com/wasmCloud/wasmCloud/commit/a0a1b8c0c3d82feb19f42c4faa6de96b99bac13f))
+    - Downgrade link/claims log/trace ([`d9a8c62`](https://github.com/wasmCloud/wasmCloud/commit/d9a8c62d6fce6e71edadcf7de78cac749cf58126))
+    - Setup debug traces ([`b014263`](https://github.com/wasmCloud/wasmCloud/commit/b014263cf3614995f597336bb40e51ab72bfa1c9))
+    - Propagate traces through components ([`fa1fde1`](https://github.com/wasmCloud/wasmCloud/commit/fa1fde185b47b055e511f6f2dee095e269db1651))
+    - Add support for configuring grpc protocol with opentelemetry ([`378b7c8`](https://github.com/wasmCloud/wasmCloud/commit/378b7c89c8b00a5dcee76c06bc8de615dc58f8aa))
+    - Replace actor references by component in crates ([`20c72ce`](https://github.com/wasmCloud/wasmCloud/commit/20c72ce0ed423561ae6dbd5a91959bec24ff7cf3))
+    - Updates host to support new wasm artifact type ([`0aa01a9`](https://github.com/wasmCloud/wasmCloud/commit/0aa01a92925dc12203bf9f06e13d21b7812b77eb))
+    - Bump oci-distribution to 0.11.0 ([`88c07bf`](https://github.com/wasmCloud/wasmCloud/commit/88c07bf3be18da4f4afac3e7e356ddc507a6d85e))
+    - Gracefully shutdown epoch interrupt thread ([`077a28a`](https://github.com/wasmCloud/wasmCloud/commit/077a28a6567a436c99368c7eb1bd5dd2a6bc6103))
+    - Generate changelogs after 1.0.1 release ([`4e0313a`](https://github.com/wasmCloud/wasmCloud/commit/4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e))
     - Updated with newest features ([`0f03f1f`](https://github.com/wasmCloud/wasmCloud/commit/0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6))
     - Generate crate changelogs ([`f986e39`](https://github.com/wasmCloud/wasmCloud/commit/f986e39450676dc598b92f13cb6e52b9c3200c0b))
     - Count epoch in a separate OS thread ([`3eb4534`](https://github.com/wasmCloud/wasmCloud/commit/3eb453405aa144599f43bbaf56197566c9f0cf0a))
@@ -897,7 +1043,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-Stop if one of the core wasmbus tasks diesFlush NATS queues concurrently on shutdownHandle stopped method errors<csr-unknown/>
+ handle invocation handling errors<csr-unknown/>
 
 ## v0.18.2 (2021-05-13)
 
