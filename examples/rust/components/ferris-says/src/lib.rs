@@ -33,7 +33,7 @@ impl Guest for FerrisSayer {
 /// Reusable functionality for calling  funcitonality
 fn make_ferris_say(phrase: &str) -> String {
     let mut w = Vec::new();
-    if let Err(e) = say(&phrase, MAX_TERM_WIDTH, &mut w) {
+    if let Err(e) = say(phrase, MAX_TERM_WIDTH, &mut w) {
         return format!("ERROR: internal error, failed to say: {e}");
     };
     match String::from_utf8(w) {
