@@ -14,13 +14,13 @@ async fn record_reachability(host: &str) {
             timeout(Duration::from_millis(500), TcpStream::connect(addr)).await,
             Ok(Ok(_))
         ) {
-            let snake_case_host = host.replace('.', "_");
-            println!("cargo:rustc-cfg=can_reach_{snake_case_host}");
+            let host = host.replace('.', "_");
+            println!("cargo:rustc-cfg=can_reach_{host}");
             // NOTE: In Rust 1.80.0 custom cfg conditions became a warning.
             //
             // As wash does not have an MSRV, we may have people build on versions *before* 1.80,
             // and we can remove the double-configuration line below a couple versions later.
-            println!("cargo:rustc-check-cfg=cfg(can_reach_{snake_case_host})");
+            println!("cargo:rustc-check-cfg=cfg(can_reach_{host})");
             return;
         }
     }
