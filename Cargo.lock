@@ -6809,7 +6809,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "wat",
  "weld-codegen",
- "wit-bindgen-core 0.27.0",
+ "wit-bindgen-core 0.28.0",
  "wit-bindgen-go",
  "wit-component 0.212.0",
  "wit-parser 0.212.0",
