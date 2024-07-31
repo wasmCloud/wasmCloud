@@ -1332,7 +1332,7 @@ impl Host {
             event::component_scaled(
                 claims.as_ref(),
                 &annotations,
-                &self.host_key.public_key(),
+                self.host_key.public_key(),
                 max_instances,
                 &component_ref,
                 &component_id,
