@@ -5,6 +5,7 @@ use std::path::Path;
 #[cfg(feature = "otel")]
 use std::sync::Arc;
 
+#[cfg(feature = "otel")]
 use anyhow::Context as _;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{LogExporterBuilder, SpanExporterBuilder, WithExportConfig};
@@ -17,6 +18,7 @@ use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::EnvFilter;
+#[cfg(feature = "otel")]
 use tracing_subscriber::Layer;
 use wasmcloud_core::logging::Level;
 use wasmcloud_core::OtelConfig;
@@ -90,19 +92,17 @@ pub fn configure_tracing(
         .with_ansi(ansi);
 
     let dispatch = if use_structured_logging {
-        registry
-            .with(
-                fmt.event_format(JsonOrNot::Json(Format::default().json()))
-                    .fmt_fields(JsonFields::new()),
-            )
-            .into()
+        reg.with(
+            fmt.event_format(JsonOrNot::Json(Format::default().json()))
+                .fmt_fields(JsonFields::new()),
+        )
+        .into()
     } else {
-        registry
-            .with(
-                fmt.event_format(JsonOrNot::Not(Format::default()))
-                    .fmt_fields(DefaultFields::new()),
-            )
-            .into()
+        reg.with(
+            fmt.event_format(JsonOrNot::Not(Format::default()))
+                .fmt_fields(DefaultFields::new()),
+        )
+        .into()
     };
 
     Ok((
@@ -304,6 +304,7 @@ where
     Ok(log_layer)
 }
 
+#[cfg(feature = "otel")]
 fn get_trace_level_filter(trace_level_override: Option<&Level>) -> EnvFilter {
     if let Some(trace_level) = trace_level_override {
         let level = wasi_level_to_tracing_level(trace_level);

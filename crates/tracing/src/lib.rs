@@ -8,8 +8,10 @@ pub use opentelemetry::{
     metrics::{Counter, Histogram, Meter, Unit},
     KeyValue,
 };
+use wasmcloud_core::logging::Level;
+#[cfg(feature = "otel")]
+use wasmcloud_core::tls;
 use wasmcloud_core::OtelConfig;
-use wasmcloud_core::{logging::Level, tls};
 
 #[cfg(feature = "otel")]
 pub mod context;
@@ -28,7 +30,7 @@ pub fn configure_observability(
     use_structured_logging: bool,
     flame_graph: Option<impl AsRef<Path>>,
     log_level_override: Option<&Level>,
-) -> anyhow::Result<traces::FlushGuard> {
+) -> anyhow::Result<(tracing::Dispatch, traces::FlushGuard)> {
     // if OTEL is not enabled, explicitly do not emit observability
     let otel_config = OtelConfig::default();
     traces::configure_tracing(
@@ -75,6 +77,7 @@ pub fn configure_observability(
 // exporter that is used by to communicate with the OpenTelemetry endpoints:
 // * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-otlp/src/exporter/http/mod.rs#L10
 // * https://github.com/open-telemetry/opentelemetry-rust/blob/opentelemetry-otlp-0.16.0/opentelemetry-otlp/src/exporter/http/mod.rs#l130-l134
+#[cfg(feature = "otel")]
 pub(crate) fn get_http_client(otel_config: &OtelConfig) -> anyhow::Result<reqwest_0_11::Client> {
     let mut certs = tls::NATIVE_ROOTS.to_vec();
     if !otel_config.additional_ca_paths.is_empty() {
