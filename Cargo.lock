@@ -6812,7 +6812,7 @@ dependencies = [
  "wit-bindgen-core 0.27.0",
  "wit-bindgen-go",
  "wit-component 0.212.0",
- "wit-parser 0.212.0",
+ "wit-parser 0.214.0",
 ]
 
 [[package]]
@@ -7568,7 +7568,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc",
  "wit-component 0.212.0",
- "wit-parser 0.212.0",
+ "wit-parser 0.214.0",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
  "wrpc-transport 0.26.7",
