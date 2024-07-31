@@ -105,6 +105,7 @@ const RESERVED_NAMES: [&str; 5] = [
 /// - if map already contains a value, do nothing
 /// - if silent and prompt has a default, use the prompt's default
 /// - if !silent, prompt user for value
+///
 /// Returns list of undefined variables
 pub(crate) fn fill_project_variables<F>(
     config: &Config,
