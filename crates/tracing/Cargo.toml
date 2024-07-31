@@ -17,6 +17,8 @@ otel = [
     "opentelemetry-appender-tracing",
     "tracing-opentelemetry",
     "opentelemetry-otlp",
+    "wasmcloud-core/otel",
+    "wasmcloud-core/rustls-native-certs",
 ]
 
 [dependencies]
@@ -52,4 +54,4 @@ tracing-subscriber = { workspace = true, features = [
     "fmt",
     "json",
 ] }
-wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-core = { workspace = true }
