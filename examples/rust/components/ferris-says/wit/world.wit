@@ -6,5 +6,7 @@ interface invoke {
 }
 
 world example-ferris-says {
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
   export invoke;
 }
