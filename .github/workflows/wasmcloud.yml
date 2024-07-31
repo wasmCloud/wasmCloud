@@ -795,6 +795,7 @@ jobs:
         uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c
         with:
           signoff: true
+          committer: wasmCloud Automation <automation@wasmcloud.com>
           title: Release ${{ inputs.crate }}
           commit-message: 'release(${{ inputs.crate }}): release and update CHANGELOG'
 
