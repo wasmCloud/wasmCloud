@@ -363,6 +363,6 @@ wit-bindgen-wrpc = { version = "0.4.13", default-features = false }
 wit-component = { version = "0.212", default-features = false }
 wit-parser = { version = "0.212", default-features = false }
 wrpc-interface-http = { version = "0.25.2", default-features = false }
-wrpc-runtime-wasmtime = { version = "0.19.3", default-features = false }
+wrpc-runtime-wasmtime = { version = "0.19.4", default-features = false }
 wrpc-transport = { version = "0.26.5", default-features = false }
 wrpc-transport-nats = { version = "0.22.3", default-features = false }
