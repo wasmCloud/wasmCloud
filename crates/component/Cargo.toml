@@ -2,6 +2,7 @@
 name = "wasmcloud-component"
 version = "0.1.0"
 description = "wasmCloud component library giving access to interfaces provided by wasmCloud host runtime"
+readme = "README.md"
 
 authors.workspace = true
 categories.workspace = true
