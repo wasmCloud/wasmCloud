@@ -1,7 +1,8 @@
 [package]
 name = "wasmcloud-runtime"
-version = "0.3.0"
+version = "0.1.0"
 description = "wasmCloud runtime library"
+readme = "README.md"
 
 authors.workspace = true
 categories.workspace = true
