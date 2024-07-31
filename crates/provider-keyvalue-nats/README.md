@@ -2,11 +2,11 @@
 
 This capability provider is an implementation of the following interfaces of `wasi:keyvalue` proposal:
 
-*   wasi:keyvalue/store\*
+- wasi:keyvalue/store\*
 
-*   wasi:keyvalue/atomics
+- wasi:keyvalue/atomics
 
-*   wasi:keyvalue/batch
+- wasi:keyvalue/batch
 
 > The NATS Kv store doesn't support a cursor, when using the `list_keys` function; therefore, all keys will be returned, irrespective of if a cursor value was provided by the user or not.
 
@@ -16,19 +16,19 @@ This provider is multi-threaded and can handle concurrent requests from multiple
 
 To configure this provider, use the following settings in link definitions:
 
-| **Property**  | **Description**                                                                                                                                                                                                                                                                                                 |
-|:--------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `CLUSTER_URI` | NATS cluster connection URI. If not specified, the default is `nats://0.0.0.0:4222`                                                                                                                                                                                                                             |
-| `JS_DOMAIN`   | Optional NATS Jetstream domain to connect to.                                                                                                                                                                                                                                                                   |
-| `BUCKET`      | The name of an existing NATS Kv Store. It must be specified. Additional links could be added if access to more Kv stores is needed; the buckets could be referenced by their respective `link_names` (please see the Rust ***keyvalue-messaging*** example for a comprehensive demonstration of this approach). |
-| `TLS_CA_FILE` | Alternatively, the path qualified name of the CA public key could be provided. If both are provided, the `TLS_CA` will be used.                                                                                                                                                                                 |
+| **Property**  | **Description**                                                                                                                                                                                                                                                                                         |
+| :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `BUCKET`      | **Required**: The name of an existing NATS Kv Store. Additional links could be added if access to more Kv stores is needed; the buckets could be referenced by their respective `link_names` (please see the Rust **_keyvalue-messaging_** example for a comprehensive demonstration of this approach). |
+| `CLUSTER_URI` | NATS cluster connection URI. If not specified, the default is `nats://0.0.0.0:4222`                                                                                                                                                                                                                     |
+| `JS_DOMAIN`   | Optional NATS Jetstream domain to connect to.                                                                                                                                                                                                                                                           |
+| `TLS_CA_FILE` | Alternatively, the path qualified name of the CA public key could be provided. If both are provided, the `TLS_CA` will be used.                                                                                                                                                                         |
 
 ## Link Definition Secret Settings
 
-While the provider supports receiving the following values via configuration (similar to values outlined in the configuration section above), the values below are *sensitive*, and thus *should* be configured via link-time secrets.
+While the provider supports receiving the following values via configuration (similar to values outlined in the configuration section above), the values below are _sensitive_, and thus _should_ be configured via link-time secrets.
 
 | **Property**  | **Description**                                                                                                 |
-|:--------------|:----------------------------------------------------------------------------------------------------------------|
+| :------------ | :-------------------------------------------------------------------------------------------------------------- |
 | `CLIENT_JWT`  | Optional JWT auth token. For JWT authentication, both `CLIENT_JWT` and `CLIENT_SEED` must be provided.          |
 | `CLIENT_SEED` | Private seed for JWT authentication.                                                                            |
 | `TLS_CA`      | To secure communications with the NATS server, the public key of its CA could be provided as an encoded string. |
