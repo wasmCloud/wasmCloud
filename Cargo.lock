@@ -8630,9 +8630,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-runtime-wasmtime"
-version = "0.19.3"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe838be4bd89acf8c5c81e0edb924d186dcd819800eba7e5398131efdb0cbddc"
+checksum = "65a3b55fb329d1b4dbc49466746738303abdff7bca187f4a0c06489eeff8fa3d"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8644,7 +8644,7 @@ dependencies = [
  "wasm-tokio",
  "wasmtime",
  "wasmtime-wasi",
- "wit-parser 0.212.0",
+ "wit-parser 0.214.0",
  "wrpc-introspect",
  "wrpc-transport 0.26.7",
 ]
