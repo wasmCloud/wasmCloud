@@ -273,6 +273,7 @@ impl StorageClient {
     /// This can be used either for giving shortcuts to actors in the linkdefs, for example:
     /// - component could use bucket names `alias_today`, `alias_images`, etc. and the linkdef aliases
     ///   will remap them to the real bucket name
+    ///
     /// The `'alias_'` prefix is not required, so this also works as a general redirect capability
     pub fn unalias<'n, 's: 'n>(&'s self, bucket_or_alias: &'n str) -> &'n str {
         debug!(%bucket_or_alias, aliases = ?self.aliases);

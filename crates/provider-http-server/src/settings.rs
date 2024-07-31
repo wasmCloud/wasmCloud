@@ -91,6 +91,7 @@ pub struct ServiceSettings {
     /// - "5k" = 5 * 1024 bytes,
     /// - "5m" = 5 * 1024*1024 bytes,
     /// - "1g" = 1024*1024*1024 bytes
+    ///
     /// The value may not be higher than i32::MAX
     pub max_content_len: Option<String>,
 
