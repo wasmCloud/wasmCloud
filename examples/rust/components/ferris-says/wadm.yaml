@@ -19,8 +19,8 @@ spec:
       type: component
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        image: file://./build/ferris_says_s.wasm
-        # image: ghcr.io/wasmcloud/components/ferris-says-rust:0.1.0
+        # image: file://./build/ferris_says_s.wasm
+        image: ghcr.io/wasmcloud/components/ferris-says-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
