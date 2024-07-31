@@ -1,10 +1,11 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use ferris_says::say;
 
 wit_bindgen::generate!({ generate_all });
 
 use exports::wasmcloud::example_ferris_says::invoke::Guest;
+use wasi::clocks;
 
 const MAX_TERM_WIDTH: usize = 80;
 
@@ -17,11 +18,10 @@ impl Guest for FerrisSayer {
         // NOTE: using the "SystemTime" standard library API means using
         // wasi:clocks when this Rust code is compiled down to WebAssembly + WASI
         let now = SystemTime::now();
-        let Ok(now_unix) = now.duration_since(UNIX_EPOCH).map(|d| d.as_millis()) else {
-            return "ERROR: failed to calculate ms since UNIX epoch".into();
-        };
+        let now_monotonic = clocks::monotonic_clock::now();
         make_ferris_say(&format!(
-            "Hello fellow wasmCloud users! (@{now_unix}ms UNIX)"
+            "Hello fellow wasmCloud users! (@{}| {now_monotonic})",
+            humantime::format_rfc3339(now),
         ))
     }
 
