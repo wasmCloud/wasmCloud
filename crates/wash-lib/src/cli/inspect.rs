@@ -118,7 +118,7 @@ pub async fn handle_command(
             CommandOutput::from_key_and_text(
                 "wit",
                 printer
-                    .print(resolve, main)
+                    .print(resolve, main, true)
                     .context("should be able to print WIT world from a component")?,
             )
         }
