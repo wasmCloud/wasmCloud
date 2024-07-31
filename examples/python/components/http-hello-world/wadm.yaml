@@ -3,7 +3,6 @@ kind: Application
 metadata:
   name: python-hello-world
   annotations:
-    version: v0.0.1
     description: 'Python component that uses wasi:http'
     wasmcloud.dev/authors: wasmCloud team
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/python/http-hello-world/wadm.yaml

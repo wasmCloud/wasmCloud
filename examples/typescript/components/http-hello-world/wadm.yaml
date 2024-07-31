@@ -4,7 +4,6 @@ kind: Application
 metadata:
   name: typescript-hello-world
   annotations:
-    version: v0.0.1
     description: 'Demo of Typescript HTTP hello world server'
     wasmcloud.dev/authors: wasmCloud team
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/typescript/components/http-hello-world/wadm.yaml

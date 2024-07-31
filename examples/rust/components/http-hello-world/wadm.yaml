@@ -3,7 +3,6 @@ kind: Application
 metadata:
   name: rust-hello-world
   annotations:
-    version: v0.0.1
     description: 'HTTP hello world demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
     wasmcloud.dev/authors: wasmCloud team
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/http-hello-world/wadm.yaml
@@ -16,9 +15,9 @@ spec:
     - name: http-component
       type: component
       properties:
-        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        # image: file://./build/http_hello_world_s.wasm
-        image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
+        image: file://./build/http_hello_world_s.wasm
+        # To use the a precompiled version of this component, use the line below instead:
+        # image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the component
         - type: spreadscaler
