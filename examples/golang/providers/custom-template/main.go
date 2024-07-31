@@ -108,7 +108,7 @@ func handleDelTargetLink(handler *Handler, link provider.InterfaceLinkDefinition
 	return nil
 }
 
-func handleHealthCheck(_ *Handler) string {
+func handleHealthCheck(handler *Handler) string {
 	handler.provider.Logger.Info("Handling health check")
 	return "provider healthy"
 }
