@@ -1160,9 +1160,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.7.0"
+version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fca2be1d5c43812bae364ee3f30b3afcb7877cf59f4aeb94c66f313a41d2fac9"
+checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 dependencies = [
  "serde",
 ]
@@ -5173,7 +5173,7 @@ dependencies = [
  "tracing-subscriber",
  "wascap 0.15.0",
  "wasmcloud-secrets-client",
- "wasmcloud-secrets-types 0.1.0",
+ "wasmcloud-secrets-types 0.3.0",
 ]
 
 [[package]]
@@ -6811,7 +6811,7 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.8.0",
  "wasmcloud-provider-sdk",
- "wasmcloud-secrets-types 0.1.0",
+ "wasmcloud-secrets-types 0.3.0",
  "wat",
  "weld-codegen",
  "which",
@@ -7144,7 +7144,7 @@ dependencies = [
  "wasmcloud-provider-messaging-nats",
  "wasmcloud-provider-sdk",
  "wasmcloud-provider-sqldb-postgres",
- "wasmcloud-secrets-types 0.1.0",
+ "wasmcloud-secrets-types 0.3.0",
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
@@ -7329,7 +7329,7 @@ dependencies = [
  "wasmcloud-core 0.8.0",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
- "wasmcloud-secrets-types 0.1.0",
+ "wasmcloud-secrets-types 0.3.0",
  "wasmcloud-tracing",
  "wrpc-transport 0.26.7",
  "wrpc-transport-nats 0.22.3",
@@ -7670,21 +7670,7 @@ dependencies = [
  "nkeys 0.4.3",
  "serde_json",
  "thiserror",
- "wasmcloud-secrets-types 0.1.0",
-]
-
-[[package]]
-name = "wasmcloud-secrets-types"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "nkeys 0.4.3",
- "serde",
- "serde_json",
- "thiserror",
- "wascap 0.15.0",
+ "wasmcloud-secrets-types 0.3.0",
 ]
 
 [[package]]
@@ -7701,6 +7687,20 @@ dependencies = [
  "serde_json",
  "thiserror",
  "wascap 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "wasmcloud-secrets-types"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "nkeys 0.4.3",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wascap 0.15.0",
 ]
 
 [[package]]
@@ -7723,7 +7723,7 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.8.0",
  "wasmcloud-host",
- "wasmcloud-secrets-types 0.1.0",
+ "wasmcloud-secrets-types 0.3.0",
 ]
 
 [[package]]
