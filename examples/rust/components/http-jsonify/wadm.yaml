@@ -19,7 +19,7 @@ spec:
       type: component
       properties:
         # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        # image: file://./build/wasmcloud_component_http_jsonify_s.wasm
+        # image: file://./build/http_jsonify_s.wasm
         image: ghcr.io/wasmcloud/components/http-jsonify-rust:0.1.1
       traits:
         # Govern the spread/scheduling of the component
