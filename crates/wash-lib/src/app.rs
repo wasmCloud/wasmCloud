@@ -197,6 +197,7 @@ pub async fn deploy_model(
     wadm_client
         .deploy_manifest(model_name, version.as_deref())
         .await
+        .map(|_| ())
 }
 
 /// Put a model definition, instructing wadm to store the application manifest for later deploys
