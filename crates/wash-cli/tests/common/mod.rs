@@ -23,7 +23,7 @@ use wash_lib::cli::output::{
     CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
     StopCommandOutput, UpCommandOutput,
 };
-use wash_lib::config::{downloads_dir, WASMCLOUD_PID_FILE};
+use wash_lib::config::host_pid_file;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
 use wasmcloud_control_interface::Host;
 
@@ -802,7 +802,7 @@ pub async fn wait_for_no_hosts() -> Result<()> {
     )
     .await
     .context("number of hosts running is still non-zero")?;
-    let lockfile = downloads_dir().map(|p| p.join(WASMCLOUD_PID_FILE))?;
+    let lockfile = host_pid_file()?;
     if wait_for_file_to_be_removed(&lockfile).await.is_err() {
         // If the PID file wasn't removed, attempt to delete it manually
         tokio::fs::remove_file(&lockfile).await.with_context(|| {

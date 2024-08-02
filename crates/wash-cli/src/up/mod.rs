@@ -21,7 +21,7 @@ use tracing::warn;
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::config::{
-    create_nats_client_from_opts, downloads_dir, DEFAULT_NATS_TIMEOUT_MS, WASMCLOUD_PID_FILE,
+    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
 };
 use wash_lib::context::fs::ContextDir;
 use wash_lib::context::ContextManager;
@@ -431,16 +431,16 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let ctl_client = wasmcloud_opts.clone().into_ctl_client(None).await?;
 
     if !cmd.wasmcloud_opts.multi_local
-        && tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE))
+        && tokio::fs::try_exists(host_pid_file()?)
             .await
             .is_ok_and(|exists| exists)
     {
         // Check if host is running.
-        let host_state = running_host_count(&ctl_client, &install_dir).await?;
+        let host_state = running_host_count(&ctl_client).await?;
         if host_state == WasmCloudHostState::NotRunning {
             eprintln!("🟨 Pid file {:?} exists but no hosts are running. Removing Pid file and proceeding with \"wash up\"",
-            install_dir.join(WASMCLOUD_PID_FILE));
-            tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+            host_pid_file()?);
+            tokio::fs::remove_file(host_pid_file()?).await?;
         } else if host_state == WasmCloudHostState::MultipleRunning {
             bail!("🟨 Multiple hosts are running. Please use --multi-local to start another");
         } else {
@@ -457,7 +457,6 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
                     host_started.clone(),
                     host_state,
                     ctl_client,
-                    install_dir.clone(),
                     manifest_path.clone(),
                     true,
                 )
@@ -600,7 +599,6 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             host_started.clone(),
             WasmCloudHostState::NotRunning,
             ctl_client,
-            install_dir.clone(),
             manifest_path.clone(),
             cmd.detached,
         )
@@ -619,11 +617,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         "pid": wasmcloud_child.id().unwrap()
     });
 
-    tokio::fs::write(
-        install_dir.join(WASMCLOUD_PID_FILE),
-        pid_file_contents.to_string(),
-    )
-    .await?;
+    tokio::fs::write(host_pid_file()?, pid_file_contents.to_string()).await?;
 
     // If we're running in detached mode, then we can print out some logs, build output and return early.
     if cmd.detached {
@@ -660,7 +654,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
     );
     stop_wasmcloud(wasmcloud_child).await?;
-    tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    tokio::fs::remove_file(host_pid_file()?).await?;
 
     if wadm_process.is_some() {
         // remove wadm pidfile, the process is stopped automatically by CTRL+c
@@ -672,10 +666,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 }
 
 /// Check if a wasmcloud host is running
-async fn running_host_count(
-    ctl_client: &CtlClient,
-    install_dir: &Path,
-) -> Result<WasmCloudHostState> {
+async fn running_host_count(ctl_client: &CtlClient) -> Result<WasmCloudHostState> {
     match ctl_client
         .get_hosts()
         .await
@@ -690,7 +681,7 @@ async fn running_host_count(
     }
 
     // Wasmcloud host might be starting but not up yet. Check if the process in the pid file is running.
-    let pid_file_string = tokio::fs::read_to_string(&install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    let pid_file_string = tokio::fs::read_to_string(host_pid_file()?).await?;
     let pid_file_value: Value = serde_json::from_str(&pid_file_string)?;
     if let Some(pid) = pid_file_value.get("pid") {
         if is_process_running(&pid.to_string()) {
@@ -721,7 +712,6 @@ fn process_wadm_manifest(
     host_started: Arc<AtomicBool>,
     host_state: WasmCloudHostState,
     ctl_client: CtlClient,
-    install_dir: PathBuf,
     manifest_path: PathBuf,
     detached: bool,
 ) -> tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> {
@@ -730,9 +720,7 @@ fn process_wadm_manifest(
         if detached && host_state < WasmCloudHostState::Running {
             tokio::time::timeout(tokio::time::Duration::from_secs(3), async {
                 loop {
-                    if let Ok(WasmCloudHostState::Running) =
-                        running_host_count(&ctl_client, &install_dir).await
-                    {
+                    if let Ok(WasmCloudHostState::Running) = running_host_count(&ctl_client).await {
                         break;
                     }
                 }

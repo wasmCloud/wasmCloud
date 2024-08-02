@@ -40,6 +40,11 @@ pub fn downloads_dir() -> Result<PathBuf> {
     Ok(cfg_dir()?.join(DOWNLOADS_DIR))
 }
 
+/// The path to the running wasmCloud Host PID file for wash
+pub fn host_pid_file() -> Result<PathBuf> {
+    Ok(downloads_dir()?.join(WASMCLOUD_PID_FILE))
+}
+
 #[derive(Clone)]
 /// Connection options for a Wash instance
 pub struct WashConnectionOptions {

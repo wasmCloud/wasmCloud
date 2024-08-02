@@ -10,8 +10,8 @@ use tokio::process::Command;
 use tracing::warn;
 use wash_lib::cli::{stop::stop_hosts, CommandOutput, OutputKind};
 use wash_lib::config::{
-    create_nats_client_from_opts, downloads_dir, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-    WASMCLOUD_PID_FILE,
+    create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_HOST,
+    DEFAULT_NATS_PORT,
 };
 use wash_lib::id::ServerId;
 use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
@@ -132,7 +132,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
             );
             return Ok(CommandOutput::new(out_text, out_json));
         } else {
-            let wasmcloud_pid_file_path = install_dir.join(WASMCLOUD_PID_FILE);
+            let wasmcloud_pid_file_path = host_pid_file()?;
             // Failing to find the pid file is not an error that should prevent stopping other resources
             if let Err(e) = tokio::fs::remove_file(&wasmcloud_pid_file_path)
                 .await
