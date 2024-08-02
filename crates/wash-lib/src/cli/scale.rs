@@ -1,15 +1,13 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
-use crate::common::{boxed_err_to_anyhow, find_host_id};
-use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
+use crate::common::find_host_id;
+use crate::component::{scale_component, ScaleComponentArgs};
 use crate::config::WashConnectionOptions;
 use crate::context::default_component_operation_timeout_ms;
-use crate::wait::{wait_for_component_scaled_event, FindEventOutcome};
 
 use super::validate_component_id;
 
@@ -68,7 +66,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
 
     let annotations = input_vec_to_hashmap(cmd.annotations)?;
 
-    scale_component(ScaleComponentArgs {
+    let info = scale_component(ScaleComponentArgs {
         client: &client,
         // NOTE(thomastaylor312): In the future, we could check if this is interactive and then
         // prompt the user to choose if more than one thing matches
@@ -78,7 +76,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         max_instances: cmd.max_instances,
         annotations: Some(annotations),
         config: cmd.config,
-        skip_wait: false,
+        skip_wait: cmd.skip_wait,
         timeout_ms: None,
     })
     .await?;
@@ -89,62 +87,17 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         format!("{} max concurrent instances", cmd.max_instances)
     };
 
-    // If --skip-wait was specified,immediately return the result
-    if cmd.skip_wait {
-        return Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!(
-                "Request to scale component {} to {scale_msg} has been accepted",
-                cmd.component_ref
-            ),
-        ));
-    }
-
-    // Build a receiver to wait for the component_scaled event
-    let mut receiver = client
-        .events_receiver(vec!["component_scaled".into()])
-        .await
-        .map_err(boxed_err_to_anyhow)?;
-
-    // If skip wait was *not* provided, then we should wait for scaled event
-    let event = wait_for_component_scaled_event(
-        &mut receiver,
-        Duration::from_millis(cmd.wait_timeout_ms),
-        &cmd.host_id,
-        &cmd.component_ref,
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "Timed out waiting for scale event for component [{}] (ref: [{}]) on host [{}]",
-            &cmd.component_id, &cmd.component_ref, &cmd.host_id
-        )
-    })?;
-
-    match event {
-        FindEventOutcome::Success(ComponentScaledInfo {
-            host_id,
-            component_ref,
-            component_id,
-        }) => {
-            let text = format!(
-                "Component [{component_id}] (ref: [{component_ref}]) scaled on host [{host_id}]",
-            );
-            Ok(CommandOutput::new(
-                text.clone(),
-                HashMap::from([
-                    ("host_id".into(), host_id.into()),
-                    ("component_id".into(), component_id.into()),
-                    ("component_ref".into(), component_ref.into()),
-                    ("result".into(), text.into()),
-                ]),
-            ))
-        }
-        FindEventOutcome::Failure(err) => Err(err).with_context(|| {
-            format!(
-                "Failed to scale component [{}] (ref: [{}]) on host [{}]",
-                cmd.component_id, cmd.component_ref, cmd.host_id,
-            )
-        }),
-    }
+    let text = format!(
+        "Component [{}] (ref: [{}]) scaled on host [{}] to {scale_msg}",
+        info.component_id, info.component_ref, info.host_id,
+    );
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("host_id".into(), info.host_id.into()),
+            ("component_id".into(), info.component_id.into()),
+            ("component_ref".into(), info.component_ref.into()),
+            ("result".into(), text.into()),
+        ]),
+    ))
 }
