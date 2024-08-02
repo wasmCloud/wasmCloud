@@ -317,9 +317,9 @@ ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 vaultrs = { version = "0.7", default-features = false }
-wadm = { version = "0.13.0", default-features = false }
-wadm-client = { version = "0.2.0", default-features = false }
-wadm-types = { version = "0.2.0", default-features = false }
+wadm = { version = "0.14.0", default-features = false }
+wadm-client = { version = "0.3.0", default-features = false }
+wadm-types = { version = "0.3.0", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.15.0", path = "./crates/wascap", default-features = false }

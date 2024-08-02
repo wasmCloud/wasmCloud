@@ -6620,15 +6620,15 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aaf51fde61578275a9d7f19b7732219162c279dc76f02e2779a5e11beb33240"
+checksum = "5a1dab42d9eb3412b2fcab8189d79de99a9db2f48cf9e48aedf7c3c163b10f07"
 dependencies = [
  "anyhow",
  "async-nats",
  "bytes",
  "futures",
- "nkeys 0.3.2",
+ "nkeys 0.4.3",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6641,21 +6641,21 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00e7f30261740ec9da4d038cf719032d4bc00437b3e0252e258d0308d44fb576"
+checksum = "253b4a5c06d99f8d6768d69a1ba264652731cd298c87fd880077ad0e554840f2"
 dependencies = [
  "anyhow",
  "async-nats",
  "async-trait",
- "base64 0.21.7",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "cloudevents-sdk",
  "indexmap 2.4.0",
  "jsonschema",
  "lazy_static",
- "nkeys 0.3.2",
+ "nkeys 0.4.3",
  "rand 0.8.5",
  "regex",
  "schemars",
