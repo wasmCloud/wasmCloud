@@ -172,7 +172,7 @@ pub async fn undeploy_model(
         client.clone(),
     );
 
-    wadm_client.undeploy_manifest(model_name).await
+    wadm_client.undeploy_manifest(model_name).await.map(|_| ())
 }
 
 /// Deploy a model, instructing wadm to manage the application
@@ -187,7 +187,7 @@ pub async fn deploy_model(
     lattice: Option<String>,
     model_name: &str,
     version: Option<String>,
-) -> Result<()> {
+) -> Result<(String, Option<String>)> {
     let wadm_client = wadm_client::Client::from_nats_client(
         &lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string()),
         None,

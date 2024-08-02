@@ -264,24 +264,22 @@ pub(crate) async fn deploy_model_from_manifest(
     version: Option<String>,
 ) -> Result<CommandOutput> {
     let (name, version) = match manifest {
-        AppManifest::SerializedModel(manifest) => {
-            wash_lib::app::put_and_deploy_model(
-                client,
-                lattice,
-                serde_yaml::to_string(&manifest)
-                    .context("failed to convert manifest to string")?
-                    .as_ref(),
-            )
-            .await
-        }
+        AppManifest::SerializedModel(manifest) => wash_lib::app::put_and_deploy_model(
+            client,
+            lattice,
+            serde_yaml::to_string(&manifest)
+                .context("failed to convert manifest to string")?
+                .as_ref(),
+        )
+        .await
+        .map(|(name, version)| (name, Some(version))),
         AppManifest::ModelName(model_name) => {
-            wash_lib::app::deploy_model(client, lattice, &model_name, version.clone())
-                .await
-                .map(|_| (model_name.to_string(), version.unwrap_or_default()))
+            wash_lib::app::deploy_model(client, lattice, &model_name, version.clone()).await
         }
     }?;
 
     let mut map = HashMap::new();
+    let version = version.unwrap_or_default();
     map.insert("deployed".to_string(), json!(true));
     map.insert("model_name".to_string(), json!(name));
     map.insert("model_version".to_string(), json!(version));
