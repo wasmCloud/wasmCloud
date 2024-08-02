@@ -344,10 +344,10 @@ wasmcloud-provider-messaging-nats = { version = "*", path = "./crates/provider-m
 wasmcloud-provider-sdk = { version = "^0.7.0", path = "./crates/provider-sdk", default-features = false }
 wasmcloud-provider-sqldb-postgres = { version = "*", path = "./crates/provider-sqldb-postgres", default-features = false }
 wasmcloud-runtime = { version = "0.1", path = "./crates/runtime", default-features = false }
-wasmcloud-secrets-client = { version = "^0.3.0", path = "./crates/secrets-client", default-features = false }
-wasmcloud-secrets-types = { version = "^0.3.0", path = "./crates/secrets-types", default-features = false }
+wasmcloud-secrets-client = { version = "^0.4.0", path = "./crates/secrets-client", default-features = false }
+wasmcloud-secrets-types = { version = "^0.4.0", path = "./crates/secrets-types", default-features = false }
 wasmcloud-test-util = { version = "^0.12.0", path = "./crates/test-util", default-features = false }
-wasmcloud-tracing = { version = "^0.6.0", path = "./crates/tracing", default-features = false }
+wasmcloud-tracing = { version = "^0.7.0", path = "./crates/tracing", default-features = false }
 wasmparser = { version = "0.214", default-features = false }
 wasmtime = { version = "22", default-features = false }
 wasmtime-wasi = { version = "22", default-features = false }
