@@ -1,0 +1,11 @@
+package wasmcloud:http-image-processor;
+
+world component {
+  import wasi:logging/logging;
+  import wasi:blobstore/blobstore@0.2.0-draft; 
+  import wasi:http/outgoing-handler@0.2.0;
+
+  import wasmcloud:bus/lattice@1.0.0;
+
+  export wasi:http/incoming-handler@0.2.0;
+}
