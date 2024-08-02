@@ -244,7 +244,8 @@ pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let install_dir = downloads_dir()?;
 
     let (_, hosts_remain) = stop_hosts(client, Some(&cmd.host_id), false).await?;
-    if !hosts_remain {
+    let pid_file_exists = tokio::fs::try_exists(install_dir.join(WASMCLOUD_PID_FILE)).await?;
+    if !hosts_remain && pid_file_exists {
         tokio::fs::remove_file(install_dir.join(WASMCLOUD_PID_FILE)).await?;
     }
 
