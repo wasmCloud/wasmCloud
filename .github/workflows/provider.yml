@@ -84,7 +84,7 @@ jobs:
           ./wash par insert --arch x86_64-windows --binary "./artifacts/wasmcloud-x86_64-pc-windows-msvc/bin/${{ inputs.name }}-provider.exe" "${{ inputs.name }}.par.gz"
           ./wash par inspect "${{ inputs.name }}.par.gz"
 
-      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
+      - uses: actions/upload-artifact@89ef406dd8d7e03cfd12d9e0a4a378f454709029
         with:
           name: ${{ inputs.name }}.par.gz
           path: ${{ inputs.name }}.par.gz
