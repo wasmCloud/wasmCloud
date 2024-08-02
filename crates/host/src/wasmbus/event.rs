@@ -1,5 +1,3 @@
-use core::num::NonZeroUsize;
-
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Context;
@@ -70,7 +68,7 @@ pub fn component_scale_failed(
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
     component_id: impl AsRef<str>,
-    max_instances: NonZeroUsize,
+    max_instances: u32,
     error: &anyhow::Error,
 ) -> serde_json::Value {
     if let Some(claims) = claims {

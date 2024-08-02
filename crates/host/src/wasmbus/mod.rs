@@ -1281,13 +1281,12 @@ impl Host {
         component_ref: Arc<str>,
         component_id: Arc<str>,
         max_instances: NonZeroUsize,
-        annotations: impl Into<Annotations>,
+        annotations: &Annotations,
         config: ConfigBundle,
         secrets: HashMap<String, Secret<SecretValue>>,
     ) -> anyhow::Result<&'a mut Arc<Component>> {
         debug!(?component_ref, ?max_instances, "starting new component");
 
-        let annotations = annotations.into();
         if let Some(ref claims) = claims {
             self.store_claims(Claims::Component(claims.clone()))
                 .await
@@ -1316,7 +1315,7 @@ impl Host {
         let component = wasmcloud_runtime::Component::new(&self.runtime, &wasm)?;
         let component = self
             .instantiate_component(
-                &annotations,
+                annotations,
                 Arc::clone(&component_ref),
                 Arc::clone(&component_id),
                 max_instances,
@@ -1331,7 +1330,7 @@ impl Host {
             "component_scaled",
             event::component_scaled(
                 claims.as_ref(),
-                &annotations,
+                annotations,
                 self.host_key.public_key(),
                 max_instances,
                 &component_ref,
@@ -1556,20 +1555,74 @@ impl Host {
 
         let component_id = Arc::from(component_id);
         let component_ref = Arc::from(component_ref);
-        // Spawn a task to perform  the scaling and possibly an update of the component afterwards
+        // Spawn a task to perform the scaling and possibly an update of the component afterwards
         spawn(async move {
+            // Fetch the component from the reference
+            let component_and_claims =
+                self.fetch_component(&component_ref)
+                    .await
+                    .map(|component_bytes| {
+                        // Pull the claims token from the component, this returns an error only if claims are embedded
+                        // and they are invalid (expired, tampered with, etc)
+                        let claims_token =
+                            wasmcloud_runtime::component::claims_token(&component_bytes);
+                        (component_bytes, claims_token)
+                    });
+            let (wasm, claims_token) = match component_and_claims {
+                Ok((wasm, Ok(claims_token))) => (wasm, claims_token),
+                Err(e) | Ok((_, Err(e))) => {
+                    if let Err(e) = self
+                        .publish_event(
+                            "component_scale_failed",
+                            event::component_scale_failed(
+                                None,
+                                &annotations,
+                                host_id,
+                                &component_ref,
+                                &component_id,
+                                max_instances,
+                                &e,
+                            ),
+                        )
+                        .await
+                    {
+                        error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                    }
+                    return;
+                }
+            };
+            // Scale the component
             if let Err(e) = self
                 .handle_scale_component_task(
                     Arc::clone(&component_ref),
                     Arc::clone(&component_id),
                     &host_id,
                     max_instances,
-                    annotations,
+                    &annotations,
                     config,
+                    wasm,
+                    claims_token.as_ref(),
                 )
                 .await
             {
                 error!(%component_ref, %component_id, err = ?e, "failed to scale component");
+                if let Err(e) = self
+                    .publish_event(
+                        "component_scale_failed",
+                        event::component_scale_failed(
+                            claims_token.map(|c| c.claims).as_ref(),
+                            &annotations,
+                            host_id,
+                            &component_ref,
+                            &component_id,
+                            max_instances,
+                            &e,
+                        ),
+                    )
+                    .await
+                {
+                    error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                }
                 return;
             }
 
@@ -1598,47 +1651,62 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     /// Handles scaling an component to a supplied number of `max` concurrently executing instances.
     /// Supplying `0` will result in stopping that component instance.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_scale_component_task(
         &self,
         component_ref: Arc<str>,
         component_id: Arc<str>,
         host_id: &str,
         max_instances: u32,
-        annotations: Annotations,
+        annotations: &Annotations,
         config: Vec<String>,
+        wasm: Vec<u8>,
+        claims_token: Option<&jwt::Token<jwt::Component>>,
     ) -> anyhow::Result<()> {
         trace!(?component_ref, max_instances, "scale component task");
 
-        let wasm = self.fetch_component(&component_ref).await?;
-        let claims_token = wasmcloud_runtime::component::claims_token(&wasm)?;
-        let claims = claims_token.as_ref().map(|c| c.claims.clone());
-        let resp = self
+        let claims = claims_token.map(|c| c.claims.clone());
+        match self
             .policy_manager
             .evaluate_start_component(
                 &component_id,
                 &component_ref,
                 max_instances,
-                &annotations,
+                annotations,
                 claims.as_ref(),
             )
-            .await?;
-        if !resp.permitted {
-            bail!(
-                "Policy denied request to scale component `{}`: `{:?}`",
-                resp.request_id,
-                resp.message
-            )
+            .await?
+        {
+            PolicyResponse {
+                permitted: false,
+                message: Some(message),
+                ..
+            } => bail!("Policy denied request to scale component `{component_id}`: `{message:?}`"),
+            PolicyResponse {
+                permitted: false, ..
+            } => bail!("Policy denied request to scale component `{component_id}`"),
+            PolicyResponse {
+                permitted: true, ..
+            } => (),
         };
 
-        match (
+        let scaled_event = match (
             self.components
                 .write()
                 .await
                 .entry(component_id.to_string()),
             NonZeroUsize::new(max_instances as usize),
         ) {
-            // No component is running and we requested to scale to zero, noop
-            (hash_map::Entry::Vacant(_), None) => {}
+            // No component is running and we requested to scale to zero, noop.
+            // We still publish the event to indicate that the component has been scaled to zero
+            (hash_map::Entry::Vacant(_), None) => event::component_scaled(
+                claims.as_ref(),
+                annotations,
+                host_id,
+                0_usize,
+                &component_ref,
+                &component_id,
+            ),
             // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
                 let (config, secrets) = self
@@ -1649,79 +1717,61 @@ impl Host {
                     )
                     .await?;
 
-                if let Err(e) = self
-                    .start_component(
-                        entry,
-                        wasm,
-                        claims.clone(),
-                        Arc::clone(&component_ref),
-                        Arc::clone(&component_id),
-                        max,
-                        annotations.clone(),
-                        config,
-                        secrets,
-                    )
-                    .await
-                {
-                    self.publish_event(
-                        "component_scale_failed",
-                        event::component_scale_failed(
-                            claims.as_ref(),
-                            &annotations,
-                            host_id,
-                            &component_ref,
-                            &component_id,
-                            max,
-                            &e,
-                        ),
-                    )
-                    .await?;
-                    return Err(e);
-                }
+                self.start_component(
+                    entry,
+                    wasm,
+                    claims.clone(),
+                    Arc::clone(&component_ref),
+                    Arc::clone(&component_id),
+                    max,
+                    annotations,
+                    config,
+                    secrets,
+                )
+                .await?;
+
+                event::component_scaled(
+                    claims.as_ref(),
+                    annotations,
+                    host_id,
+                    max,
+                    &component_ref,
+                    &component_id,
+                )
             }
             // Component is running and we requested to scale to zero instances, stop component
             (hash_map::Entry::Occupied(entry), None) => {
                 let component = entry.remove();
-                if let Err(err) = self
-                    .stop_component(&component, host_id)
+                self.stop_component(&component, host_id)
                     .await
-                    .context("failed to stop component in response to scale to zero")
-                {
-                    self.publish_event(
-                        "component_scale_failed",
-                        event::component_scale_failed(
-                            claims.as_ref(),
-                            &component.annotations,
-                            host_id,
-                            component_ref,
-                            &component.id,
-                            component.max_instances,
-                            &err,
-                        ),
-                    )
-                    .await?;
-                    return Err(err);
-                };
+                    .context("failed to stop component in response to scale to zero")?;
 
                 info!(?component_ref, "component stopped");
-                self.publish_event(
-                    "component_scaled",
-                    event::component_scaled(
-                        claims.as_ref(),
-                        &component.annotations,
-                        host_id,
-                        0_usize,
-                        &component.image_reference,
-                        &component.id,
-                    ),
+                event::component_scaled(
+                    claims.as_ref(),
+                    &component.annotations,
+                    host_id,
+                    0_usize,
+                    &component.image_reference,
+                    &component.id,
                 )
-                .await?;
             }
             // Component is running and we requested to scale to some amount or unbounded, scale component
             (hash_map::Entry::Occupied(mut entry), Some(max)) => {
                 let component = entry.get_mut();
                 let config_changed =
                     &config != component.handler.config_data.read().await.config_names();
+
+                // Create the event first to avoid borrowing the component
+                // This event is idempotent.
+                let event = event::component_scaled(
+                    claims.as_ref(),
+                    &component.annotations,
+                    host_id,
+                    max,
+                    &component.image_reference,
+                    &component.id,
+                );
 
                 // Modify scale only if the requested max differs from the current max or if the configuration has changed
                 if component.max_instances != max || config_changed {
@@ -1740,7 +1790,7 @@ impl Host {
                     }
                     let instance = self
                         .instantiate_component(
-                            &annotations,
+                            annotations,
                             Arc::clone(&component_ref),
                             Arc::clone(&component.id),
                             max,
@@ -1749,35 +1799,21 @@ impl Host {
                         )
                         .await
                         .context("failed to instantiate component")?;
-                    let publish_result = match component.max_instances.cmp(&max) {
-                        std::cmp::Ordering::Less | std::cmp::Ordering::Greater => {
-                            self.publish_event(
-                                "component_scaled",
-                                event::component_scaled(
-                                    claims.as_ref(),
-                                    &component.annotations,
-                                    host_id,
-                                    max,
-                                    &component.image_reference,
-                                    &component.id,
-                                ),
-                            )
-                            .await
-                        }
-                        std::cmp::Ordering::Equal => Ok(()),
-                    };
                     let component = entry.insert(instance);
                     self.stop_component(&component, host_id)
                         .await
                         .context("failed to stop component after scaling")?;
 
                     info!(?component_ref, ?max, "component scaled");
-
-                    // Wait to unwrap the event publish result until after we've processed the instances
-                    publish_result?;
+                } else {
+                    debug!(?component_ref, ?max, "component already at desired scale");
                 }
+                event
             }
-        }
+        };
+
+        self.publish_event("component_scaled", scaled_event).await?;
+
         Ok(())
     }
 
