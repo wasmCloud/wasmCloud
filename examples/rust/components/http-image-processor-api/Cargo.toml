@@ -1,0 +1,32 @@
+[package]
+name = "http-image-processor"
+edition = "2021"
+version = "0.1.0"
+description = """
+A HTTP image processing API with one primary endpoint ('/process') which uploads, modifies, and returns images.
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = { workspace = true, features = [ "default" ] }
+bytes = { workspace = true, features = [ "default", "serde" ] }
+image = { workspace = true, features = [ "bmp", "png", "jpeg", "gif", "webp", "tiff" ] }
+multipart = { workspace = true, features = [ "server" ] }
+serde = { workspace = true, features = [ "std", "derive" ] }
+serde_json = { workspace = true, features = [ "std" ] }
+url = { workspace = true, features = [ "serde" ] }
+wit-bindgen = { workspace = true, features = [ "default" ] }
+
+[workspace.dependencies]
+anyhow = { version = "1", default-features = false }
+bytes = { version = "1", default-features = false }
+image = { version = "0.25", default-features = false }
+multipart = { version = "0.18", default-features = false }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
+url = { version = "2", default-features = false }
+wit-bindgen = { version = "0.28", default-features = false }
