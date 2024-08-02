@@ -12,7 +12,7 @@ runs:
     shell: bash
   - run: nix run -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
     shell: bash
-  - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b
+  - uses: actions/upload-artifact@89ef406dd8d7e03cfd12d9e0a4a378f454709029
     with:
       name: ${{ inputs.package }}
       path: ${{ inputs.package }}
