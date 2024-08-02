@@ -57,6 +57,7 @@ sysinfo = { workspace = true }
 tempfile = { workspace = true }
 term-table = { workspace = true }
 termcolor = { workspace = true }
+termsize = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tar = { workspace = true }
