@@ -1,0 +1,86 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: rust-keyvalue-demo
+  annotations:
+    version: v0.1.0
+    description: "NATS keyvalue demo in Rust, using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+spec:
+  components:
+    - name: kv-demo
+      type: component
+      properties:
+        image: file://./build/keyvalue_messaging_s.wasm
+        id: kv-demo
+        config:
+          - name: nats-kv-example
+            properties:
+              link_name1: "bucket-id1"
+              # link_name2: "bucket-id2"
+              pub_subject: "nats.demo"
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Link the component to the local NATS server
+        - type: link
+          properties:
+            name: bucket-id1
+            target: nats-kv
+            namespace: wasi
+            package: keyvalue
+            interfaces: [store, atomics]
+            # NOTE: The following is an example of how to configure the NATS Kv capability provider, for an individual component
+            target_config:
+              - name: wasmcloud
+                properties:
+                  bucket: "WASMCLOUD"
+        # # NOTE: The following is an example of how to configure additional named links to the same capability provider
+        # - type: link
+        #   properties:
+        #     name: bucket-id2
+        #     target: nats-kv
+        #     namespace: wasi
+        #     package: keyvalue
+        #     interfaces: [store, atomics]
+        #     target_config:
+        #       - name: wasmland
+        #         properties:
+        #           bucket: "WASMLAND"
+        - type: link
+          properties:
+            target: nats-msg
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [consumer]
+
+    # Add a capability provider that implements `wasi:keyvalue` using NATS
+    - name: nats-kv
+      type: capability
+      properties:
+        # image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
+        image: ghcr.io/wasmcloud/keyvalue-nats:0.1.0
+        # # NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
+        # config:
+        #   - name: nats-connection
+        #     properties:
+        #       cluster_uri: "nats://0.0.0.0:4222"
+        #       bucket: "WASMCLOUD"
+
+    # Add a capability provider that implements `wasmcloud:messaging` using NATS
+    - name: nats-msg
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:canary
+      traits:
+        - type: link
+          properties:
+            target: kv-demo
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            source_config:
+              - name: nats-subscription
+                properties:
+                  subscriptions: nats.atomic.delta
