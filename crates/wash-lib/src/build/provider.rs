@@ -30,8 +30,15 @@ pub(crate) async fn build_provider(
     };
 
     trace!("Retrieving provider binary from {:?}", provider_path_buf);
-
-    let provider_bytes = tokio::fs::read(&provider_path_buf).await?;
+    let provider_path_buf = provider_path_buf
+        .canonicalize()
+        .context("failed to resolve file path")?;
+    let provider_bytes = tokio::fs::read(&provider_path_buf).await.with_context(|| {
+        format!(
+            "missing provider binary at [{}]",
+            provider_path_buf.display()
+        )
+    })?;
 
     let mut par = create_provider_archive(
         ParCreateArgs {
@@ -57,7 +64,9 @@ pub(crate) async fn build_provider(
         .join("build")
         .join(format!("{bin_name}.par.gz"));
     if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create directory [{}]", parent.display()))?;
     }
     let issuer = extract_keypair(
         sign_config.issuer.as_deref(),
