@@ -1592,7 +1592,7 @@ impl Host {
                 }
             };
             // Scale the component
-            if let Err(e) = self
+            match self
                 .handle_scale_component_task(
                     Arc::clone(&component_ref),
                     Arc::clone(&component_id),
@@ -1605,25 +1605,32 @@ impl Host {
                 )
                 .await
             {
-                error!(%component_ref, %component_id, err = ?e, "failed to scale component");
-                if let Err(e) = self
-                    .publish_event(
-                        "component_scale_failed",
-                        event::component_scale_failed(
-                            claims_token.map(|c| c.claims).as_ref(),
-                            &annotations,
-                            host_id,
-                            &component_ref,
-                            &component_id,
-                            max_instances,
-                            &e,
-                        ),
-                    )
-                    .await
-                {
-                    error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                Ok(event) => {
+                    if let Err(e) = self.publish_event("component_scaled", event).await {
+                        error!(%component_ref, %component_id, err = ?e, "failed to publish component scaled event");
+                    }
                 }
-                return;
+                Err(e) => {
+                    error!(%component_ref, %component_id, err = ?e, "failed to scale component");
+                    if let Err(e) = self
+                        .publish_event(
+                            "component_scale_failed",
+                            event::component_scale_failed(
+                                claims_token.map(|c| c.claims).as_ref(),
+                                &annotations,
+                                host_id,
+                                &component_ref,
+                                &component_id,
+                                max_instances,
+                                &e,
+                            ),
+                        )
+                        .await
+                    {
+                        error!(%component_ref, %component_id, err = ?e, "failed to publish component scale failed event");
+                    }
+                    return;
+                }
             }
 
             if perform_post_update {
@@ -1651,6 +1658,8 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     /// Handles scaling an component to a supplied number of `max` concurrently executing instances.
     /// Supplying `0` will result in stopping that component instance.
+    ///
+    /// Should return a serialized event to publish to the events topic, or an error if the scaling failed.
     #[allow(clippy::too_many_arguments)]
     async fn handle_scale_component_task(
         &self,
@@ -1662,7 +1671,7 @@ impl Host {
         config: Vec<String>,
         wasm: Vec<u8>,
         claims_token: Option<&jwt::Token<jwt::Component>>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<serde_json::Value> {
         trace!(?component_ref, max_instances, "scale component task");
 
         let claims = claims_token.map(|c| c.claims.clone());
@@ -1690,7 +1699,7 @@ impl Host {
             } => (),
         };
 
-        let scaled_event = match (
+        match (
             self.components
                 .write()
                 .await
@@ -1699,14 +1708,14 @@ impl Host {
         ) {
             // No component is running and we requested to scale to zero, noop.
             // We still publish the event to indicate that the component has been scaled to zero
-            (hash_map::Entry::Vacant(_), None) => event::component_scaled(
+            (hash_map::Entry::Vacant(_), None) => Ok(event::component_scaled(
                 claims.as_ref(),
                 annotations,
                 host_id,
                 0_usize,
                 &component_ref,
                 &component_id,
-            ),
+            )),
             // No component is running and we requested to scale to some amount, start with specified max
             (hash_map::Entry::Vacant(entry), Some(max)) => {
                 let (config, secrets) = self
@@ -1730,14 +1739,14 @@ impl Host {
                 )
                 .await?;
 
-                event::component_scaled(
+                Ok(event::component_scaled(
                     claims.as_ref(),
                     annotations,
                     host_id,
                     max,
                     &component_ref,
                     &component_id,
-                )
+                ))
             }
             // Component is running and we requested to scale to zero instances, stop component
             (hash_map::Entry::Occupied(entry), None) => {
@@ -1747,14 +1756,14 @@ impl Host {
                     .context("failed to stop component in response to scale to zero")?;
 
                 info!(?component_ref, "component stopped");
-                event::component_scaled(
+                Ok(event::component_scaled(
                     claims.as_ref(),
                     &component.annotations,
                     host_id,
                     0_usize,
                     &component.image_reference,
                     &component.id,
-                )
+                ))
             }
             // Component is running and we requested to scale to some amount or unbounded, scale component
             (hash_map::Entry::Occupied(mut entry), Some(max)) => {
@@ -1808,13 +1817,9 @@ impl Host {
                 } else {
                     debug!(?component_ref, ?max, "component already at desired scale");
                 }
-                event
+                Ok(event)
             }
-        };
-
-        self.publish_event("component_scaled", scaled_event).await?;
-
-        Ok(())
+        }
     }
 
     // TODO(#1548): With component IDs, new component references, configuration, etc, we're going to need to do some
