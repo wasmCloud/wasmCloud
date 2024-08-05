@@ -121,7 +121,8 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     disable_keygen: command.disable_keygen,
                 }),
             )
-            .await?;
+            .await
+            .context("failed to build provider")?;
             Ok(CommandOutput::new(
                 format!("Built artifact can be found at {path:?}"),
                 HashMap::from([("path".to_string(), json!(path))]),
