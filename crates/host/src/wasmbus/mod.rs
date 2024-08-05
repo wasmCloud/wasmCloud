@@ -641,7 +641,7 @@ async fn merge_registry_config(
 }
 
 impl Host {
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+    const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
     const NAME_ADJECTIVES: &'static str = "
     autumn hidden bitter misty silent empty dry dark summer
@@ -763,11 +763,13 @@ impl Host {
 
         let start_at = Instant::now();
 
+        let heartbeat_interval = config
+            .heartbeat_interval
+            .unwrap_or(Self::DEFAULT_HEARTBEAT_INTERVAL);
         let heartbeat_start_at = start_at
-            .checked_add(Self::HEARTBEAT_INTERVAL)
+            .checked_add(heartbeat_interval)
             .context("failed to compute heartbeat start time")?;
-        let heartbeat =
-            IntervalStream::new(interval_at(heartbeat_start_at, Self::HEARTBEAT_INTERVAL));
+        let heartbeat = IntervalStream::new(interval_at(heartbeat_start_at, heartbeat_interval));
 
         let (stop_tx, stop_rx) = watch::channel(None);
 
