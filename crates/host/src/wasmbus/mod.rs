@@ -43,16 +43,18 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
+use wasmcloud_control_interface::v2alpha1::auction::{
+    ComponentAuctionAck, ComponentAuctionRequest,
+};
 use wasmcloud_control_interface::{
-    ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, InterfaceLinkDefinition,
-    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
-    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateComponentCommand,
+    ComponentDescription, CtlResponse, DeleteInterfaceLinkDefinitionRequest, HostInventory,
+    HostLabel, InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest,
+    ProviderDescription, RegistryCredential, ScaleComponentCommand, StartProviderCommand,
+    StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
 use wasmcloud_core::{
     provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
-    CTL_API_VERSION_1,
+    CTL_API_VERSION_1, CTL_API_VERSION_2_ALPHA_1,
 };
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::WrpcServeEvent;
@@ -166,6 +168,10 @@ impl Queue {
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config.>"),
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config"),
             )),
+            // v2alpha1
+            Either::Left(nats.subscribe(format!(
+                "{topic_prefix}.{CTL_API_VERSION_2_ALPHA_1}.{lattice}.*.auction",
+            ))),
         ])
         .await
         .into_iter()
@@ -190,6 +196,18 @@ struct Component {
     /// Maximum number of instances of this component that can be running at once
     max_instances: NonZeroUsize,
     image_reference: Arc<str>,
+    /// Maximum amount of RAM that can be used by each instance of this component
+    max_memory_size: Option<usize>,
+}
+
+impl Component {
+    /// Returns the maximum amount of memory this component could use if all instances were running
+    /// and using the maximum amount of memory at once. If the maximum memory is not set, returns 0.
+    pub(crate) fn max_memory(&self) -> usize {
+        self.max_memory_size
+            .map(|m| m * self.max_instances.get())
+            .unwrap_or(0)
+    }
 }
 
 impl Deref for Component {
@@ -381,6 +399,7 @@ pub struct Host {
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
     max_execution_time: Duration,
+    system_info: Arc<RwLock<sysinfo::System>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -899,6 +918,11 @@ impl Host {
             provider_claims: Arc::default(),
             metrics: Arc::new(metrics),
             max_execution_time: max_execution_time_ms,
+            // Since memory information is all that we're interested in, fetch just that
+            system_info: Arc::new(RwLock::new(sysinfo::System::new_with_specifics(
+                sysinfo::RefreshKind::new()
+                    .with_memory(sysinfo::MemoryRefreshKind::new().with_ram()),
+            ))),
         };
 
         let host = Arc::new(host);
@@ -1081,6 +1105,22 @@ impl Host {
         Ok(*self.stop_rx.borrow())
     }
 
+    async fn refresh_ram_usage(&self) {
+        self.system_info.write().await.refresh_memory();
+    }
+
+    /// Computes the amount of free memory available to the host after subtracting
+    /// the maximum memory of all running components
+    async fn get_free_memory(&self) -> u64 {
+        self.system_info.read().await.free_memory()
+            - self
+                .components
+                .read()
+                .await
+                .iter()
+                .fold(0, |acc, (_, c)| acc + c.max_memory()) as u64
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn inventory(&self) -> HostInventory {
         trace!("generating host inventory");
@@ -1182,6 +1222,7 @@ impl Host {
         image_reference: Arc<str>,
         id: Arc<str>,
         max_instances: NonZeroUsize,
+        max_memory_size: Option<usize>,
         mut component: wasmcloud_runtime::Component<Handler>,
         handler: Handler,
     ) -> anyhow::Result<Arc<Component>> {
@@ -1193,6 +1234,7 @@ impl Host {
 
         let max_execution_time = self.max_execution_time;
         component.set_max_execution_time(max_execution_time);
+        component.set_max_memory_size(max_memory_size);
 
         let (events_tx, mut events_rx) = mpsc::channel(256);
         let prefix = Arc::from(format!("{}.{id}", &self.host_config.lattice));
@@ -1289,6 +1331,7 @@ impl Host {
             annotations: annotations.clone(),
             max_instances,
             image_reference,
+            max_memory_size,
         }))
     }
 
@@ -1302,6 +1345,7 @@ impl Host {
         component_ref: Arc<str>,
         component_id: Arc<str>,
         max_instances: NonZeroUsize,
+        max_memory_size: Option<usize>,
         annotations: &Annotations,
         config: ConfigBundle,
         secrets: HashMap<String, Secret<SecretValue>>,
@@ -1340,6 +1384,7 @@ impl Host {
                 Arc::clone(&component_ref),
                 Arc::clone(&component_id),
                 max_instances,
+                max_memory_size,
                 component,
                 handler,
             )
@@ -1377,33 +1422,59 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<Option<CtlResponse<ComponentAuctionAck>>> {
-        let ComponentAuctionRequest {
-            component_ref,
-            component_id,
-            constraints,
-        } = serde_json::from_slice(payload.as_ref())
+        let auction: ComponentAuctionRequest = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize component auction command")?;
 
-        info!(
-            component_ref,
-            component_id,
-            ?constraints,
+        debug!(
+            auction.component_ref,
+            auction.component_id,
+            ?auction.constraints,
+            auction.max_memory,
+            auction.max_instances,
             "handling auction for component"
         );
 
-        let host_labels = self.labels.read().await;
-        let constraints_satisfied = constraints
-            .iter()
-            .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
-        let component_id_running = self.components.read().await.contains_key(&component_id);
+        let constraints_satisfied = {
+            let host_labels = self.labels.read().await;
+            auction
+                .constraints
+                .iter()
+                .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v))
+        };
+        let component_id_running = self
+            .components
+            .read()
+            .await
+            .contains_key(&auction.component_id);
+
+        if auction.max_memory > self.host_config.max_linear_memory {
+            debug!(
+                max_memory = auction.max_memory,
+                max_linear_memory = self.host_config.max_linear_memory,
+                "component max memory requested exceeds host max linear memory"
+            );
+            return Ok(None);
+        }
+
+        let requested_ram_amount = auction.max_memory * auction.max_instances as u64;
+        self.refresh_ram_usage().await;
+
+        // If we cannot check the free memory on a system, we are not going to respond to the auction.
+        // You can still start these components on a system that does not support this feature.
+        // This is to avoid an unsupported system always participating in auctions when it's likely
+        // that it cannot run the component (since supported systems include Linux, Mac, Windows, etc.)
+        let ram_available =
+            sysinfo::IS_SUPPORTED_SYSTEM && self.get_free_memory().await > requested_ram_amount;
 
         // This host can run the component if all constraints are satisfied and the component is not already running
-        if constraints_satisfied && !component_id_running {
+        if constraints_satisfied && !component_id_running && ram_available {
             Ok(Some(CtlResponse::ok(ComponentAuctionAck {
-                component_ref,
-                component_id,
-                constraints,
+                component_ref: auction.component_ref,
+                component_id: auction.component_id,
+                constraints: auction.constraints,
                 host_id: self.host_key.public_key(),
+                max_instances: auction.max_instances,
+                max_memory: auction.max_memory,
             })))
         } else {
             Ok(None)
@@ -1422,7 +1493,7 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider auction command")?;
 
-        info!(
+        debug!(
             provider_ref,
             provider_id,
             ?constraints,
@@ -1619,6 +1690,7 @@ impl Host {
                     Arc::clone(&component_id),
                     &host_id,
                     max_instances,
+                    None,
                     &annotations,
                     config,
                     wasm,
@@ -1679,6 +1751,7 @@ impl Host {
         component_id: Arc<str>,
         host_id: &str,
         max_instances: u32,
+        max_memory_size: Option<usize>,
         annotations: &Annotations,
         config: Vec<String>,
         wasm: Vec<u8>,
@@ -1745,6 +1818,7 @@ impl Host {
                     Arc::clone(&component_ref),
                     Arc::clone(&component_id),
                     max,
+                    max_memory_size,
                     annotations,
                     config,
                     secrets,
@@ -1815,6 +1889,7 @@ impl Host {
                             Arc::clone(&component_ref),
                             Arc::clone(&component.id),
                             max,
+                            max_memory_size,
                             component.component.clone(),
                             handler,
                         )
@@ -1953,6 +2028,7 @@ impl Host {
                     Arc::clone(&new_component_ref),
                     Arc::clone(&component_id),
                     max,
+                    existing_component.max_memory_size,
                     new_component,
                     existing_component.handler.copy_for_new(),
                 )

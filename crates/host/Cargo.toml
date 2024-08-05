@@ -36,6 +36,7 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
+sysinfo = { workspace = true, features = ["system"] }
 sha2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = [
@@ -52,7 +53,7 @@ ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = { workspace = true, features = ["v2alpha1"] }
 wasmcloud-core = { workspace = true, features = [
     "oci-distribution",
     "otel",
