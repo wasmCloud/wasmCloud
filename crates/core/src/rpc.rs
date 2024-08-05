@@ -56,3 +56,13 @@ pub fn health_subject(lattice: &str, provider_key: &str) -> String {
 pub fn shutdown_subject(lattice: &str, provider_key: &str, link_name: &str) -> String {
     format!("wasmbus.rpc.{lattice}.{provider_key}.{link_name}.shutdown")
 }
+
+/// Generate the wasmbus RPC subject for delivering config updates to a given provider
+///
+/// When messages are published on this subject, providers up the perform shutdown (cleanly if possible).
+///
+/// NOTE that the NATS message body limits (default 1MiB) apply to these messages
+#[must_use]
+pub fn provider_config_update_subject(lattice: &str, provider_key: &str) -> String {
+    format!("wasmbus.rpc.{lattice}.{provider_key}.config.update")
+}
