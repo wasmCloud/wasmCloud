@@ -46,10 +46,15 @@ impl Drop for AbortHandles {
 ///    config. This is for use in situations where you want to be notified when a config changes,
 ///    such as for a provider that needs to be notified when a config changes
 pub struct ConfigBundle {
+    /// A live view of the configuration that is being managed/updated by this bundle
     merged_config: LockedConfig,
+    /// Names of named config that contribute to this bundle
     config_names: Vec<String>,
+    /// A receiver that fires when changes are made to the bundle
     changed_receiver: Receiver<()>,
-    // These are here so they can be dropped when the bundle is dropped
+    /// Abort handles to the tasks that are watching for updates
+    ///
+    /// These are `drop()`ed when the bundle is dropped
     _handles: Arc<AbortHandles>,
 }
 
@@ -78,12 +83,15 @@ impl Debug for ConfigBundle {
 }
 
 impl ConfigBundle {
-    /// Create a new config bundle. It takes an ordered list of receivers that should match the
+    /// Create a new config bundle.
+    ///
+    /// It takes an ordered list of receivers that should match the
     /// order of config given by the user.
     ///
     /// This is only called internally.
+    #[must_use]
     async fn new(receivers: Vec<ConfigReceiver>) -> Self {
-        // Generate the intital abort handles so we can construct the bundle
+        // Generate the initial abort handles so we can construct the bundle
         let (abort_handles, mut registrations): (Vec<_>, Vec<_>) =
             std::iter::repeat_with(AbortHandle::new_pair)
                 .take(receivers.len())
@@ -194,9 +202,9 @@ impl BundleGenerator {
 
     /// Generate a new config bundle. Will return an error if any of the configs do not exist or if
     /// there was an error fetching the initial config
-    pub async fn generate(&self, names: Vec<String>) -> anyhow::Result<ConfigBundle> {
+    pub async fn generate(&self, config_names: Vec<String>) -> anyhow::Result<ConfigBundle> {
         let receivers: Vec<ConfigReceiver> =
-            futures::future::join_all(names.into_iter().map(|name| self.get_receiver(name)))
+            futures::future::join_all(config_names.into_iter().map(|name| self.get_receiver(name)))
                 .await
                 .into_iter()
                 .collect::<anyhow::Result<_>>()?;
@@ -321,15 +329,15 @@ async fn update_merge(
 ) {
     // We get a write lock to start so nothing else can update the merged config while we merge
     // in the other configs (e.g. when one of the ordered configs is write locked)
-    let mut lock = merged_config.write().await;
-    lock.clear();
+    let mut hashmap = merged_config.write().await;
+    hashmap.clear();
 
     // NOTE(thomastaylor312): There is a possible optimization here where we could just create a
     // temporary hashmap of borrowed strings and then after extending everything we could
     // into_iter it and clone it into the final hashmap. This would avoid extra allocations at
     // the cost of a few more iterations
     for recv in ordered_receivers {
-        lock.extend(recv.borrow().clone());
+        hashmap.extend(recv.borrow().clone());
     }
     // Send a notification that the config has changed
     changed_notifier.send_replace(());

@@ -35,7 +35,7 @@ use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, watch, RwLock, Semaphore};
+use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{interval_at, timeout_at, Instant};
 use tokio::{process, select, spawn};
@@ -50,7 +50,10 @@ use wasmcloud_control_interface::{
     ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateComponentCommand,
 };
-use wasmcloud_core::{ComponentId, HealthCheckResponse, HostData, OtelConfig, CTL_API_VERSION_1};
+use wasmcloud_core::{
+    provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
+    CTL_API_VERSION_1,
+};
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::WrpcServeEvent;
 use wasmcloud_runtime::Runtime;
@@ -317,13 +320,17 @@ impl wrpc_transport::Serve for WrpcServer {
     }
 }
 
+/// An Provider instance
 #[derive(Debug)]
 struct Provider {
-    child: JoinHandle<()>,
-    annotations: Annotations,
     image_ref: String,
     claims_token: Option<jwt::Token<jwt::CapabilityProvider>>,
     xkey: XKey,
+    annotations: Annotations,
+    /// Task that continuously performs health checks against the provider
+    health_check_task: JoinHandle<()>,
+    /// Task that continuously forwards configuration updates to the provider
+    config_update_task: JoinHandle<()>,
 }
 
 /// wasmCloud Host
@@ -2086,8 +2093,7 @@ impl Host {
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
 
-        // TODO(#1648): Implement redelivery of changed configuration when `config.changed()` is true
-        let (config, secrets) = self
+        let (mut config, secrets) = self
             .fetch_config_and_secrets(
                 config,
                 claims_token.as_ref().map(|t| &t.jwt),
@@ -2259,6 +2265,26 @@ impl Host {
                 .context("failed to write newline")?;
             stdin.shutdown().await.context("failed to close stdin")?;
 
+            // Create a channel for watching for child process exit
+            let (exit_tx, exit_rx) = broadcast::channel::<()>(1);
+            spawn(async move {
+                match child.wait().await {
+                    Ok(status) => {
+                        debug!("provider @ [{}] exited with `{status:?}`", path.display());
+                    }
+                    Err(e) => {
+                        error!(
+                            "failed to wait for provider @ [{}] to execute: {e}",
+                            path.display()
+                        );
+                    }
+                }
+                if let Err(err) = exit_tx.send(()) {
+                    warn!(%err, "failed to send exit tx");
+                }
+            });
+            let mut exit_health_rx = exit_rx.resubscribe();
+
             // TODO: Change method receiver to Arc<Self> and `move` into the closure
             let rpc_nats = self.rpc_nats.clone();
             let ctl_nats = self.ctl_nats.clone();
@@ -2267,7 +2293,7 @@ impl Host {
             let health_lattice = self.host_config.lattice.clone();
             let health_host_id = host_id.to_string();
             let health_provider_id = provider_id.to_string();
-            let child = spawn(async move {
+            let health_check_task = spawn(async move {
                 // Check the health of the provider every 30 seconds
                 let mut health_check = tokio::time::interval(Duration::from_secs(30));
                 let mut previous_healthy = false;
@@ -2357,15 +2383,11 @@ impl Host {
                                     warn!(provider_id = health_provider_id, "failed to request provider health, retrying in 30 seconds");
                                 }
                         }
-                        exit_status = child.wait() => match exit_status {
-                            Ok(status) => {
-                                debug!("`{}` exited with `{status:?}`", path.display());
-                                break;
+                        exit = exit_health_rx.recv() => {
+                            if let Err(err) = exit {
+                                warn!(%err, provider_id = health_provider_id, "failed to receive exit in health check task");
                             }
-                            Err(e) => {
-                                warn!("failed to wait for `{}` to execute: {e}", path.display());
-                                break;
-                            }
+                            break;
                         }
                     }
                 }
@@ -2382,8 +2404,46 @@ impl Host {
                 ),
             )
             .await?;
+
+            // Spawn off a task to watch for config bundle updates and forward them to
+            // the provider that we're spawning and managing
+            let mut exit_config_tx = exit_rx;
+            let provider_id = provider_id.to_string();
+            let lattice = self.host_config.lattice.to_string();
+            let client = self.rpc_nats.clone();
+            let config_update_task = spawn(async move {
+                let subject = provider_config_update_subject(&lattice, &provider_id);
+                trace!(provider_id, "starting config update listener");
+                loop {
+                    select! {
+                        config = config.changed() => {
+                            trace!(provider_id, "provider config bundle changed");
+                            let bytes = match serde_json::to_vec(&*config) {
+                                Ok(bytes) => bytes,
+                                Err(err) => {
+                                    error!(%err, provider_id, lattice, "failed to serialize configuration update ");
+                                    continue;
+                                }
+                            };
+                            trace!(provider_id, subject, "publishing config bundle bytes");
+                            if let Err(err) = client.publish(subject.clone(), Bytes::from(bytes)).await {
+                                error!(%err, provider_id, lattice, "failed to publish configuration update bytes to component");
+                            }
+                        }
+                        exit = exit_config_tx.recv() => {
+                            if let Err(err) = exit {
+                                warn!(%err, provider_id, "failed to receive exit in config update task");
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // Add the provider
             entry.insert(Provider {
-                child,
+                health_check_task,
+                config_update_task,
                 annotations,
                 claims_token,
                 image_ref: provider_ref.to_string(),
@@ -2392,6 +2452,7 @@ impl Host {
         } else {
             bail!("provider is already running with that ID")
         }
+
         Ok(())
     }
 
@@ -2415,7 +2476,10 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            child, annotations, ..
+            health_check_task,
+            config_update_task,
+            annotations,
+            ..
         } = entry.remove();
 
         // Send a request to the provider, requesting a graceful shutdown
@@ -2444,7 +2508,8 @@ impl Host {
                 "provider did not gracefully shut down in time, shutting down forcefully"
             );
         }
-        child.abort();
+        health_check_task.abort();
+        config_update_task.abort();
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
