@@ -131,7 +131,12 @@ where
         >,
     > {
         let (tx, rx) = oneshot::channel();
-        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let mut store = new_store(
+            &self.engine,
+            self.handler.clone(),
+            self.max_execution_time,
+            self.max_memory_size,
+        );
         let (bindings, _) =
             incoming_http_bindings::IncomingHttp::instantiate_pre(&mut store, &self.pre).await?;
         let data = store.data_mut();
