@@ -51,7 +51,7 @@ serde_json = { workspace = true, features = ["raw_value"] }
 serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
-sysinfo = { workspace = true }
+sysinfo = { workspace = true, features = ["system"] }
 tempfile = { workspace = true }
 term-table = { workspace = true }
 termcolor = { workspace = true }

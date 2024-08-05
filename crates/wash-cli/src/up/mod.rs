@@ -11,7 +11,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use sysinfo::{System, SystemExt};
+use sysinfo::{ProcessesToUpdate, System};
 use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -706,7 +706,7 @@ fn is_process_running(pid: &str) -> bool {
     match pid.parse() {
         Ok(pid) => {
             let mut sys = System::new_all();
-            sys.refresh_processes();
+            sys.refresh_processes(ProcessesToUpdate::All);
             sys.processes().get(&pid).is_some()
         }
         Err(_) => false,
