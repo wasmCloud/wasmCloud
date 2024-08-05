@@ -63,6 +63,8 @@ pub struct Host {
     pub version: String,
     /// The Max Execution time for Host runtime
     pub max_execution_time: Duration,
+    /// The interval at which the Host will send heartbeats
+    pub heartbeat_interval: Option<Duration>,
 }
 
 /// Configuration for wasmCloud policy service
@@ -106,6 +108,7 @@ impl Default for Host {
             secrets_topic_prefix: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
             max_execution_time: Duration::from_millis(10 * 60 * 1000),
+            heartbeat_interval: None,
         }
     }
 }

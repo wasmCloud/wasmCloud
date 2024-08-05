@@ -61,7 +61,7 @@ struct Args {
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
-    #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration)]
+    #[clap(long = "provider-shutdown-delay-ms", alias = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration_millis)]
     provider_shutdown_delay: Duration,
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST")]
@@ -157,7 +157,7 @@ struct Args {
     )]
     rpc_seed: Option<String>,
     /// Timeout in milliseconds for all RPC calls
-    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration, hide = true)]
+    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration_millis, hide = true)]
     rpc_timeout_ms: Duration,
     /// Optional flag to require host communication over TLS with a NATS server for RPC messages
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
@@ -174,14 +174,14 @@ struct Args {
     )]
     policy_changes_topic: Option<String>,
     /// If provided, allows to set a custom Max Execution time for the Host in ms.
-    #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration)]
+    #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis)]
     max_execution_time: Duration,
     /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
         env = "WASMCLOUD_POLICY_TIMEOUT",
         requires = "policy_topic",
-        value_parser = parse_duration,
+        value_parser = parse_duration_millis,
     )]
     policy_timeout_ms: Option<Duration>,
 
@@ -269,6 +269,10 @@ struct Args {
     /// Configures the set of certificate authorities as repeatable set of file paths to load into the OCI and OpenTelemetry clients
     #[arg(long = "tls-ca-path")]
     pub tls_ca_paths: Option<Vec<PathBuf>>,
+
+    /// If provided, overrides the default heartbeat interval of every 30 seconds. Provided value is interpreted as seconds.
+    #[arg(long = "heartbeat-interval-seconds", env = "WASMCLOUD_HEARTBEAT_INTERVAL", value_parser = parse_duration_secs, hide = true)]
+    heartbeat_interval: Option<Duration>,
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -421,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
         secrets_topic_prefix: args.secrets_topic_prefix,
         version: env!("CARGO_PKG_VERSION").to_string(),
         max_execution_time: args.max_execution_time,
+        heartbeat_interval: args.heartbeat_interval,
     }))
     .await
     .context("failed to initialize host")?;
@@ -456,9 +461,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_duration(arg: &str) -> anyhow::Result<Duration> {
+fn parse_duration_millis(arg: &str) -> anyhow::Result<Duration> {
     arg.parse()
         .map(Duration::from_millis)
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+fn parse_duration_secs(arg: &str) -> anyhow::Result<Duration> {
+    arg.parse()
+        .map(Duration::from_secs)
         .map_err(|e| anyhow::anyhow!(e))
 }
 
