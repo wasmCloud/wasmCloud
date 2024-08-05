@@ -107,6 +107,7 @@ clap = { workspace = true, features = [
 ] }
 nkeys = { workspace = true }
 redis = { workspace = true, optional = true }
+regex = { workspace = true}
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 tracing-subscriber = { workspace = true }
@@ -148,6 +149,7 @@ redis = { workspace = true, features = [
     "connection-manager",
     "tokio-comp",
 ] }
+regex = { workspace = true}
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 rmp-serde = { workspace = true }
 rustversion = { workspace = true }
