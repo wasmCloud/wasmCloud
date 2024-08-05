@@ -10,7 +10,7 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use oci_distribution::Reference;
 use rand::{distributions::Alphanumeric, Rng};
-use sysinfo::{ProcessExt, SystemExt};
+use sysinfo::ProcessesToUpdate;
 use tempfile::TempDir;
 use tokio::{
     fs::File,
@@ -684,11 +684,12 @@ pub async fn wait_until_process_has_count(
 
     tokio::time::timeout(timeout, async move {
         loop {
-            info.refresh_processes();
+            info.refresh_processes(ProcessesToUpdate::All);
             let count = info
                 .processes()
                 .values()
-                .map(|p| p.exe().to_string_lossy())
+                .filter_map(|p| p.exe())
+                .map(|p| p.to_string_lossy())
                 .filter(|name| name.contains(filter))
                 .count();
             if predicate(count) {
