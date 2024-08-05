@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{self, bail, Context};
+use anyhow::{bail, Context};
 use clap::Parser;
 use nkeys::KeyPair;
+use regex::Regex;
 use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
 use tracing::{warn, Level as TracingLogLevel};
@@ -384,6 +385,12 @@ async fn main() -> anyhow::Result<()> {
         oci_user: args.oci_user,
         oci_password: args.oci_password,
     };
+    if let Some(policy_topic) = args.policy_topic.as_deref() {
+        anyhow::ensure!(
+            validate_nats_subject(policy_topic).is_ok(),
+            "Invalid policy topic"
+        );
+    }
     let policy_service_config = PolicyServiceConfig {
         policy_topic: args.policy_topic,
         policy_changes_topic: args.policy_changes_topic,
@@ -412,6 +419,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Some((key, value))
     }));
+    if let Some(secrets_topic) = args.secrets_topic_prefix.as_deref() {
+        anyhow::ensure!(
+            validate_nats_subject(secrets_topic).is_ok(),
+            "Invalid secrets topic"
+        );
+    }
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice: Arc::from(args.lattice),
@@ -483,6 +496,20 @@ fn parse_duration_millis(arg: &str) -> anyhow::Result<Duration> {
         .map_err(|e| anyhow::anyhow!(e))
 }
 
+/// Validates that a subject string (e.g. secrets-topic and policy-topic) adheres to the rules and conventions
+/// of being a valid NATS subject.
+/// This function is specifically for validating subjects to publish to and not intended to be used for
+/// validating subjects to subscribe to, as those may include wildcard characters.
+fn validate_nats_subject(subject: &str) -> anyhow::Result<()> {
+    let re = Regex::new(r"^(?:[A-Za-z0-9_-]+\.)*[A-Za-z0-9_-]+$")
+        .context("Failed to compile NATS subject regex")?;
+    if re.is_match(subject) && !subject.contains('*') && !subject.contains('>') {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Invalid NATS subject: {}", subject))
+    }
+}
+
 fn parse_duration_secs(arg: &str) -> anyhow::Result<Duration> {
     arg.parse()
         .map(Duration::from_secs)
@@ -504,4 +531,32 @@ fn ensure_certs_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<()> {
         bail!("failed to parse certificates from the provided path");
     };
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nats_subject_validation() {
+        // Valid subjects
+        assert!(validate_nats_subject("wasmcloud.secrets").is_ok());
+        assert!(validate_nats_subject("simple").is_ok());
+        assert!(validate_nats_subject("with_underscore").is_ok());
+        assert!(validate_nats_subject("with-hyphen").is_ok());
+        assert!(validate_nats_subject("multiple.topic.levels").is_ok());
+        assert!(validate_nats_subject("123.456").is_ok());
+        assert!(validate_nats_subject("subject.123").is_ok());
+        // Invalid subjects
+        assert!(validate_nats_subject("").is_err()); // Empty topic
+        assert!(validate_nats_subject(".").is_err()); // Just a dot
+        assert!(validate_nats_subject(".starts.with.dot").is_err()); // Starts with a dot
+        assert!(validate_nats_subject("ends.with.dot.").is_err()); // Ends with a dot
+        assert!(validate_nats_subject("double..dot").is_err()); // Double dot
+        assert!(validate_nats_subject("contains.*.wildcard").is_err()); // Contains *
+        assert!(validate_nats_subject("contains.>.wildcard").is_err()); // Contains >
+        assert!(validate_nats_subject("spaced words").is_err()); // Contains space
+        assert!(validate_nats_subject("invalid!chars").is_err()); // Contains !
+        assert!(validate_nats_subject("invalid@chars").is_err()); // Contains @
+    }
 }
