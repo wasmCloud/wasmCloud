@@ -17,6 +17,7 @@ use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
+use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
@@ -196,6 +197,7 @@ where
     claims: Option<jwt::Claims<jwt::Component>>,
     instance_pre: wasmtime::component::InstancePre<Ctx<H>>,
     max_execution_time: Duration,
+    max_linear_memory: Option<usize>,
 }
 
 impl<H> Debug for Component<H>
@@ -215,12 +217,18 @@ fn new_store<H: Handler>(
     engine: &wasmtime::Engine,
     handler: H,
     max_execution_time: Duration,
+    max_memory_size: Option<usize>,
 ) -> wasmtime::Store<Ctx<H>> {
     let table = ResourceTable::new();
     let wasi = WasiCtxBuilder::new()
         .args(&["main.wasm"]) // TODO: Configure argv[0]
         .inherit_stderr()
         .build();
+
+    let mut limiter = StoreLimitsBuilder::new();
+    if let Some(max_memory_size) = max_memory_size {
+        limiter = limiter.memory_size(max_memory_size);
+    }
 
     let mut store = wasmtime::Store::new(
         engine,
@@ -231,9 +239,11 @@ fn new_store<H: Handler>(
             table,
             shared_resources: SharedResourceTable::default(),
             timeout: max_execution_time,
+            limiter: limiter.build(),
         },
     );
     store.set_epoch_deadline(max_execution_time.as_secs());
+    store.limiter(|ctx| &mut ctx.limiter);
     store
 }
 
@@ -352,6 +362,7 @@ where
             claims,
             instance_pre,
             max_execution_time: rt.max_execution_time,
+            max_linear_memory: None,
         })
     }
 
@@ -360,6 +371,14 @@ where
     #[instrument(level = "trace", skip_all)]
     pub fn set_max_execution_time(&mut self, max_execution_time: Duration) -> &mut Self {
         self.max_execution_time = max_execution_time.max(Duration::from_secs(1));
+        self
+    }
+
+    /// Sets maximum memory size for the linear memory of an instance of this component.
+    /// Supplying `None` will disable the limit.
+    #[instrument(level = "trace", skip_all)]
+    pub fn set_max_memory_size(&mut self, max_memory_size: Option<usize>) -> &mut Self {
+        self.max_linear_memory = max_memory_size;
         self
     }
 
@@ -413,6 +432,7 @@ where
     {
         let span = Span::current();
         let max_execution_time = self.max_execution_time;
+        let max_memory_size = self.max_linear_memory;
         let mut invocations = vec![];
         let instance = Instance {
             engine: self.engine.clone(),
@@ -420,6 +440,7 @@ where
             handler: handler.clone(),
             max_execution_time: self.max_execution_time,
             events: events.clone(),
+            max_memory_size,
         };
         for (name, ty) in self
             .instance_pre
@@ -461,7 +482,14 @@ where
                     debug!(?name, "serving root function");
                     let func = srv
                         .serve_function(
-                            move || new_store(&engine, handler.clone(), max_execution_time),
+                            move || {
+                                new_store(
+                                    &engine,
+                                    handler.clone(),
+                                    max_execution_time,
+                                    max_memory_size,
+                                )
+                            },
                             pre,
                             ty,
                             "",
@@ -515,7 +543,12 @@ where
                                 let func = srv
                                     .serve_function(
                                         move || {
-                                            new_store(&engine, handler.clone(), max_execution_time)
+                                            new_store(
+                                                &engine,
+                                                handler.clone(),
+                                                max_execution_time,
+                                                max_memory_size,
+                                            )
                                         },
                                         pre,
                                         ty,
@@ -604,6 +637,7 @@ where
     pre: wasmtime::component::InstancePre<Ctx<H>>,
     handler: H,
     max_execution_time: Duration,
+    max_memory_size: Option<usize>,
     events: mpsc::Sender<WrpcServeEvent<C>>,
 }
 
@@ -617,6 +651,7 @@ where
             pre: self.pre.clone(),
             handler: self.handler.clone(),
             max_execution_time: self.max_execution_time,
+            max_memory_size: self.max_memory_size,
             events: self.events.clone(),
         }
     }
@@ -634,6 +669,7 @@ where
     table: ResourceTable,
     shared_resources: SharedResourceTable,
     timeout: Duration,
+    limiter: StoreLimits,
 }
 
 impl<H: Handler> WasiView for Ctx<H> {

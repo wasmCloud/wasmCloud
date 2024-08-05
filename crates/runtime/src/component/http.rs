@@ -134,7 +134,12 @@ where
         let scheme = wrpc_interface_http::bindings::wrpc::http::types::Scheme::from(scheme).into();
 
         let (tx, rx) = oneshot::channel();
-        let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
+        let mut store = new_store(
+            &self.engine,
+            self.handler.clone(),
+            self.max_execution_time,
+            self.max_memory_size,
+        );
         let pre = incoming_http_bindings::IncomingHttpPre::new(self.pre.clone())
             .context("failed to pre-instantiate `wasi:http/incoming-handler`")?;
         let bindings = pre
