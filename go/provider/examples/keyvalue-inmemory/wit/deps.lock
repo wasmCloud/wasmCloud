@@ -1,0 +1,4 @@
+[keyvalue]
+url = "https://github.com/wrpc/keyvalue/archive/main.tar.gz"
+sha256 = "384d54bed5a91e7673732138b9b35c85351c64abd4d359e196aaf11a97d663ed"
+sha512 = "feabffd5a6b10b1043342aa7378132f2f6aace06c1d0bb67492e8ec8c23db62b2cf357db51f1672f21bb6b20e3bf8952347ce6fc2e108955e66766574e8e7793"
