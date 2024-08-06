@@ -25,7 +25,8 @@ use wasmcloud_core::nats::convert_header_map_to_hashmap;
 use wasmcloud_core::rpc::{health_subject, link_del_subject, link_put_subject, shutdown_subject};
 use wasmcloud_core::secrets::SecretValue;
 use wasmcloud_core::{
-    HealthCheckRequest, HealthCheckResponse, HostData, InterfaceLinkDefinition, LatticeTarget,
+    provider_config_update_subject, HealthCheckRequest, HealthCheckResponse, HostData,
+    InterfaceLinkDefinition, LatticeTarget,
 };
 
 #[cfg(feature = "otel")]
@@ -315,11 +316,55 @@ async fn subscribe_link_del(
     Ok(link_del_rx)
 }
 
+/// Subscribe to configuration updates that are passed by the host.
+///
+/// We expect the hosts to send configuration updates messages over NATS,
+/// with information on whether the configuration applies to a specific link,
+/// and the contents of the new/updated configuration.
+async fn subscribe_config_update(
+    nats: async_nats::Client,
+    mut quit: broadcast::Receiver<()>,
+    lattice: &str,
+    provider_key: &str,
+) -> ProviderInitResult<mpsc::Receiver<(HashMap<String, String>, oneshot::Sender<()>)>> {
+    let (config_update_tx, config_update_rx) = mpsc::channel(1);
+    let mut sub = nats
+        .subscribe(provider_config_update_subject(lattice, provider_key).to_subject())
+        .await?;
+    spawn({
+        async move {
+            process_until_quit!(sub, quit, msg, {
+                match serde_json::from_slice::<HashMap<String, String>>(&msg.payload) {
+                    Ok(update) => {
+                        let (tx, rx) = oneshot::channel();
+                        // Perform the config update on the host
+                        if let Err(err) = config_update_tx.send((update, tx)).await {
+                            error!(%err, "failed to send config update");
+                            continue;
+                        }
+                        // Wait for the response from the rx to perform it
+                        if let Err(err) = rx.await.as_ref() {
+                            error!(%err, "failed to receive config update response");
+                        }
+                    }
+                    Err(err) => {
+                        error!(%err, "received invalid config update data on message");
+                    }
+                }
+            });
+        }
+        .instrument(tracing::debug_span!("subscribe_config_update"))
+    });
+
+    Ok(config_update_rx)
+}
+
 pub(crate) struct ProviderCommandReceivers {
     pub health: mpsc::Receiver<(HealthCheckRequest, oneshot::Sender<HealthCheckResponse>)>,
     pub shutdown: mpsc::Receiver<oneshot::Sender<()>>,
     pub link_put: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
     pub link_del: mpsc::Receiver<(InterfaceLinkDefinition, oneshot::Sender<()>)>,
+    pub config_update: mpsc::Receiver<(HashMap<String, String>, oneshot::Sender<()>)>,
 }
 
 /// State of provider initialization
@@ -406,11 +451,13 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
         "Starting capability provider {provider_key} instance {instance_id} with nats url {lattice_rpc_url}"
     );
 
+    // Build the NATS client
     let nats_addr = if !lattice_rpc_url.is_empty() {
         lattice_rpc_url.as_str()
     } else {
         DEFAULT_NATS_ADDR
     };
+
     let nats = with_connection_event_logging(
         match (lattice_rpc_user_jwt.trim(), lattice_rpc_user_seed.trim()) {
             ("", "") => async_nats::ConnectOptions::default(),
@@ -426,8 +473,11 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
     )
     .connect(nats_addr)
     .await?;
+    let store_client = nats.clone();
     let nats = Arc::new(nats);
-    let (health, shutdown, link_put, link_del) = try_join!(
+
+    // Listen and process various provider events/functionality
+    let (health, shutdown, link_put, link_del, config_update) = try_join!(
         subscribe_health(
             Arc::clone(&nats),
             quit_tx.subscribe(),
@@ -453,6 +503,12 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             lattice_rpc_prefix,
             provider_key,
         ),
+        subscribe_config_update(
+            store_client,
+            quit_tx.subscribe(),
+            lattice_rpc_prefix,
+            provider_key,
+        ),
     )?;
     Ok(ProviderInitState {
         nats,
@@ -471,6 +527,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             shutdown,
             link_put,
             link_del,
+            config_update,
         },
     })
 }
@@ -578,6 +635,7 @@ async fn handle_provider_commands(
         mut shutdown,
         mut link_put,
         mut link_del,
+        mut config_update,
     }: ProviderCommandReceivers,
 ) {
     loop {
@@ -671,6 +729,27 @@ async fn handle_provider_commands(
                     }
                 } else {
                     error!("failed to handle link del, shutdown");
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "failed to shutdown provider");
+                    }
+                    if quit_tx.send(()).is_err() {
+                        error!("failed to send quit");
+                    };
+                    return
+                };
+            }
+            req = config_update.recv() => {
+                if let Some((cfg, tx)) = req {
+                    // Notify the provider that some config has been updated
+                    if let Err(e) = provider.on_config_update(&cfg).await {
+                        error!(error = %e, "failed to pass through config update for provider");
+                    }
+
+                    if tx.send(()).is_err() {
+                        error!("failed to send config update response");
+                    }
+                } else {
+                    error!("failed to handle config update, shutdown");
                     if let Err(e) = provider.shutdown().await {
                         error!(error = %e, "failed to shutdown provider");
                     }
