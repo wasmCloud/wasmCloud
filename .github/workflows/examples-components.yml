@@ -71,7 +71,7 @@ jobs:
           name: wash-${{ matrix.wash-version }}
           path: ~/.cargo/bin/wash
 
-  # Ensure that `wash build` works for all example projects below
+  # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
     name: build
     runs-on: ubuntu-22.04
@@ -179,6 +179,12 @@ jobs:
         run: |
           npm install -g @bytecodealliance/jco
           npm install -g @bytecodealliance/componentize-js
+
+      # Validate example wadm.yaml if the example has one
+      - name: validate wadm.yaml
+        if: ${{ hashFiles('wadm.yaml') != '' }}
+        run: wash app validate wadm.yaml
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
 
       # Build example project(s)
       - name: build project
