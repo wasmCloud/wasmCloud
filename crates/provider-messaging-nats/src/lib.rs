@@ -18,7 +18,7 @@ use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, serve_provider_exports,
-    Context, LinkConfig, Provider,
+    Context, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 mod connection;
@@ -339,60 +339,54 @@ impl Provider for NatsMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, component_id: &str) -> anyhow::Result<()> {
-        if component_id == get_connection().provider_key() {
-            return self.delete_link_as_source(component_id).await;
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        let mut links = self.consumer_components.write().await;
+        if let Some(bundle) = links.remove(component_id) {
+            let client = &bundle.client;
+            debug!(
+                component_id,
+                "droping NATS client [{}] for (consumer) component",
+                format!(
+                    "{}:{}",
+                    client.server_info().server_id,
+                    client.server_info().client_id
+                ),
+            );
         }
 
-        self.delete_link_as_target(component_id).await
+        debug!(
+            component_id,
+            "finished processing (consumer) link deletion for component",
+        );
+
+        Ok(())
     }
 
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_source(&self, target_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_source_id()))]
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        // If we were the source, then the component we're invoking is the target
+        let component_id = info.get_target_id();
         let mut links = self.handler_components.write().await;
-        if let Some(bundle) = links.remove(target_id) {
+        if let Some(bundle) = links.remove(component_id) {
             // Note: subscriptions will be closed via Drop on the NatsClientBundle
             let client = &bundle.client;
             debug!(
-                "droping NATS client [{}] and associated subscriptions [{}] for (handler) component [{}]...",
+                component_id,
+                "droping NATS client [{}] and associated subscriptions [{}] for (handler) component",
                 format!(
                     "{}:{}",
                     client.server_info().server_id,
                     client.server_info().client_id
                 ),
                 &bundle.sub_handles.len(),
-                target_id
             );
         }
 
         debug!(
-            "finished processing (handler) link deletion for component [{}]",
-            target_id
-        );
-
-        Ok(())
-    }
-
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
-        let mut links = self.consumer_components.write().await;
-        if let Some(bundle) = links.remove(source_id) {
-            let client = &bundle.client;
-            debug!(
-                "droping NATS client [{}] for (consumer) component [{}]...",
-                format!(
-                    "{}:{}",
-                    client.server_info().server_id,
-                    client.server_info().client_id
-                ),
-                source_id
-            );
-        }
-
-        debug!(
-            "finished processing (consumer) link deletion for component [{}]",
-            source_id
+            component_id,
+            "finished processing (handler) link deletion for component",
         );
 
         Ok(())

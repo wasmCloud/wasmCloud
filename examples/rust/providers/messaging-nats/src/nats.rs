@@ -192,7 +192,7 @@ impl Provider for NatsMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection which removes all subscriptions
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
         let mut all_components = self.components.write().await;
 
         if all_components.remove(source_id).is_some() {

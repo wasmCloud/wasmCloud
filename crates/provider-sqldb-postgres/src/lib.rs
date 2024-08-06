@@ -17,7 +17,7 @@ use tracing::{error, instrument, warn};
 use ulid::Ulid;
 
 use wasmcloud_provider_sdk::{
-    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, Provider,
+    get_connection, propagate_trace_for_ctx, run_provider, LinkConfig, LinkDeleteInfo, Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -221,13 +221,14 @@ impl Provider for PostgresProvider {
     /// Handle notification that a link is dropped
     ///
     /// Generally we can release the resources (connections) associated with the source
-    #[instrument(level = "debug", skip_all, fields(source_id))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut prepared_statements = self.prepared_statements.write().await;
-        prepared_statements.retain(|_stmt_token, (_conn, src_id)| source_id != *src_id);
+        prepared_statements.retain(|_stmt_token, (_conn, src_id)| component_id != *src_id);
         drop(prepared_statements);
         let mut connections = self.connections.write().await;
-        connections.remove(source_id);
+        connections.remove(component_id);
         drop(connections);
         Ok(())
     }
