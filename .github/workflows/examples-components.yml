@@ -182,7 +182,7 @@ jobs:
 
       # Validate example wadm.yaml if the example has one
       - name: validate wadm.yaml
-        if: ${{ hashFiles('wadm.yaml') != '' }}
+        if: ${{ hashFiles(format('examples/{0}/{1}/components/wadm.yaml', matrix.project.lang, matrix.project.name)) != '' }}
         run: wash app validate wadm.yaml
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
 
