@@ -183,6 +183,18 @@ impl ProviderInitConfig for &ProviderInitState {
     }
 }
 
+/// Objects that can act as provider configuration updates
+pub trait ProviderConfigUpdate: Send + Sync {
+    /// Get the configuration values associated with the configuration update
+    fn get_values(&self) -> &HashMap<String, String>;
+}
+
+impl ProviderConfigUpdate for &HashMap<String, String> {
+    fn get_values(&self) -> &HashMap<String, String> {
+        self
+    }
+}
+
 /// Capability Provider handling of messages from host
 pub trait Provider<E = anyhow::Error>: Sync {
     /// Initialize the provider
@@ -195,6 +207,28 @@ pub trait Provider<E = anyhow::Error>: Sync {
         init_config: impl ProviderInitConfig,
     ) -> impl Future<Output = Result<(), E>> + Send {
         let _ = init_config;
+        async { Ok(()) }
+    }
+
+    /// Process a configuration update for the provider
+    ///
+    /// Providers are configured with zero or more config names which the
+    /// host combines into a single config that they are provided with.
+    ///
+    /// As named configurations change over time, the host makes updates to the
+    /// bundles of configuration that are relevant to this provider, and this method
+    /// helps the provider handle those changes.
+    ///
+    /// For more information on *how* these updates are delivered, see `run_provider()`
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The relevant configuration update
+    fn on_config_update(
+        &self,
+        update: impl ProviderConfigUpdate,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        let _ = update;
         async { Ok(()) }
     }
 
