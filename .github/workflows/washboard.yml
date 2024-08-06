@@ -89,13 +89,13 @@ jobs:
 
       - name: Upload Artifact
         if: ${{ matrix.wash.release }}
-        uses: actions/upload-artifact@89ef406dd8d7e03cfd12d9e0a4a378f454709029
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
         with:
           name: washboard
           path: ./washboard-ui/washboard.tar.gz
 
       - name: Upload Playwright Report
-        uses: actions/upload-artifact@89ef406dd8d7e03cfd12d9e0a4a378f454709029
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
         if: always()
         with:
           name: playwright-report
