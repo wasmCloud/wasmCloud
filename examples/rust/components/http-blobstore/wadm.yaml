@@ -10,13 +10,8 @@ metadata:
     wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-blobstore/wadm.yaml
     wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-blobstore/README.md
     wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-blobstore
-    wasmcloud.dev/categories:
-      - http
-      - http-server
-      - rust
-      - blobstore
-      - object-storage
-      - example
+    wasmcloud.dev/categories: |
+      http,http-server,rust,blobstore,object-storage,example
 spec:
   components:
     # Component that serves the blobstore-over-HTTP abstraction
