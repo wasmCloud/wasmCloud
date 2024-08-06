@@ -2,14 +2,15 @@
 
 The following document outlines how the wasmCloud project governance operates.
 
-- [The wasmCloud Project](#the-wasmcloud-project)
-- [Maintainers Structure](#maintainers-structure)
-  - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
-- [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
-- [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
-- [Code of Conduct](#code-of-conduct)
-- [DCO and Licenses](#dco-and-licenses)
-- [Pull Requests and Reviews](#pull-requests)
+- [wasmCloud Governance](#wasmcloud-governance)
+  - [The wasmCloud Project](#the-wasmcloud-project)
+  - [Maintainers Structure](#maintainers-structure)
+    - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
+  - [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
+  - [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
+  - [Code of Conduct](#code-of-conduct)
+  - [DCO and Licenses](#dco-and-licenses)
+  - [Pull Requests and Reviews](#pull-requests-and-reviews)
 
 ## The wasmCloud Project
 
@@ -109,9 +110,9 @@ and company Y
 
 ## Code of Conduct
 
-The code of conduct is overseen by the wasmCloud org maintainers. Possible code of conduct
-violations should be sent to the org maintainers <!-- TODO: Update this to a mailing list once we
-have one  -->
+This project follows the [CNCF Code of
+Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md). Possible code of conduct
+violations should be sent to the org maintainers.
 
 If the possible violation is against one of the org maintainers that member will be recused from
 voting on the issue. Such issues must be escalated to the appropriate CNCF contact, and CNCF may
