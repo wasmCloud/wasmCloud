@@ -45,7 +45,7 @@ use wasmcloud_provider_sdk::core::secrets::SecretValue;
 use wasmcloud_provider_sdk::core::tls;
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
-    serve_provider_exports, Context, LinkConfig, Provider,
+    serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 mod bindings {
@@ -924,9 +924,11 @@ impl Provider for BlobstoreS3Provider {
     }
 
     /// Handle notification that a link is dropped: close the connection
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut aw = self.actors.write().await;
-        aw.remove(source_id);
+        aw.remove(component_id);
         Ok(())
     }
 
