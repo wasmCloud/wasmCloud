@@ -11,6 +11,8 @@ use wash_lib::{
     plugin::{subcommand::SubcommandRunner, PLUGIN_DIR},
 };
 
+const MAX_TERMINAL_WIDTH: usize = 120;
+
 pub fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
 }
@@ -142,9 +144,16 @@ pub fn msgpack_to_json_val(msg: Vec<u8>, bin_str: char) -> serde_json::Value {
     }
 }
 
-pub fn configure_table_style(table: &mut Table<'_>) {
+pub fn configure_table_style(table: &mut Table<'_>, num_rows: usize) {
     table.style = empty_table_style();
     table.separate_rows = false;
+
+    // Sets the max column width to ensure the table evenly fills the terminal width
+    table.max_column_width = termsize::get()
+        // Just slightly reducing the terminal width to account for padding
+        .map(|size| size.cols.saturating_sub(4) as usize)
+        .unwrap_or(MAX_TERMINAL_WIDTH)
+        / num_rows;
 }
 
 fn empty_table_style() -> TableStyle {

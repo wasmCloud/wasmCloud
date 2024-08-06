@@ -9,7 +9,7 @@ use super::ModelSummary;
 
 pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 2);
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Version", 1, Alignment::Left),
@@ -28,19 +28,16 @@ pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
 
 pub fn list_models_table(models: Vec<ModelSummary>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 3);
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Name", 1, Alignment::Left),
-        TableCell::new_with_alignment("Latest Version", 1, Alignment::Left),
         TableCell::new_with_alignment("Deployed Version", 1, Alignment::Left),
-        TableCell::new_with_alignment("Deploy Status", 1, Alignment::Right),
-        TableCell::new_with_alignment("Description", 1, Alignment::Left),
+        TableCell::new_with_alignment("Status", 1, Alignment::Left),
     ]));
     models.iter().for_each(|m| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(m.name.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(m.version.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(
                 m.deployed_version
                     .clone()
@@ -48,13 +45,16 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
                 1,
                 Alignment::Left,
             ),
-            TableCell::new_with_alignment(format!("{:?}", m.status), 1, Alignment::Right),
-            TableCell::new_with_alignment(
-                m.description.clone().unwrap_or_else(|| "N/A".to_string()),
-                1,
+            TableCell::new_with_alignment(format!("{:?}", m.status), 1, Alignment::Left),
+        ]));
+
+        if let Some(description) = m.description.as_ref() {
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                format!("  └ {}", description),
+                3,
                 Alignment::Left,
-            ),
-        ]))
+            )]));
+        }
     });
 
     table.render()
@@ -62,7 +62,7 @@ pub fn list_models_table(models: Vec<ModelSummary>) -> String {
 
 pub fn status_table(model_name: String, status: Status) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 4);
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Name", 1, Alignment::Left),
