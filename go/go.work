@@ -1,5 +1,0 @@
-go 1.22.5
-
-use ./provider
-
-use ./provider/examples/keyvalue-inmemory
