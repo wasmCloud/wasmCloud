@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, instrument, warn};
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, HostData, LinkConfig, Provider,
+    run_provider, serve_provider_exports, Context, HostData, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 use config::StorageConfig;
@@ -76,8 +76,10 @@ impl Provider for BlobstoreAzblobProvider {
         Ok(())
     }
 
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        self.config.write().await.remove(source_id);
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        self.config.write().await.remove(component_id);
         Ok(())
     }
 
