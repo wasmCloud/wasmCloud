@@ -99,7 +99,14 @@ where
             (Ok(stream), io) => {
                 if let Some(io) = io {
                     // TODO: Move this into the runtime
-                    io.await.context("failed to perform async I/O")?;
+                    let handle = tokio::spawn(async move {
+                        if let Err(e) = io.await {
+                            tracing::error!("Error awaiting async IO: {:?}", e);
+                        }
+                    });
+                    self.table
+                        .push(handle)
+                        .context("failed to push async I/O")?;
                 }
                 let value = self
                     .table
