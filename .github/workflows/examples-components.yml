@@ -180,11 +180,13 @@ jobs:
           npm install -g @bytecodealliance/jco
           npm install -g @bytecodealliance/componentize-js
 
-      # Validate example wadm.yaml if the example has one
+      # Validate example [local.]wadm.yaml if present
       - name: validate wadm.yaml
-        if: ${{ hashFiles(format('examples/{0}/{1}/components/wadm.yaml', matrix.project.lang, matrix.project.name)) != '' }}
-        run: wash app validate wadm.yaml
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        shell: bash
+        run: |
+          [[ ! -f wadm.yaml ]] || wash app validate wadm.yaml
+          [[ ! -f local.wadm.yaml ]] || wash app validate local.wadm.yaml
 
       # Build example project(s)
       - name: build project
