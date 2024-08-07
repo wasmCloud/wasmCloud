@@ -21,7 +21,7 @@ mod bindings {
     export!(Blobby);
 }
 
-use std::io::{Read as _, Write as _};
+use std::io::{self, Read as _, Write as _};
 
 use http::{
     header::{ALLOW, CONTENT_LENGTH},
@@ -29,6 +29,7 @@ use http::{
 };
 
 use ::wasi::http::types::*;
+use ::wasi::io::streams::InputStream;
 use bindings::exports::wasi::http::incoming_handler::Guest;
 use bindings::wasi::blobstore;
 use bindings::wasi::logging::logging::{log, Level};
@@ -159,7 +160,7 @@ impl Guest for Blobby {
 
         let res = match request.method() {
             Method::Get => {
-                let data = match get_object(&container_id, &file_name) {
+                let mut data = match get_object(&container_id, &file_name) {
                     Ok(s) => s,
                     Err(e) => {
                         send_response_error(response_out, e);
@@ -171,41 +172,14 @@ impl Guest for Blobby {
                     .set_status_code(StatusCode::OK.as_u16())
                     .expect("Unable to set status code");
                 let response_body = response.body().unwrap();
-                let mut stream = response_body.write().expect("Unable to get stream");
-                if let Err(e) = stream.write_all(&data) {
-                    log(
-                        Level::Error,
-                        "handle",
-                        format!("Failed to write to stream: {}", e).as_str(),
-                    );
-                    send_response_error(
-                        response_out,
-                        Error {
-                            status_code: StatusCode::INTERNAL_SERVER_ERROR,
-                            message: "Unable to send data to client".to_string(),
-                        },
-                    );
-                    return;
-                }
-                if let Err(e) = stream.flush() {
-                    log(
-                        Level::Error,
-                        "handle",
-                        format!("Failed to flush stream: {}", e).as_str(),
-                    );
-                    send_response_error(
-                        response_out,
-                        Error {
-                            status_code: StatusCode::INTERNAL_SERVER_ERROR,
-                            message: "Unable to flush data to client".to_string(),
-                        },
-                    );
-                    return;
-                }
-                // This MUST be dropped to free the resource
-                drop(stream);
-                let response = OutgoingBody::finish(response_body, None)
-                    .map(|_| response)
+                ResponseOutparam::set(response_out, Ok(response));
+                log(Level::Debug, "handle", "Writing data to stream");
+                io::copy(
+                    &mut data,
+                    &mut response_body.write().expect("Unable to get stream"),
+                )
+                .expect("failed to stream blob to http response body");
+                OutgoingBody::finish(response_body, None)
                     .map_err(|e| {
                         log(
                             Level::Error,
@@ -213,8 +187,9 @@ impl Guest for Blobby {
                             format!("Failed to finish response body: {}", e).as_str(),
                         );
                         e
-                    });
-                ResponseOutparam::set(response_out, response);
+                    })
+                    .expect("failed to finish outgoing body");
+
                 return;
             }
             Method::Post | Method::Put => {
@@ -233,12 +208,8 @@ impl Guest for Blobby {
                         return;
                     }
                 };
-                let mut stream = body
-                    .stream()
-                    .expect("Unable to get stream from request body");
                 // HACK(thomastaylor312): We are requiring the content length header to be set so we
-                // can splice the stream properly. This should be better with wasi 0.2.2 which will
-                // introduce a stream forward function
+                // can limit the bytes when splicing the stream.
                 let raw_header = request.headers().get(&CONTENT_LENGTH.to_string());
                 // Yep, wasi http really is gross. The way the `get` function works is that it
                 // returns an empty vec if the header is not set, but a vec with one empty vec if
@@ -284,31 +255,10 @@ impl Guest for Blobby {
                     }
                 };
 
-                // Only read up to the exact amount of bytes we need. This is to prevent a bad component
-                // from sending infinite data
-                let mut buf = vec![
-                    0u8;
-                    content_length
-                        .try_into()
-                        .expect("Too much data to read into component")
-                ];
-                if let Err(e) = stream.read_exact(&mut buf) {
-                    log(
-                        Level::Error,
-                        "handle",
-                        format!("Failed to read request body: {}", e).as_str(),
-                    );
-                    send_response_error(
-                        response_out,
-                        Error {
-                            status_code: StatusCode::BAD_REQUEST,
-                            message: "Failed to read request body".to_string(),
-                        },
-                    );
-                    return;
-                }
-
-                put_object(&container_id, &file_name, buf)
+                let stream = body
+                    .stream()
+                    .expect("Unable to get stream from request body");
+                put_object(&container_id, &file_name, stream, content_length)
             }
             Method::Delete => delete_object(&container_id, &file_name),
             _ => {
@@ -345,7 +295,7 @@ impl Guest for Blobby {
 // HACK(thomastaylor312): We are returning the full object in memory because there isn't really a
 // way to glue in the streams to each other right now. This should get better in wasi 0.2.2 with the
 // stream forward function
-fn get_object(container_name: &String, object_name: &String) -> Result<Vec<u8>> {
+fn get_object(container_name: &String, object_name: &String) -> Result<InputStream> {
     // Check that the object exists first. If it doesn't return the proper http response
     let container =
         blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
@@ -362,8 +312,9 @@ fn get_object(container_name: &String, object_name: &String) -> Result<Vec<u8>> 
     let incoming = container
         .get_data(object_name, 0, metadata.size)
         .map_err(Error::from_blobstore_error)?;
-    let body = blobstore::types::IncomingValue::incoming_value_consume_sync(incoming)
-        .map_err(Error::from_blobstore_error)?;
+    let body =
+        bindings::wasi::blobstore::types::IncomingValue::incoming_value_consume_async(incoming)
+            .map_err(Error::from_blobstore_error)?;
 
     log(Level::Info, "get_object", "successfully got object stream");
     Ok(body)
@@ -379,10 +330,12 @@ fn delete_object(container_name: &String, object_name: &String) -> Result<Status
         .map_err(Error::from_blobstore_error)
 }
 
-// HACK(thomastaylor312): We are passing the full object in memory because there isn't really a way
-// to glue in the streams to each other right now. This should get better in wasi 0.2.2 with the
-// stream forward function
-fn put_object(container_name: &String, object_name: &String, data: Vec<u8>) -> Result<StatusCode> {
+fn put_object(
+    container_name: &String,
+    object_name: &String,
+    data: InputStream,
+    content_length: u64,
+) -> Result<StatusCode> {
     let container =
         blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
     let result_value = blobstore::types::OutgoingValue::new_outgoing_value();
@@ -391,29 +344,8 @@ fn put_object(container_name: &String, object_name: &String, data: Vec<u8>) -> R
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
 
-    if let Err(e) = body.write_all(&data) {
-        log(
-            Level::Error,
-            "put_object",
-            &format!("Failed to write data to blobstore: {}", e),
-        );
-        return Err(Error {
-            status_code: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("Failed to write data to blobstore: {}", e),
-        });
-    }
-
-    if let Err(e) = body.flush() {
-        log(
-            Level::Error,
-            "put_object",
-            &format!("Failed to flush data to blobstore: {}", e),
-        );
-        return Err(Error {
-            status_code: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("Failed to flush data to blobstore: {}", e),
-        });
-    }
+    io::copy(&mut data.take(content_length), &mut body)
+        .expect("failed to stream data from http response to blobstore");
 
     if let Err(e) = container.write_data(object_name, &result_value) {
         log(
