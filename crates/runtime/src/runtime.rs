@@ -35,7 +35,7 @@ impl RuntimeBuilder {
             engine_config,
             max_components: 10000,
             // Why so large you ask? Well, python components are chonky, like 35MB for a hello world
-            // chonky. So this is pretty big for now.
+            // chonky. So 50MB is pretty big for now to allow for larger component instantiation.
             max_component_size: 50 * 1024 * 1024,
             max_execution_time: Duration::from_secs(10 * 60),
             component_config: ComponentConfig::default(),
@@ -133,8 +133,8 @@ impl RuntimeBuilder {
             // - How large of a component we can load (i.e. all components must be less than this value)
             // - How much memory a fully loaded host carrying c components will use
             //
-            // Note that 10MiB *is* the default value, but we are explicit here for ease of discovery
-            .max_memory_size(10 * 1024 * 1024)
+            // Note that 10MiB *is* the default value, but we are overriding it here to make it explicit.
+            .max_memory_size(20 * 1024 * 1024)
             // These numbers are set to avoid page faults when trying to claim new space on linux
             .linear_memory_keep_resident(10 * 1024)
             .table_keep_resident(10 * 1024);
