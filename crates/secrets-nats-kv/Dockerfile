@@ -1,5 +1,5 @@
 # First stage: Build the binary
-FROM rust:1-bullseye as builder
+FROM rust:1-bullseye AS builder
 
 WORKDIR /app
 
