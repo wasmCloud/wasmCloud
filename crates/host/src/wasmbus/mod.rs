@@ -2493,10 +2493,7 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            ref health_check_task,
-            ref config_update_task,
-            ref annotations,
-            ..
+            ref annotations, ..
         } = entry.remove();
 
         // Send a request to the provider, requesting a graceful shutdown
@@ -2525,8 +2522,6 @@ impl Host {
                 "provider did not gracefully shut down in time, shutting down forcefully"
             );
         }
-        health_check_task.abort();
-        config_update_task.abort();
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
