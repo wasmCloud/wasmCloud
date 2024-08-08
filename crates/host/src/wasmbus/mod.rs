@@ -2424,10 +2424,13 @@ impl Host {
             let config_update_task = spawn(async move {
                 let subject = provider_config_update_subject(&lattice, &provider_id);
                 trace!(provider_id, "starting config update listener");
-                let mut update_config = update_config.write().await;
                 loop {
+                    let mut update_config = update_config.write().await;
                     select! {
-                        update = update_config.changed() => {
+                        maybe_update = update_config.changed() => {
+                            let Ok(update) = maybe_update else {
+                                break;
+                            };
                             trace!(provider_id, "provider config bundle changed");
                             let bytes = match serde_json::to_vec(&*update) {
                                 Ok(bytes) => bytes,

@@ -1,7 +1,7 @@
 //! Module with structs for use in managing and accessing config used by various wasmCloud entities
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use async_nats::jetstream::kv::{Operation, Store};
 use futures::{future::AbortHandle, stream::Abortable, TryStreamExt};
 use tokio::sync::{
@@ -161,7 +161,9 @@ impl ConfigBundle {
     ///
     /// Please note that this requires a mutable borrow in order to manage underlying notification
     /// acknowledgement.
-    pub async fn changed(&mut self) -> RwLockReadGuard<'_, HashMap<String, String>> {
+    pub async fn changed(
+        &mut self,
+    ) -> anyhow::Result<RwLockReadGuard<'_, HashMap<String, String>>> {
         // NOTE(thomastaylor312): We use a watch channel here because we want everything to get
         // notified individually (including clones) if config changes. Notify doesn't quite work
         // because we have to have a permit existing when we create otherwise the notify_watchers
@@ -170,8 +172,9 @@ impl ConfigBundle {
             // If we get here, it likely means that a whole bunch of stuff has failed above it.
             // Might be worth changing this to a panic
             error!(error = %e, "Config changed receiver errored, this means that the config sender has dropped and the whole bundle has failed");
+            bail!("failed to read receiver: {e}");
         }
-        self.merged_config.read().await
+        Ok(self.merged_config.read().await)
     }
 
     /// Returns a reference to the ordered list of config names handled by this bundle
@@ -389,6 +392,7 @@ mod tests {
         // Wait for the new config to come. This calls the same underlying method as get_config
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         assert_eq!(
             *conf,
@@ -400,6 +404,7 @@ mod tests {
         baz_tx.send_replace(HashMap::from([("star".to_string(), "wars".to_string())]));
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         assert_eq!(
             *conf,
@@ -417,6 +422,7 @@ mod tests {
         ]));
         let conf = tokio::time::timeout(Duration::from_millis(50), bundle.changed())
             .await
+            .expect("conf should have been present")
             .expect("Should have received a config");
         // Check that the config merged correctly
         assert_eq!(
