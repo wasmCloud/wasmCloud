@@ -331,6 +331,16 @@ struct Provider {
     health_check_task: JoinHandle<()>,
     /// Task that continuously forwards configuration updates to the provider
     config_update_task: JoinHandle<()>,
+    /// Config bundle for the aggregated configuration being watched by the provider
+    #[allow(unused)]
+    config: Arc<RwLock<ConfigBundle>>,
+}
+
+impl Drop for Provider {
+    fn drop(&mut self) {
+        self.health_check_task.abort();
+        self.config_update_task.abort();
+    }
 }
 
 /// wasmCloud Host
@@ -2091,7 +2101,7 @@ impl Host {
         self.store_component_spec(&provider_id, &component_specification)
             .await?;
 
-        let (mut config, secrets) = self
+        let (config, secrets) = self
             .fetch_config_and_secrets(
                 config,
                 claims_token.as_ref().map(|t| &t.jwt),
@@ -2409,14 +2419,17 @@ impl Host {
             let provider_id = provider_id.to_string();
             let lattice = self.host_config.lattice.to_string();
             let client = self.rpc_nats.clone();
+            let config = Arc::new(RwLock::new(config));
+            let update_config = config.clone();
             let config_update_task = spawn(async move {
                 let subject = provider_config_update_subject(&lattice, &provider_id);
                 trace!(provider_id, "starting config update listener");
+                let mut update_config = update_config.write().await;
                 loop {
                     select! {
-                        config = config.changed() => {
+                        update = update_config.changed() => {
                             trace!(provider_id, "provider config bundle changed");
-                            let bytes = match serde_json::to_vec(&*config) {
+                            let bytes = match serde_json::to_vec(&*update) {
                                 Ok(bytes) => bytes,
                                 Err(err) => {
                                     error!(%err, provider_id, lattice, "failed to serialize configuration update ");
@@ -2446,6 +2459,7 @@ impl Host {
                 claims_token,
                 image_ref: provider_ref.to_string(),
                 xkey,
+                config,
             });
         } else {
             bail!("provider is already running with that ID")
@@ -2474,9 +2488,9 @@ impl Host {
             return Ok(CtlResponse::error("provider with that ID is not running"));
         };
         let Provider {
-            health_check_task,
-            config_update_task,
-            annotations,
+            ref health_check_task,
+            ref config_update_task,
+            ref annotations,
             ..
         } = entry.remove();
 
@@ -2511,7 +2525,7 @@ impl Host {
         info!(provider_id, "provider stopped");
         self.publish_event(
             "provider_stopped",
-            event::provider_stopped(&annotations, host_id, provider_id, "stop"),
+            event::provider_stopped(annotations, host_id, provider_id, "stop"),
         )
         .await?;
         Ok(CtlResponse::success())
