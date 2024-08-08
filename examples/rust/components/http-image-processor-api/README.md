@@ -1,4 +1,4 @@
-# HTTP Image Processor API Component
+# HTTP Image Processor Component
 
 This component receives and processes images (filtering, resizing, etc) images over a HTTP API.
 

@@ -1,5 +1,5 @@
 [package]
-name = "http-image-processor-api"
+name = "http-image-processor"
 edition = "2021"
 version = "0.1.0"
 description = """
