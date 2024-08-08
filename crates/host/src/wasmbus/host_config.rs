@@ -7,6 +7,7 @@ use std::time::Duration;
 use nkeys::KeyPair;
 use url::Url;
 use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
+use wasmcloud_runtime::{MAX_COMPONENTS, MAX_COMPONENT_SIZE, MAX_LINEAR_MEMORY};
 
 /// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
@@ -61,8 +62,14 @@ pub struct Host {
     /// The semver version of the host. This is used by a consumer of this crate to indicate the
     /// host version (which may differ from the crate version)
     pub version: String,
-    /// The Max Execution time for Host runtime
+    /// The maximum execution time for a component instance
     pub max_execution_time: Duration,
+    /// The maximum linear memory that a component instance can allocate
+    pub max_linear_memory: u64,
+    /// The maximum size of a component binary that can be loaded
+    pub max_component_size: u64,
+    /// The maximum number of components that can be run simultaneously
+    pub max_components: u32,
     /// The interval at which the Host will send heartbeats
     pub heartbeat_interval: Option<Duration>,
 }
@@ -108,6 +115,11 @@ impl Default for Host {
             secrets_topic_prefix: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
             max_execution_time: Duration::from_millis(10 * 60 * 1000),
+            // 10 MB
+            max_linear_memory: MAX_LINEAR_MEMORY,
+            // 50 MB
+            max_component_size: MAX_COMPONENT_SIZE,
+            max_components: MAX_COMPONENTS,
             heartbeat_interval: None,
         }
     }
