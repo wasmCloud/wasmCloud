@@ -8,9 +8,9 @@ metadata:
     description: |
       A simple demo of invocation of a cowsay-like function in wasmCloud, written in Rust
     wasmcloud.dev/authors: wasmCloud team
-    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/ferris-says/wadm.yaml
-    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rusg/components/ferris-says/README.md
-    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rusg/components/ferris-says
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/ferris-says/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/ferris-says/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/ferris-says
     wasmcloud.dev/categories: |
       rust,hello-world,example
 spec:
