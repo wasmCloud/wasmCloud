@@ -1,7 +1,7 @@
 ARG NIX_VERSION=2.18.1
 ARG DEBIAN_VERSION=12.2
 
-FROM --platform=$BUILDPLATFORM nixos/nix:${NIX_VERSION} as build
+FROM --platform=$BUILDPLATFORM nixos/nix:${NIX_VERSION} AS build
 ARG TARGETPLATFORM
 COPY ../.. /src
 WORKDIR /src
@@ -18,7 +18,7 @@ RUN case ${TARGETPLATFORM} in \
     nix --accept-flake-config --extra-experimental-features 'nix-command flakes' build -L ".#wasmcloud-${TARGET}"
 RUN install -Dp ./result/bin/wash /out/wash
 
-FROM debian:${DEBIAN_VERSION}-slim as result
+FROM debian:${DEBIAN_VERSION}-slim AS result
 
 RUN apt update &&\
     apt install -y ca-certificates
