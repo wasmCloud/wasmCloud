@@ -176,6 +176,19 @@ struct Args {
     /// If provided, allows to set a custom Max Execution time for the Host in ms.
     #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis)]
     max_execution_time: Duration,
+    /// The maximum amount of memory bytes that a component can allocate
+    #[clap(long = "max-linear-memory-bytes", default_value_t = 10 * 1024 * 1024, env = "WASMCLOUD_MAX_LINEAR_MEMORY")]
+    max_linear_memory: u64,
+    /// The maximum byte size of a component binary that can be loaded
+    #[clap(long = "max-component-size-bytes", default_value_t = 50 * 1024 * 1024, env = "WASMCLOUD_MAX_COMPONENT_SIZE")]
+    max_component_size: u64,
+    /// The maximum number of components that can be run simultaneously
+    #[clap(
+        long = "max-components",
+        default_value_t = 10000,
+        env = "WASMCLOUD_MAX_COMPONENTS"
+    )]
+    max_components: u32,
     /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
@@ -425,6 +438,9 @@ async fn main() -> anyhow::Result<()> {
         secrets_topic_prefix: args.secrets_topic_prefix,
         version: env!("CARGO_PKG_VERSION").to_string(),
         max_execution_time: args.max_execution_time,
+        max_linear_memory: args.max_linear_memory,
+        max_component_size: args.max_component_size,
+        max_components: args.max_components,
         heartbeat_interval: args.heartbeat_interval,
     }))
     .await
