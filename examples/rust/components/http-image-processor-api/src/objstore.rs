@@ -51,6 +51,12 @@ pub(crate) fn write_object(
     container
         .write_data(key, &data)
         .map_err(|e| anyhow!("failed to write data: {e}"))?;
+
+    lattice::set_link_name(
+        "default",
+        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
+    );
+
     Ok(())
 }
 
@@ -71,5 +77,11 @@ pub(crate) fn read_object(link_name: &str, bucket: &str, key: &str) -> Result<By
         .map_err(|e| anyhow!("failed to get data: {e}"))?;
     let body = IncomingValue::incoming_value_consume_sync(incoming)
         .map_err(|e| anyhow!("failed to consume incoming value: {e}"))?;
+
+    lattice::set_link_name(
+        "default",
+        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
+    );
+
     Ok(Bytes::from(body))
 }
