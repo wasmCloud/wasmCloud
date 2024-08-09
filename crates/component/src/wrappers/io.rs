@@ -56,7 +56,23 @@ impl std::io::Write for OutputStreamWriter<'_> {
 
         let n = match self.stream.check_write().map(std::num::NonZeroU64::new) {
             Ok(Some(n)) => n,
-            Ok(None) | Err(StreamError::Closed) => return Ok(0),
+            Ok(None) => {
+                // NOTE(thomastaylor312): If we got zero, we could actually be out of write budget, so block on the subscribe. We could subscribe and then call check write above, but calling check write allows us to return early if there is an error or if things are ready to write.
+                self.stream.subscribe().block();
+                match self.stream.check_write().map(std::num::NonZeroU64::new) {
+                    Ok(Some(n)) => n,
+                    // If we get zero again, we're definitely done
+                    Ok(None) | Err(StreamError::Closed) => {
+                        return Ok(0);
+                    }
+                    Err(StreamError::LastOperationFailed(e)) => {
+                        return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
+                    }
+                }
+            }
+            Err(StreamError::Closed) => {
+                return Ok(0);
+            }
             Err(StreamError::LastOperationFailed(e)) => {
                 return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
             }
