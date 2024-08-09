@@ -148,6 +148,7 @@ redis = { workspace = true, features = [
     "connection-manager",
     "tokio-comp",
 ] }
+regex = { workspace = true}
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 rmp-serde = { workspace = true }
 rustversion = { workspace = true }
