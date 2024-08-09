@@ -1,0 +1,20 @@
+[package]
+name = "http-task-manager"
+edition = "2021"
+version = "0.1.0"
+description = """
+A task manager exposed via HTTP API and wRPC, with Postgres as a backend 
+"""
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = { workspace = true }
+wit-bindgen = { workspace = true }
+
+[workspace.dependencies]
+anyhow = { version = "1", default-features = false }
+wit-bindgen = { version = "0.28", features = ["default"] }

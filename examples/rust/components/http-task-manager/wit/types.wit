@@ -1,0 +1,65 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+interface types {
+  use wasmcloud:postgres/types@0.1.0-draft.{timestamp-tz};
+
+  /// ID of a given task (set by the task manager)
+  type task-id = string;
+
+  /// ID of a task group that identifies *how* tasks can be used
+  type group-id = string;
+
+  /// ID of a worker
+  type worker-id = string;
+
+  /// Stringified JSON
+  type json-string = string;
+
+  /// Stringified JSON
+  type failure-reason = string;
+
+  /// Status of the task
+  variant task-status {
+    /// Submitted tasks have been submitted but have not been worked on
+    submitted(timestamp-tz),
+    /// Tasks that are leased are being worked on by the given worker
+    leased(tuple<timestamp-tz, worker-id>),
+    /// Tasks that have been failed
+    failed(tuple<timestamp-tz, worker-id, failure-reason>),
+    /// Tasks that have been completed
+    completed(tuple<timestamp-tz, worker-id>),
+  }
+
+  /// A task record
+  record task {
+    /// ID of the given task
+    id: task-id,
+
+    /// Data needed to complete the task
+    data: option<json-string>,
+
+    /// Current status of the task (task-status)
+    status: option<json-string>,
+
+    /// When the task last failed, if it has
+    last-failed-at: option<timestamp-tz>,
+
+    /// Reason for a failure if the task failed
+    last-failure-reason: option<string>,
+
+    /// The ID of the worker that leased this task
+    work-lease-id: option<worker-id>,
+
+    /// When the current worker (if any) started woring on the task
+    work-leased-at: option<timestamp-tz>,
+
+    /// When the task was last updated submitted
+    completed-at: option<timestamp-tz>,
+
+    /// When the task was submitted
+    submitted-at: timestamp-tz,
+
+    /// When the task was last updated submitted
+    last-updated-at: timestamp-tz,
+  }
+}
