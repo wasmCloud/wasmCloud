@@ -1,0 +1,75 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+/// Functionality for working with tasks
+interface tasks {
+  use types.{group-id, task, task-id, task-status};
+
+  /// Errors that can occur while performing retrieving tasks
+  variant get-tasks-error {
+    /// Invalid group-id
+    invalid-group-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Get all tasks for the given group ID
+  get-tasks-by-group-id: func(id: group-id) -> result<list<task>, get-tasks-error>;
+
+  /// Errors that can occur while submitting multiple tasks
+  variant submit-tasks-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while submitting a single task
+  variant submit-task-error {
+    /// Invalid group-id
+    invalid-task-data,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Submit a single task
+  submit-tasks: func(
+    group-id: string, 
+    tasks: list<task>
+  ) -> result<list<result<task-status, submit-task-error>>, submit-tasks-error>;
+
+  /// Errors that can occur while fetching an individual task's status
+  variant get-task-status-error {
+    /// Invalid task ID
+    invalid-task-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while fetching a group of task statuses
+  variant get-task-statuses-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Get the status of one or more tasks
+  get-task-statuses: func(
+    ids: list<task-id>
+  ) -> result<list<result<task-status, get-task-status-error>>, get-task-statuses-error>;
+
+  /// Errors that can occur while updating a single task status
+  variant update-task-status-error {
+    /// Invalid task ID
+    invalid-task-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while updating task status
+  variant update-task-statuses-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Update task status for a given task
+  update-task-statuses: func(
+    updates: list<tuple<task-id, task-status>>
+  ) -> result<list<result<task-status, update-task-status-error>>, update-task-statuses-error>;
+}
