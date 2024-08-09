@@ -19,7 +19,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/examples.yml
+      - .github/workflows/examples-components.yml
       - crates/wash-lib/**
       - crates/wash-cli/**
       - examples/rust/components/**
@@ -71,7 +71,7 @@ jobs:
           name: wash-${{ matrix.wash-version }}
           path: ~/.cargo/bin/wash
 
-  # Ensure that `wash build` works for all example projects below
+  # Ensure that `wash build` and `wash app validate` works for all example projects below
   wash-build:
     name: build
     runs-on: ubuntu-22.04
@@ -168,6 +168,13 @@ jobs:
         run: |
           npm install -g @bytecodealliance/jco
           npm install -g @bytecodealliance/componentize-js
+      # Validate example [local.]wadm.yaml if present
+      - name: validate wadm.yaml
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        shell: bash
+        run: |
+          [[ -f wadm.yaml ]] && wash app validate wadm.yaml
+          [[ -f local.wadm.yaml ]] && wash app validate local.wadm.yaml
       # Build example project(s)
       - name: build project
         run: wash build
