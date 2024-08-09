@@ -2572,67 +2572,84 @@ impl Host {
         let payload = payload.as_ref();
         let interface_link_definition: InterfaceLinkDefinition = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
-        let InterfaceLinkDefinition {
-            source_id,
-            target,
-            wit_namespace,
-            wit_package,
-            interfaces,
-            name,
-            source_config: _,
-            target_config: _,
-        } = interface_link_definition.clone();
 
-        let ns_and_package = format!("{wit_namespace}:{wit_package}");
-        debug!(
-            source_id,
-            target,
-            ns_and_package,
-            name,
-            ?interfaces,
-            "handling put wrpc link definition"
-        );
+        let link_set_result: anyhow::Result<()> = async {
+            let InterfaceLinkDefinition {
+                source_id,
+                target,
+                wit_namespace,
+                wit_package,
+                interfaces,
+                name,
+                source_config: _,
+                target_config: _,
+            } = interface_link_definition.clone();
 
-        self.validate_config(
-            interface_link_definition
-                .source_config
-                .iter()
-                .chain(&interface_link_definition.target_config),
-        )
-        .await?;
+            let ns_and_package = format!("{wit_namespace}:{wit_package}");
+            debug!(
+                source_id,
+                target,
+                ns_and_package,
+                name,
+                ?interfaces,
+                "handling put wrpc link definition"
+            );
 
-        let mut component_spec = self
-            .get_component_spec(&source_id)
-            .await?
-            .unwrap_or_default();
+            self.validate_config(
+                interface_link_definition
+                    .source_config
+                    .iter()
+                    .chain(&interface_link_definition.target_config),
+            )
+            .await?;
 
-        // If we can find an existing link with the same source, target, namespace, package, and name, update it.
-        // Otherwise, add the new link to the component specification.
-        if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
-            link.source_id == source_id
-                && link.target == target
-                && link.wit_namespace == wit_namespace
-                && link.wit_package == wit_package
-                && link.name == name
-        }) {
-            if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
-                *existing_link = interface_link_definition.clone();
-            }
+            let mut component_spec = self
+                .get_component_spec(&source_id)
+                .await?
+                .unwrap_or_default();
+
+            // If we can find an existing link with the same source, target, namespace, package, and name, update it.
+            // Otherwise, add the new link to the component specification.
+            if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
+                link.source_id == source_id
+                    && link.target == target
+                    && link.wit_namespace == wit_namespace
+                    && link.wit_package == wit_package
+                    && link.name == name
+            }) {
+                if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
+                    *existing_link = interface_link_definition.clone();
+                }
+            } else {
+                component_spec.links.push(interface_link_definition.clone());
+            };
+
+            // Update component specification with the new link
+            self.store_component_spec(&source_id, &component_spec)
+                .await?;
+
+            self.put_backwards_compat_provider_link(&interface_link_definition)
+                .await?;
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = link_set_result {
+            self.publish_event(
+                "linkdef_set_failed",
+                event::linkdef_set_failed(&interface_link_definition, &e),
+            )
+            .await?;
+            Ok(CtlResponse::error(e.to_string().as_ref()))
         } else {
-            component_spec.links.push(interface_link_definition.clone());
-        };
-
-        // Update component specification with the new link
-        self.store_component_spec(&source_id, &component_spec)
+            self.publish_event(
+                "linkdef_set",
+                event::linkdef_set(&interface_link_definition),
+            )
             .await?;
-
-        let set_event = event::linkdef_set(&interface_link_definition);
-        self.publish_event("linkdef_set", set_event).await?;
-
-        self.put_backwards_compat_provider_link(&interface_link_definition)
-            .await?;
-
-        Ok(CtlResponse::success())
+            Ok(CtlResponse::success())
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
