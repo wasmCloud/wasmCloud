@@ -108,6 +108,23 @@ pub fn linkdef_set(
     })
 }
 
+pub fn linkdef_set_failed(
+    link: &wasmcloud_control_interface::InterfaceLinkDefinition,
+    error: &anyhow::Error,
+) -> serde_json::Value {
+    json!({
+        "source_id": link.source_id,
+        "target": link.target,
+        "name": link.name,
+        "wit_namespace": link.wit_namespace,
+        "wit_package": link.wit_package,
+        "interfaces": link.interfaces,
+        "source_config": link.source_config,
+        "target_config": link.target_config,
+        "error": format!("{error:#}"),
+    })
+}
+
 pub fn linkdef_deleted(
     source_id: impl AsRef<str>,
     name: impl AsRef<str>,
