@@ -1,0 +1,65 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: http-task-manager
+  annotations:
+    description: |
+      Task manager which is accessed via HTTP, enabling storage, leasing and completion of jobs
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-task-manager/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/http-task-manager/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/http-task-manager
+    wasmcloud.dev/categories: |
+      http,http-server,rust,task-manager,example
+spec:
+  components:
+    - name: http-task-mgr
+      type: component
+      properties:
+        image: file://./build/http_task_manager.wasm
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Establish a unidirectional link to the `sqldb-postgres` provider (the sqldb provider),
+        # so the `http-task-mgr` component can make use of sqldb functionality provided Postgres
+        # (i.e. reading/writing to a database)
+        - type: link
+          properties:
+            target: sqldb-postgres
+            namespace: wasmcloud
+            package: postgres
+            interfaces: [query]
+            target_config:
+              - name: default-postgres
+
+    # Add a capability provider that enables HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.22.0
+      traits:
+        # Establish a unidirectional link from this http server provider (the "source")
+        # to the `http-component` component (the "target") so the component can handle incoming HTTP requests,
+        #
+        # The source (this provider) is configured such that the HTTP server listens on 127.0.0.1:8080
+        - type: link
+          properties:
+            target: http-task-mgr
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 127.0.0.1:8080
+
+    # Add a capability provider that interacts with the filesystem
+    - name: sqldb-postgres
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.5.2
+        config:
+          - name: 'default-postgres'
