@@ -47,7 +47,7 @@ use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, run_provider, LinkConfig, Provider,
+    get_connection, initialize_observability, run_provider, LinkConfig, LinkDeleteInfo, Provider,
 };
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
@@ -111,9 +111,11 @@ impl Provider for HttpServerProvider {
     }
 
     /// Handle notification that a link is dropped - stop the http listener
-    async fn delete_link(&self, actor_id: &str) -> anyhow::Result<()> {
-        if let Some((_, server)) = self.actors.remove(actor_id) {
-            info!(%actor_id, "httpserver stopping listener for component");
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        if let Some((_, server)) = self.actors.remove(component_id) {
+            info!(component_id, "httpserver stopping listener for component");
             server.handle.shutdown();
         }
         Ok(())
