@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/wasmcloud/wasmcloud.git",
-    "directory": "washboard-ui/packages/lattice-client-react"
+    "directory": "typescript/packages/lattice-client-react"
   },
   "type": "module",
   "types": "./build/index.d.ts",

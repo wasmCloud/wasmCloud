@@ -13,7 +13,7 @@ updates:
   schedule:
     interval: "daily"
 - package-ecosystem: npm
-  directory: "/washboard-ui"
+  directory: "/typescript"
   open-pull-requests-limit: 20
   schedule:
     interval: "weekly"

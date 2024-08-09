@@ -3085,9 +3085,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@wasmcloud/washboard-ui@workspace:packages/washboard-ui":
+"@wasmcloud/washboard-ui@workspace:apps/washboard-ui":
   version: 0.0.0-use.local
-  resolution: "@wasmcloud/washboard-ui@workspace:packages/washboard-ui"
+  resolution: "@wasmcloud/washboard-ui@workspace:apps/washboard-ui"
   dependencies:
     "@hookform/resolvers": "npm:^3.9.0"
     "@playwright/test": "npm:^1.45.3"

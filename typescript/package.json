@@ -4,9 +4,12 @@
   "type": "commonjs",
   "private": true,
   "workspaces": [
+    "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "build": "turbo run build",
+    "start": "turbo run dev",
     "turbo:build": "turbo run build --cache-dir .turbo/cache",
     "turbo:dev": "turbo run dev",
     "turbo:lint": "turbo run lint",

@@ -3,11 +3,11 @@ name: nix
 on:
   pull_request:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
   merge_group:
   push:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
 
 permissions:
   contents: read
