@@ -1,0 +1,21 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: ferris-says
+  annotations:
+    version: v0.0.1
+    description: |
+      A simple demo of invocation of a cowsay-like function in wasmCloud, written in Rust
+spec:
+  components:
+    - name: ferris-says
+      type: component
+      properties:
+        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
+        image: file://./build/ferris_says_s.wasm
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1

@@ -19,7 +19,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/examples.yml
+      - .github/workflows/examples-components.yml
       - crates/wash-lib/**
       - crates/wash-cli/**
       - examples/rust/components/**
@@ -39,7 +39,7 @@ env:
 
 jobs:
   build-wash-cli:
-    name: Build wash CLI
+    name: build wash-cli
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -87,9 +87,11 @@ jobs:
           - lang: "golang"
             lang_version: "1.20"
             name: "http-echo-tinygo"
+            test_deploy: wadm.yaml
           - lang: "golang"
             lang_version: "1.20"
             name: "http-hello-world"
+            test_deploy: wadm.yaml
           # Rust example components
           - name: "blobby"
             lang: "rust"
@@ -97,27 +99,35 @@ jobs:
           - name: "dog-fetcher"
             lang: "rust"
             wasm-bin: "dog_fetcher_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "echo-messaging"
             lang: "rust"
             wasm-bin: "echo_messaging_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "ferris-says"
             lang: "rust"
             wasm-bin: "ferris_says_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "http-blobstore"
             lang: "rust"
             wasm-bin: "http_blobstore_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "http-hello-world"
             lang: "rust"
             wasm-bin: "http_hello_world_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "http-jsonify"
             lang: "rust"
             wasm-bin: "http_jsonify_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "http-keyvalue-counter"
             lang: "rust"
             wasm-bin: "http_keyvalue_counter_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "keyvalue-messaging"
             lang: "rust"
             wasm-bin: "keyvalue_messaging_s.wasm"
+            test_deploy: local.wadm.yaml
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
@@ -129,6 +139,7 @@ jobs:
           - name: "http-hello-world"
             lang: "typescript"
             lang_version: "20.x"
+            test_deploy: wadm.yaml
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       # Download wash binary & install to path
@@ -168,10 +179,37 @@ jobs:
         run: |
           npm install -g @bytecodealliance/jco
           npm install -g @bytecodealliance/componentize-js
+
       # Build example project(s)
       - name: build project
         run: wash build
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+
+      # Run the local.wadm that comes with the example
+      - name: test component load
+        if: ${{ matrix.project.test_deploy && matrix.wash-version == 'current' }}
+        shell: bash
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        run: |
+          set -xe
+          wash up &
+          WASH_PID=$!
+          sleep 3;
+          wash app deploy ${{ matrix.project.test_deploy }};
+          TRIES=0
+          while [[ $(wash get inventory --output=json | jq '.inventories[0].components | length') -eq 0 ]] ; do
+            if [[ $TRIES -gt 10 ]]; then
+              echo "❌ failed to find component in inventory output after deploying example manifest";
+              exit -1;
+            fi
+            TRIES=$((TRIES+1));
+            sleep 1;
+          done;
+          echo "✅ successfully started at least one component";
+          wash app delete ${{ matrix.project.test_deploy }};
+          kill $WASH_PID;
+          exit 0;
+
       # Save example as an artifact for later step(s)
       - uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
         if: ${{ startswith(github.ref, format('refs/tags/component-{0}-v', matrix.project.name)) }}
