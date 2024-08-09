@@ -15,6 +15,8 @@ spec:
     - name: http-component
       type: component
       properties:
+        # NOTE: this example is used in the quickstart guide,
+        # we keep the local file ref enabled instead of OCI like other examples.
         image: file://./build/http_hello_world_s.wasm
         # To use the a precompiled version of this component, use the line below instead:
         # image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
@@ -44,3 +46,6 @@ spec:
               - name: default-http
                 properties:
                   address: 127.0.0.1:8080
+        - type: daemonscaler
+          properties:
+            replicas: 1

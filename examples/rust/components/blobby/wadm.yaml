@@ -66,6 +66,9 @@ spec:
               - name: default-http
                 properties:
                   address: 0.0.0.0:8080
+        - type: daemonscaler
+          properties:
+            replicas: 1
     - name: blobstore
       type: capability
       properties:

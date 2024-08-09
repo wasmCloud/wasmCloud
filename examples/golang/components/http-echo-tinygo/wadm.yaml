@@ -52,3 +52,6 @@ spec:
               - name: default-http
                 properties:
                   port: '8080'
+        - type: daemonscaler
+          properties:
+            replicas: 1

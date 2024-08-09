@@ -69,3 +69,6 @@ spec:
               - name: default-http
                 properties:
                   address: 127.0.0.1:8080
+        - type: daemonscaler
+          properties:
+            replicas: 1
