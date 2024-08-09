@@ -15,8 +15,14 @@ interface tasks {
   /// Get all tasks for the given group ID
   get-tasks-by-group-id: func(id: group-id) -> result<list<task>, get-tasks-error>;
 
-  /// Errors that can occur while performing retrieving tasks
+  /// Errors that can occur while submitting multiple tasks
   variant submit-tasks-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while submitting a single task
+  variant submit-task-error {
     /// Invalid group-id
     invalid-task-data,
     /// Unexpected error
@@ -24,7 +30,10 @@ interface tasks {
   }
 
   /// Submit a single task
-  submit-task: func(group-id: string, task: task) -> result<list<task-status>, submit-tasks-error>;
+  submit-tasks: func(
+    group-id: string, 
+    tasks: list<task>
+  ) -> result<list<result<task-status, submit-task-error>>, submit-tasks-error>;
 
   /// Errors that can occur while fetching an individual task's status
   variant get-task-status-error {
@@ -41,7 +50,9 @@ interface tasks {
   }
 
   /// Get the status of one or more tasks
-  get-task-statuses: func(ids: list<task-id>) -> result<list<result<task-status, get-task-status-error>>, get-task-statuses-error>;
+  get-task-statuses: func(
+    ids: list<task-id>
+  ) -> result<list<result<task-status, get-task-status-error>>, get-task-statuses-error>;
 
   /// Errors that can occur while updating a single task status
   variant update-task-status-error {
@@ -58,5 +69,7 @@ interface tasks {
   }
 
   /// Update task status for a given task
-  update-task-status: func(updates: list<tuple<task-id, task-status>>) -> result<list<result<task-status, update-task-status-error>>, update-task-statuses-error>;
+  update-task-statuses: func(
+    updates: list<tuple<task-id, task-status>>
+  ) -> result<list<result<task-status, update-task-status-error>>, update-task-statuses-error>;
 }

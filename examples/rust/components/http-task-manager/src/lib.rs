@@ -34,16 +34,21 @@ use exports::wasmcloud::task_manager::tasks;
 use wasi::http::types::{
     Fields, IncomingRequest, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
-use wasmcloud::postgres::query::query;
-use wasmcloud::postgres::types::TimestampTz;
-use wasmcloud::postgres::types::{PgValue, ResultRow, ResultRowEntry};
-use wasmcloud::task_manager::tasks::GetTasksError;
-use wasmcloud::task_manager::types::{GetTasksError, GroupId, Task};
+//use wasmcloud::postgres::query::query;
+//use wasmcloud::postgres::types::TimestampTz;
+//use wasmcloud::postgres::types::{PgValue, ResultRow, ResultRowEntry};
+use wasmcloud::task_manager::types::{GroupId, Task, TaskId, TaskStatus};
+
+use crate::tasks::{
+    GetTaskStatusError, GetTaskStatusesError, GetTasksError, SubmitTaskError, SubmitTasksError,
+    UpdateTaskStatusError, UpdateTaskStatusesError,
+};
 // END wit-bindgen generated imports
 
 /// All implementation of the `component` world hangs off of this struct
 struct HttpTaskManager;
 
+// Implementation of wasi:http/incoming-handler
 impl incoming_handler::Guest for HttpTaskManager {
     fn handle(_request: IncomingRequest, response_out: ResponseOutparam) {
         let response = OutgoingResponse::new(Fields::new());
@@ -59,21 +64,33 @@ impl incoming_handler::Guest for HttpTaskManager {
     }
 }
 
+// Implementation of our home-grown tasks interface
 impl tasks::Guest for HttpTaskManager {
-    fn get_tasks_by_group_id(id: GroupId) -> Result<Vec<Task>, GetTasksError> {
-        Ok(())
+    fn get_tasks_by_group_id(_id: GroupId) -> Result<Vec<Task>, GetTasksError> {
+        Err(GetTasksError::Unexpected("not implemented yet".into()))
     }
 
-    fn submit_task(id: GroupId) -> Result<()> {
-        Ok(())
+    fn submit_tasks(
+        _id: GroupId,
+        _tasks: Vec<Task>,
+    ) -> Result<Vec<Result<TaskStatus, SubmitTaskError>>, SubmitTasksError> {
+        Err(SubmitTasksError::Unexpected("not implemented yet".into()))
     }
 
-    fn get_task_statuses(id: GroupId) -> Result<()> {
-        Ok(())
+    fn get_task_statuses(
+        _ids: Vec<TaskId>,
+    ) -> Result<Vec<Result<TaskStatus, GetTaskStatusError>>, GetTaskStatusesError> {
+        Err(GetTaskStatusesError::Unexpected(
+            "not implemented yet".into(),
+        ))
     }
 
-    fn update_task_status(id: GroupId) -> Result<()> {
-        Ok(())
+    fn update_task_statuses(
+        _updates: Vec<(TaskId, TaskStatus)>,
+    ) -> Result<Vec<Result<TaskStatus, UpdateTaskStatusError>>, UpdateTaskStatusesError> {
+        Err(UpdateTaskStatusesError::Unexpected(
+            "not implemented".into(),
+        ))
     }
 }
 
