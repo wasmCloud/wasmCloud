@@ -80,7 +80,7 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "guid": HostRng::generate_guid(),
         "random_32": HostRng::random32(),
         "random_in_range": HostRng::random_in_range(min, max),
-        "long_value": "1234567890".repeat(1000),
+        "long_value": "1234567890".repeat(10000),
         "config_value": config::runtime::get(&config_key).expect("failed to get config value"),
         "all_config": config::runtime::get_all().expect("failed to get all config values"),
         "ping": pong,
@@ -89,9 +89,9 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "is_same": is_same,
         "archie": is_good_boy,
     });
-    eprintln!("response: `{res:?}`");
 
     let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
+    eprintln!("response_len: `{}`", body.len());
 
     let tcp4 = tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv4)
         .expect("failed to create an IPv4 TCP socket");
