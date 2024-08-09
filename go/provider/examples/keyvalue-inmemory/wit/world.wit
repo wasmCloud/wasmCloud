@@ -1,0 +1,5 @@
+package wrpc-examples:keyvalue-go-server;
+
+world server {
+    export wrpc:keyvalue/store@0.2.0-draft;
+}
