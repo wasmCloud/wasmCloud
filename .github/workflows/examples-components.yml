@@ -194,6 +194,13 @@ jobs:
         wash-version:
           - 0.29.2
         project:
+          # Go example components (to publish)
+          - lang: "golang"
+            lang_version: "1.20"
+            name: "http-echo-tinygo"
+          - lang: "golang"
+            lang_version: "1.20"
+            name: "http-hello-world"  
           # Rust example components (to publish)
           - name: "blobby"
             lang: "rust"
