@@ -274,6 +274,14 @@ pub struct WasmcloudOpts {
     /// Defines the Max Execution time (in ms) that the host runtime will execute for
     #[clap(long = "max-execution-time-ms", alias = "max-time-ms", env = WASMCLOUD_MAX_EXECUTION_TIME_MS, default_value = DEFAULT_MAX_EXECUTION_TIME_MS)]
     pub max_execution_time: u64,
+
+    /// If provided, enables interfacing with a secrets backend for secret retrieval over the given topic prefix.
+    #[clap(long = "secrets-topic", env = WASMCLOUD_SECRETS_TOPIC)]
+    pub secrets_topic: Option<String>,
+
+    /// If provided, enables policy checks on start actions and component invocations
+    #[clap(long = "policy-topic", env = WASMCLOUD_POLICY_TOPIC)]
+    pub policy_topic: Option<String>,
 }
 
 impl WasmcloudOpts {
@@ -374,6 +382,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         rpc_seed: cmd.wasmcloud_opts.rpc_seed.or(ctx.rpc_seed),
         rpc_credsfile: cmd.wasmcloud_opts.rpc_credsfile.or(ctx.rpc_credsfile),
         max_execution_time: cmd.wasmcloud_opts.max_execution_time,
+        secrets_topic: cmd.wasmcloud_opts.secrets_topic,
+        policy_topic: cmd.wasmcloud_opts.policy_topic,
         cluster_seed: cmd
             .wasmcloud_opts
             .cluster_seed
