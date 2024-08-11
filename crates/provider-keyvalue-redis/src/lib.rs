@@ -30,6 +30,8 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            // TODO: Implement the watch interface and add its binding
+            // "wrpc:keyvalue/watch@0.2.0-draft": generate,
         }
     });
 }
@@ -303,6 +305,49 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         Ok(self.exec_cmd(ctx, &mut Cmd::del(&keys)).await)
     }
 }
+
+// TODO: 
+// Implementation of the watch on-set and on-delete interface.
+// Every time there is a change on the bucket, the provider needs to
+// inform the component interested in on-set or on-delete events:
+// If a bucket is added, invoke on_set.
+// If a bucket is deleted, invoke on_delete.
+// provider (src) --> component (dst)
+/*
+impl keyvalue::watch::Handler<Option<Context>> for KvRedisProvider {
+    // map to store watch server (and its link parameters) for each linked component
+    // Start a server instance that calls the given component whenever there is a change in the bucket
+    
+    async fn on_set(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+        value: list<u8>,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
+        propagate_trace_for_ctx!(context);
+        check_bucket_name(&bucket);
+        Ok(self
+            // send the on-set notification to the given component           
+            // 
+            .await)
+    }        
+
+    async fn on_delete(
+        &self,
+        context: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Result<u64, keyvalue::store::Error>> {
+        propagate_trace_for_ctx!(context);
+        check_bucket_name(&bucket);
+        Ok(self
+            // send the on-delete notification to the given component           
+            // 
+            .await)
+    } 
+}
+*/
 
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
