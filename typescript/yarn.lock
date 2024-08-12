@@ -323,6 +323,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@babel/helper-validator-identifier@npm:^7.24.5":
+  version: 7.24.7
+  resolution: "@babel/helper-validator-identifier@npm:7.24.7"
+  checksum: 10/86875063f57361471b531dbc2ea10bbf5406e12b06d249b03827d361db4cad2388c6f00936bcd9dc86479f7e2c69ea21412c2228d4b3672588b754b70a449d4b
+  languageName: node
+  linkType: hard
+
 "@babel/helper-validator-identifier@npm:^7.24.6":
   version: 7.24.6
   resolution: "@babel/helper-validator-identifier@npm:7.24.6"
@@ -3017,7 +3024,7 @@ __metadata:
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.9"
     eslint-plugin-tailwindcss: "npm:3.17.4"
-    eslint-plugin-unicorn: "npm:^52.0.0"
+    eslint-plugin-unicorn: "npm:^55.0.0"
     typescript: "npm:^5.5.4"
   peerDependencies:
     eslint: ^8.57.0
@@ -3134,7 +3141,7 @@ __metadata:
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.9"
     eslint-plugin-tailwindcss: "npm:^3.17.4"
-    eslint-plugin-unicorn: "npm:^52.0.0"
+    eslint-plugin-unicorn: "npm:^55.0.0"
     execa: "npm:^9.3.0"
     get-port: "npm:^7.1.0"
     lucide-react: "npm:^0.424.0"
@@ -3919,12 +3926,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"core-js-compat@npm:^3.34.0":
-  version: 3.35.0
-  resolution: "core-js-compat@npm:3.35.0"
+"core-js-compat@npm:^3.37.0":
+  version: 3.38.0
+  resolution: "core-js-compat@npm:3.38.0"
   dependencies:
-    browserslist: "npm:^4.22.2"
-  checksum: 10/aa21ad2f0c946be7a8ecef92233bc003a38fa27e43a925fcd9b79e32ae49b879e0f5c23459ffc310df38ee547389b8e5e43a6a8be0b2369b9b9ebf3d04ae69b9
+    browserslist: "npm:^4.23.3"
+  checksum: 10/7ebdca6b305c9c470980e1f7e7a3d759add7cb754bff62926242907ee4d1d4e8bb13f70eb9a7d7769e0f63aec3f4cca83abf60f502286853b45d4b63a01c25ed
   languageName: node
   linkType: hard
 
@@ -5009,17 +5016,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-unicorn@npm:^52.0.0":
-  version: 52.0.0
-  resolution: "eslint-plugin-unicorn@npm:52.0.0"
+"eslint-plugin-unicorn@npm:^55.0.0":
+  version: 55.0.0
+  resolution: "eslint-plugin-unicorn@npm:55.0.0"
   dependencies:
-    "@babel/helper-validator-identifier": "npm:^7.22.20"
+    "@babel/helper-validator-identifier": "npm:^7.24.5"
     "@eslint-community/eslint-utils": "npm:^4.4.0"
-    "@eslint/eslintrc": "npm:^2.1.4"
     ci-info: "npm:^4.0.0"
     clean-regexp: "npm:^1.0.0"
-    core-js-compat: "npm:^3.34.0"
+    core-js-compat: "npm:^3.37.0"
     esquery: "npm:^1.5.0"
+    globals: "npm:^15.7.0"
     indent-string: "npm:^4.0.0"
     is-builtin-module: "npm:^3.2.1"
     jsesc: "npm:^3.0.2"
@@ -5027,11 +5034,11 @@ __metadata:
     read-pkg-up: "npm:^7.0.1"
     regexp-tree: "npm:^0.1.27"
     regjsparser: "npm:^0.10.0"
-    semver: "npm:^7.5.4"
+    semver: "npm:^7.6.1"
     strip-indent: "npm:^3.0.0"
   peerDependencies:
     eslint: ">=8.56.0"
-  checksum: 10/69b8aeee04806b808a534fe5484ad75ee9feec6078aad90651d7ce7216e2bd14980fec5a2e05fd800b874406a54240af66f04ab83023a7f1fe67397b6dc4c032
+  checksum: 10/ea2fe55c517e18a8abedee125492ba09b11695fe41a3f42bf7b6789e9c937c89e8692735b07dcd41e25aff849950da2cca76ac6b727996e6bd2a978c8dc2685f
   languageName: node
   linkType: hard
 
@@ -5644,7 +5651,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"globals@npm:^15.3.0":
+"globals@npm:^15.3.0, globals@npm:^15.7.0":
   version: 15.9.0
   resolution: "globals@npm:15.9.0"
   checksum: 10/19bca70131c5d3e0d4171deed0f8ae16adda19f18d39b67421056f1eaa160b4433c3ffc8eb69b8b19adebbbdad4834d8a0494c5fe1ae295f0f769a5c0331d794
@@ -8277,7 +8284,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"semver@npm:^7.3.5, semver@npm:^7.5.4":
+"semver@npm:^7.3.5":
   version: 7.5.4
   resolution: "semver@npm:7.5.4"
   dependencies:
@@ -8296,6 +8303,15 @@ __metadata:
   bin:
     semver: bin/semver.js
   checksum: 10/1b41018df2d8aca5a1db4729985e8e20428c650daea60fcd16e926e9383217d00f574fab92d79612771884a98d2ee2a1973f49d630829a8d54d6570defe62535
+  languageName: node
+  linkType: hard
+
+"semver@npm:^7.6.1":
+  version: 7.6.3
+  resolution: "semver@npm:7.6.3"
+  bin:
+    semver: bin/semver.js
+  checksum: 10/36b1fbe1a2b6f873559cd57b238f1094a053dbfd997ceeb8757d79d1d2089c56d1321b9f1069ce263dc64cfa922fa1d2ad566b39426fe1ac6c723c1487589e10
   languageName: node
   linkType: hard
 
