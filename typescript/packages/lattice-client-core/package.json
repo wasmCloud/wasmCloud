@@ -44,7 +44,7 @@
     "tailwindcss": "^3.4.3"
   },
   "devDependencies": {
-    "@types/eslint": "~8.56.10",
+    "@types/eslint": "~9.6.0",
     "@wasmcloud/eslint-config": "workspace:^",
     "@wasmcloud/tsconfig": "workspace:^",
     "tsup": "^8.2.4",
