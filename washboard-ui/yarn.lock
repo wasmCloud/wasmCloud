@@ -2795,7 +2795,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@typescript-eslint/parser@npm:8.0.0, @typescript-eslint/parser@npm:^8.0.0":
+"@typescript-eslint/parser@npm:8.0.0":
   version: 8.0.0
   resolution: "@typescript-eslint/parser@npm:8.0.0"
   dependencies:
@@ -2810,6 +2810,24 @@ __metadata:
     typescript:
       optional: true
   checksum: 10/044a7deb299bc988b7f33a99b9c1dc387133e7ce4b2f7751568e4fd07a2e541c1d628e332205ac3cbd797fcad95f89d097a38e6e7e42707d9022fbf0b8b26e6c
+  languageName: node
+  linkType: hard
+
+"@typescript-eslint/parser@npm:^8.0.1":
+  version: 8.0.1
+  resolution: "@typescript-eslint/parser@npm:8.0.1"
+  dependencies:
+    "@typescript-eslint/scope-manager": "npm:8.0.1"
+    "@typescript-eslint/types": "npm:8.0.1"
+    "@typescript-eslint/typescript-estree": "npm:8.0.1"
+    "@typescript-eslint/visitor-keys": "npm:8.0.1"
+    debug: "npm:^4.3.4"
+  peerDependencies:
+    eslint: ^8.57.0 || ^9.0.0
+  peerDependenciesMeta:
+    typescript:
+      optional: true
+  checksum: 10/d483e236d13e40f00cb6590b956caee9ea4a68c0bc338aad7463a0183e1983d08d1a31b5f9107641d06cd7bcc55d5b7cb7d48d42d9cf3c4996573d798128ec46
   languageName: node
   linkType: hard
 
@@ -3002,7 +3020,7 @@ __metadata:
   dependencies:
     "@types/node": "npm:^20.14.14"
     "@typescript-eslint/eslint-plugin": "npm:^8.0.1"
-    "@typescript-eslint/parser": "npm:^8.0.0"
+    "@typescript-eslint/parser": "npm:^8.0.1"
     eslint-config-prettier: "npm:^9.1.0"
     eslint-config-turbo: "npm:^1.13.4"
     eslint-config-xo: "npm:^0.46.0"
@@ -3114,7 +3132,7 @@ __metadata:
     "@types/react-dom": "npm:^18.3.0"
     "@types/uuid": "npm:^10.0.0"
     "@typescript-eslint/eslint-plugin": "npm:^8.0.1"
-    "@typescript-eslint/parser": "npm:^8.0.0"
+    "@typescript-eslint/parser": "npm:^8.0.1"
     "@vitejs/plugin-react": "npm:^4.3.1"
     "@vitejs/plugin-react-swc": "npm:^3.7.0"
     "@wasmcloud/lattice-client-react": "workspace:^"
@@ -3137,7 +3155,7 @@ __metadata:
     eslint-plugin-unicorn: "npm:^52.0.0"
     execa: "npm:^9.3.0"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.424.0"
+    lucide-react: "npm:^0.427.0"
     nats.ws: "npm:^1.29.2"
     pino: "npm:^9.3.2"
     postcss: "npm:^8.4.40"
@@ -3146,7 +3164,7 @@ __metadata:
     react-dom: "npm:^18.3.1"
     react-hook-form: "npm:^7.52.2"
     react-router-dom: "npm:^6.26.0"
-    tailwind-merge: "npm:^2.4.0"
+    tailwind-merge: "npm:^2.5.1"
     tailwindcss: "npm:^3.4.7"
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
@@ -6704,12 +6722,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.424.0":
-  version: 0.424.0
-  resolution: "lucide-react@npm:0.424.0"
+"lucide-react@npm:^0.427.0":
+  version: 0.427.0
+  resolution: "lucide-react@npm:0.427.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
-  checksum: 10/6bb9656323a56babb0f8f7f4f52ebe4cb908ecca6d2f6a864dba7699f6bd28de59bcb89a672ff38b506e3a91901343a1f4d45b9a59e2052bb1eeea11ad01f922
+  checksum: 10/2c15b89d01e6050a9f36795d236a16432e3c78e6622d58ff813dce4f538afff9bcf1cf90b1eb1c66830a187c3e453af75f7e73d01c80d01490d2a0ab1a349e68
   languageName: node
   linkType: hard
 
@@ -8792,10 +8810,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tailwind-merge@npm:^2.4.0":
-  version: 2.4.0
-  resolution: "tailwind-merge@npm:2.4.0"
-  checksum: 10/dda331a95146c9943dd18f152156fe7a5daf450a686d0562fb521ebc027273bd0c8f9503742668b3e90d27e887aa794ea5e79c38faa51216e19e9d0f1ec55925
+"tailwind-merge@npm:^2.5.1":
+  version: 2.5.1
+  resolution: "tailwind-merge@npm:2.5.1"
+  checksum: 10/4fb0e3de7c5a7a9dcef4504e05b1b14a8e8b40572c2838c0cd50bc6d2f09a73add1a8ec16c4f40759bfa390ca97bbb08588ed319a8825aa162357e9580994630
   languageName: node
   linkType: hard
 
