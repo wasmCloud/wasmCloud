@@ -73,6 +73,21 @@ impl Default for StdioStream<'_> {
     }
 }
 
+/// Similar to [`crate::wasi::io::poll::poll`], but polls all `pollables` until they are all ready.
+///
+/// Poll for completion on a set of pollables.
+///
+/// This function takes a list of pollables, which identify I/O sources of interest, and waits until all of the events are ready for I/O.
+pub fn join(pollables: &[&crate::wasi::io::poll::Pollable]) {
+    let mut pollables = pollables.to_vec();
+    while !pollables.is_empty() {
+        let ready_indices = crate::wasi::io::poll::poll(&pollables);
+        ready_indices.iter().rev().for_each(|&i| {
+            pollables.swap_remove(i as usize);
+        });
+    }
+}
+
 #[cfg(feature = "futures")]
 impl futures::AsyncRead for StdioStream<'_> {
     fn poll_read(
