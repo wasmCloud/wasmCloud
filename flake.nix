@@ -45,7 +45,7 @@
         ];
 
         excludePaths = let
-          washboardExclude = map (name: "washboard-ui/${name}") (remove "dist" (attrNames (readDir ./washboard-ui)));
+          washboardExclude = map (name: "typescript/${name}") (remove "dist" (attrNames (readDir ./typescript)));
         in
           [
             ".devcontainer"

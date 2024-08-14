@@ -20,7 +20,7 @@ use wascap::prelude::KeyPair;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, LinkConfig, Provider,
+    run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 mod config;
@@ -271,21 +271,18 @@ impl Provider for KvNatsProvider {
 
     /// Provider should perform any operations needed for a link deletion, including cleaning up
     /// per-component resources.
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut links = self.consumer_components.write().await;
-        if let Some(kv_store) = links.remove(source_id) {
+        if let Some(kv_store) = links.remove(component_id) {
             debug!(
-                "dropping NATS Kv store [{}] for (consumer) component [{}]...",
-                format!("{:?}", kv_store),
-                source_id
+                component_id,
+                "dropping NATS Kv store [{kv_store:?}] for (consumer) component...",
             );
         }
 
-        debug!(
-            "finished processing (consumer) link deletion for component [{}]",
-            source_id
-        );
+        debug!(component_id, "finished processing link deletion");
 
         Ok(())
     }

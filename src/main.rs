@@ -47,7 +47,7 @@ struct Args {
     #[clap(long = "nats-jwt", env = "WASMCLOUD_NATS_JWT", requires = "nats_seed")]
     nats_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS
-    #[clap(long = "nats-seed", env = "WASMCOULD_NATS_SEED", requires = "nats_jwt")]
+    #[clap(long = "nats-seed", env = "WASMCLOUD_NATS_SEED", requires = "nats_jwt")]
     nats_seed: Option<String>,
     /// The lattice the host belongs to
     #[clap(

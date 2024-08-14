@@ -16,7 +16,7 @@ use tracing::{debug, error, info, instrument, warn};
 use vaultrs::client::{Client as _, VaultClient, VaultClientSettings};
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    Provider,
+    LinkDeleteInfo, Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -451,11 +451,12 @@ impl Provider for KvVaultProvider {
     }
 
     /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "debug", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut aw = self.components.write().await;
-        if let Some(client) = aw.remove(source_id) {
-            debug!("deleting link for component [{source_id}]");
+        if let Some(client) = aw.remove(component_id) {
+            debug!(component_id, "deleting link for component");
             drop(client);
         }
         Ok(())

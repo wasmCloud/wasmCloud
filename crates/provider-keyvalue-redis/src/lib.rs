@@ -20,7 +20,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, propagate_trace_for_ctx, run_provider, Context, LinkConfig,
-    Provider,
+    LinkDeleteInfo, Provider,
 };
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 
@@ -414,17 +414,15 @@ impl Provider for KvRedisProvider {
     }
 
     /// Handle notification that a link is dropped - close the connection
-    #[instrument(level = "info", skip(self))]
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
         let mut aw = self.sources.write().await;
         // NOTE: ideally we should *not* get rid of all links for a given source here,
         // but delete_link actually does not tell us enough about the link to know whether
         // we're dealing with one link or the other.
-        aw.retain(|(src_id, _link_name), _| src_id != source_id);
-        debug!(
-            component_id = source_id,
-            "closing all redis connections for component"
-        );
+        aw.retain(|(src_id, _link_name), _| src_id != component_id);
+        debug!(component_id, "closing all redis connections for component");
         Ok(())
     }
 
