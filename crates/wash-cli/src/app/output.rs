@@ -29,7 +29,6 @@ pub fn list_revisions_table(revisions: Vec<VersionInfo>) -> String {
 pub fn list_models_table(models: Vec<ModelSummary>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 3);
-
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Name", 1, Alignment::Left),
         TableCell::new_with_alignment("Deployed Version", 1, Alignment::Left),

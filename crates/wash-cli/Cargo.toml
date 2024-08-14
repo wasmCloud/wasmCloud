@@ -29,6 +29,7 @@ clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"
 clap_complete = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
+crossterm ={ workspace = true, features = ["events","windows"] }
 dirs = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
