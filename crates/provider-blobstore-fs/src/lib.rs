@@ -574,9 +574,29 @@ impl Provider for FsProvider {
 
         // Determine the root path value
         let root_val: PathBuf = match config.iter().find(|(key, _)| key.to_uppercase() == "ROOT") {
-            None => "/tmp".into(),
+            None => {
+                // If no root is specified, use the tempdir and create a specific directory for this component
+                let root = std::env::temp_dir();
+                // Resolve the subpath from the root to the component ID, carefully
+                match resolve_subpath(&root, source_id) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        error!("Failed to resolve subpath to component directory: {e}");
+                        return Err(
+                            anyhow!(e).context("failed to resolve subpath to component dir")
+                        );
+                    }
+                }
+            }
+            // If a root is manually specified, use that path exactly
             Some((_, value)) => value.into(),
         };
+
+        // Ensure the root path exists
+        if let Err(e) = create_dir_all(&root_val).await {
+            error!("Could not create component directory: {:?}", e);
+            return Err(anyhow!(e).context("failed to create component directory"));
+        }
 
         // Build configuration for FS Provider to use later
         let config = FsProviderConfig {
@@ -594,21 +614,6 @@ impl Provider for FsProvider {
             .write()
             .await
             .insert(source_id.into(), config.clone());
-
-        // Resolve the subpath from the root to the component ID, carefully
-        let actor_dir = match resolve_subpath(&config.root, source_id) {
-            Ok(path) => path,
-            Err(e) => {
-                error!("Failed to resolve subpath to component directory: {e}");
-                return Err(anyhow!(e).context("failed to resolve subpath to component dir"));
-            }
-        };
-
-        // Create directory for the individual component
-        if let Err(e) = create_dir_all(actor_dir.as_path()).await {
-            error!("Could not create component directory: {:?}", e);
-            return Err(anyhow!(e).context("failed to create component directory"));
-        }
 
         Ok(())
     }
