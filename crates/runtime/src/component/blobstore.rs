@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{stream, StreamExt as _};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt};
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use wasmtime::component::Resource;
-use wasmtime_wasi::pipe::{AsyncReadStream, AsyncWriteStream};
+use wasmtime_wasi::pipe::AsyncWriteStream;
 use wasmtime_wasi::{HostOutputStream, InputStream};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
@@ -97,20 +97,16 @@ where
         .await?
         {
             (Ok(stream), io) => {
-                if let Some(io) = io {
-                    // TODO: Move this into the runtime
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = io.await {
-                            tracing::error!("Error awaiting async IO: {:?}", e);
-                        }
-                    });
-                    self.table
-                        .push(handle)
-                        .context("failed to push async I/O")?;
-                }
+                let io = if let Some(io) = io {
+                    Box::new(io) as Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>
+                } else {
+                    Box::new(async { Ok(()) })
+                        as Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>
+                };
+                let input_streamer = HostInputStreamer::new(stream, io);
                 let value = self
                     .table
-                    .push(stream)
+                    .push(input_streamer)
                     .context("failed to push stream and size")?;
                 Ok(Ok(value))
             }
@@ -393,11 +389,13 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
         &mut self,
         incoming_value: Resource<types::IncomingValue>,
     ) -> anyhow::Result<Result<types::IncomingValueSyncBody>> {
-        let stream = self
+        let streamer = self
             .table
             .delete(incoming_value)
-            .context("failed to delete incoming value")?;
-        Ok(Ok(stream.collect::<Vec<Bytes>>().await.concat()))
+            .context("failed to get incoming value")?;
+
+        streamer.io.await.context("failed to perform async I/O")?;
+        Ok(Ok(streamer.buf.into()))
     }
 
     #[instrument(skip(self))]
@@ -409,11 +407,10 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
             .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
+
         let stream = self
             .table
-            .push(InputStream::Host(Box::new(AsyncReadStream::new(
-                StreamReader::new(stream.map(std::io::Result::Ok)),
-            ))))
+            .push(InputStream::Host(Box::new(stream)))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
@@ -538,3 +535,71 @@ where
 
 #[async_trait]
 impl<H> container::Host for Ctx<H> where H: Handler {}
+
+/// A host input streamer
+pub struct HostInputStreamer {
+    reader: StreamReader<
+        core::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Bytes>> + Send>>,
+        Bytes,
+    >,
+    io: core::pin::Pin<Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>>,
+    buf: BytesMut,
+    err: Option<StreamError>,
+}
+
+impl HostInputStreamer {
+    /// Create a new `HostInputStreamer` with the given stream and I/O future.
+    pub fn new(
+        stream: core::pin::Pin<Box<dyn futures::Stream<Item = bytes::Bytes> + Send>>,
+        io: Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>,
+    ) -> Self {
+        Self {
+            reader: StreamReader::new(Box::pin(stream.map(std::io::Result::Ok))),
+            io: Box::into_pin(io),
+            buf: BytesMut::with_capacity(4096),
+            err: None,
+        }
+    }
+}
+
+use wasmtime_wasi::StreamError;
+
+impl wasmtime_wasi::HostInputStream for HostInputStreamer {
+    fn read(&mut self, size: usize) -> wasmtime_wasi::StreamResult<Bytes> {
+        // Check that we get the error first
+        if let Some(e) = self.err.take() {
+            return Err(e);
+        }
+        // Consume the buffer
+        let b = if self.buf.len() > size {
+            self.buf.split_off(size)
+        } else {
+            self.buf.split_off(self.buf.len())
+        };
+        // NOTE(thomastaylor312): It might be more efficient to resize back up to our default size
+        // here, but for now this just returns the bytes
+        Ok(b.into())
+    }
+}
+
+#[async_trait::async_trait]
+impl wasmtime_wasi::Subscribe for HostInputStreamer {
+    async fn ready(&mut self) {
+        tokio::select! {
+            res = self.io.as_mut() => {
+                // set this error
+                match res {
+                    Ok(_) => self.err = Some(StreamError::Closed),
+                    Err(e) => self.err = Some(StreamError::LastOperationFailed(e.into())),
+                }
+            },
+            // NOTE(thomastaylor312): For now we just let this grow the buffer, but we might want to
+            // use read instead and manually cap our buffer size if this becomes a problem
+            res = self.reader.read_buf(&mut self.buf) => {
+                if let Err(e) = res {
+                    self.err = Some(StreamError::LastOperationFailed(e.into()))
+                }
+            }
+        }
+    }
+}

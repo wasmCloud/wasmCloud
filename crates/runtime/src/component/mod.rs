@@ -21,6 +21,7 @@ use wrpc_runtime_wasmtime::{
     collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
 };
 
+pub use blobstore::HostInputStreamer;
 pub use bus::Bus;
 pub use config::Config;
 pub use logging::Logging;

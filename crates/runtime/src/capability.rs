@@ -9,8 +9,7 @@ mod wasmtime_bindings {
 
     mod blobstore {
         pub type Container = std::sync::Arc<str>;
-        pub type IncomingValue =
-            core::pin::Pin<Box<dyn futures::Stream<Item = bytes::Bytes> + Send>>;
+        pub type IncomingValue = crate::component::HostInputStreamer;
         pub type OutgoingValue = crate::io::AsyncVec;
         pub type StreamObjectNames = crate::io::BufferedIncomingStream<String>;
     }
