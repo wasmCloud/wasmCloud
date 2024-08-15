@@ -13,7 +13,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, instrument, warn, Instrument as _, Span};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
-use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
+use wasi_preview1_component_adapter_provider::{
+    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+};
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
@@ -270,8 +272,8 @@ where
                 .module(wasm)
                 .context("failed to set core component module")?
                 .adapter(
-                    "wasi_snapshot_preview1",
-                    WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
+                    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME,
+                    WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
                 )
                 .context("failed to add WASI preview1 adapter")?
                 .encode()

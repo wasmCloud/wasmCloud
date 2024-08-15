@@ -3141,15 +3141,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
-name = "is_executable"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa9acdc6d67b75e626ad644734e8bc6df893d9cd2a834129065d3dd6158ea9c8"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "iso8601"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3490,16 +3481,6 @@ dependencies = [
  "bitflags 2.5.0",
  "cfg-if",
  "libc",
-]
-
-[[package]]
-name = "nix-nar"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e412c3138d9fcb384da86b4a068c11bad373441eb5c4b89406de4faf649fa02"
-dependencies = [
- "is_executable",
- "thiserror",
 ]
 
 [[package]]
@@ -5825,7 +5806,7 @@ dependencies = [
  "tokio",
  "url",
  "wascap 0.15.0",
- "wasmcloud-component-adapters",
+ "wasi-preview1-component-adapter-provider",
  "wit-component 0.215.0",
 ]
 
@@ -6893,8 +6874,8 @@ dependencies = [
  "wadm-types",
  "walkdir",
  "wascap 0.15.0",
+ "wasi-preview1-component-adapter-provider",
  "wasm-encoder 0.215.0",
- "wasmcloud-component-adapters",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.8.0",
  "wasmparser 0.215.0",
@@ -6929,6 +6910,12 @@ checksum = "2f43d1c36145feb89a3e61aa0ba3e582d976a8ab77f1474aa0adb80800fe0cf8"
 dependencies = [
  "wit-bindgen-rt 0.24.0",
 ]
+
+[[package]]
+name = "wasi-preview1-component-adapter-provider"
+version = "23.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f91d3d13afef569b9fc80cfbb807c87c16ef49bd3ac1a93285ea6a264b600d2d"
 
 [[package]]
 name = "wasite"
@@ -7188,26 +7175,6 @@ dependencies = [
  "uuid 1.10.0",
  "wasi 0.13.1+wasi-0.2.0",
  "wit-bindgen",
-]
-
-[[package]]
-name = "wasmcloud-component-adapters"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e2f03df5ce84548110521426695ac9d4cc5ab591953d9a6dd2165ce9968055a"
-dependencies = [
- "anyhow",
- "base64 0.21.7",
- "futures",
- "nix-nar",
- "once_cell",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -7672,8 +7639,8 @@ dependencies = [
  "tracing-subscriber",
  "uuid 1.10.0",
  "wascap 0.15.0",
+ "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
- "wasmcloud-component-adapters",
  "wasmcloud-core 0.8.0",
  "wasmparser 0.215.0",
  "wasmtime",

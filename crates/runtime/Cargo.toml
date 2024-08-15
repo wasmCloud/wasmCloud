@@ -32,7 +32,7 @@ tokio-util = { workspace = true, features = ["codec", "io"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-component-adapters = { workspace = true }
+wasi-preview1-component-adapter-provider = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = [
