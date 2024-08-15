@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-docs = ["wasmcloud-component-adapters/docs"]
+docs = []
 
 [package.metadata.docs.rs]
 features = ["docs"]
@@ -16,6 +16,8 @@ anyhow = { workspace = true, features = ["std"] }
 futures = { workspace = true, features = ["alloc", "async-await"] }
 heck = { workspace = true }
 nkeys = { workspace = true }
+rustversion = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = [
@@ -24,9 +26,7 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
 ] }
+url = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
-wasmcloud-component-adapters = { workspace = true }
+wasi-preview1-component-adapter-provider = { workspace = true }
 wit-component = { workspace = true }
-rustversion = { workspace = true }
-semver = { workspace = true, features = [ "serde" ] }
-url = { workspace = true, features = [ "serde" ] }

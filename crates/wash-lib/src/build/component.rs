@@ -9,6 +9,9 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use normpath::PathExt;
 use tracing::{debug, info, warn};
+use wasi_preview1_component_adapter_provider::{
+    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+};
 use wasm_encoder::{Encode, Section};
 use wit_bindgen_core::Files;
 use wit_bindgen_go::Opts as WitBindgenGoOpts;
@@ -473,7 +476,10 @@ fn adapt_wasi_preview1_component(
 
     // Adapt the module
     encoder = encoder
-        .adapter("wasi_snapshot_preview1", adapter_wasm_bytes.as_ref())
+        .adapter(
+            WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME,
+            adapter_wasm_bytes.as_ref(),
+        )
         .context("failed to set adapter during encoding")?;
 
     // Return the encoded module bytes
@@ -494,7 +500,7 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ComponentConfig) -> Resul
         return std::fs::read(path)
             .with_context(|| format!("failed to read wasm bytes from [{}]", path.display()));
     }
-    Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
+    Ok(WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER.into())
 }
 
 /// Embed required component metadata to a given WebAssembly binary

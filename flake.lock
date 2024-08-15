@@ -453,7 +453,6 @@
       "inputs": {
         "nixify": "nixify",
         "nixlib": "nixlib_3",
-        "wasmcloud-component-adapters": "wasmcloud-component-adapters",
         "wit-deps": "wit-deps"
       }
     },
@@ -553,53 +552,6 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
-        "type": "github"
-      }
-    },
-    "wasi-preview1-command-component-adapter": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-GTDtRk1fmYJtCOd1Dd1OKCmckengEnwhnDYLw0LdRH8=",
-        "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.command.wasm"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.command.wasm"
-      }
-    },
-    "wasi-preview1-reactor-component-adapter": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-zsV6cKMoJCp3aOYtRsumLg6xgiTGMGGV5rB7fivktJQ=",
-        "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.reactor.wasm"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.0/wasi_snapshot_preview1.reactor.wasm"
-      }
-    },
-    "wasmcloud-component-adapters": {
-      "inputs": {
-        "nixify": [
-          "nixify"
-        ],
-        "wasi-preview1-command-component-adapter": "wasi-preview1-command-component-adapter",
-        "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter"
-      },
-      "locked": {
-        "lastModified": 1711387649,
-        "narHash": "sha256-3YZCkGUPaX7w+BqCUzyR41vAzchSMak6qRtmMBiOjMw=",
-        "owner": "wasmCloud",
-        "repo": "wasmcloud-component-adapters",
-        "rev": "896b9c66f5ca6150cab2a4cb0326ad0081c90a4d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "wasmCloud",
-        "ref": "v0.9.0",
-        "repo": "wasmcloud-component-adapters",
         "type": "github"
       }
     },
