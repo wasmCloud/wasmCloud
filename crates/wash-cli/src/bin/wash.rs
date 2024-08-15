@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
+ 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
+
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 use wash_cli::app::{self, AppCliCommand};
@@ -131,6 +132,13 @@ struct Cli {
     )]
     pub(crate) experimental: bool,
 
+    #[clap(
+        long = "markdown-help", 
+        hide = true,
+        global = true
+    )]
+    markdown_help: bool,
+
     #[clap(subcommand)]
     command: CliCommand,
 }
@@ -235,6 +243,14 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    // Implement clap_markdown for markdown generation of command line documentation
+    let mdargs = Cli::parse();
+
+    // Most straightforward way to invoke is probably `wash app list --markdown-help > help.md`
+    if mdargs.markdown_help {
+        clap_markdown::print_help_markdown::<Cli>();
+    };
 
     let mut command = Cli::command();
     // Load plugins if they are not disabled

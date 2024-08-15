@@ -27,6 +27,7 @@ async-nats-0_33 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"] }
 clap_complete = { workspace = true }
+clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 crossterm ={ workspace = true, features = ["events","windows"] }
