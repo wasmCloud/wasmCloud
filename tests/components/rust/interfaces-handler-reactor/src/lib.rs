@@ -1,9 +1,8 @@
-#![allow(clippy::missing_safety_doc)]
-
 wit_bindgen::generate!({
     with: {
         "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
-    }
+    },
+    generate_all,
 });
 
 use exports::test_components::testing;
