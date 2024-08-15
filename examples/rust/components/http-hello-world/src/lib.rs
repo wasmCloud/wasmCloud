@@ -1,8 +1,6 @@
-wit_bindgen::generate!({
-    generate_all
-});
+wit_bindgen::generate!({ generate_all });
 
-use exports::wasi::http::incoming_handler::Guest;
+use wasi::exports::http::incoming_handler::Guest;
 use wasi::http::types::*;
 
 struct HttpServer;
@@ -22,4 +20,4 @@ impl Guest for HttpServer {
     }
 }
 
-export!(HttpServer);
+wasi::http::proxy::export!(HttpServer);
