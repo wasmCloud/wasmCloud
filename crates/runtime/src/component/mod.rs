@@ -16,7 +16,7 @@ use wascap::wasm::extract_claims;
 use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpImpl};
+use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
     collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
 };
@@ -191,14 +191,6 @@ where
     }
 }
 
-fn type_annotate_http<F, H>(val: F) -> F
-where
-    H: Handler,
-    F: Fn(&mut Ctx<H>) -> WasiHttpImpl<&mut Ctx<H>>,
-{
-    val
-}
-
 fn new_store<H: Handler>(
     engine: &wasmtime::Engine,
     handler: H,
@@ -296,17 +288,8 @@ where
 
         wasmtime_wasi::add_to_linker_async(&mut linker)
             .context("failed to link core WASI interfaces")?;
-        let closure = type_annotate_http(|ctx| WasiHttpImpl(ctx));
-        wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/outgoing-handler` interface")?;
-        wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/types` interface")?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("failed to link `wasi:http`")?;
 
         capability::blobstore::blobstore::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:blobstore/blobstore`")?;
