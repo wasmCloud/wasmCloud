@@ -116,7 +116,7 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 
 [build-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "macros", "net"] }
 
 [dev-dependencies]
 claims = { workspace = true }
