@@ -1,10 +1,9 @@
-#![allow(clippy::missing_safety_doc)]
-
 wit_bindgen::generate!({
     with: {
         "wasi:http/types@0.2.0": wasmcloud_component::wasi::http::types,
         "wasi:io/streams@0.2.0": wasmcloud_component::wasi::io::streams,
-    }
+    },
+    generate_all,
 });
 
 use std::collections::HashMap;
