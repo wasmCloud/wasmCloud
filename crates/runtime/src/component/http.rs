@@ -8,9 +8,9 @@ use tokio::sync::oneshot;
 use tokio::{join, spawn};
 use tracing::{debug, instrument, warn, Instrument as _};
 use wasmtime::component::ResourceTable;
-use wasmtime_wasi_http::body::HyperOutgoingBody;
+use wasmtime_wasi_http::body::{HostIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
-    HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig,
+    HostFutureIncomingResponse, HostIncomingRequest, IncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 use wrpc_interface_http::ServeIncomingHandlerWasmtime;
@@ -130,14 +130,31 @@ where
             wasmtime_wasi_http::bindings::http::types::ErrorCode,
         >,
     > {
+        let scheme = request.uri().scheme().context("scheme missing")?;
+        let scheme = wrpc_interface_http::bindings::wrpc::http::types::Scheme::from(scheme).into();
+
         let (tx, rx) = oneshot::channel();
         let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
-        let (bindings, _) =
-            incoming_http_bindings::IncomingHttp::instantiate_pre(&mut store, &self.pre).await?;
+        let pre = incoming_http_bindings::IncomingHttpPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasi:http/incoming-handler`")?;
+        let bindings = pre
+            .instantiate_async(&mut store)
+            .await
+            .context("failed to instantiate `wasi:http/incoming-handler`")?;
         let data = store.data_mut();
-        let request = data
-            .new_incoming_request(request)
-            .context("failed to create incoming request")?;
+
+        // The below is adapted from `WasiHttpView::new_incoming_request`, which is unusable for
+        // us, since it requires a `hyper::Error`
+
+        let (parts, body) = request.into_parts();
+        let body = HostIncomingBody::new(
+            body,
+            // TODO: this needs to be plumbed through
+            std::time::Duration::from_millis(600 * 1000),
+        );
+        let incoming_req = HostIncomingRequest::new(data, parts, scheme, Some(body))?;
+        let request = data.table().push(incoming_req)?;
+
         let response = data
             .new_response_outparam(tx)
             .context("failed to create response")?;

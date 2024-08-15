@@ -103,10 +103,9 @@ where
         }: wrpc_handler_bindings::wasmcloud::messaging::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
         let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
-        let (bindings, _) =
-            wasmtime_handler_bindings::MessagingHandler::instantiate_pre(&mut store, &self.pre)
-                .await?;
-
+        let pre = wasmtime_handler_bindings::MessagingHandlerPre::new(self.pre.clone())
+            .context("failed to pre-instantiate `wasmcloud:messaging/handler`")?;
+        let bindings = pre.instantiate_async(&mut store).await?;
         let res = bindings
             .wasmcloud_messaging_handler()
             .call_handle_message(
