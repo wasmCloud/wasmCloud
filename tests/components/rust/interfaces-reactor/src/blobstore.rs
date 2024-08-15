@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use wasmcloud_component::wasi::blobstore;
-use wasmcloud_component::OutputStreamWriter;
 
 fn assert_create_container(name: &String, min_created_at: u64) -> blobstore::container::Container {
     eprintln!("call `wasi:blobstore/blobstore.create-container`...");
@@ -69,13 +68,11 @@ fn assert_write_container_data(
     let mut value_stream = value
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
-    let mut value_stream_writer = OutputStreamWriter::from(&mut value_stream);
-    eprintln!("write body to outgoing blobstore stream...");
-    value_stream_writer
+    value_stream
         .write_all(data)
         .expect("failed to write result to blobstore output stream");
     eprintln!("flush outgoing blobstore stream...");
-    value_stream_writer
+    value_stream
         .flush()
         .expect("failed to flush blobstore output stream");
     eprintln!("call `wasi:blobstore/container.container.write-data`...");

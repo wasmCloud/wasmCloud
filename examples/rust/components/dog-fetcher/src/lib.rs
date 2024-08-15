@@ -1,9 +1,24 @@
-#![allow(clippy::missing_safety_doc)]
-wit_bindgen::generate!();
+mod bindings {
+    use crate::DogFetcher;
 
-use std::io::Read;
+    wit_bindgen::generate!({
+        with: {
+            "wasi:clocks/monotonic-clock@0.2.0": ::wasi::clocks::monotonic_clock,
+            "wasi:http/incoming-handler@0.2.0": generate,
+            "wasi:http/outgoing-handler@0.2.0": ::wasi::http::outgoing_handler,
+            "wasi:http/types@0.2.0": ::wasi::http::types,
+            "wasi:io/error@0.2.0": ::wasi::io::error,
+            "wasi:io/poll@0.2.0": ::wasi::io::poll,
+            "wasi:io/streams@0.2.0": ::wasi::io::streams,
+        }
+    });
 
-use exports::wasi::http::incoming_handler::Guest;
+    export!(DogFetcher);
+}
+
+use std::io::{Write as _, Read as _};
+
+use bindings::exports::wasi::http::incoming_handler::Guest;
 use wasi::http::types::*;
 
 #[derive(serde::Deserialize)]
@@ -40,7 +55,7 @@ impl Guest for DogFetcher {
                         let mut stream = response_body
                             .stream()
                             .expect("failed to get HTTP request response stream");
-                        InputStreamReader::from(&mut stream)
+                        stream
                             .read_to_end(&mut buf)
                             .expect("failed to read value from HTTP request response stream");
                         buf
@@ -61,7 +76,7 @@ impl Guest for DogFetcher {
         let response = OutgoingResponse::new(Fields::new());
         response.set_status_code(200).unwrap();
         let response_body = response.body().unwrap();
-        let write_stream = response_body.write().unwrap();
+        let mut write_stream = response_body.write().unwrap();
 
         // Write the headers and then write the body
         ResponseOutparam::set(response_out, Ok(response));
@@ -74,52 +89,9 @@ impl Guest for DogFetcher {
         //
         // If we expected the body to possibly be longer, we'd need to loop and write chunks,
         // paying attention to how to use the appropriate wasi:io APIs.
-        write_stream
-            .blocking_write_and_flush(dog_picture_url.as_bytes())
-            .unwrap();
+        write_stream.write_all(dog_picture_url.as_bytes()).unwrap();
         drop(write_stream);
 
         OutgoingBody::finish(response_body, None).expect("failed to finish response body");
     }
 }
-
-pub struct InputStreamReader<'a> {
-    stream: &'a mut crate::wasi::io::streams::InputStream,
-}
-
-impl<'a> From<&'a mut crate::wasi::io::streams::InputStream> for InputStreamReader<'a> {
-    fn from(stream: &'a mut crate::wasi::io::streams::InputStream) -> Self {
-        Self { stream }
-    }
-}
-
-impl std::io::Read for InputStreamReader<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        use crate::wasi::io::streams::StreamError;
-        use std::io;
-
-        let n = buf
-            .len()
-            .try_into()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        match self.stream.blocking_read(n) {
-            Ok(chunk) => {
-                let n = chunk.len();
-                if n > buf.len() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "more bytes read than requested",
-                    ));
-                }
-                buf[..n].copy_from_slice(&chunk);
-                Ok(n)
-            }
-            Err(StreamError::Closed) => Ok(0),
-            Err(StreamError::LastOperationFailed(e)) => {
-                Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
-            }
-        }
-    }
-}
-
-export!(DogFetcher);

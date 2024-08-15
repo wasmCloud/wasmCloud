@@ -18,11 +18,11 @@
 //!   - Request bodies must fit in component memory (all of it is read in)
 //!   - Trailers are not processed/sent
 //!
-#![allow(clippy::missing_safety_doc)]
-
 use anyhow::{anyhow, bail, ensure, Result};
 
-wit_bindgen::generate!();
+wit_bindgen::generate!({
+    generate_all
+});
 
 /// Implementation of the 'component' world in wit/world.wit will hang off of this struct
 struct Component;
