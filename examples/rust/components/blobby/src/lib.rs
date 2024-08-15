@@ -1,22 +1,37 @@
-#![allow(clippy::missing_safety_doc)]
-// ^^^ This is for clippy complaining about something that wit bindgen is generating
+mod bindings {
+    use crate::Blobby;
 
-wit_bindgen::generate!();
+    wit_bindgen::generate!({
+        with: {
+            "wasi:blobstore/blobstore@0.2.0-draft": generate,
+            "wasi:blobstore/container@0.2.0-draft": generate,
+            "wasi:blobstore/types@0.2.0-draft": generate,
+            "wasi:clocks/monotonic-clock@0.2.0": ::wasi::clocks::monotonic_clock,
+            "wasi:http/incoming-handler@0.2.0": generate,
+            "wasi:http/types@0.2.0": ::wasi::http::types,
+            "wasi:io/error@0.2.0": ::wasi::io::error,
+            "wasi:io/poll@0.2.0": ::wasi::io::poll,
+            "wasi:io/streams@0.2.0": ::wasi::io::streams,
+            "wasi:logging/logging": generate,
+        }
+    });
 
-use std::io::{Read, Write};
+    // export! defines that the `Blobby` struct defined below is going to define
+    // the exports of the `world`, namely the `run` function.
+    export!(Blobby);
+}
+
+use std::io::{Read as _, Write as _};
 
 use http::{
     header::{ALLOW, CONTENT_LENGTH},
     StatusCode,
 };
 
-use exports::wasi::http::incoming_handler::Guest;
-use wasi::blobstore::blobstore;
-use wasi::http::types::*;
-use wasi::logging::logging::{log, Level};
-use wrapper::OutputStreamWriter;
-
-mod wrapper;
+use ::wasi::http::types::*;
+use bindings::exports::wasi::http::incoming_handler::Guest;
+use bindings::wasi::blobstore;
+use bindings::wasi::logging::logging::{log, Level};
 
 struct Error {
     status_code: StatusCode,
@@ -24,7 +39,7 @@ struct Error {
 }
 
 impl Error {
-    fn from_blobstore_error(e: blobstore::Error) -> Self {
+    fn from_blobstore_error(e: blobstore::blobstore::Error) -> Self {
         Error {
             status_code: StatusCode::BAD_GATEWAY,
             message: format!("Error when communicating with blobstore: {}", e),
@@ -51,13 +66,13 @@ const CONTAINER_PARAM_NAME: &str = "container";
 
 /// A helper that will automatically create a container if it doesn't exist and returns an owned copy of the name for immediate use
 fn ensure_container(name: &String) -> Result<()> {
-    if !blobstore::container_exists(name).map_err(Error::from_blobstore_error)? {
+    if !blobstore::blobstore::container_exists(name).map_err(Error::from_blobstore_error)? {
         log(
             Level::Info,
             "handle",
             format!("creating missing container/bucket [{name}]").as_str(),
         );
-        blobstore::create_container(name).map_err(Error::from_blobstore_error)?;
+        blobstore::blobstore::create_container(name).map_err(Error::from_blobstore_error)?;
     }
     Ok(())
 }
@@ -68,9 +83,7 @@ fn send_response_error(response_out: ResponseOutparam, error: Error) {
         .set_status_code(error.status_code.as_u16())
         .expect("Unable to set status code");
     let response_body = response.body().expect("body called more than once");
-    let mut writer = response_body.write().expect("should only call write once");
-
-    let mut stream = OutputStreamWriter::from(&mut writer);
+    let mut stream = response_body.write().expect("should only call write once");
 
     if let Err(e) = stream.write_all(error.message.as_bytes()) {
         log(
@@ -81,7 +94,7 @@ fn send_response_error(response_out: ResponseOutparam, error: Error) {
         return;
     }
     // Make sure to release the write resources
-    drop(writer);
+    drop(stream);
     OutgoingBody::finish(response_body, None).expect("failed to finish response body");
     ResponseOutparam::set(response_out, Ok(response));
 }
@@ -159,8 +172,7 @@ impl Guest for Blobby {
                     .expect("Unable to set status code");
                 let response_body = response.body().unwrap();
                 let mut stream = response_body.write().expect("Unable to get stream");
-                let mut outstream = OutputStreamWriter::from(&mut stream);
-                if let Err(e) = outstream.write_all(&data) {
+                if let Err(e) = stream.write_all(&data) {
                     log(
                         Level::Error,
                         "handle",
@@ -175,7 +187,7 @@ impl Guest for Blobby {
                     );
                     return;
                 }
-                if let Err(e) = outstream.flush() {
+                if let Err(e) = stream.flush() {
                     log(
                         Level::Error,
                         "handle",
@@ -336,7 +348,7 @@ impl Guest for Blobby {
 fn get_object(container_name: &String, object_name: &String) -> Result<Vec<u8>> {
     // Check that the object exists first. If it doesn't return the proper http response
     let container =
-        blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
+        blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
     if !container
         .has_object(object_name)
         .map_err(Error::from_blobstore_error)?
@@ -350,7 +362,7 @@ fn get_object(container_name: &String, object_name: &String) -> Result<Vec<u8>> 
     let incoming = container
         .get_data(object_name, 0, metadata.size)
         .map_err(Error::from_blobstore_error)?;
-    let body = wasi::blobstore::types::IncomingValue::incoming_value_consume_sync(incoming)
+    let body = blobstore::types::IncomingValue::incoming_value_consume_sync(incoming)
         .map_err(Error::from_blobstore_error)?;
 
     log(Level::Info, "get_object", "successfully got object stream");
@@ -359,7 +371,7 @@ fn get_object(container_name: &String, object_name: &String) -> Result<Vec<u8>> 
 
 fn delete_object(container_name: &String, object_name: &String) -> Result<StatusCode> {
     let container =
-        blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
+        blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
 
     container
         .delete_object(object_name)
@@ -372,16 +384,14 @@ fn delete_object(container_name: &String, object_name: &String) -> Result<Status
 // stream forward function
 fn put_object(container_name: &String, object_name: &String, data: Vec<u8>) -> Result<StatusCode> {
     let container =
-        blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
-    let result_value = wasi::blobstore::types::OutgoingValue::new_outgoing_value();
+        blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
+    let result_value = blobstore::types::OutgoingValue::new_outgoing_value();
 
     let mut body = result_value
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
 
-    let mut out = OutputStreamWriter::from(&mut body);
-
-    if let Err(e) = out.write_all(&data) {
+    if let Err(e) = body.write_all(&data) {
         log(
             Level::Error,
             "put_object",
@@ -393,7 +403,7 @@ fn put_object(container_name: &String, object_name: &String, data: Vec<u8>) -> R
         });
     }
 
-    if let Err(e) = out.flush() {
+    if let Err(e) = body.flush() {
         log(
             Level::Error,
             "put_object",
@@ -419,7 +429,3 @@ fn put_object(container_name: &String, object_name: &String, data: Vec<u8>) -> R
 
     Ok(StatusCode::CREATED)
 }
-
-// export! defines that the `Blobby` struct defined below is going to define
-// the exports of the `world`, namely the `run` function.
-export!(Blobby);

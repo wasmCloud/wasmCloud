@@ -12,4 +12,4 @@ An example component that performs queries with the wasmcloud-sqldb-postgres pro
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.24", features = ["default"] }
+wit-bindgen = "0.30"
