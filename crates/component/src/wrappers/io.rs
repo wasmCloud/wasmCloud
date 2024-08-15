@@ -54,12 +54,19 @@ impl std::io::Write for OutputStreamWriter<'_> {
         use crate::wasi::io::streams::StreamError;
         use std::io;
 
-        let n = match self.stream.check_write().map(std::num::NonZeroU64::new) {
-            Ok(Some(n)) => n,
-            Ok(None) | Err(StreamError::Closed) => return Ok(0),
-            Err(StreamError::LastOperationFailed(e)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
-            }
+        let n = loop {
+            match self.stream.check_write().map(std::num::NonZeroU64::new) {
+                Ok(Some(n)) => {
+                    break n;
+                }
+                Ok(None) => {
+                    self.stream.subscribe().block();
+                }
+                Err(StreamError::Closed) => return Ok(0),
+                Err(StreamError::LastOperationFailed(e)) => {
+                    return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
+                }
+            };
         };
         let n = n
             .get()

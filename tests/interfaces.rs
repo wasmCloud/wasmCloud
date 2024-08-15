@@ -43,7 +43,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
+                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=debug")
             }),
         )
         .init();
@@ -509,7 +509,7 @@ async fn interfaces() -> anyhow::Result<()> {
     ensure!(config_value.is_none());
     ensure!(all_config == []);
     ensure!(ping == "pong");
-    ensure!(long_value == "1234567890".repeat(1000));
+    ensure!(long_value == "1234567890".repeat(10000));
     ensure!(meaning_of_universe == 42);
     ensure!(split == ["hi", "there", "friend"]);
     ensure!(is_same);

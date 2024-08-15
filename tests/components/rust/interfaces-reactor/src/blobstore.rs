@@ -1,7 +1,7 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use wasmcloud_component::wasi::blobstore;
-use wasmcloud_component::OutputStreamWriter;
+use wasmcloud_component::{InputStreamReader, OutputStreamWriter};
 
 fn assert_create_container(name: &String, min_created_at: u64) -> blobstore::container::Container {
     eprintln!("call `wasi:blobstore/blobstore.create-container`...");
@@ -124,6 +124,24 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
 
     eprintln!("write `result` object...");
     assert_write_container_data(&container, &String::from("result"), body);
+
+    // Also test streaming read
+    eprintln!("call `wasi:blobstore/container.container.get-data`...");
+    let stored_value = container
+        .get_data(
+            &String::from("result"),
+            0,
+            body.len().saturating_add(10).try_into().unwrap_or(u64::MAX),
+        )
+        .expect("failed to get container data");
+    let mut stream = blobstore::types::IncomingValue::incoming_value_consume_async(stored_value)
+        .expect("failed to get input stream");
+    let mut stored_value = Vec::new();
+    eprintln!("read data from input stream...");
+    InputStreamReader::from(&mut stream)
+        .read_to_end(&mut stored_value)
+        .expect("failed to read data from input stream");
+    assert_eq!(stored_value, body);
 
     {
         eprintln!("call `wasi:blobstore/container.container.list-objects`...");

@@ -16,11 +16,10 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{stream, StreamExt as _};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt};
-use tokio_util::io::StreamReader;
 use tracing::instrument;
 use wasmtime::component::Resource;
 use wasmtime_wasi::pipe::AsyncWriteStream;
-use wasmtime_wasi::{HostOutputStream, InputStream};
+use wasmtime_wasi::{HostOutputStream, InputStream, StreamError};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
 
@@ -394,8 +393,23 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
             .delete(incoming_value)
             .context("failed to get incoming value")?;
 
-        streamer.io.await.context("failed to perform async I/O")?;
-        Ok(Ok(streamer.buf.into()))
+        // There shouldn't be anything in the buffer since we haven't read yet, but just in case,
+        // use the buffer as the start of the Vec
+        let out: Vec<u8> = streamer.buf.into();
+        // TODO: Should this be used in a select rather than spawned?
+        tokio::spawn(async move {
+            if let Err(err) = streamer.io.await {
+                tracing::error!(?err, "incoming value streamer errored");
+            }
+        });
+        let data = streamer
+            .stream
+            .fold(out, |mut acc, bytes| async move {
+                acc.extend(Vec::from(bytes));
+                acc
+            })
+            .await;
+        Ok(Ok(data))
     }
 
     #[instrument(skip(self))]
@@ -538,10 +552,9 @@ impl<H> container::Host for Ctx<H> where H: Handler {}
 
 /// A host input streamer
 pub struct HostInputStreamer {
-    reader: StreamReader<
-        core::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<Bytes>> + Send>>,
-        Bytes,
-    >,
+    // NOTE(thomastaylor312): We aren't using `StreamReader` and reading from that buffer because
+    // `read` isn't async. So we manually fill our own buffer and use that instead
+    stream: core::pin::Pin<Box<dyn futures::Stream<Item = Bytes> + Send>>,
     io: core::pin::Pin<Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>>,
     buf: BytesMut,
     err: Option<StreamError>,
@@ -549,20 +562,21 @@ pub struct HostInputStreamer {
 
 impl HostInputStreamer {
     /// Create a new `HostInputStreamer` with the given stream and I/O future.
+    #[must_use]
     pub fn new(
         stream: core::pin::Pin<Box<dyn futures::Stream<Item = bytes::Bytes> + Send>>,
         io: Box<dyn futures::Future<Output = anyhow::Result<()>> + Send>,
     ) -> Self {
         Self {
-            reader: StreamReader::new(Box::pin(stream.map(std::io::Result::Ok))),
+            stream,
             io: Box::into_pin(io),
+            // MAGIC NUMBER: 4096 seems to be a common chunk size so we start with that. This should
+            // avoid at least an initial allocation
             buf: BytesMut::with_capacity(4096),
             err: None,
         }
     }
 }
-
-use wasmtime_wasi::StreamError;
 
 impl wasmtime_wasi::HostInputStream for HostInputStreamer {
     fn read(&mut self, size: usize) -> wasmtime_wasi::StreamResult<Bytes> {
@@ -572,13 +586,13 @@ impl wasmtime_wasi::HostInputStream for HostInputStreamer {
         }
         // Consume the buffer
         let b = if self.buf.len() > size {
-            self.buf.split_off(size)
+            self.buf.split_to(size)
         } else {
-            self.buf.split_off(self.buf.len())
+            self.buf.split()
         };
         // NOTE(thomastaylor312): It might be more efficient to resize back up to our default size
         // here, but for now this just returns the bytes
-        Ok(b.into())
+        Ok(b.freeze())
     }
 }
 
@@ -587,17 +601,18 @@ impl wasmtime_wasi::Subscribe for HostInputStreamer {
     async fn ready(&mut self) {
         tokio::select! {
             res = self.io.as_mut() => {
-                // set this error
                 match res {
-                    Ok(_) => self.err = Some(StreamError::Closed),
-                    Err(e) => self.err = Some(StreamError::LastOperationFailed(e.into())),
+                    Ok(()) => self.err = Some(StreamError::Closed),
+                    Err(e) => self.err = Some(StreamError::LastOperationFailed(e)),
                 }
             },
-            // NOTE(thomastaylor312): For now we just let this grow the buffer, but we might want to
-            // use read instead and manually cap our buffer size if this becomes a problem
-            res = self.reader.read_buf(&mut self.buf) => {
-                if let Err(e) = res {
-                    self.err = Some(StreamError::LastOperationFailed(e.into()))
+            bytes = self.stream.next() => {
+                // There isn't really a zero-copy way to do this, so we just copy the bytes
+                // into our buffer
+                if let Some(bytes) = bytes {
+                    self.buf.extend(bytes);
+                } else {
+                    self.err = Some(StreamError::Closed);
                 }
             }
         }
