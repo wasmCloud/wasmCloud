@@ -509,7 +509,7 @@ async fn interfaces() -> anyhow::Result<()> {
     ensure!(config_value.is_none());
     ensure!(all_config == []);
     ensure!(ping == "pong");
-    ensure!(long_value == "1234567890".repeat(1000));
+    ensure!(long_value == "1234567890".repeat(10000));
     ensure!(meaning_of_universe == 42);
     ensure!(split == ["hi", "there", "friend"]);
     ensure!(is_same);
