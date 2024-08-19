@@ -8863,17 +8863,11 @@ dependencies = [
 
 [[package]]
 name = "wrpc-interface-blobstore"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca946495e61a2c19aadb6382f959ee350943d2dac00fa2dcfb6d28f5f3ca354c"
+checksum = "890617dc86a103519c1ddc8757e2f33d0fa5dcd70aa8d1fa61c4a4b364da0600"
 dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "futures",
- "tracing",
  "wit-bindgen-wrpc 0.4.13",
- "wrpc-transport 0.26.7",
 ]
 
 [[package]]
