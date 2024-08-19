@@ -7680,6 +7680,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -7695,6 +7696,7 @@ dependencies = [
  "wit-bindgen-wrpc 0.6.0",
  "wit-component 0.215.0",
  "wit-parser 0.215.0",
+ "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
  "wrpc-transport 0.26.7",
@@ -8856,6 +8858,21 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.215.0",
+]
+
+[[package]]
+name = "wrpc-interface-blobstore"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca946495e61a2c19aadb6382f959ee350943d2dac00fa2dcfb6d28f5f3ca354c"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "tracing",
+ "wit-bindgen-wrpc 0.4.13",
+ "wrpc-transport 0.26.7",
 ]
 
 [[package]]

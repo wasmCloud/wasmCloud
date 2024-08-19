@@ -7,6 +7,7 @@
 //! can be used by actors on your lattice.
 //!
 
+use core::future::Future;
 use core::pin::Pin;
 use core::str::FromStr;
 
@@ -36,7 +37,6 @@ use bytes::{Bytes, BytesMut};
 use futures::{stream, Stream, StreamExt as _};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt as _;
-use tokio::spawn;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
@@ -55,8 +55,8 @@ mod bindings {
             "wasi:io/error@0.2.0": generate,
             "wasi:io/poll@0.2.0": generate,
             "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.1.0": generate,
-            "wrpc:blobstore/types@0.1.0": generate,
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": generate,
         }
     });
 }
@@ -692,7 +692,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         name: String,
         limit: Option<u64>,
         offset: Option<u64>,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Vec<String>> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Vec<String>> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let client = self.client(cx).await?;
@@ -700,7 +708,10 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .list_container_objects(client.unalias(&name), limit, offset)
                 .await
                 .map(Vec::from_iter)?;
-            anyhow::Ok(Box::pin(stream::iter([names])) as Pin<Box<dyn Stream<Item = _> + Send>>)
+            anyhow::Ok((
+                Box::pin(stream::iter([names])) as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move { Ok(()) }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -768,7 +779,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         id: ObjectId,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Bytes> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Bytes> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let limit = end
@@ -787,23 +806,20 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .context("failed to get object")?;
             let mut data = ReaderStream::new(body.into_async_read().take(limit));
             let (tx, rx) = mpsc::channel(16);
-            spawn(async move {
-                while let Some(buf) = data.next().await {
-                    match buf {
-                        Ok(buf) => {
-                            if tx.send(buf).await.is_err() {
-                                warn!("stream receiver closed");
-                                return;
-                            }
-                        }
-                        Err(err) => {
-                            error!(?err, "failed to read object");
-                            return;
+            anyhow::Ok((
+                Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move {
+                    while let Some(buf) = data.next().await {
+                        let buf = buf
+                            .context("failed to read object")
+                            .map_err(|err| format!("{err:#}"))?;
+                        if tx.send(buf).await.is_err() {
+                            return Err("stream receiver closed".to_string());
                         }
                     }
-                }
-            });
-            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
+                    Ok(())
+                }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -874,22 +890,26 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         cx: Option<Context>,
         id: ObjectId,
         data: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<Result<Pin<Box<dyn Future<Output = Result<(), String>> + Send>>, String>>
+    {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let client = self.client(cx).await?;
-            // TODO: Stream value to S3
-            let data: BytesMut = data.collect().await;
-            client
+            let req = client
                 .s3_client
                 .put_object()
                 .bucket(client.unalias(&id.container))
-                .key(&id.object)
-                .body(data.freeze().into())
-                .send()
-                .await
-                .context("failed to put object")?;
-            anyhow::Ok(())
+                .key(&id.object);
+            anyhow::Ok(Box::pin(async {
+                // TODO: Stream data to S3
+                let data: BytesMut = data.collect().await;
+                req.body(data.freeze().into())
+                    .send()
+                    .await
+                    .context("failed to put object")
+                    .map_err(|err| format!("{err:#}"))?;
+                Ok(())
+            }) as Pin<Box<dyn Future<Output = _> + Send>>)
         }
         .await
         .map_err(|err| format!("{err:#}")))

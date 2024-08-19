@@ -43,7 +43,7 @@ pub async fn start_nats() -> Result<(
         async_nats::ConnectOptions::new().retry_on_initial_connect(),
     )
     .await
-    .context("failed to build nats client")?;
+    .context("failed to build NATS client")?;
     let client = timeout(Duration::from_secs(3), async move {
         loop {
             if client.connection_state() == State::Connected {
@@ -61,7 +61,7 @@ pub async fn start_nats() -> Result<(
         async_nats_0_33::ConnectOptions::new().retry_on_initial_connect(),
     )
     .await
-    .context("failed to build nats client")?;
+    .context("failed to build NATS client")?;
     let client = timeout(Duration::from_secs(3), async move {
         loop {
             if client.connection_state() == State::Connected {
