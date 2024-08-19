@@ -28,7 +28,7 @@ pub use config::Config;
 pub use logging::Logging;
 pub use secrets::Secrets;
 
-mod blobstore;
+pub(crate) mod blobstore;
 mod bus;
 mod config;
 mod http;

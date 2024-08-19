@@ -68,6 +68,12 @@ fn assert_write_container_data(
     let mut value_stream = value
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
+    eprintln!("call `wasi:blobstore/container.container.write-data`...");
+    container
+        .write_data(key, &value)
+        .expect("failed to write data");
+
+    eprintln!("write {data:?} to outgoing blobstore stream...");
     value_stream
         .write_all(data)
         .expect("failed to write result to blobstore output stream");
@@ -75,10 +81,12 @@ fn assert_write_container_data(
     value_stream
         .flush()
         .expect("failed to flush blobstore output stream");
-    eprintln!("call `wasi:blobstore/container.container.write-data`...");
-    container
-        .write_data(key, &value)
-        .expect("failed to write data");
+    drop(value_stream);
+
+    eprintln!("finishing outgoing blobstore stream...");
+    blobstore::types::OutgoingValue::finish(value)
+        .expect("failed to finish outgoing blobstore stream");
+
     eprintln!("call `wasi:blobstore/container.container.get-data`...");
     let stored_value = container
         .get_data(
@@ -89,7 +97,24 @@ fn assert_write_container_data(
         .expect("failed to get container data");
     let stored_value = blobstore::types::IncomingValue::incoming_value_consume_sync(stored_value)
         .expect("failed to get stored value buffer");
-    assert_eq!(stored_value, data);
+    assert_eq!(
+        stored_value,
+        data,
+        r#"stored value mismatch
+
+left length: {}
+right length: {}
+
+left string:
+{}
+
+right string:
+{}"#,
+        stored_value.len(),
+        data.len(),
+        String::from_utf8_lossy(&stored_value),
+        String::from_utf8_lossy(data),
+    );
 }
 
 pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
@@ -180,9 +205,9 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
         let (mut names, end) = objects
             .read_stream_object_names(5)
             .expect("failed to read object names");
-        assert!(end);
         names.sort();
         assert_eq!(names, ["bar", "baz", "result"]);
+        assert!(end);
     }
     {
         eprintln!("call `wasi:blobstore/container.container.list-objects`...");
@@ -195,8 +220,8 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
         let (names, end) = objects
             .read_stream_object_names(2)
             .expect("failed to read object names");
+        assert_eq!(names, ["foobar"]);
         assert!(end);
-        assert_eq!(names, ["foobar"])
     };
     eprintln!("call `wasi:blobstore/container.container.get-data`...");
     let value = other
@@ -224,8 +249,8 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
         let (names, end) = objects
             .read_stream_object_names(2)
             .expect("failed to read object names");
-        assert!(end);
         assert_eq!(names, ["foobar"]);
+        assert!(end);
     }
     {
         eprintln!("call `wasi:blobstore/container.container.list-objects`...");
@@ -238,9 +263,9 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
         let (mut names, end) = objects
             .read_stream_object_names(5)
             .expect("failed to read object names");
-        assert!(end);
         names.sort();
         assert_eq!(names, ["bar", "baz", "foo", "result"]);
+        assert!(end);
     }
     eprintln!("call `wasi:blobstore/container.container.get-data`...");
     let value = container
@@ -262,8 +287,8 @@ pub fn run_test(min_created_at: u64, body: &[u8], name: impl Into<String>) {
         let (names, end) = objects
             .read_stream_object_names(5)
             .expect("failed to read object names");
-        assert!(end);
         assert!(names.is_empty());
+        assert!(end);
     }
     container
         .delete_object(&String::from("foo"))

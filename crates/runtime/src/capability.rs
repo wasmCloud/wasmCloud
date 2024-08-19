@@ -9,10 +9,9 @@ mod wasmtime_bindings {
 
     mod blobstore {
         pub type Container = std::sync::Arc<str>;
-        pub type IncomingValue =
-            core::pin::Pin<Box<dyn futures::Stream<Item = bytes::Bytes> + Send>>;
-        pub type OutgoingValue = crate::io::AsyncVec;
-        pub type StreamObjectNames = crate::io::BufferedIncomingStream<String>;
+        pub type IncomingValue = crate::component::blobstore::IncomingValue;
+        pub type OutgoingValue = crate::component::blobstore::OutgoingValue;
+        pub type StreamObjectNames = crate::component::blobstore::StreamObjectNames;
     }
 
     mod lattice {
@@ -64,15 +63,9 @@ pub mod wrpc {
     wit_bindgen_wrpc::generate!({
         world: "wrpc-interfaces",
         with: {
-            "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:io/error@0.2.0": generate,
-            "wasi:io/poll@0.2.0": generate,
-            "wasi:io/streams@0.2.0": generate,
             "wasmcloud:messaging/consumer@0.2.0": generate,
             "wasmcloud:messaging/handler@0.2.0": generate,
             "wasmcloud:messaging/types@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.1.0": generate,
-            "wrpc:blobstore/types@0.1.0": generate,
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
         }

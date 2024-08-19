@@ -232,7 +232,6 @@ fn encode_component(_: impl AsRef<[u8]>, _: &[u8]) -> Result<Vec<u8>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=../../crates/component");
-    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=rust");
 
     let out_dir = env::var("OUT_DIR")
