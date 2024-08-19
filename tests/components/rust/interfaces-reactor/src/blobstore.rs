@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read as _, Write};
 
 use wasmcloud_component::wasi::blobstore;
 
@@ -100,7 +100,7 @@ fn assert_write_container_data(
     assert_eq!(
         stored_value,
         data,
-        r#"stored value mismatch
+        r#"sync stored value mismatch
 
 left length: {}
 right length: {}
@@ -113,6 +113,39 @@ right string:
         stored_value.len(),
         data.len(),
         String::from_utf8_lossy(&stored_value),
+        String::from_utf8_lossy(data),
+    );
+
+    eprintln!("call `wasi:blobstore/container.container.get-data`...");
+    let stored_value = container
+        .get_data(
+            key,
+            0,
+            data.len().saturating_add(10).try_into().unwrap_or(u64::MAX),
+        )
+        .expect("failed to get container data");
+    let mut stored_value = blobstore::types::IncomingValue::incoming_value_consume_async(stored_value)
+        .expect("failed to get stored value buffer");
+    let mut buf = vec![];
+    stored_value
+        .read_to_end(&mut buf)
+        .expect("failed to consume incoming value async");
+    assert_eq!(
+        buf,
+        data,
+        r#"async stored value mismatch
+
+left length: {}
+right length: {}
+
+left string:
+{}
+
+right string:
+{}"#,
+        buf.len(),
+        data.len(),
+        String::from_utf8_lossy(&buf),
         String::from_utf8_lossy(data),
     );
 }
