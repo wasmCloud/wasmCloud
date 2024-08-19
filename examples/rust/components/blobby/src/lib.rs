@@ -344,9 +344,6 @@ fn put_object(
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
 
-    io::copy(&mut data.take(content_length), &mut body)
-        .expect("failed to stream data from http response to blobstore");
-
     if let Err(e) = container.write_data(object_name, &result_value) {
         log(
             Level::Error,
@@ -358,6 +355,10 @@ fn put_object(
             message: format!("Failed to write data to blobstore: {}", e),
         });
     }
+    io::copy(&mut data.take(content_length), &mut body)
+        .expect("failed to stream data from http response to blobstore");
+
+    blobstore::types::OutgoingValue::finish(result_value).expect("failed to write data");
 
     Ok(StatusCode::CREATED)
 }
