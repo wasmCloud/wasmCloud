@@ -12,6 +12,7 @@ pub const WASH_DIR: &str = ".wash";
 
 pub const DOWNLOADS_DIR: &str = "downloads";
 pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
+pub const WADM_PID_FILE: &str = "wadm.pid";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE: &str = "default";
@@ -43,6 +44,11 @@ pub fn downloads_dir() -> Result<PathBuf> {
 /// The path to the running wasmCloud Host PID file for wash
 pub fn host_pid_file() -> Result<PathBuf> {
     Ok(downloads_dir()?.join(WASMCLOUD_PID_FILE))
+}
+
+/// The path to the running wadm PID file for wash
+pub fn wadm_pid_file() -> Result<PathBuf> {
+    Ok(downloads_dir()?.join(WADM_PID_FILE))
 }
 
 #[derive(Clone)]
