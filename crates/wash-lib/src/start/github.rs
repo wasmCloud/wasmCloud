@@ -127,11 +127,10 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
 // MacOS runners we use.
 mod test {
     use std::{collections::HashMap, env::temp_dir};
-    use testcontainers::{
-        core::{Mount, WaitFor},
-        runners::AsyncRunner,
-        GenericImage,
-    };
+
+    use testcontainers::core::{ContainerPort, Mount, WaitFor};
+    use testcontainers::runners::AsyncRunner as _;
+    use testcontainers::{GenericImage, ImageExt};
     use tokio::fs::{create_dir_all, remove_dir_all};
     use tokio::io::AsyncBufReadExt;
 
@@ -195,15 +194,16 @@ shutdown_lifetime 1 seconds
             .unwrap();
 
         let container = GenericImage::new("cgr.dev/chainguard/squid-proxy", "latest")
-            .with_exposed_port(3128)
+            .with_exposed_port(ContainerPort::Tcp(3128))
+            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
+            .with_wait_for(WaitFor::seconds(3))
             .with_mount(Mount::bind_mount(
                 squid_config_path.to_string_lossy().to_string(),
                 "/etc/squid.conf",
             ))
-            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
-            .with_wait_for(WaitFor::seconds(3))
             .start()
-            .await;
+            .await
+            .expect("failed to start squid-proxy container");
 
         let mut env_vars = HashMap::from([("HTTP_PROXY", None), ("HTTPS_PROXY", None)]);
         // Setup environment variables for the client
@@ -216,7 +216,10 @@ shutdown_lifetime 1 seconds
                 env_var,
                 format!(
                     "http://localhost:{}",
-                    container.get_host_port_ipv4(3128).await
+                    container
+                        .get_host_port_ipv4(ContainerPort::Tcp(3128))
+                        .await
+                        .expect("failed to get squid-proxy host port")
                 ),
             );
         }
@@ -227,13 +230,13 @@ shutdown_lifetime 1 seconds
         let http = client.get(http_endpoint).send().await.unwrap();
         let https = client.get(https_endpoint).send().await.unwrap();
 
-        container.stop().await;
+        let _ = container.stop().await;
 
         assert_eq!(http.status(), reqwest::StatusCode::OK);
         assert_eq!(https.status(), reqwest::StatusCode::OK);
 
         let mut stderr = vec![];
-        let mut lines = container.stderr().lines();
+        let mut lines = container.stderr(false).lines();
         while let Some(line) = lines.next_line().await.unwrap() {
             stderr.push(line);
         }
@@ -275,15 +278,16 @@ shutdown_lifetime 1 seconds
             .unwrap();
 
         let container = GenericImage::new("chainguard/squid-proxy", "latest")
-            .with_exposed_port(3128)
+            .with_exposed_port(ContainerPort::Tcp(3128))
+            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
+            .with_wait_for(WaitFor::seconds(3))
             .with_mount(Mount::bind_mount(
                 squid_config_path.to_string_lossy().to_string(),
                 "/etc/squid.conf",
             ))
-            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
-            .with_wait_for(WaitFor::seconds(3))
             .start()
-            .await;
+            .await
+            .expect("failed to start squid-proxy container");
 
         let mut env_vars = HashMap::from([("HTTP_PROXY", None), ("HTTPS_PROXY", None)]);
         // Setup environment variables for the client
@@ -296,7 +300,10 @@ shutdown_lifetime 1 seconds
                 env_var,
                 format!(
                     "http://localhost:{}",
-                    container.get_host_port_ipv4(3128).await
+                    container
+                        .get_host_port_ipv4(3128)
+                        .await
+                        .expect("failed to get squid-proxy port")
                 ),
             );
         }
@@ -310,13 +317,13 @@ shutdown_lifetime 1 seconds
         let http = client.get(http_endpoint).send().await.unwrap();
         let https = client.get(https_endpoint).send().await.unwrap();
 
-        container.stop().await;
+        let _ = container.stop().await;
 
         assert_eq!(http.status(), reqwest::StatusCode::OK);
         assert_eq!(https.status(), reqwest::StatusCode::OK);
 
         let mut stderr = vec![];
-        let mut lines = container.stderr().lines();
+        let mut lines = container.stderr(false).lines();
         while let Some(line) = lines.next_line().await.unwrap() {
             stderr.push(line);
         }
