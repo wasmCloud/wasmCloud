@@ -1,4 +1,5 @@
 use core::ops::Deref;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +14,10 @@ use wasmcloud_runtime::capability::config::runtime::ConfigError;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
-use wasmcloud_runtime::component::{Bus, Config, Logging, ReplacedInstanceTarget, Secrets};
+use wasmcloud_runtime::component::{
+    Bus, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, ReplacedInstanceTarget,
+    Secrets,
+};
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
 
@@ -311,5 +315,16 @@ impl Secrets for Handler {
         };
         use secrecy::ExposeSecret;
         Ok(secret_val.expose_secret().clone())
+    }
+}
+
+impl InvocationErrorIntrospect for Handler {
+    fn invocation_error_kind(&self, err: &anyhow::Error) -> InvocationErrorKind {
+        if let Some(err) = err.root_cause().downcast_ref::<std::io::Error>() {
+            if err.kind() == std::io::ErrorKind::NotConnected {
+                return InvocationErrorKind::NotFound;
+            }
+        }
+        InvocationErrorKind::Trap
     }
 }
