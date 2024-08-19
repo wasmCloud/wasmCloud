@@ -17,5 +17,7 @@ world wrpc-interfaces {
     import wrpc:keyvalue/atomics@0.2.0-draft;
     import wrpc:keyvalue/store@0.2.0-draft;
 
+    import wrpc:blobstore/blobstore@0.1.0;
+
     export wasmcloud:messaging/handler@0.2.0;
 }

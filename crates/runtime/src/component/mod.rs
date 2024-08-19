@@ -105,6 +105,22 @@ macro_rules! skip_static_instances {
     };
 }
 
+/// This represents a kind of wRPC invocation error
+pub enum InvocationErrorKind {
+    /// This occurs when the endpoint is not found, for example as would happen when the runtime
+    /// would attempt to call `foo:bar/baz@0.2.0`, but the peer served `foo:bar/baz@0.1.0`.
+    NotFound,
+
+    /// An error kind, which will result in a trap in the component
+    Trap,
+}
+
+/// Implementations of this trait are able to introspect an error returned by wRPC invocations
+pub trait InvocationErrorIntrospect {
+    /// Classify [`InvocationErrorKind`] of an error returned by wRPC
+    fn invocation_error_kind(&self, err: &anyhow::Error) -> InvocationErrorKind;
+}
+
 /// A collection of traits that the host must implement
 pub trait Handler:
     wrpc_transport::Invoke<Context = Option<ReplacedInstanceTarget>>
@@ -112,6 +128,7 @@ pub trait Handler:
     + Config
     + Logging
     + Secrets
+    + InvocationErrorIntrospect
     + Send
     + Sync
     + Clone
@@ -125,6 +142,7 @@ impl<
             + Config
             + Logging
             + Secrets
+            + InvocationErrorIntrospect
             + Send
             + Sync
             + Clone

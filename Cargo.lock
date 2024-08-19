@@ -6856,7 +6856,7 @@ dependencies = [
  "wat",
  "weld-codegen",
  "which",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
  "wrpc-interface-http",
  "wrpc-transport 0.26.7",
  "wrpc-transport-nats 0.22.3",
@@ -7405,7 +7405,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
  "wrpc-transport 0.26.7",
 ]
 
@@ -7423,7 +7423,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
  "wrpc-transport 0.26.7",
 ]
 
@@ -7448,7 +7448,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
  "wrpc-transport 0.26.7",
 ]
 
@@ -7514,7 +7514,7 @@ dependencies = [
  "tracing",
  "wascap 0.15.0",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7534,7 +7534,7 @@ dependencies = [
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7549,7 +7549,7 @@ dependencies = [
  "url",
  "vaultrs",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7578,7 +7578,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wasmcloud-tracing",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7600,7 +7600,7 @@ dependencies = [
  "tracing-opentelemetry 0.24.0",
  "wascap 0.15.0",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7659,7 +7659,7 @@ dependencies = [
  "ulid",
  "uuid 1.10.0",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
 ]
 
 [[package]]
@@ -7693,7 +7693,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
- "wit-bindgen-wrpc 0.6.0",
+ "wit-bindgen-wrpc 0.6.1",
  "wit-component 0.215.0",
  "wit-parser 0.215.0",
  "wrpc-interface-blobstore",
@@ -8664,9 +8664,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a8e623caab1795cc3dbd5056ca66418cfd499b153cd1608051129ef0db69a2"
+checksum = "13d6d77b55743394580ef24522b59040eaef23aebbf30588445d1d14d85e19e5"
 dependencies = [
  "anyhow",
  "bitflags 2.6.0",
@@ -8676,7 +8676,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasm-tokio",
- "wit-bindgen-wrpc-rust-macro 0.6.0",
+ "wit-bindgen-wrpc-rust-macro 0.6.1",
  "wrpc-transport 0.26.7",
 ]
 
@@ -8694,9 +8694,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc-rust"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9d534a3bb4e0ebf77e2e12eb1525665041c3caac2bcd1063fe9327aca956b0"
+checksum = "3021f508e6712267917551c71b3e4d45178f033a9df13b5b86d940d626a2ea6d"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -8723,9 +8723,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-wrpc-rust-macro"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1a64c976aee2b1a6a690db4c18c3071e6ec1f609aa3fb63a2d84afdb12e0e5b"
+checksum = "5baaf937595c7f7db4140b1ca61f7d6106984c529a6632b38c652a26554a58cd"
 dependencies = [
  "anyhow",
  "prettyplease",
@@ -8733,7 +8733,7 @@ dependencies = [
  "quote",
  "syn 2.0.74",
  "wit-bindgen-core 0.30.0",
- "wit-bindgen-wrpc-rust 0.6.0",
+ "wit-bindgen-wrpc-rust 0.6.1",
 ]
 
 [[package]]

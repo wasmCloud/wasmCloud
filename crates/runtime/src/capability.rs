@@ -63,12 +63,10 @@ pub mod wrpc {
     wit_bindgen_wrpc::generate!({
         world: "wrpc-interfaces",
         with: {
-            "wasmcloud:messaging/consumer@0.2.0": generate,
-            "wasmcloud:messaging/handler@0.2.0": generate,
-            "wasmcloud:messaging/types@0.2.0": generate,
-            "wrpc:keyvalue/atomics@0.2.0-draft": generate,
-            "wrpc:keyvalue/store@0.2.0-draft": generate,
-        }
+            "wasi:blobstore/types@0.2.0-draft": wrpc_interface_blobstore::bindings::wasi::blobstore::types,
+            "wrpc:blobstore/types@0.1.0": wrpc_interface_blobstore::bindings::wrpc::blobstore::types,
+        },
+        generate_all,
     });
 }
 

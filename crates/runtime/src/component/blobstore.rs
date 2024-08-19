@@ -1,4 +1,4 @@
-use super::{Ctx, Handler, ReplacedInstanceTarget};
+use super::{Ctx, Handler, InvocationErrorIntrospect, InvocationErrorKind, ReplacedInstanceTarget};
 
 use crate::capability::blobstore::blobstore::ContainerName;
 use crate::capability::blobstore::container::Container;
@@ -6,6 +6,7 @@ use crate::capability::blobstore::types::{
     ContainerMetadata, Error, ObjectId, ObjectMetadata, ObjectName,
 };
 use crate::capability::blobstore::{blobstore, container, types};
+use crate::capability::wrpc::wrpc::blobstore::blobstore as blobstore_0_1_0;
 use crate::io::BufferedIncomingStream;
 
 use core::future::Future;
@@ -21,9 +22,9 @@ use bytes::Bytes;
 use futures::future::OptionFuture;
 use futures::{future, FutureExt, Stream, StreamExt as _};
 use tokio::sync::mpsc;
-use tokio::{select, try_join};
+use tokio::{join, select, try_join};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::instrument;
+use tracing::{debug, instrument};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi::{HostInputStream, HostOutputStream, StreamError, StreamResult, Subscribe};
@@ -35,6 +36,33 @@ use wrpc_interface_blobstore::bindings;
 const MAX_CHUNK_SIZE: usize = 1 << 16;
 
 type Result<T, E = Error> = core::result::Result<T, E>;
+
+async fn invoke_with_fallback<
+    T,
+    Fut: Future<Output = anyhow::Result<T>>,
+    Fut0_1_0: Future<Output = anyhow::Result<T>>,
+>(
+    name: &str,
+    introspect: &impl InvocationErrorIntrospect,
+    f: impl FnOnce() -> Fut,
+    f_0_1_0: impl FnOnce() -> Fut0_1_0,
+) -> anyhow::Result<T> {
+    match f().await {
+        Ok(res) => Ok(res),
+        Err(err) => match introspect.invocation_error_kind(&err) {
+            InvocationErrorKind::NotFound => {
+                debug!(
+                    name,
+                    desired_instance = "wrpc:blobstore/blobstore@0.2.0",
+                    fallback_instance = "wrpc:blobstore/blobstore@0.1.0",
+                    "desired function export not found, fallback to older version"
+                );
+                f_0_1_0().await
+            }
+            InvocationErrorKind::Trap => Err(err),
+        },
+    }
+}
 
 pub struct OutgoingValue {
     guest: GuestOutgoingValue,
@@ -102,10 +130,23 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        match bindings::wrpc::blobstore::blobstore::get_container_info(
+        match invoke_with_fallback(
+            "get-container-info",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            name,
+            || {
+                bindings::wrpc::blobstore::blobstore::get_container_info(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    name,
+                )
+            },
+            || {
+                blobstore_0_1_0::get_container_info(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    name,
+                )
+            },
         )
         .await?
         {
@@ -131,20 +172,47 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        match bindings::wrpc::blobstore::blobstore::get_container_data(
+        let id = bindings::wasi::blobstore::types::ObjectId {
+            container: container.to_string(),
+            object: name,
+        };
+        match invoke_with_fallback(
+            "get-container-data",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            &bindings::wasi::blobstore::types::ObjectId {
-                container: container.to_string(),
-                object: name,
+            || async {
+                let (res, io) = bindings::wrpc::blobstore::blobstore::get_container_data(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                    start,
+                    end,
+                )
+                .await?;
+                Ok((res, io.map(wasmtime_wasi::runtime::spawn)))
             },
-            start,
-            end,
+            || async {
+                let (res, io) = blobstore_0_1_0::get_container_data(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                    start,
+                    end,
+                )
+                .await?;
+                Ok((
+                    res.map(|stream| {
+                        (
+                            stream,
+                            Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = _> + Send>>,
+                        )
+                    }),
+                    io.map(wasmtime_wasi::runtime::spawn),
+                ))
+            },
         )
         .await?
         {
             (Ok((stream, status)), io) => {
-                let io = io.map(wasmtime_wasi::runtime::spawn);
                 let value = self
                     .table
                     .push(IncomingValue { stream, status, io })
@@ -171,22 +239,56 @@ where
             .table
             .get_mut(&data)
             .context("failed to get outgoing value")?;
-        let HostOutgoingValue::Init(rx) = mem::take(host) else {
+        let HostOutgoingValue::Init(mut rx) = mem::take(host) else {
             bail!("outgoing-value.write-data was already called")
         };
-        match bindings::wrpc::blobstore::blobstore::write_container_data(
+        let id = bindings::wrpc::blobstore::types::ObjectId {
+            container: container.to_string(),
+            object,
+        };
+        let (tx, rx_wrpc) = mpsc::channel(128);
+        let (tx_0_1_0, rx_wrpc_0_1_0) = mpsc::channel(128);
+        // Due to the fallback, we cannot directly pass `rx` to the invocation, instead,
+        // spawn a task, which forwards messages to both invocation streams.
+        tokio::spawn(async move {
+            while let Some(item) = rx.recv().await {
+                if let (Err(_), Err(_)) = join!(tx.send(item.clone()), tx_0_1_0.send(item)) {
+                    return;
+                }
+            }
+        });
+        match invoke_with_fallback(
+            "write-container-data",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            &bindings::wrpc::blobstore::types::ObjectId {
-                container: container.to_string(),
-                object,
+            || async {
+                let (res, io) = bindings::wrpc::blobstore::blobstore::write_container_data(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                    Box::pin(ReceiverStream::new(rx_wrpc)),
+                )
+                .await?;
+                Ok((res, io.map(wasmtime_wasi::runtime::spawn)))
             },
-            Box::pin(ReceiverStream::new(rx)),
+            || async {
+                let (res, io) = blobstore_0_1_0::write_container_data(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                    Box::pin(ReceiverStream::new(rx_wrpc_0_1_0)),
+                )
+                .await?;
+                Ok((
+                    res.map(|()| {
+                        Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = _> + Send>>
+                    }),
+                    io.map(wasmtime_wasi::runtime::spawn),
+                ))
+            },
         )
         .await?
         {
             (Ok(status), io) => {
-                let io = io.map(wasmtime_wasi::runtime::spawn);
                 *host = HostOutgoingValue::Writing { status, io };
                 Ok(Ok(()))
             }
@@ -204,22 +306,46 @@ where
             .get(&container)
             .context("failed to get container")?;
         // TODO: implement a stream with limit and offset
-        match bindings::wrpc::blobstore::blobstore::list_container_objects(
+        match invoke_with_fallback(
+            "list-container-objects",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            container,
-            None,
-            None,
+            || async {
+                let (res, io) = bindings::wrpc::blobstore::blobstore::list_container_objects(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                    None,
+                    None,
+                )
+                .await?;
+                Ok((res, io.map(wasmtime_wasi::runtime::spawn)))
+            },
+            || async {
+                let (res, io) = blobstore_0_1_0::list_container_objects(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                    None,
+                    None,
+                )
+                .await?;
+                Ok((
+                    res.map(|stream| {
+                        (
+                            stream,
+                            Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = _> + Send>>,
+                        )
+                    }),
+                    io.map(wasmtime_wasi::runtime::spawn),
+                ))
+            },
         )
         .await?
         {
             (Ok((stream, status)), io) => {
                 let stream = BufferedIncomingStream::new(stream);
                 let status = status.fuse();
-                let io = io
-                    .map(wasmtime_wasi::runtime::spawn)
-                    .map(FutureExt::fuse)
-                    .into();
+                let io = io.map(FutureExt::fuse).into();
                 let stream = self
                     .table
                     .push(StreamObjectNames { stream, status, io })
@@ -249,11 +375,26 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        bindings::wrpc::blobstore::blobstore::delete_objects(
+        let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        invoke_with_fallback(
+            "delete-objects",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            container,
-            &names.iter().map(String::as_str).collect::<Vec<_>>(),
+            || {
+                bindings::wrpc::blobstore::blobstore::delete_objects(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                    &names,
+                )
+            },
+            || {
+                blobstore_0_1_0::delete_objects(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                    &names,
+                )
+            },
         )
         .await
     }
@@ -268,12 +409,26 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        bindings::wrpc::blobstore::blobstore::has_object(
+        let id = bindings::wrpc::blobstore::types::ObjectId {
+            container: container.to_string(),
+            object,
+        };
+        invoke_with_fallback(
+            "has-object",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            &bindings::wrpc::blobstore::types::ObjectId {
-                container: container.to_string(),
-                object,
+            || {
+                bindings::wrpc::blobstore::blobstore::has_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                )
+            },
+            || {
+                blobstore_0_1_0::has_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                )
             },
         )
         .await
@@ -289,12 +444,26 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        match bindings::wrpc::blobstore::blobstore::get_object_info(
+        let id = bindings::wrpc::blobstore::types::ObjectId {
+            container: container.to_string(),
+            object: name.clone(),
+        };
+        match invoke_with_fallback(
+            "get-object-info",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            &bindings::wrpc::blobstore::types::ObjectId {
-                container: container.to_string(),
-                object: name.clone(),
+            || {
+                bindings::wrpc::blobstore::blobstore::get_object_info(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                )
+            },
+            || {
+                blobstore_0_1_0::get_object_info(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    &id,
+                )
             },
         )
         .await?
@@ -317,10 +486,23 @@ where
             .table
             .get(&container)
             .context("failed to get container")?;
-        bindings::wrpc::blobstore::blobstore::clear_container(
+        invoke_with_fallback(
+            "clear-container",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreContainer),
-            container,
+            || {
+                bindings::wrpc::blobstore::blobstore::clear_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                )
+            },
+            || {
+                blobstore_0_1_0::clear_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreContainer),
+                    container,
+                )
+            },
         )
         .await
     }
@@ -681,10 +863,23 @@ where
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>>> {
-        match bindings::wrpc::blobstore::blobstore::create_container(
+        match invoke_with_fallback(
+            "create-container",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &name,
+            || {
+                bindings::wrpc::blobstore::blobstore::create_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
+            || {
+                blobstore_0_1_0::create_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
         )
         .await?
         {
@@ -704,10 +899,23 @@ where
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>>> {
-        match bindings::wrpc::blobstore::blobstore::container_exists(
+        match invoke_with_fallback(
+            "container-exists",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &name,
+            || {
+                bindings::wrpc::blobstore::blobstore::container_exists(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
+            || {
+                blobstore_0_1_0::container_exists(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
         )
         .await?
         {
@@ -725,36 +933,78 @@ where
 
     #[instrument(skip(self))]
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
-        bindings::wrpc::blobstore::blobstore::delete_container(
+        invoke_with_fallback(
+            "delete-container",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &name,
+            || {
+                bindings::wrpc::blobstore::blobstore::delete_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
+            || {
+                blobstore_0_1_0::delete_container(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
         )
         .await
     }
 
     #[instrument(skip(self))]
     async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
-        bindings::wrpc::blobstore::blobstore::container_exists(
+        invoke_with_fallback(
+            "container-exists",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &name,
+            || {
+                bindings::wrpc::blobstore::blobstore::container_exists(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
+            || {
+                blobstore_0_1_0::container_exists(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &name,
+                )
+            },
         )
         .await
     }
 
     #[instrument(skip(self))]
     async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bindings::wrpc::blobstore::blobstore::copy_object(
+        let src = bindings::wasi::blobstore::types::ObjectId {
+            container: src.container,
+            object: src.object,
+        };
+        let dest = bindings::wasi::blobstore::types::ObjectId {
+            container: dest.container,
+            object: dest.object,
+        };
+        invoke_with_fallback(
+            "copy-object",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &bindings::wasi::blobstore::types::ObjectId {
-                container: src.container,
-                object: src.object,
+            || {
+                bindings::wrpc::blobstore::blobstore::copy_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &src,
+                    &dest,
+                )
             },
-            &bindings::wasi::blobstore::types::ObjectId {
-                container: dest.container,
-                object: dest.object,
+            || {
+                blobstore_0_1_0::copy_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &src,
+                    &dest,
+                )
             },
         )
         .await
@@ -762,16 +1012,32 @@ where
 
     #[instrument(skip(self))]
     async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bindings::wrpc::blobstore::blobstore::move_object(
+        let src = bindings::wasi::blobstore::types::ObjectId {
+            container: src.container,
+            object: src.object,
+        };
+        let dest = bindings::wasi::blobstore::types::ObjectId {
+            container: dest.container,
+            object: dest.object,
+        };
+        invoke_with_fallback(
+            "move-object",
             &self.handler,
-            Some(ReplacedInstanceTarget::BlobstoreBlobstore),
-            &bindings::wasi::blobstore::types::ObjectId {
-                container: src.container,
-                object: src.object,
+            || {
+                bindings::wrpc::blobstore::blobstore::move_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &src,
+                    &dest,
+                )
             },
-            &bindings::wasi::blobstore::types::ObjectId {
-                container: dest.container,
-                object: dest.object,
+            || {
+                blobstore_0_1_0::move_object(
+                    &self.handler,
+                    Some(ReplacedInstanceTarget::BlobstoreBlobstore),
+                    &src,
+                    &dest,
+                )
             },
         )
         .await
