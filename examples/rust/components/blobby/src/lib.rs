@@ -358,6 +358,8 @@ fn put_object(
     io::copy(&mut data.take(content_length), &mut body)
         .expect("failed to stream data from http response to blobstore");
 
+    drop(body);
+
     blobstore::types::OutgoingValue::finish(result_value).expect("failed to write data");
 
     Ok(StatusCode::CREATED)
