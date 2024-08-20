@@ -301,7 +301,6 @@ impl bindings::prepared::Handler<Option<Context>> for PostgresProvider {
     }
 }
 
-#[cfg(feature = "rustls")]
 fn create_tls_pool(
     cfg: deadpool_postgres::Config,
     runtime: Option<deadpool_postgres::Runtime>,
@@ -315,12 +314,4 @@ fn create_tls_pool(
         ),
     )
     .context("failed to create TLS-enabled connection pool")
-}
-
-#[cfg(not(feature = "rustls"))]
-fn create_tls_pool(
-    _cfg: deadpool_postgres::Config,
-    _runtime: Option<deadpool_postgres::Runtime>,
-) -> Result<Pool> {
-    anyhow::bail!("cannot build TLS connections without rustls feature")
 }

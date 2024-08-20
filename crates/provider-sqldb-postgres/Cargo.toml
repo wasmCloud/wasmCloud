@@ -11,10 +11,6 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-default = [ "rustls" ]
-rustls = [ "dep:tokio-postgres-rustls" ]
-
 [dependencies]
 anyhow = { workspace = true }
 bigdecimal = { workspace = true }
@@ -32,7 +28,7 @@ rustls = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true, features = [ "runtime", "with-serde_json-1", "with-chrono-0_4", "with-uuid-0_8", "with-geo-types-0_7", "array-impls", "with-bit-vec-0_6", "with-uuid-1" ]  }
-tokio-postgres-rustls = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 uuid = { workspace = true }
