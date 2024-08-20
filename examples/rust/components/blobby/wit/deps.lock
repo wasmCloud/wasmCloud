@@ -1,7 +1,8 @@
 [blobstore]
-path = "../../../../../crates/runtime/wit/deps/blobstore"
+url = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
 sha256 = "9a2c47932e2be8804c01ba2c43bbb55bce10ebe4a6735b53ecd0021810492001"
 sha512 = "e68bdc404e33271e850fa451a00f8ca3cf3ed5b3ea693cea7293122ddc66bc21868a8b43fdb9bcdf52ba769a2f621074039972618d322a4804e6d4dbd4f8e4d7"
+deps = ["io"]
 
 [cli]
 sha256 = "285865a31d777181b075f39e92bcfe59c89cd6bacce660be1b9a627646956258"
@@ -19,15 +20,14 @@ sha512 = "ead452f9b7bfb88593a502ec00d76d4228003d51c40fd0408aebc32d35c94673551b00
 url = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 sha256 = "8f44402bde16c48e28c47dc53eab0b26af5b3b3482a1852cf77673e0880ba1c1"
 sha512 = "760695f9a25c25bf75a25b731cb21c3bda9e288e450edda823324ecbc73d5d798bbb5de2edad999566980836f037463ee9e57d61789d04b3f3e381475b1a9a0f"
-deps = ["cli", "clocks", "filesystem", "random", "sockets"]
+deps = ["cli", "clocks", "filesystem", "io", "random", "sockets"]
 
 [io]
-path = "../../../../../crates/runtime/wit/deps/io"
 sha256 = "7210e5653539a15478f894d4da24cc69d61924cbcba21d2804d69314a88e5a4c"
 sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee0977ad2291126a37631c0d86eeea75d822fa8af224c422134500bf9f0f2bb"
 
 [logging]
-path = "../../../../../crates/runtime/wit/deps/logging"
+url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 sha256 = "9676b482485bb0fd2751a390374c1108865a096b7037f4b5dbe524f066bfb06e"
 sha512 = "30a621a6d48a0175e8047c062e618523a85f69c45a7c31918da2b888f7527fce1aca67fa132552222725d0f6cdcaed95be7f16c28488d9468c0fad00cb7450b9"
 
