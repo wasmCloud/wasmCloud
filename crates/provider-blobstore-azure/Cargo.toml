@@ -14,12 +14,15 @@ async-nats = { workspace = true, features = ["ring"] }
 async-trait = { workspace = true }
 azure_core = { workspace = true, features = [
     "enable_reqwest_rustls",
+    "hmac_rust",
 ], default-features = false }
 azure_storage = { workspace = true, features = [
     "enable_reqwest_rustls",
+    "hmac_rust",
 ], default-features = false }
 azure_storage_blobs = { workspace = true, features = [
     "enable_reqwest_rustls",
+    "hmac_rust",
 ], default-features = false }
 base64 = { workspace = true }
 bytes = { workspace = true }
