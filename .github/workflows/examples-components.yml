@@ -92,6 +92,10 @@ jobs:
             lang_version: "1.20"
             name: "http-hello-world"
             test_deploy: wadm.yaml
+          - name: "sqldb-postgres-query"
+            lang: "golang"
+            wasm-bin: "sqldb_postgres_query_s.wasm"
+            test_deploy: local.wadm.yaml
           # Rust example components
           - name: "blobby"
             lang: "rust"
