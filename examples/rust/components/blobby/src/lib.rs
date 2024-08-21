@@ -21,7 +21,7 @@ mod bindings {
     export!(Blobby);
 }
 
-use std::io::{self, Read as _, Write as _};
+use std::io::Write as _;
 
 use http::{
     header::{ALLOW, CONTENT_LENGTH},
@@ -160,8 +160,8 @@ impl Guest for Blobby {
 
         let res = match request.method() {
             Method::Get => {
-                let mut data = match get_object(&container_id, &file_name) {
-                    Ok(s) => s,
+                let (data, mut size) = match get_object(&container_id, &file_name) {
+                    Ok((data, size)) => (data, size),
                     Err(e) => {
                         send_response_error(response_out, e);
                         return;
@@ -174,11 +174,13 @@ impl Guest for Blobby {
                 let response_body = response.body().unwrap();
                 ResponseOutparam::set(response_out, Ok(response));
                 log(Level::Debug, "handle", "Writing data to stream");
-                io::copy(
-                    &mut data,
-                    &mut response_body.write().expect("Unable to get stream"),
-                )
-                .expect("failed to stream blob to http response body");
+                let stream = response_body.write().expect("failed to get stream");
+                while size > 0 {
+                    let len = stream
+                        .blocking_splice(&data, size)
+                        .expect("failed to stream blob to HTTP response body");
+                    size = size.saturating_sub(len);
+                }
                 OutgoingBody::finish(response_body, None)
                     .map_err(|e| {
                         log(
@@ -295,7 +297,7 @@ impl Guest for Blobby {
 // HACK(thomastaylor312): We are returning the full object in memory because there isn't really a
 // way to glue in the streams to each other right now. This should get better in wasi 0.2.2 with the
 // stream forward function
-fn get_object(container_name: &String, object_name: &String) -> Result<InputStream> {
+fn get_object(container_name: &String, object_name: &String) -> Result<(InputStream, u64)> {
     // Check that the object exists first. If it doesn't return the proper http response
     let container =
         blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
@@ -317,7 +319,7 @@ fn get_object(container_name: &String, object_name: &String) -> Result<InputStre
             .map_err(Error::from_blobstore_error)?;
 
     log(Level::Info, "get_object", "successfully got object stream");
-    Ok(body)
+    Ok((body, metadata.size))
 }
 
 fn delete_object(container_name: &String, object_name: &String) -> Result<StatusCode> {
@@ -334,13 +336,13 @@ fn put_object(
     container_name: &String,
     object_name: &String,
     data: InputStream,
-    content_length: u64,
+    mut content_length: u64,
 ) -> Result<StatusCode> {
     let container =
         blobstore::blobstore::get_container(container_name).map_err(Error::from_blobstore_error)?;
     let result_value = blobstore::types::OutgoingValue::new_outgoing_value();
 
-    let mut body = result_value
+    let stream = result_value
         .outgoing_value_write_body()
         .expect("failed to get outgoing value output stream");
 
@@ -355,10 +357,13 @@ fn put_object(
             message: format!("Failed to write data to blobstore: {}", e),
         });
     }
-    io::copy(&mut data.take(content_length), &mut body)
-        .expect("failed to stream data from http response to blobstore");
-
-    drop(body);
+    while content_length > 0 {
+        let len = stream
+            .blocking_splice(&data, content_length)
+            .expect("failed to stream data from http response to blobstore");
+        content_length = content_length.saturating_sub(len);
+    }
+    drop(stream);
 
     blobstore::types::OutgoingValue::finish(result_value).expect("failed to write data");
 
