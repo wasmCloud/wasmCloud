@@ -3,21 +3,24 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_nats::subject::ToSubject;
+use bytes::Bytes;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
-use wasmcloud::messaging::types::BrokerMessage;
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
-    get_connection, load_host_data, run_provider, Context, LinkConfig, Provider,
+    get_connection, load_host_data, run_provider, serve_provider_exports, Context, LinkConfig,
+    Provider,
 };
 
 use crate::connection::ConnectionConfig;
 
-wit_bindgen_wrpc::generate!();
-
-use exports::wasmcloud::messaging::consumer::Handler;
+mod bindings {
+    wit_bindgen_wrpc::generate!({ generate_all });
+}
+use bindings::exports::wasmcloud::messaging::consumer::Handler;
+use bindings::wasmcloud::messaging::types::BrokerMessage;
 
 /// [`NatsClientBundle`]s hold a NATS client and information (subscriptions)
 /// related to it.
@@ -58,10 +61,11 @@ impl NatsMessagingProvider {
             .await
             .context("failed to run provider")?;
         let connection = get_connection();
-        serve(
+        serve_provider_exports(
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
+            bindings::serve,
         )
         .await
     }
@@ -237,7 +241,7 @@ impl Handler<Option<Context>> for NatsMessagingProvider {
         &self,
         _ctx: Option<Context>,
         _subject: String,
-        _body: Vec<u8>,
+        _body: Bytes,
         _timeout_ms: u32,
     ) -> anyhow::Result<Result<BrokerMessage, String>> {
         todo!("Implement wasmcloud:messaging/consumer.request for NATS provider")

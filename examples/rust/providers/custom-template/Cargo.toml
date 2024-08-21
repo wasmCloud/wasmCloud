@@ -18,5 +18,5 @@ serde = { version = "1.0.197" , features = ["derive"] }
 serde_json = "1.0.115"
 tokio = { version = "1.37.0", features = [ "full" ] }
 tracing = "0.1"
-wasmcloud-provider-sdk = "0.5.0"
-wit-bindgen-wrpc = "0.3.7"
+wasmcloud-provider-sdk = "0.7.0"
+wit-bindgen-wrpc = "0.6.3"
