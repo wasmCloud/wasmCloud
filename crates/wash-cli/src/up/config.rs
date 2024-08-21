@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use crate::up::{credsfile::parse_credsfile, WasmcloudOpts};
 
 // NATS configuration values
-pub const NATS_SERVER_VERSION: &str = "v2.10.7";
+pub const NATS_SERVER_VERSION: &str = "v2.10.18";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
