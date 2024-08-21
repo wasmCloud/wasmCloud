@@ -18,8 +18,7 @@ spec:
     - name: querier
       type: component
       properties:
-        # To use the locally compiled code in this folder, use local.wadm.yaml
-        image: ghcr.io/wasmcloud/components/sqldb-postgres-query-rust:0.1.0
+        image: file://./build/sqldb_postgres_query_s.wasm
       traits:
         # Govern the spread/scheduling of the actor
         - type: spreadscaler
