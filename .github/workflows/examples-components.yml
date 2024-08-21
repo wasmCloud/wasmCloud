@@ -131,6 +131,7 @@ jobs:
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
+            test_deploy: local.wadm.yaml
           # Python example components
           - name: "http-hello-world"
             lang: "python"
