@@ -32,17 +32,23 @@
 //! by the all of the server green threads.
 //!
 
+use core::future::Future;
+use core::pin::Pin;
 use core::str::FromStr as _;
+use core::task::{ready, Context, Poll};
 use core::time::Duration;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use anyhow::Context as _;
+use anyhow::{anyhow, Context as _};
 use axum::extract;
 use axum::handler::Handler as _;
 use axum_server::tls_rustls::RustlsConfig;
-use futures::StreamExt as _;
+use bytes::Bytes;
+use futures::Stream;
+use pin_project_lite::pin_project;
+use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
@@ -171,6 +177,69 @@ struct RequestContext {
     scheme: http::uri::Scheme,
 }
 
+pin_project! {
+    struct ResponseBody {
+        #[pin]
+        body: wrpc_interface_http::HttpBody,
+        #[pin]
+        errors: Box<dyn Stream<Item = wrpc_interface_http::HttpBodyError<axum::Error>> + Send + Unpin>,
+        #[pin]
+        io: Option<JoinHandle<anyhow::Result<()>>>,
+    }
+}
+
+impl http_body::Body for ResponseBody {
+    type Data = Bytes;
+    type Error = anyhow::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let mut this = self.as_mut().project();
+        if let Some(io) = this.io.as_mut().as_pin_mut() {
+            match io.poll(cx) {
+                Poll::Ready(Ok(Ok(()))) => {
+                    this.io.take();
+                }
+                Poll::Ready(Ok(Err(err))) => {
+                    return Poll::Ready(Some(Err(
+                        anyhow!(err).context("failed to complete async I/O")
+                    )))
+                }
+                Poll::Ready(Err(err)) => {
+                    return Poll::Ready(Some(Err(anyhow!(err).context("I/O task failed"))))
+                }
+                Poll::Pending => {}
+            }
+        }
+        match this.errors.poll_next(cx) {
+            Poll::Ready(Some(err)) => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                return Poll::Ready(Some(Err(anyhow!(err).context("failed to process body"))));
+            }
+            Poll::Ready(None) | Poll::Pending => {}
+        }
+        match ready!(this.body.poll_frame(cx)) {
+            Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
+            Some(Err(err)) => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                Poll::Ready(Some(Err(err)))
+            }
+            None => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
 #[instrument(level = "debug", skip(settings))]
 async fn handle_request(
     extract::State(RequestContext {
@@ -180,7 +249,7 @@ async fn handle_request(
     }): extract::State<RequestContext>,
     extract::Host(authority): extract::Host,
     request: extract::Request,
-) -> axum::response::Result<axum::response::Response> {
+) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let method = request.method();
     if let Some(readonly_mode) = settings.readonly_mode {
@@ -247,20 +316,10 @@ async fn handle_request(
     } else {
         fut.await
     };
-    let (res, mut errs, io) =
+    let (res, errors, io) =
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")))?;
-    if let Some(io) = io {
-        spawn(async move {
-            if let Err(err) = io.await {
-                error!(?err, "failed to complete async I/O");
-            }
-        });
-    }
-    spawn(async move {
-        while let Some(err) = errs.next().await {
-            error!(?err, "body error encountered");
-        }
-    });
+    let io = io.map(spawn);
+    let errors: Box<dyn Stream<Item = _> + Send + Unpin> = Box::new(errors);
     // TODO: Convert this to http status code
     let mut res =
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")))?;
@@ -269,7 +328,11 @@ async fn handle_request(
             .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         res.headers_mut().append("Cache-Control", cache_control);
     };
-    Ok(res.map(axum::body::Body::new))
+    axum::response::Result::<_, axum::response::ErrorResponse>::Ok(res.map(|body| ResponseBody {
+        body,
+        errors,
+        io,
+    }))
 }
 
 impl HttpServerCore {

@@ -7478,6 +7478,8 @@ dependencies = [
  "dashmap",
  "futures",
  "http 1.1.0",
+ "http-body 1.0.1",
+ "pin-project-lite",
  "serde",
  "serde_json",
  "thiserror",
