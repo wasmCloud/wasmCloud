@@ -22,12 +22,16 @@ aws-smithy-runtime = { workspace = true, features = ["client", "tls-rustls"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
+# Intentionally stale version for `aws-smithy-runtime` compatibility
+# see: https://github.com/smithy-lang/smithy-rs/issues/3710
 hyper-rustls = { version = "0.25", features = [
     "http2",
     "ring",
     "webpki-tokio",
-], default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
-rustls = { version = "0.22", default-features = false } # Downgrade for `aws-smithy-runtime` compatibility
+], default-features = false }
+# Intentionally stale version for `aws-smithy-runtime` compatibility
+# see: https://github.com/smithy-lang/smithy-rs/issues/3710
+rustls = { version = "0.22", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
