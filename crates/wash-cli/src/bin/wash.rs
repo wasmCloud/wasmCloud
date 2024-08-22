@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
- 
+
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
 
@@ -122,7 +122,8 @@ struct Cli {
     pub(crate) experimental: bool,
 
     #[clap(
-        long = "markdown-help", 
+        long = "help-markdown",
+        conflicts_with = "help",
         hide = true,
         global = true
     )]
@@ -239,6 +240,7 @@ async fn main() {
     // Most straightforward way to invoke is probably `wash app list --markdown-help > help.md`
     if mdargs.markdown_help {
         clap_markdown::print_help_markdown::<Cli>();
+        std::process::exit(0);
     };
 
     let mut command = Cli::command();
