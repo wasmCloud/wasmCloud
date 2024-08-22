@@ -1,31 +1,31 @@
 #![allow(clippy::type_complexity)]
 
 //! blobstore-fs capability provider
-//!
-//!
 
+use core::future::Future;
 use core::pin::Pin;
+use core::time::Duration;
+
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{anyhow, bail, Context as _};
 use bindings::wrpc::blobstore::types::{ObjectId, ObjectMetadata};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
 use tokio::fs::{self, create_dir_all, File};
-use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
-use tokio::spawn;
+use tokio::io::{self, AsyncReadExt as _, AsyncSeekExt as _};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::{ReadDirStream, ReceiverStream};
-use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tokio_util::io::{ReaderStream, StreamReader};
+use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
-    serve_provider_exports, Context, LinkConfig, Provider,
+    serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 use crate::bindings::wrpc::blobstore::types::ContainerMetadata;
@@ -37,8 +37,8 @@ mod bindings {
             "wasi:io/error@0.2.0": generate,
             "wasi:io/poll@0.2.0": generate,
             "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.1.0": generate,
-            "wrpc:blobstore/types@0.1.0": generate,
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": generate,
         }
     });
 }
@@ -284,7 +284,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for
         name: String,
         limit: Option<u64>,
         offset: Option<u64>,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Vec<String>> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Vec<String>> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let path = self.get_container(cx, name).await?;
@@ -302,23 +310,21 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for
                     anyhow::Ok(name)
                 });
             let (tx, rx) = mpsc::channel(16);
-            spawn(async move {
-                while let Some(name) = names.next().await {
-                    match name {
-                        Ok(name) => {
-                            if tx.send(vec![name]).await.is_err() {
-                                warn!("stream receiver closed");
-                                return;
-                            }
+            anyhow::Ok((
+                Box::pin(ReceiverStream::new(rx).ready_chunks(128))
+                    as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move {
+                    async move {
+                        while let Some(name) = names.next().await {
+                            let name = name.context("failed to list file names")?;
+                            tx.send(name).await.context("stream receiver closed")?;
                         }
-                        Err(err) => {
-                            error!(?err, "failed to list file names");
-                            return;
-                        }
+                        anyhow::Ok(())
                     }
-                }
-            });
-            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
+                    .await
+                    .map_err(|err| format!("{err:#}"))
+                }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -408,7 +414,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for
         id: ObjectId,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Bytes> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Bytes> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let limit = end
@@ -428,25 +442,22 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for
             }
             let mut data = ReaderStream::new(object.take(limit));
             let (tx, rx) = mpsc::channel(16);
-            spawn(async move {
-                while let Some(buf) = data.next().await {
-                    match buf {
-                        Ok(buf) => {
+            anyhow::Ok((
+                Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move {
+                    async move {
+                        while let Some(buf) = data.next().await {
+                            let buf = buf.context("failed to read file")?;
                             debug!(?buf, "sending chunk");
-                            if tx.send(buf).await.is_err() {
-                                warn!("stream receiver closed");
-                                return;
-                            }
+                            tx.send(buf).await.context("stream receiver closed")?;
                         }
-                        Err(err) => {
-                            error!(?err, "failed to read file");
-                            return;
-                        }
+                        debug!("finished reading file");
+                        anyhow::Ok(())
                     }
-                }
-                debug!("finished reading file");
-            });
-            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
+                    .await
+                    .map_err(|err| format!("{err:#}"))
+                }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -547,13 +558,33 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for
         cx: Option<Context>,
         id: ObjectId,
         data: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<Result<Pin<Box<dyn Future<Output = Result<(), String>> + Send>>, String>>
+    {
         Ok(async {
             propagate_trace_for_ctx!(cx);
-            // TODO: Consider streaming
-            let data: BytesMut = data.collect().await;
             let path = self.get_object(cx, id).await?;
-            fs::write(path, data).await.context("failed to write file")
+            let mut file = File::options()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&path)
+                .await
+                .context("failed to open file")?;
+            anyhow::Ok(Box::pin(async move {
+                debug!(path = ?path.display(), "streaming data to file");
+                let n = io::copy(
+                    &mut StreamReader::new(data.map(|chunk| {
+                        trace!(?chunk, "received data chunk");
+                        std::io::Result::Ok(chunk)
+                    })),
+                    &mut file,
+                )
+                .await
+                .context("failed to write file")
+                .map_err(|err| format!("{err:#}"))?;
+                debug!(n, path = ?path.display(), "finished writing file");
+                Ok(())
+            }) as Pin<Box<dyn Future<Output = _> + Send>>)
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -574,9 +605,29 @@ impl Provider for FsProvider {
 
         // Determine the root path value
         let root_val: PathBuf = match config.iter().find(|(key, _)| key.to_uppercase() == "ROOT") {
-            None => "/tmp".into(),
+            None => {
+                // If no root is specified, use the tempdir and create a specific directory for this component
+                let root = std::env::temp_dir();
+                // Resolve the subpath from the root to the component ID, carefully
+                match resolve_subpath(&root, source_id) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        error!("Failed to resolve subpath to component directory: {e}");
+                        return Err(
+                            anyhow!(e).context("failed to resolve subpath to component dir")
+                        );
+                    }
+                }
+            }
+            // If a root is manually specified, use that path exactly
             Some((_, value)) => value.into(),
         };
+
+        // Ensure the root path exists
+        if let Err(e) = create_dir_all(&root_val).await {
+            error!("Could not create component directory: {:?}", e);
+            return Err(anyhow!(e).context("failed to create component directory"));
+        }
 
         // Build configuration for FS Provider to use later
         let config = FsProviderConfig {
@@ -595,26 +646,13 @@ impl Provider for FsProvider {
             .await
             .insert(source_id.into(), config.clone());
 
-        // Resolve the subpath from the root to the component ID, carefully
-        let actor_dir = match resolve_subpath(&config.root, source_id) {
-            Ok(path) => path,
-            Err(e) => {
-                error!("Failed to resolve subpath to component directory: {e}");
-                return Err(anyhow!(e).context("failed to resolve subpath to component dir"));
-            }
-        };
-
-        // Create directory for the individual component
-        if let Err(e) = create_dir_all(actor_dir.as_path()).await {
-            error!("Could not create component directory: {:?}", e);
-            return Err(anyhow!(e).context("failed to create component directory"));
-        }
-
         Ok(())
     }
 
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        self.config.write().await.remove(source_id);
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        self.config.write().await.remove(component_id);
         Ok(())
     }
 

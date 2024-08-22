@@ -28,11 +28,12 @@ nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 secrecy = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "io"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-component-adapters = { workspace = true }
+wasi-preview1-component-adapter-provider = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = [
@@ -50,6 +51,7 @@ wasmtime-wasi-http = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
+wrpc-interface-blobstore = { workspace = true }
 wrpc-interface-http = { workspace = true, features = ["wasmtime-wasi-http"] }
 wrpc-runtime-wasmtime = { workspace = true }
 wrpc-transport = { workspace = true }

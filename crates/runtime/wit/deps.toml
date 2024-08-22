@@ -1,5 +1,5 @@
 blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
-blobstore-wrpc = "https://github.com/wrpc/blobstore/archive/v0.1.0.tar.gz"
+blobstore-wrpc-0-1-0 = "https://github.com/wrpc/blobstore/archive/v0.1.0.tar.gz"
 config = "https://github.com/WebAssembly/wasi-runtime-config/archive/main.tar.gz"
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"

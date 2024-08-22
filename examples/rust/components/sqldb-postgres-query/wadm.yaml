@@ -8,9 +8,9 @@ metadata:
     description: |
       Demo WebAssembly component using the wasmCloud SQLDB Postgres provider via the wasmcloud:postgres WIT interface
     wasmcloud.dev/authors: wasmCloud team
-    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/wadm.yaml
-    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-quer/README.md
-    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/sqldb-postgres-quer
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-query/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/rust/components/sqldb-postgres-query/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/rust/components/sqldb-postgres-query
     wasmcloud.dev/categories: |
       database,sqldb,postgres,rust,example
 spec:
@@ -18,8 +18,7 @@ spec:
     - name: querier
       type: component
       properties:
-        # To use the locally compiled code in this folder, use the line below instead after running `wash build`:
-        # image: file://./build/sqldb_postgres_query_s.wasm
+        # To use the locally compiled code in this folder, use local.wadm.yaml
         image: ghcr.io/wasmcloud/components/sqldb-postgres-query-rust:0.1.0
       traits:
         # Govern the spread/scheduling of the actor

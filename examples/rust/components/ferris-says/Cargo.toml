@@ -12,6 +12,6 @@ Example component that takes an invocation and returns a ferris-says (cowsay-lik
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.28", features = ["default"] }
-ferris-says = { version = "0.3.1" }
-humantime = { version = "2.1.0" }
+wit-bindgen = "0.30"
+ferris-says = "0.3.1"
+humantime = "2.1"

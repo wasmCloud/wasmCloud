@@ -47,29 +47,7 @@ impl std::fmt::Display for ObservedMessage {
 impl ObservedMessage {
     #[must_use]
     pub fn parse(data: Vec<u8>) -> Self {
-        // Try parsing with msgpack and then with cbor. If neither work, then just return the raw
-        // NOTE(thomastaylor312): I don't think anyone else does their own encoding, but if that
-        // becomes popular, we can add support for it here
-        let mut serializer = serde_json::Serializer::pretty(Vec::new());
-        let parsed = match serde_transcode::transcode(
-            &mut rmp_serde::Deserializer::new(&data[..]),
-            &mut serializer,
-        ) {
-            // SAFETY: We know that JSON writes to valid UTF-8
-            Ok(()) => String::from_utf8(serializer.into_inner()).unwrap(),
-            Err(_) => {
-                // Reset the buffer in case we wrote some data on previous failure
-                let mut serializer = serde_json::Serializer::pretty(Vec::new());
-                match serde_transcode::transcode(
-                    &mut serde_cbor::Deserializer::from_reader(&data[..]),
-                    &mut serializer,
-                ) {
-                    Ok(()) => String::from_utf8(serializer.into_inner()).unwrap(),
-                    Err(_) => return Self::Raw(data),
-                }
-            }
-        };
-        Self::Parsed(parsed)
+        Self::Parsed(String::from_utf8_lossy(&data).to_string())
     }
 }
 
@@ -129,21 +107,23 @@ impl Stream for Spier {
         match self.stream.poll_next_unpin(cx) {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(msg)) => {
-                // lattice.component.wrpc.0.0.1.operation.function
-                let subject_parts = msg.subject.split('.').collect::<Vec<_>>();
-                let component_id = subject_parts.get(1);
-                let operation = subject_parts.get(6);
-                let function = subject_parts.get(7);
+                // <lattice>.<component>.wrpc.0.0.1.<operation>@<versionX.Y.Z>.<function>
+                let mut subject_parts = msg.subject.split('.');
+                subject_parts.next(); // Skip the lattice
+                let component_id = subject_parts.next();
+                // Skip "wrpc.0.0.1", collect the rest
+                let operation = subject_parts.skip(4).collect::<Vec<_>>();
 
-                if component_id.is_none() || operation.is_none() || function.is_none() {
+                // The length assertion is to ensure that at least the `operation.function` is present since the
+                // version is technically optional.
+                if component_id.is_none() || operation.len() < 2 {
                     debug!("Received invocation with invalid subject: {}", msg.subject);
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
                 let component_id = component_id.unwrap();
-                let operation = format!("{}.{}", operation.unwrap(), function.unwrap());
 
-                let (from, to) = if component_id == &self.component_id {
+                let (from, to) = if component_id == self.component_id {
                     // Attempt to get the source from the message header
                     let from = msg
                         .headers
@@ -161,7 +141,7 @@ impl Stream for Spier {
                     timestamp: Local::now(),
                     from,
                     to,
-                    operation,
+                    operation: operation.join("."),
                     message: ObservedMessage::parse(msg.payload.to_vec()),
                 }))
             }

@@ -3,11 +3,11 @@ name: nix
 on:
   pull_request:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
   merge_group:
   push:
     paths-ignore:
-      - washboard-ui/**
+      - typescript/**
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   fmt:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
     - uses: ./.github/actions/install-nix
@@ -27,7 +27,7 @@ jobs:
     - run: nix fmt
 
   run:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
     - uses: ./.github/actions/install-nix
@@ -36,7 +36,7 @@ jobs:
     - run: nix run -L . -- --version
 
   develop:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-16-cores
     steps:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
     - uses: ./.github/actions/install-nix

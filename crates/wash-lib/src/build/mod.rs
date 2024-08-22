@@ -81,7 +81,7 @@ fn convert_wit_dir_to_world(
 
     // Select the target world that was specified by the user
     let world_id = resolve
-        .select_world(&package_id, world.as_ref().into())
+        .select_world(package_id, world.as_ref().into())
         .context("failed to select world from built resolver")?;
 
     Ok((resolve, world_id))

@@ -12,7 +12,9 @@ use serde::Deserialize;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::task::JoinSet;
-use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
+use wasi_preview1_component_adapter_provider::{
+    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+};
 
 /// List of (manifest path, output artifact name) for all the packages used during test
 ///
@@ -216,7 +218,7 @@ fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> Result<Vec<u8>>
         .validate(true)
         .module(module.as_ref())
         .context("failed to set core component module")?
-        .adapter("wasi_snapshot_preview1", adapter)
+        .adapter(WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, adapter)
         .context("failed to add WASI adapter")?
         .encode()
         .context("failed to encode a component")
@@ -230,7 +232,6 @@ fn encode_component(_: impl AsRef<[u8]>, _: &[u8]) -> Result<Vec<u8>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=../../crates/component");
-    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=rust");
 
     let out_dir = env::var("OUT_DIR")
@@ -244,7 +245,7 @@ async fn main() -> Result<()> {
         let module = fs::read(&path)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))?;
-        let component = encode_component(module, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER)
+        let component = encode_component(module, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER)
             .with_context(|| format!("failed to encode `{}`", path.display()))?;
         let path = out_dir.join(format!("rust-{package_name}-preview2.wasm"));
         fs::write(&path, component)

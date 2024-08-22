@@ -1,16 +1,16 @@
 {
-  "name": "@wasmcloud/lattice-client-core",
+  "name": "@wasmcloud/lattice-client-react",
   "license": "Apache-2.0",
-  "version": "0.3.3",
-  "description": "Framework-agnostic core package for the wasmCloud Lattice Client",
+  "version": "0.2.3",
+  "description": "React specific package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
     "type": "git",
     "url": "https://github.com/wasmcloud/wasmcloud.git",
-    "directory": "washboard-ui/packages/lattice-client-core"
+    "directory": "typescript/packages/lattice-client-react"
   },
-  "homepage": "http://wasmcloud.com",
   "type": "module",
+  "types": "./build/index.d.ts",
   "exports": {
     ".": {
       "import": {
@@ -35,22 +35,22 @@
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
     "dev": "tsup --watch",
-    "build": "tsup",
-    "prepublish": "yarn build",
-    "publish": "yarn npm publish --access public"
-  },
-  "peerDependencies": {
-    "eslint": "^8.57.0",
-    "tailwindcss": "^3.4.3"
+    "build": "tsup"
   },
   "devDependencies": {
     "@types/eslint": "~8.56.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
     "@wasmcloud/eslint-config": "workspace:^",
     "@wasmcloud/tsconfig": "workspace:^",
-    "tsup": "^8.2.4",
-    "type-fest": "^4.23.0"
+    "eslint": "^8.57.0",
+    "tailwindcss": "^3.4.10",
+    "tsup": "^8.2.4"
   },
   "dependencies": {
-    "nats.ws": "^1.29.2"
+    "@wasmcloud/lattice-client-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0"
   }
 }

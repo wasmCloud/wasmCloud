@@ -5,18 +5,20 @@ use anyhow::{anyhow, Result};
 use crate::up::{credsfile::parse_credsfile, WasmcloudOpts};
 
 // NATS configuration values
-pub const NATS_SERVER_VERSION: &str = "v2.10.7";
+pub const NATS_SERVER_VERSION: &str = "v2.10.18";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 // wadm configuration values
-pub const WADM_VERSION: &str = "v0.13.0";
+pub const WADM_VERSION: &str = "v0.14.0";
 // wasmCloud configuration values, https://wasmcloud.com/docs/reference/host-config
-pub const WASMCLOUD_HOST_VERSION: &str = "v1.1.0";
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.2.0";
 // NATS isolation configuration variables
 pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
 pub const DEFAULT_LATTICE: &str = "default";
 pub const WASMCLOUD_JS_DOMAIN: &str = "WASMCLOUD_JS_DOMAIN";
+pub const WASMCLOUD_POLICY_TOPIC: &str = "WASMCLOUD_POLICY_TOPIC";
+pub const WASMCLOUD_SECRETS_TOPIC: &str = "WASMCLOUD_SECRETS_TOPIC";
 // Host / Cluster configuration
 pub const WASMCLOUD_CLUSTER_ISSUERS: &str = "WASMCLOUD_CLUSTER_ISSUERS";
 pub const WASMCLOUD_CLUSTER_SEED: &str = "WASMCLOUD_CLUSTER_SEED";
@@ -87,6 +89,16 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         WASMCLOUD_MAX_EXECUTION_TIME_MS.to_string(),
         wasmcloud_opts.max_execution_time.to_string(),
     );
+    if let Some(policy_topic) = wasmcloud_opts.policy_topic {
+        host_config.insert(WASMCLOUD_POLICY_TOPIC.to_string(), policy_topic.to_string());
+    }
+
+    if let Some(secrets_topic) = wasmcloud_opts.secrets_topic {
+        host_config.insert(
+            WASMCLOUD_SECRETS_TOPIC.to_string(),
+            secrets_topic.to_string(),
+        );
+    }
 
     if wasmcloud_opts.allow_latest {
         host_config.insert(WASMCLOUD_OCI_ALLOW_LATEST.to_string(), "true".to_string());

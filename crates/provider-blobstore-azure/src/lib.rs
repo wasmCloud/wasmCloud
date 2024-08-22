@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use core::future::Future;
 use core::pin::Pin;
 
 use std::collections::HashMap;
@@ -10,13 +11,12 @@ use azure_storage_blobs::prelude::*;
 use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
-use tokio::spawn;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{error, instrument, warn};
+use tracing::{error, instrument};
 use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
-    run_provider, serve_provider_exports, Context, HostData, LinkConfig, Provider,
+    run_provider, serve_provider_exports, Context, HostData, LinkConfig, LinkDeleteInfo, Provider,
 };
 
 use config::StorageConfig;
@@ -30,8 +30,8 @@ mod bindings {
             "wasi:io/error@0.2.0": generate,
             "wasi:io/poll@0.2.0": generate,
             "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.1.0": generate,
-            "wrpc:blobstore/types@0.1.0": generate,
+            "wrpc:blobstore/blobstore@0.2.0": generate,
+            "wrpc:blobstore/types@0.2.0": generate,
         }
     });
 }
@@ -76,8 +76,10 @@ impl Provider for BlobstoreAzblobProvider {
         Ok(())
     }
 
-    async fn delete_link(&self, source_id: &str) -> anyhow::Result<()> {
-        self.config.write().await.remove(source_id);
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_source_id();
+        self.config.write().await.remove(component_id);
         Ok(())
     }
 
@@ -275,7 +277,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         name: String,
         limit: Option<u64>,
         offset: Option<u64>,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Vec<String>> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Vec<String>> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let client = self
@@ -285,39 +295,36 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
 
             let mut names = client.container_client(name).list_blobs().into_stream();
             let (tx, rx) = mpsc::channel(16);
-            spawn(async move {
-                let mut offset = offset.unwrap_or_default().try_into().unwrap_or(usize::MAX);
-                let mut limit = limit
-                    .and_then(|limit| limit.try_into().ok())
-                    .unwrap_or(usize::MAX);
-                while let Some(res) = names.next().await {
-                    match res {
-                        Ok(res) => {
-                            let mut chunk = vec![];
-                            for name in res.blobs.blobs().map(|Blob { name, .. }| name) {
-                                if limit == 0 {
-                                    return;
-                                }
-                                if offset > 0 {
-                                    offset -= 1;
-                                    continue;
-                                }
-                                chunk.push(name.clone());
-                                limit -= 1;
+            anyhow::Ok((
+                Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move {
+                    let mut offset = offset.unwrap_or_default().try_into().unwrap_or(usize::MAX);
+                    let mut limit = limit
+                        .and_then(|limit| limit.try_into().ok())
+                        .unwrap_or(usize::MAX);
+                    while let Some(res) = names.next().await {
+                        let res = res
+                            .context("failed to receive response")
+                            .map_err(|err| format!("{err:#}"))?;
+                        let mut chunk = vec![];
+                        for name in res.blobs.blobs().map(|Blob { name, .. }| name) {
+                            if limit == 0 {
+                                break;
                             }
-                            if tx.send(chunk).await.is_err() {
-                                warn!("stream receiver closed");
-                                return;
+                            if offset > 0 {
+                                offset -= 1;
+                                continue;
                             }
+                            chunk.push(name.clone());
+                            limit -= 1;
                         }
-                        Err(err) => {
-                            error!(?err, "failed to receive response");
-                            return;
+                        if !chunk.is_empty() && tx.send(chunk).await.is_err() {
+                            return Err("stream receiver closed".to_string());
                         }
                     }
-                }
-            });
-            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
+                    Ok(())
+                }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -419,7 +426,15 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         id: ObjectId,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Result<Pin<Box<dyn Stream<Item = Bytes> + Send>>, String>> {
+    ) -> anyhow::Result<
+        Result<
+            (
+                Pin<Box<dyn Stream<Item = Bytes> + Send>>,
+                Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+            ),
+            String,
+        >,
+    > {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let client = self
@@ -435,29 +450,25 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .into_stream();
 
             let (tx, rx) = mpsc::channel(16);
-            spawn(async move {
-                while let Some(res) = stream.next().await {
-                    match res {
-                        Ok(res) => match res.data.collect().await {
-                            Ok(buf) => {
-                                if tx.send(buf).await.is_err() {
-                                    warn!("stream receiver closed");
-                                    return;
-                                }
-                            }
-                            Err(err) => {
-                                error!(?err, "failed to receive bytes");
-                                return;
-                            }
-                        },
-                        Err(err) => {
-                            error!(?err, "failed to receive blob");
-                            return;
+            anyhow::Ok((
+                Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>,
+                Box::pin(async move {
+                    async move {
+                        while let Some(res) = stream.next().await {
+                            let res = res.context("failed to receive blob")?;
+                            let buf = res
+                                .data
+                                .collect()
+                                .await
+                                .context("failed to receive bytes")?;
+                            tx.send(buf).await.context("stream receiver closed")?;
                         }
+                        anyhow::Ok(())
                     }
-                }
-            });
-            anyhow::Ok(Box::pin(ReceiverStream::new(rx)) as Pin<Box<dyn Stream<Item = _> + Send>>)
+                    .await
+                    .map_err(|err| format!("{err:#}"))
+                }) as Pin<Box<dyn Future<Output = _> + Send>>,
+            ))
         }
         .await
         .map_err(|err| format!("{err:#}")))
@@ -570,23 +581,26 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
         cx: Option<Context>,
         id: ObjectId,
         data: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<Result<Pin<Box<dyn Future<Output = Result<(), String>> + Send>>, String>>
+    {
         Ok(async {
             propagate_trace_for_ctx!(cx);
-            // TODO: Consider streaming
-            let data: BytesMut = data.collect().await;
             let client = self
                 .get_config(cx.as_ref())
                 .await
                 .context("failed to retrieve azure blobstore client")?;
-
-            client
-                .container_client(id.container)
-                .blob_client(id.object)
-                .put_block_blob(data)
-                .await
-                .map(|_| ())
-                .context("failed to write container data")
+            let client = client.container_client(id.container).blob_client(id.object);
+            anyhow::Ok(Box::pin(async move {
+                // TODO: Stream data
+                let data: BytesMut = data.collect().await;
+                client
+                    .put_block_blob(data)
+                    .await
+                    .map(|_| ())
+                    .context("failed to write container data")
+                    .map_err(|err| format!("{err:#}"))?;
+                Ok(())
+            }) as Pin<Box<dyn Future<Output = _> + Send>>)
         }
         .await
         .map_err(|err| format!("{err:#}")))

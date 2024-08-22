@@ -2,6 +2,7 @@
 
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::type_complexity)]
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 

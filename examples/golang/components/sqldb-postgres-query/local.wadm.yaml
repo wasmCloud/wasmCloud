@@ -1,0 +1,45 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: go-sqldb-postgres-query
+  annotations:
+    version: v0.1.0
+    description: |
+      Demo WebAssembly component using the wasmCloud SQLDB Postgres provider via the wasmcloud:postgres WIT interface
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/sqldb-postgres-query/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/sqldb-postgres-query/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/sqldb-postgres-query
+    wasmcloud.dev/categories: |
+      database,sqldb,postgres,golang,example
+spec:
+  components:
+    - name: querier
+      type: component
+      properties:
+        image: file://./build/sqldb_postgres_query_s.wasm
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+        # Establish a unidirectional link to the `sqldb-postgres` provider (the sqldb provider),
+        # so the `querier` component can make use of sqldb functionality provided Postgres
+        # (i.e. reading/writing to a database)
+        - type: link
+          properties:
+            target: sqldb-postgres
+            namespace: wasmcloud
+            package: postgres
+            interfaces: [query]
+            target_config:
+              - name: default-postgres
+
+    # Add a capability provider that interacts with the filesystem
+    - name: sqldb-postgres
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.2.0
+        config:
+          - name: 'default-postgres'

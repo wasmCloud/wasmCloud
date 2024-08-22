@@ -15,7 +15,7 @@ use anyhow::{Context, Ok};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpImpl};
+use wasmtime_wasi_http::WasiHttpCtx;
 
 use super::Data;
 
@@ -43,13 +43,6 @@ pub struct DirMapping {
     pub host_path: PathBuf,
     /// The path that will be accessible in the component. Otherwise defaults to the `host_path`
     pub component_path: Option<String>,
-}
-
-fn type_annotate_http<F, T>(val: F) -> F
-where
-    F: Fn(&mut T) -> WasiHttpImpl<&mut T>,
-{
-    val
 }
 
 impl SubcommandRunner {
@@ -118,19 +111,10 @@ impl SubcommandRunner {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::add_to_linker_async(&mut linker)
             .context("failed to link core WASI interfaces")?;
-        let closure = type_annotate_http(|ctx| WasiHttpImpl(ctx));
-        wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/outgoing-handler` interface")?;
-        wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/types` interface")?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("failed to link `wasi:http`")?;
 
-        let (instance, _) = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
+        let instance = Subcommands::instantiate_async(&mut store, &component, &linker).await?;
         let metadata = instance
             .wasmcloud_wash_subcommand()
             .call_register(&mut store)

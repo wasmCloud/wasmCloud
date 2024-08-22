@@ -113,12 +113,12 @@ pub async fn handle_command(
         })) if command.wit => {
             let witty = wit_component::decode(&buf).expect("Failed to decode WIT");
             let resolve = witty.resolve();
-            let main = witty.packages();
+            let main = witty.package();
             let mut printer = wit_component::WitPrinter::default();
             CommandOutput::from_key_and_text(
                 "wit",
                 printer
-                    .print(resolve, main, true)
+                    .print(resolve, main, &[])
                     .context("should be able to print WIT world from a component")?,
             )
         }

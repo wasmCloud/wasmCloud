@@ -37,7 +37,7 @@ jobs:
         with:
           shared-key: "${{ matrix.os }}-shared-cache"
       - name: Install nextest
-        uses: taiki-e/install-action@91ca22ecbd089d3927c5887b794c135a827853bd
+        uses: taiki-e/install-action@e96513f64c39eb6ebc73e13b6e8470317202483a
         with:
           tool: nextest
 
@@ -71,7 +71,7 @@ jobs:
         with:
           cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
       - name: Install nextest
-        uses: taiki-e/install-action@91ca22ecbd089d3927c5887b794c135a827853bd
+        uses: taiki-e/install-action@e96513f64c39eb6ebc73e13b6e8470317202483a
         with:
           tool: nextest
       - name: Run integration tests
@@ -97,7 +97,7 @@ jobs:
           shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@91ca22ecbd089d3927c5887b794c135a827853bd
+        uses: taiki-e/install-action@e96513f64c39eb6ebc73e13b6e8470317202483a
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: install wash (current)

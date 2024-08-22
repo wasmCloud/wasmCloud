@@ -78,6 +78,41 @@ pub struct StartComponentCommand {
     pub config: Vec<String>,
 }
 
+/// Utility function for resolving component and provider references
+async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
+    let resolved = match s.as_ref() {
+        s if s.starts_with('/') => {
+            format!("file://{}", &s) // prefix with file:// if it's an absolute path
+        }
+        s if tokio::fs::try_exists(s).await.is_ok_and(|exists| exists) => {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(&s)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        // If a URI-formatted relative path was provided, resolve it
+        s if s.starts_with("file://")
+            && tokio::fs::try_exists(s.split_at(7).1)
+                .await
+                .is_ok_and(|exists| exists) =>
+        {
+            format!(
+                "file://{}",
+                tokio::fs::canonicalize(s.split_at(7).1)
+                    .await
+                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
+                    .display()
+            )
+        }
+        // For all other cases, just take the provided string
+        s => s.to_string(),
+    };
+    Ok(resolved)
+}
+
 pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting component
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
@@ -89,12 +124,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
         .into_ctl_client(Some(cmd.auction_timeout_ms))
         .await?;
 
-    // TODO: absolutize the path if it's a relative file
-    let component_ref = if cmd.component_ref.starts_with('/') {
-        format!("file://{}", &cmd.component_ref) // prefix with file:// if it's an absolute path
-    } else {
-        cmd.component_ref.to_string()
-    };
+    let component_ref = resolve_ref(&cmd.component_ref).await?;
 
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,
@@ -218,36 +248,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
         .await?;
 
     // Attempt to parse the provider_ref from strings that may look lke paths or be OCI references
-    let provider_ref = match cmd.provider_ref {
-        // If provider ref starts with '/', then prefix with 'file://', as it's an absolute path
-        ref s if s.starts_with('/') => format!("file://{}", &cmd.provider_ref),
-        // If the provided ref happens to be an existing path, convert
-        ref s if tokio::fs::try_exists(s).await.is_ok_and(|exists| exists) => {
-            format!(
-                "file://{}",
-                tokio::fs::canonicalize(&s)
-                    .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
-                    .display()
-            )
-        }
-        // If a URI-formatted relative path was provided, resolve it
-        ref s
-            if s.starts_with("file://")
-                && tokio::fs::try_exists(s.split_at(7).1)
-                    .await
-                    .is_ok_and(|exists| exists) =>
-        {
-            format!(
-                "file://{}",
-                tokio::fs::canonicalize(s.split_at(7).1)
-                    .await
-                    .with_context(|| format!("failed to resolve absolute path: {}", s))?
-                    .display()
-            )
-        }
-        _ => cmd.provider_ref.to_string(),
-    };
+    let provider_ref = resolve_ref(&cmd.provider_ref).await?;
 
     let host = match cmd.host_id {
         Some(host) => find_host_id(&host, &client).await?.0,

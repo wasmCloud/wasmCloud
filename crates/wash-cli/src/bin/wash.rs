@@ -22,7 +22,7 @@ use wash_cli::par::{self, ParCliCommand};
 use wash_cli::plugin::{self, PluginCommand};
 use wash_cli::secrets::{self, SecretsCliCommand};
 use wash_cli::ui::{self, UiCommand};
-use wash_cli::up::{self, UpCommand};
+use wash_cli::up::{self, UpCommand, NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash_cli::util::ensure_plugin_dir;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
@@ -99,8 +99,19 @@ Options:
   -V, --version          Print version
 ";
 
+/// Helper function to display the version of all the binaries wash runs
+fn version() -> String {
+    format!(
+        "         v{}\n├ nats-server {}\n├ wadm        {}\n└ wasmcloud   {}",
+        clap::crate_version!(),
+        NATS_SERVER_VERSION,
+        WADM_VERSION,
+        WASMCLOUD_HOST_VERSION
+    )
+}
+
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", version, override_help = HELP)]
+#[clap(name = "wash", version = version(), override_help = HELP)]
 struct Cli {
     #[clap(
         short = 'o',

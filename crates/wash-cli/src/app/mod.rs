@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Args, Subcommand};
@@ -12,6 +13,12 @@ use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
 use wash_lib::config::WashConnectionOptions;
 
 use crate::appearance::spinner::Spinner;
+use crossterm::{
+    cursor, execute,
+    terminal::{Clear, ClearType},
+};
+use std::io::{stdout, Write};
+use tokio::time::sleep;
 
 mod output;
 
@@ -50,6 +57,9 @@ pub enum AppCliCommand {
 pub struct ListCommand {
     #[clap(flatten)]
     opts: CliConnectionOpts,
+    /// Switches to a real-time, live-updating application list
+    #[clap(long)]
+    watch: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -153,7 +163,7 @@ pub async fn handle_command(
     let out: CommandOutput = match command {
         List(cmd) => {
             sp.update_spinner_message("Listing applications ...".to_string());
-            get_applications(cmd).await?
+            get_applications(cmd, &sp).await?
         }
         Get(cmd) => {
             sp.update_spinner_message("Getting application manifest ... ".to_string());
@@ -264,24 +274,22 @@ pub(crate) async fn deploy_model_from_manifest(
     version: Option<String>,
 ) -> Result<CommandOutput> {
     let (name, version) = match manifest {
-        AppManifest::SerializedModel(manifest) => {
-            wash_lib::app::put_and_deploy_model(
-                client,
-                lattice,
-                serde_yaml::to_string(&manifest)
-                    .context("failed to convert manifest to string")?
-                    .as_ref(),
-            )
-            .await
-        }
+        AppManifest::SerializedModel(manifest) => wash_lib::app::put_and_deploy_model(
+            client,
+            lattice,
+            serde_yaml::to_string(&manifest)
+                .context("failed to convert manifest to string")?
+                .as_ref(),
+        )
+        .await
+        .map(|(name, version)| (name, Some(version))),
         AppManifest::ModelName(model_name) => {
-            wash_lib::app::deploy_model(client, lattice, &model_name, version.clone())
-                .await
-                .map(|_| (model_name.to_string(), version.unwrap_or_default()))
+            wash_lib::app::deploy_model(client, lattice, &model_name, version.clone()).await
         }
     }?;
 
     let mut map = HashMap::new();
+    let version = version.unwrap_or_default();
     map.insert("deployed".to_string(), json!(true));
     map.insert("model_name".to_string(), json!(name));
     map.insert("model_version".to_string(), json!(version));
@@ -417,17 +425,81 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
     Ok(CommandOutput::new(message, map))
 }
 
-async fn get_applications(cmd: ListCommand) -> Result<CommandOutput> {
+async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutput> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());
 
     let client = connection_opts.into_nats_client().await?;
-    let models = wash_lib::app::get_models(&client, lattice).await?;
 
-    let mut map = HashMap::new();
-    map.insert("applications".to_string(), json!(models));
-    Ok(CommandOutput::new(output::list_models_table(models), map))
+    if cmd.watch {
+        sp.finish_and_clear();
+        watch_applications(&client, lattice).await?;
+        Ok(CommandOutput::new(
+            "Watching applications (press Ctrl+C to exit)".to_string(),
+            HashMap::new(),
+        ))
+    } else {
+        let models = wash_lib::app::get_models(&client, lattice).await?;
+        let mut map = HashMap::new();
+        map.insert("applications".to_string(), json!(models));
+        Ok(CommandOutput::new(output::list_models_table(models), map))
+    }
+}
+
+async fn watch_applications(
+    client: &async_nats_0_33::Client,
+    lattice: Option<String>,
+) -> Result<()> {
+    let mut stdout = stdout();
+
+    execute!(stdout, Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0))
+        .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
+
+    loop {
+        let models = wash_lib::app::get_models(client, lattice.clone()).await?;
+        let table = output::list_models_table(models);
+
+        execute!(stdout, Clear(ClearType::Purge), cursor::MoveTo(0, 0))
+            .map_err(|e| anyhow::anyhow!("Failed to execute terminal commands: {}", e))?;
+
+        stdout
+            .write_all(table.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write table to stdout: {}", e))?;
+
+        stdout
+            .flush()
+            .map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
+        execute!(
+            stdout,
+            Clear(ClearType::CurrentLine),
+            Clear(ClearType::FromCursorDown),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
+
+        if crossterm::event::poll(Duration::from_millis(800))
+            .map_err(|e| anyhow::anyhow!("Failed to poll for events: {}", e))?
+        {
+            if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                if key.code == crossterm::event::KeyCode::Char('c')
+                    && key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                {
+                    execute!(stdout, Clear(ClearType::Purge), cursor::MoveTo(0, 0)).map_err(
+                        |e| anyhow::anyhow!("Failed to execute terminal commands: {}", e),
+                    )?;
+                    break;
+                }
+            }
+        }
+
+        sleep(Duration::from_millis(800)).await;
+    }
+
+    execute!(stdout, cursor::Show).map_err(|e| anyhow::anyhow!("Failed to show cursor: {}", e))?;
+
+    Ok(())
 }
 
 fn show_validate_manifest_results(messages: impl AsRef<[ValidationFailure]>) -> CommandOutput {

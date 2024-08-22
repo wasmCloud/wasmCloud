@@ -13,10 +13,12 @@ use tokio::sync::mpsc;
 use tracing::{debug, instrument, warn, Instrument as _, Span};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
-use wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER;
+use wasi_preview1_component_adapter_provider::{
+    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+};
 use wasmtime::component::{types, Linker, ResourceTable, ResourceTableError};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
-use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpImpl};
+use wasmtime_wasi_http::WasiHttpCtx;
 use wrpc_runtime_wasmtime::{
     collect_component_resources, link_item, ServeExt as _, SharedResourceTable, WrpcView,
 };
@@ -26,7 +28,7 @@ pub use config::Config;
 pub use logging::Logging;
 pub use secrets::Secrets;
 
-mod blobstore;
+pub(crate) mod blobstore;
 mod bus;
 mod config;
 mod http;
@@ -103,6 +105,22 @@ macro_rules! skip_static_instances {
     };
 }
 
+/// This represents a kind of wRPC invocation error
+pub enum InvocationErrorKind {
+    /// This occurs when the endpoint is not found, for example as would happen when the runtime
+    /// would attempt to call `foo:bar/baz@0.2.0`, but the peer served `foo:bar/baz@0.1.0`.
+    NotFound,
+
+    /// An error kind, which will result in a trap in the component
+    Trap,
+}
+
+/// Implementations of this trait are able to introspect an error returned by wRPC invocations
+pub trait InvocationErrorIntrospect {
+    /// Classify [`InvocationErrorKind`] of an error returned by wRPC
+    fn invocation_error_kind(&self, err: &anyhow::Error) -> InvocationErrorKind;
+}
+
 /// A collection of traits that the host must implement
 pub trait Handler:
     wrpc_transport::Invoke<Context = Option<ReplacedInstanceTarget>>
@@ -110,6 +128,7 @@ pub trait Handler:
     + Config
     + Logging
     + Secrets
+    + InvocationErrorIntrospect
     + Send
     + Sync
     + Clone
@@ -123,6 +142,7 @@ impl<
             + Config
             + Logging
             + Secrets
+            + InvocationErrorIntrospect
             + Send
             + Sync
             + Clone
@@ -189,14 +209,6 @@ where
             .field("max_execution_time", &self.max_execution_time)
             .finish_non_exhaustive()
     }
-}
-
-fn type_annotate_http<F, H>(val: F) -> F
-where
-    H: Handler,
-    F: Fn(&mut Ctx<H>) -> WasiHttpImpl<&mut Ctx<H>>,
-{
-    val
 }
 
 fn new_store<H: Handler>(
@@ -278,8 +290,8 @@ where
                 .module(wasm)
                 .context("failed to set core component module")?
                 .adapter(
-                    "wasi_snapshot_preview1",
-                    WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
+                    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME,
+                    WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
                 )
                 .context("failed to add WASI preview1 adapter")?
                 .encode()
@@ -296,17 +308,8 @@ where
 
         wasmtime_wasi::add_to_linker_async(&mut linker)
             .context("failed to link core WASI interfaces")?;
-        let closure = type_annotate_http(|ctx| WasiHttpImpl(ctx));
-        wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/outgoing-handler` interface")?;
-        wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker_get_host(
-            &mut linker,
-            closure,
-        )
-        .context("failed to link `wasi:http/types` interface")?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("failed to link `wasi:http`")?;
 
         capability::blobstore::blobstore::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:blobstore/blobstore`")?;

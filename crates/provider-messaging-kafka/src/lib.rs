@@ -13,7 +13,9 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn};
-use wasmcloud_provider_sdk::{get_connection, run_provider, Context, LinkConfig, Provider};
+use wasmcloud_provider_sdk::{
+    get_connection, run_provider, Context, LinkConfig, LinkDeleteInfo, Provider,
+};
 use wasmcloud_provider_sdk::{initialize_observability, serve_provider_exports};
 use wasmcloud_tracing::context::TraceContextInjector;
 
@@ -329,9 +331,10 @@ impl Provider for KafkaMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection
-    #[instrument(skip(self))]
-    async fn delete_link(&self, source_id: &str) -> Result<()> {
-        debug!("deleting link for component {}", source_id);
+    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
+    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> Result<()> {
+        let component_id = info.get_source_id();
+        debug!(component_id, "deleting link for component");
 
         // Find the connection and remove it from the HashMap
         let mut connections = self.connections.write().await;
@@ -339,7 +342,7 @@ impl Provider for KafkaMessagingProvider {
             consumer,
             consumer_stop_tx,
             ..
-        }) = connections.remove(source_id)
+        }) = connections.remove(component_id)
         else {
             debug!("Linkdef deleted for non-existent consumer, ignoring");
             return Ok(());

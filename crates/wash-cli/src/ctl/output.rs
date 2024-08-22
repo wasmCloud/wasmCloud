@@ -58,7 +58,7 @@ pub fn link_del_output(
 /// Helper function to transform a LinkDefinitionList into a table string for printing
 pub fn links_table(list: Vec<InterfaceLinkDefinition>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 4);
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Source ID", 1, Alignment::Left),
@@ -86,18 +86,18 @@ pub fn links_table(list: Vec<InterfaceLinkDefinition>) -> String {
 /// Helper function to transform a Host list into a table string for printing
 pub fn hosts_table(hosts: Vec<Host>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 4);
 
     table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Host ID", 1, Alignment::Left),
-        TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
+        TableCell::new_with_alignment("Host ID", 2, Alignment::Left),
         TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
+        TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
     ]));
     hosts.iter().for_each(|h| {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(h.id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(format!("{}", h.uptime_seconds), 1, Alignment::Left),
+            TableCell::new_with_alignment(h.id.clone(), 2, Alignment::Left),
             TableCell::new_with_alignment(h.friendly_name.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(format!("{}", h.uptime_seconds), 1, Alignment::Left),
         ]))
     });
 
@@ -107,22 +107,22 @@ pub fn hosts_table(hosts: Vec<Host>) -> String {
 /// Helper function to transform a HostInventory into a table string for printing
 pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 3);
 
     invs.into_iter().for_each(|inv| {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Host ID", 1, Alignment::Left),
+            TableCell::new_with_alignment("Host ID", 2, Alignment::Left),
             TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
         ]));
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(inv.host_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(inv.host_id.clone(), 2, Alignment::Left),
             TableCell::new_with_alignment(inv.friendly_name.clone(), 1, Alignment::Left),
         ]));
 
         if !inv.labels.is_empty() {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "",
-                2,
+                3,
                 Alignment::Left,
             )]));
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
@@ -207,7 +207,7 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
 /// Helper function to transform a ClaimsList into a table string for printing
 pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 2);
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         "Claims",
@@ -277,14 +277,13 @@ pub fn claims_table(list: Vec<HashMap<String, String>>) -> String {
 /// Helper function to transform a list of plugin metadata into a table string for printing
 pub fn plugins_table(list: Vec<&Metadata>) -> String {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    crate::util::configure_table_style(&mut table, 4);
 
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Name", 1, Alignment::Left),
         TableCell::new_with_alignment("ID", 1, Alignment::Left),
         TableCell::new_with_alignment("Version", 1, Alignment::Left),
         TableCell::new_with_alignment("Author", 1, Alignment::Left),
-        TableCell::new_with_alignment("Description", 1, Alignment::Left),
     ]));
     list.into_iter().for_each(|metadata| {
         table.add_row(Row::new(vec![
@@ -292,8 +291,14 @@ pub fn plugins_table(list: Vec<&Metadata>) -> String {
             TableCell::new_with_alignment(&metadata.id, 1, Alignment::Left),
             TableCell::new_with_alignment(&metadata.version, 1, Alignment::Left),
             TableCell::new_with_alignment(&metadata.author, 1, Alignment::Left),
-            TableCell::new_with_alignment(&metadata.description, 1, Alignment::Left),
         ]));
+        if !metadata.description.is_empty() {
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                format!("  └ {}", metadata.description),
+                4,
+                Alignment::Left,
+            )]));
+        }
     });
 
     table.render()

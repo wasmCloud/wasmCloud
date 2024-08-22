@@ -3,7 +3,7 @@ name: washboard
 on:
   push:
     paths:
-      - 'washboard-ui/**'
+      - 'typescript/**'
     branches:
       - main
     tags:
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./washboard-ui
+        working-directory: ./typescript
     strategy:
       matrix:
         wash:
@@ -42,8 +42,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
         with:
-          node-version-file: ./washboard-ui/.tool-versions
-          cache-dependency-path: ./washboard-ui/yarn.lock
+          node-version-file: ./typescript/.tool-versions
+          cache-dependency-path: ./typescript/yarn.lock
 
       - name: Setup Yarn
         run: |
@@ -53,7 +53,7 @@ jobs:
       - name: Cache turbo build setup
         uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9
         with:
-          path: ./washboard-ui/.turbo
+          path: ./typescript/.turbo
           key: ${{ runner.os }}-turbo-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-turbo-
@@ -74,7 +74,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Install wash
-        uses: taiki-e/install-action@91ca22ecbd089d3927c5887b794c135a827853bd
+        uses: taiki-e/install-action@e96513f64c39eb6ebc73e13b6e8470317202483a
         with:
           tool: wash-cli@${{ matrix.wash.version }}
 
@@ -85,14 +85,14 @@ jobs:
         run: yarn run turbo:build
 
       - name: Compress
-        run: tar -C ./packages/washboard-ui/dist -zcvf washboard.tar.gz .
+        run: tar -C ./apps/washboard-ui/dist -zcvf washboard.tar.gz .
 
       - name: Upload Artifact
         if: ${{ matrix.wash.release }}
         uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
         with:
           name: washboard
-          path: ./washboard-ui/washboard.tar.gz
+          path: ./typescript/washboard.tar.gz
 
       - name: Upload Playwright Report
         uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
@@ -101,8 +101,8 @@ jobs:
           name: playwright-report
           retention-days: 30
           path: |
-            washboard-ui/packages/washboard-ui/wash-${{ matrix.wash.version }}.playwright-report
-            washboard-ui/packages/washboard-ui/wash-${{ matrix.wash.version }}.test-results
+            typescript/apps/washboard-ui/wash-${{ matrix.wash.version }}.playwright-report
+            typescript/apps/washboard-ui/wash-${{ matrix.wash.version }}.test-results
 
   release:
     runs-on: ubuntu-latest
