@@ -22,7 +22,7 @@ use wash_cli::par::{self, ParCliCommand};
 use wash_cli::plugin::{self, PluginCommand};
 use wash_cli::secrets::{self, SecretsCliCommand};
 use wash_cli::ui::{self, UiCommand};
-use wash_cli::up::{self, UpCommand, NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash_cli::up::{self, UpCommand};
 use wash_cli::util::ensure_plugin_dir;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
@@ -99,19 +99,8 @@ Options:
   -V, --version          Print version
 ";
 
-/// Helper function to display the version of all the binaries wash runs
-fn version() -> String {
-    format!(
-        "         v{}\n├ nats-server {}\n├ wadm        {}\n└ wasmcloud   {}",
-        clap::crate_version!(),
-        NATS_SERVER_VERSION,
-        WADM_VERSION,
-        WASMCLOUD_HOST_VERSION
-    )
-}
-
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", version = version(), override_help = HELP)]
+#[clap(name = "wash", version, override_help = HELP)]
 struct Cli {
     #[clap(
         short = 'o',
@@ -245,15 +234,6 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // Implement clap_markdown for markdown generation of command line documentation
-    let mdargs = Cli::parse();
-
-    // Most straightforward way to invoke is probably `wash app list --markdown-help > help.md`
-    if mdargs.markdown_help {
-        clap_markdown::print_help_markdown::<Cli>();
-        std::process::exit(0);
-    };
-
     let mut command = Cli::command();
     // Load plugins if they are not disabled
     let plugins = if std::env::var("WASH_DISABLE_PLUGINS").is_err() {
@@ -386,6 +366,12 @@ async fn main() {
     };
 
     let output_kind = cli.output;
+
+    // Implements clap_markdown for markdown generation of command line documentation. Most straightforward way to invoke is probably `wash app list --help-markdown > help.md`
+    if cli.markdown_help {
+        clap_markdown::print_help_markdown::<Cli>();
+        std::process::exit(0);
+    };
 
     // Whether or not to append `success: true` to the output JSON. For now, we only omit it for `wash config get`.
     let append_json_success = !matches!(
