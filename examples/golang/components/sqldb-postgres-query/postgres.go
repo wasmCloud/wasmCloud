@@ -20,6 +20,10 @@ const INSERT_QUERY = `
 INSERT INTO example (description) VALUES ($1) RETURNING *;
 `
 
+const SELECT_QUERY = `
+SELECT * FROM example WHERE description = 'inserted example go row!';
+`
+
 // type aliases for more readable code
 type PgValue = interfaces.WasmcloudPostgres0_1_0_draft_QueryPgValue
 type RowEntry = interfaces.WasmcloudPostgres0_1_0_draft_TypesResultRowEntry
@@ -33,29 +37,35 @@ func init() {
 }
 
 func (c Component) Call() string {
-	query := interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(CREATE_TABLE_QUERY, make([]PgValue, 0))
+	query := Query(CREATE_TABLE_QUERY, make([]PgValue, 0))
 	if query.IsErr() {
 		return fmt.Sprintf("ERROR: failed to create table: %v", query.UnwrapErr())
 	}
+
 	val := interfaces.WasmcloudPostgres0_1_0_draft_TypesPgValueText("inserted example go row!")
-	insertResult := interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(INSERT_QUERY, []PgValue{val})
+	insertResult := Query(INSERT_QUERY, []PgValue{val})
 	if insertResult.IsErr() {
 		return fmt.Sprintf("ERROR: failed to insert row: %v", insertResult.UnwrapErr())
 	}
-	insertedRows := insertResult.Unwrap()
-	var rowEntry []RowEntry
-	if len(insertedRows) == 1 {
-		rowEntry = insertedRows[0]
-	} else {
-		return "ERROR: failed to insert row"
-	}
 
-	for _, row := range rowEntry {
-		if row.ColumnName == "description" {
-			return fmt.Sprintf("SUCCESS: inserted and retrieved: %v", row.Value.GetText())
-		}
+	selectResult := Query(SELECT_QUERY, make([]PgValue, 0))
+	if selectResult.IsErr() {
+		return fmt.Sprintf("ERROR: failed to select rows: %v", selectResult.UnwrapErr())
+	}
+	selectedRows := selectResult.Unwrap()
+	if len(selectedRows) > 0 {
+		firstRow := selectedRows[0]
+		return fmt.Sprintf("SUCCESS: we selected a row! %v", firstRow)
 	}
 	return "ERROR: failed to retrieve inserted row"
+}
+
+type ResultRow = interfaces.WasmcloudPostgres0_1_0_draft_QueryResultRow
+type QueryError = interfaces.WasmcloudPostgres0_1_0_draft_QueryQueryError
+
+// Helper function to assist with readability in the example when querying the database
+func Query(query string, params []PgValue) interfaces.Result[[]ResultRow, QueryError] {
+	return interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(query, params)
 }
 
 //go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
