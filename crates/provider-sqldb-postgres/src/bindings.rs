@@ -25,9 +25,9 @@ use uuid::Uuid;
 // Bindgen happens here
 wit_bindgen_wrpc::generate!({
   with: {
-      "wasmcloud:postgres/types@0.1.0-draft": generate,
-      "wasmcloud:postgres/query@0.1.0-draft": generate,
-      "wasmcloud:postgres/prepared@0.1.0-draft": generate,
+      "wasmcloud:postgres/types@0.1.1-draft": generate,
+      "wasmcloud:postgres/query@0.1.1-draft": generate,
+      "wasmcloud:postgres/prepared@0.1.1-draft": generate,
   },
 });
 

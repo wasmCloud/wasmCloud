@@ -128,6 +128,27 @@ impl PostgresProvider {
             .map_err(|e| QueryError::Unexpected(format!("failed to evaluate full row: {e}")))
     }
 
+    /// Perform a raw query
+    async fn do_query_batch(&self, source_id: &str, query: &str) -> Result<(), QueryError> {
+        let connections = self.connections.read().await;
+        let pool = connections.get(source_id).ok_or_else(|| {
+            QueryError::Unexpected(format!(
+                "missing connection pool for source [{source_id}] while querying"
+            ))
+        })?;
+
+        let client = pool.get().await.map_err(|e| {
+            QueryError::Unexpected(format!("failed to build client from pool: {e}"))
+        })?;
+
+        client
+            .batch_execute(query)
+            .await
+            .map_err(|e| QueryError::Unexpected(format!("failed to perform query: {e}")))?;
+
+        Ok(())
+    }
+
     /// Prepare a statement
     async fn do_statement_prepare(
         &self,
@@ -265,6 +286,26 @@ impl bindings::query::Handler<Option<Context>> for PostgresProvider {
         };
 
         Ok(self.do_query(&source_id, &query, params).await)
+    }
+
+    #[instrument(level = "debug", skip_all, fields(query))]
+    async fn query_batch(
+        &self,
+        ctx: Option<Context>,
+        query: String,
+    ) -> Result<Result<(), QueryError>> {
+        propagate_trace_for_ctx!(ctx);
+        let Some(Context {
+            component: Some(source_id),
+            ..
+        }) = ctx
+        else {
+            return Ok(Err(QueryError::Unexpected(
+                "unexpectedly missing source ID".into(),
+            )));
+        };
+
+        Ok(self.do_query_batch(&source_id, &query).await)
     }
 }
 
