@@ -9,7 +9,7 @@ The purpose of this example is to provide comprehensive comments on the usage of
 Prerequisites:
 
 1. [Go toolchain](https://go.dev/doc/install)
-1. [wit-bindgen-wrpc](https://github.com/wrpc/wit-bindgen-wrpc/tree/main) `cargo install wit-bindgen-wrpc-cli`
+1. [wit-bindgen-wrpc 0.7.0](https://github.com/bytecodealliance/wrpc), download the release binary
 1. [wash](https://wasmcloud.com/docs/installation)
 
 ```bash
