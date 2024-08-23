@@ -79,7 +79,7 @@ pub struct StartComponentCommand {
 }
 
 /// Utility function for resolving component and provider references
-async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
+pub(crate) async fn resolve_ref(s: impl AsRef<str>) -> Result<String> {
     let resolved = match s.as_ref() {
         s if s.starts_with('/') => {
             format!("file://{}", &s) // prefix with file:// if it's an absolute path
@@ -166,7 +166,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
     } = scale_component(ScaleComponentArgs {
         client: &client,
         host_id: &host,
-        component_ref: &cmd.component_ref,
+        component_ref: &component_ref,
         component_id: &cmd.component_id,
         max_instances: cmd.max_instances,
         skip_wait: cmd.skip_wait,

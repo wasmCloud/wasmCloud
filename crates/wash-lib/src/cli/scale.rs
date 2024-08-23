@@ -9,6 +9,7 @@ use crate::component::{scale_component, ScaleComponentArgs};
 use crate::config::WashConnectionOptions;
 use crate::context::default_component_operation_timeout_ms;
 
+use super::start::resolve_ref;
 use super::validate_component_id;
 
 #[derive(Debug, Clone, Parser)]
@@ -65,6 +66,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
     let client = wco.into_ctl_client(None).await?;
 
     let annotations = input_vec_to_hashmap(cmd.annotations)?;
+    let component_ref = resolve_ref(&cmd.component_ref).await?;
 
     let info = scale_component(ScaleComponentArgs {
         client: &client,
@@ -72,7 +74,7 @@ pub async fn handle_scale_component(cmd: ScaleComponentCommand) -> Result<Comman
         // prompt the user to choose if more than one thing matches
         host_id: &find_host_id(&cmd.host_id, &client).await?.0,
         component_id: &cmd.component_id,
-        component_ref: &cmd.component_ref,
+        component_ref: &component_ref,
         max_instances: cmd.max_instances,
         annotations: Some(annotations),
         config: cmd.config,
