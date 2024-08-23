@@ -43,6 +43,7 @@ wasmtime = { workspace = true, features = [
     "component-model",
     "coredump",
     "cranelift",
+    "gc",
     "parallel-compilation",
     "pooling-allocator",
 ] }
