@@ -109,11 +109,11 @@ pub struct InspectCommand {
     #[clap(name = "archive")]
     archive: String,
 
-    /// Digest to verify artifact against (if OCI URL is provided for <archive>)
+    /// Digest to verify artifact against (if OCI URL is provided for `<archive>`)
     #[clap(short = 'd', long = "digest")]
     digest: Option<String>,
 
-    /// Allow latest artifact tags (if OCI URL is provided for <archive>)
+    /// Allow latest artifact tags (if OCI URL is provided for `<archive>`)
     #[clap(long = "allow-latest")]
     allow_latest: bool,
 

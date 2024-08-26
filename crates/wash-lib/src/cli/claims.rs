@@ -50,11 +50,11 @@ pub struct InspectCommand {
     #[clap(name = "wit", long = "wit", alias = "world")]
     pub wit: bool,
 
-    /// Digest to verify artifact against (if OCI URL is provided for <component>)
+    /// Digest to verify artifact against (if OCI URL is provided for `<component>`)
     #[clap(short = 'd', long = "digest")]
     pub(crate) digest: Option<String>,
 
-    /// Allow latest artifact tags (if OCI URL is provided for <component>)
+    /// Allow latest artifact tags (if OCI URL is provided for `<component>`)
     #[clap(long = "allow-latest")]
     pub(crate) allow_latest: bool,
 
