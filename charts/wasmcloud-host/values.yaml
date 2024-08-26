@@ -1,0 +1,97 @@
+replicas: 1
+nameOverride: ""
+
+image:
+  repository: "ghcr.io/wasmcloud/wasmcloud"
+  pullPolicy: "IfNotPresent"
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  # Optional: The image to use for the NATS leaf that is deployed alongside the wasmCloud host.
+  # If not provided, the default upstream image will be used.
+  natsLeaf:
+    repository: "nats"
+    pullPolicy: "IfNotPresent"
+    tag: "2.10-alpine"
+
+config:
+  # Required: The lattice to connect the hosts to.
+  lattice: "default"
+  # Optional: Additional labels to apply to the host other than the defaults set by the host
+  hostLabels: {}
+  # Optional. The name of a secret containing a set of NATS credentials under 'nats.creds' key.
+  natsCredentialsSecret: ""
+  # Optional: The name of a secret containing the registry credentials.
+  # See https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/#create-a-secret-by-providing-credentials-on-the-command-line
+  registryCredentialsSecret: "wasmcloud-pull-secret"
+  # Optional: Enable structured logging for host logs. Defaults to "false".
+  enableStructuredLogging: false
+  # Optional: The control topic prefix to use for the host. Defaults to "wasmbus.ctl"
+  controlTopicPrefix: ""
+  # Optional: The Jetstream domain to use for the NATS sidecar. Defaults to "default".
+  jetstreamDomain: "default"
+  # Optional: The leaf node domain to use for the NATS sidecar. Defaults to "leaf".
+  leafNodeDomain: "leaf"
+  # Optional: Enable the config service for this host. Defaults to "false".
+  # Makes wasmCloud host issue requests to a config service on startup.
+  configServiceEnabled: false
+  # Optional: The log level to use for the host. Defaults to "INFO".
+  logLevel: "INFO"
+  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats.default.svc.cluster.local".
+  natsAddress: "nats://nats.default.svc.cluster.local"
+  # Optional: Allow the host to deploy using the latest tag on OCI components or providers. Defaults to "false".
+  allowLatest: false
+  # Optional: Allow the host to pull artifacts from OCI registries insecurely.
+  allowedInsecure: []
+  # Optional: Policy service configuration.
+  policyService:
+    # Whether or not policy service is enabled
+    enable: false
+    # If provided, enables policy checks on start actions and component invocations.
+    topic: "wasmcloud.policy"
+    # If provided, allows the host to subscribe to updates on past policy decisions. Requires 'topic' above to be set.
+    changesTopic: "wasmcloud.policy.changes"
+    # If provided, allows setting a custom timeout for requesting policy decisions. Defaults to 1000. Requires 'topic' to be set.
+    timeoutMs: 1000
+  # Optional: Observability options for configuring the OpenTelemetry integration.
+  observability:
+    # NOTE: Enables all signals (logs/metrics/traces) at once. Set it to 'false' and enable each signal individually in case you don't need all of them.
+    enable: false
+    endpoint: ""
+    # Either 'grpc' or 'http'
+    protocol: ""
+    logs:
+      enable: false
+      endpoint: ""
+    metrics:
+      enable: false
+      endpoint: ""
+    traces:
+      enable: false
+      endpoint: ""
+  # Optional: Subject prefix that will be used by the host to query for wasmCloud Secrets.
+  # See https://wasmcloud.com/docs/concepts/secrets for more context
+  secretsTopicPrefix: "wasmcloud.secrets"
+  # Optional: The maximum amount of memory bytes that a component can allocate. Defaults to 10485760 (10mb).
+  maxLinearMemoryBytes:
+  # Optional: Additional options to control how the underlying wasmCloud hosts are scheduled in Kubernetes.
+  # This includes setting resource requirements for the nats and wasmCloud host
+  # containers along with any additional pot template settings.
+
+imagePullSecrets: []
+podSecurityContext: {}
+# fsGroup: 2000
+
+securityContext: {}
+# capabilities:
+#   drop:
+#   - ALL
+# readOnlyRootFilesystem: true
+# runAsNonRoot: true
+# runAsUser: 1000
+resources:
+  wasmcloud: {}
+  natsLeaf: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
