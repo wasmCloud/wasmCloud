@@ -7672,7 +7672,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "bigdecimal 0.4.5",
