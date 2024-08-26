@@ -23,7 +23,7 @@
     "format:fix": "yarn format:prettier --write"
   },
   "devDependencies": {
-    "@types/node": "^20.14.14",
+    "@types/node": "^20.16.1",
     "@wasmcloud/prettier-config": "workspace:*",
     "eslint": "^8.57.0",
     "eslint-config-turbo": "^2.0.14",
