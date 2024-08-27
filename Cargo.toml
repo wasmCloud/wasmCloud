@@ -227,6 +227,7 @@ deadpool-postgres = { version = "0.13", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 dirs = { version = "5", default-features = false }
 futures = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false }
 geo-types = { version = "0.7", default-features = false }
 heck = { version = "0.5", default-features = false }
 hex = { version = "0.4", default-features = false }
@@ -332,6 +333,7 @@ wasi = { version = "=0.13.1", default-features = false } # WASI 0.2.1 is not cur
 wasi-preview1-component-adapter-provider = { version = "24", default-features = false }
 wasm-encoder = { version = "0.216", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
+wasm-pkg-client = { git = "https://github.com/bytecodealliance/wasm-pkg-tools", branch = "main", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
 wasmcloud-control-interface = { version = "1.0.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "^0.9.0", path = "./crates/core", default-features = false }

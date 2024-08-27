@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{debug, info};
 use wit_parser::{Resolve, WorldId};
 
 use crate::parser::{ProjectConfig, TypeConfig};
@@ -12,12 +12,16 @@ mod component;
 pub use component::*;
 mod provider;
 use provider::build_provider;
+mod wasm_pkg;
 
 /// This tag indicates that a Wasm module uses experimental features of wasmCloud
 /// and/or the surrounding ecosystem.
 ///
 /// This tag is normally embedded in a Wasm module as a custom section
 const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
+
+/// The directory where WIT files and dependencies are stored
+const WIT_DIR: &str = "wit";
 
 /// Configuration for signing an artifact (component or provider) including issuer and subject key, the path to where keys can be found, and an option to
 /// disable automatic key generation if keys cannot be found.
@@ -58,6 +62,8 @@ pub async fn build_project(
 ) -> Result<PathBuf> {
     match &config.project_type {
         TypeConfig::Component(component_config) => {
+            // TODO: In component config, allow skipping the fetch_packages step
+            wasm_pkg::fetch_packages(component_config, &config.common).await?;
             build_component(component_config, &config.language, &config.common, signing)
         }
         TypeConfig::Provider(provider_config) => {
@@ -70,8 +76,13 @@ pub async fn build_project(
 /// and select a given world
 fn convert_wit_dir_to_world(
     dir: impl AsRef<Path>,
-    world: impl AsRef<str>,
+    world: Option<&str>,
 ) -> Result<(Resolve, WorldId)> {
+    debug!(
+        "reading WIT directory and world: {:?}, '{:?}'",
+        dir.as_ref(),
+        world
+    );
     // Resolve the WIT directory packages & worlds
     let mut resolve = wit_parser::Resolve::default();
     let (package_id, _paths) = resolve
@@ -81,7 +92,7 @@ fn convert_wit_dir_to_world(
 
     // Select the target world that was specified by the user
     let world_id = resolve
-        .select_world(package_id, world.as_ref().into())
+        .select_world(package_id, world)
         .context("failed to select world from built resolver")?;
 
     Ok((resolve, world_id))
