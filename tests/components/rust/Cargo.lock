@@ -202,15 +202,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_bytes"
-version = "0.11.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "387cc504cb06bb40a96c8e04e951fe01854cf6bc921053c954e4a606d9675c6a"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "serde_derive"
 version = "1.0.208"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -326,8 +317,6 @@ name = "wasmcloud-component"
 version = "0.1.0"
 dependencies = [
  "rand",
- "serde",
- "serde_bytes",
  "uuid",
  "wasi",
  "wit-bindgen",

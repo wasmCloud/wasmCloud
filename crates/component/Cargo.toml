@@ -16,13 +16,14 @@ default = [
     "rand",
     "tokio",
     "uuid",
+    "serde",
 ]
 
 [dependencies]
 futures = { workspace = true, optional = true, features = ["std"] }
 rand = { workspace = true, optional = true }
-serde = { workspace = true, features = ["derive"] } # TODO: Make optional once `wasi-http` integrated
-serde_bytes = { workspace = true, features = ["std"] } # TODO: Make optional once `wasi-http` integrated
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_bytes = { workspace = true, features = ["std"], optional = true }
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 wasi = { workspace = true, features = ["std"] }
