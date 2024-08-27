@@ -187,6 +187,7 @@ wrpc-transport-nats = { workspace = true }
 members = ["crates/*"]
 
 [workspace.dependencies]
+anstyle = { version = "1.0.8", default-features = false }
 anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 async-compression = { version = "0.3", default-features = false }

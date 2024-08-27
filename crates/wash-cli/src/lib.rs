@@ -15,6 +15,7 @@ pub mod keys;
 pub mod par;
 pub mod plugin;
 pub mod secrets;
+pub mod style;
 pub mod ui;
 pub mod up;
 pub mod util;

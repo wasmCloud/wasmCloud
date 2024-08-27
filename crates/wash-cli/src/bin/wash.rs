@@ -3,27 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{self, Arg, Command, FromArgMatches, Parser, Subcommand};
-
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
-use wash_cli::app::{self, AppCliCommand};
-use wash_cli::build::{self, BuildCommand};
-use wash_cli::call::{self, CallCli};
-use wash_cli::common;
-use wash_cli::completions::{self, CompletionOpts};
-use wash_cli::config::{self, ConfigCliCommand};
-use wash_cli::ctx::{self, CtxCommand};
-use wash_cli::dev::{self, DevCommand};
-use wash_cli::down::{self, DownCommand};
-use wash_cli::drain;
-use wash_cli::generate::{self, NewCliCommand};
-use wash_cli::keys::{self, KeysCliCommand};
-use wash_cli::par::{self, ParCliCommand};
-use wash_cli::plugin::{self, PluginCommand};
-use wash_cli::secrets::{self, SecretsCliCommand};
-use wash_cli::ui::{self, UiCommand};
-use wash_cli::up::{self, UpCommand, NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
-use wash_cli::util::ensure_plugin_dir;
 use wash_lib::cli::capture::{CaptureCommand, CaptureSubcommand};
 use wash_lib::cli::claims::ClaimsCliCommand;
 use wash_lib::cli::get::GetCommand;
@@ -39,6 +20,26 @@ use wash_lib::cli::update::UpdateCommand;
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::drain::Drain as DrainSelection;
 use wash_lib::plugin::subcommand::{DirMapping, SubcommandRunner};
+
+use wash_cli::app::{self, AppCliCommand};
+use wash_cli::build::{self, BuildCommand};
+use wash_cli::call::{self, CallCli};
+use wash_cli::common;
+use wash_cli::completions::{self, CompletionOpts};
+use wash_cli::config::{self, ConfigCliCommand};
+use wash_cli::ctx::{self, CtxCommand};
+use wash_cli::dev::{self, DevCommand};
+use wash_cli::down::{self, DownCommand};
+use wash_cli::drain;
+use wash_cli::generate::{self, NewCliCommand};
+use wash_cli::keys::{self, KeysCliCommand};
+use wash_cli::par::{self, ParCliCommand};
+use wash_cli::plugin::{self, PluginCommand};
+use wash_cli::secrets::{self, SecretsCliCommand};
+use wash_cli::style::WASH_CLI_STYLE;
+use wash_cli::ui::{self, UiCommand};
+use wash_cli::up::{self, UpCommand, NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
+use wash_cli::util::ensure_plugin_dir;
 
 const HELP: &str = r"
 _________________________________________________________________________________
@@ -112,6 +113,7 @@ fn version() -> String {
 
 #[derive(Debug, Clone, Parser)]
 #[clap(name = "wash", version = version(), override_help = HELP)]
+#[command(styles = WASH_CLI_STYLE)]
 struct Cli {
     #[clap(
         short = 'o',
