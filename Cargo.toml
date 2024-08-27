@@ -374,3 +374,8 @@ wrpc-interface-http = { version = "0.27", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
 wrpc-transport = { version = "0.26.7", default-features = false }
 wrpc-transport-nats = { version = "0.22.3", default-features = false }
+
+# prettyplease (v0.2.22) is a tarnsitive dep of wit-binden-wrpc and uses a newer version of syn (2.0.76)
+# this conflicts with versions of syn resolved by other dependencies 
+[patch.crates-io]
+prettyplease = { git = "https://github.com/dtolnay/prettyplease", tag = "0.2.20" }
