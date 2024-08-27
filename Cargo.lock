@@ -6825,6 +6825,7 @@ dependencies = [
 name = "wash-cli"
 version = "0.31.0"
 dependencies = [
+ "anstyle",
  "anyhow",
  "assert-json-diff",
  "async-compression",
