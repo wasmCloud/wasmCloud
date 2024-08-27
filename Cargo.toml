@@ -374,14 +374,3 @@ wrpc-interface-http = { version = "0.27", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
 wrpc-transport = { version = "0.26.7", default-features = false }
 wrpc-transport-nats = { version = "0.22.3", default-features = false }
-
-# syn is a transitive dep of various packages and two of it's downstream dependencies differ:
-#
-# - serde_derive @ 1.0.209 (^2.0.46)
-# - prettyplease @ 0.2.22 (^2.0.76)
-#
-# Normally this would resolve itself, but since we combine lock files, it's possible to get the wrong version in some transitive dependencies sneaking in (and locked to a different version).
-#
-# To ensure that the resulting (combined) Cargo.lock file can be used, we force syn t a specific version
-[patch.crates-io]
-syn = { git = "https://github.com/dtolnay/syn", tag = "2.0.76" }
