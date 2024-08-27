@@ -7249,8 +7249,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "rand 0.8.5",
- "serde",
- "serde_bytes",
  "tokio",
  "uuid 1.10.0",
  "wasi 0.13.1+wasi-0.2.0",
