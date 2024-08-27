@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use async_nats_0_33::RequestErrorKind;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm_client::Result;
@@ -160,50 +161,61 @@ pub async fn handle_command(
 ) -> anyhow::Result<CommandOutput> {
     use AppCliCommand::*;
     let sp: Spinner = Spinner::new(&output_kind)?;
-    let out: CommandOutput = match command {
+    let command_output: wadm_client::Result<CommandOutput> = match command {
         List(cmd) => {
             sp.update_spinner_message("Listing applications ...".to_string());
-            get_applications(cmd, &sp).await?
+            get_applications(cmd, &sp).await
         }
         Get(cmd) => {
             sp.update_spinner_message("Getting application manifest ... ".to_string());
-            get_manifest(cmd).await?
+            get_manifest(cmd).await
         }
         Status(cmd) => {
             sp.update_spinner_message("Getting application status ... ".to_string());
-            get_model_status(cmd).await?
+            get_model_status(cmd).await
         }
         History(cmd) => {
             sp.update_spinner_message("Getting application version history ... ".to_string());
-            get_application_versions(cmd).await?
+            get_application_versions(cmd).await
         }
         Delete(cmd) => {
             sp.update_spinner_message("Deleting application version ... ".to_string());
-            delete_application_version(cmd).await?
+            delete_application_version(cmd).await
         }
         Put(cmd) => {
             sp.update_spinner_message("Creating application version ... ".to_string());
-            put_model(cmd).await?
+            put_model(cmd).await
         }
         Deploy(cmd) => {
             sp.update_spinner_message("Deploying application ... ".to_string());
-            deploy_model(cmd).await?
+            deploy_model(cmd).await
         }
         Undeploy(cmd) => {
             sp.update_spinner_message("Undeploying application ... ".to_string());
-            undeploy_model(cmd).await?
+            undeploy_model(cmd).await
         }
         Validate(cmd) => {
             sp.update_spinner_message("Validating application manifest ... ".to_string());
             let (_manifest, validation_results) = validate_manifest_file(&cmd.application)
                 .await
                 .context("failed to validate Wadm manifest")?;
-            show_validate_manifest_results(validation_results)
+            Ok(show_validate_manifest_results(validation_results))
         }
     };
+
+    // Basic match to give a nicer error than "no responders"
+    match command_output {
+        Err(wadm_client::error::ClientError::NatsError(e))
+            if e.kind() == RequestErrorKind::NoResponders =>
+        {
+            bail!("Connection succeeded to lattice but no wadm server was listening. Ensure wadm is running.")
+        }
+        _ => {}
+    }
+
     sp.finish_and_clear();
 
-    Ok(out)
+    Ok(command_output?)
 }
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
@@ -299,7 +311,7 @@ pub(crate) async fn deploy_model_from_manifest(
     ))
 }
 
-async fn put_model(cmd: PutCommand) -> anyhow::Result<CommandOutput> {
+async fn put_model(cmd: PutCommand) -> Result<CommandOutput> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());
@@ -322,7 +334,7 @@ async fn put_model(cmd: PutCommand) -> anyhow::Result<CommandOutput> {
         .await
         .map_err(|e| anyhow::anyhow!(e)),
         AppManifest::ModelName(name) => {
-            bail!("failed to retrieve manifest. Ensure `{name}` is a valid path to a Wadm application manifest.")
+            return Err(wadm_client::error::ClientError::ManifestLoad(anyhow::anyhow!("failed to retrieve manifest. Ensure `{name}` is a valid path to a Wadm application manifest.")));
         }
     }?;
 
