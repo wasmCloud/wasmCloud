@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -45,11 +45,24 @@ struct Args {
     )]
     nats_port: u16,
     /// A user JWT to use to authenticate to NATS
-    #[clap(long = "nats-jwt", env = "WASMCLOUD_NATS_JWT", requires = "nats_seed")]
+    #[clap(
+        long = "nats-jwt",
+        env = "WASMCLOUD_NATS_JWT",
+        requires = "nats_seed",
+        conflicts_with = "nats_creds"
+    )]
     nats_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS
-    #[clap(long = "nats-seed", env = "WASMCLOUD_NATS_SEED", requires = "nats_jwt")]
+    #[clap(
+        long = "nats-seed",
+        env = "WASMCLOUD_NATS_SEED",
+        requires = "nats_jwt",
+        conflicts_with = "nats_creds"
+    )]
     nats_seed: Option<String>,
+    /// A NATS credentials file that contains the JWT and seed for authenticating to NATS
+    #[clap(long = "nats-creds", env = "WASMCLOUD_NATS_CREDS", conflicts_with_all = ["nats_jwt", "nats_seed"])]
+    nats_creds: Option<PathBuf>,
     /// The lattice the host belongs to
     #[clap(
         short = 'x',
@@ -112,7 +125,8 @@ struct Args {
         long = "ctl-jwt",
         env = "WASMCLOUD_CTL_JWT",
         requires = "ctl_seed",
-        hide = true
+        hide = true,
+        conflicts_with = "ctl_creds"
     )]
     ctl_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS for CTL messages, defaults to the value supplied to --nats-seed if not supplied
@@ -120,9 +134,13 @@ struct Args {
         long = "ctl-seed",
         env = "WASMCLOUD_CTL_SEED",
         requires = "ctl_jwt",
-        hide = true
+        hide = true,
+        conflicts_with = "ctl_creds"
     )]
     ctl_seed: Option<String>,
+    /// A NATS credentials file to use to authenticate to NATS for CTL messages, defaults to the value supplied to --nats-creds or --nats-jwt and --nats-seed
+    #[clap(long = "ctl-creds", env = "WASMCLOUD_CTL_CREDS", hide = true, conflicts_with_all = ["ctl_jwt", "ctl_seed"])]
+    ctl_creds: Option<PathBuf>,
     /// Optional flag to require host communication over TLS with a NATS server for CTL messages
     #[clap(long = "ctl-tls", env = "WASMCLOUD_CTL_TLS", hide = true)]
     ctl_tls: bool,
@@ -146,7 +164,8 @@ struct Args {
         long = "rpc-jwt",
         env = "WASMCLOUD_RPC_JWT",
         requires = "rpc_seed",
-        hide = true
+        hide = true,
+        conflicts_with = "rpc_creds"
     )]
     rpc_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS for RPC messages, defaults to the value supplied to --nats-seed if not supplied
@@ -154,9 +173,13 @@ struct Args {
         long = "rpc-seed",
         env = "WASMCLOUD_RPC_SEED",
         requires = "rpc_jwt",
-        hide = true
+        hide = true,
+        conflicts_with = "rpc_creds"
     )]
     rpc_seed: Option<String>,
+    /// A NATS credentials file to use to authenticate to NATS for RPC messages, defaults to the value supplied to --nats-creds or --nats-jwt and --nats-seed
+    #[clap(long = "rpc-creds", env = "WASMCLOUD_RPC_CREDS", hide = true, conflicts_with_all = ["rpc_jwt", "rpc_seed"])]
+    rpc_creds: Option<PathBuf>,
     /// Timeout in milliseconds for all RPC calls
     #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration_millis, hide = true)]
     rpc_timeout_ms: Duration,
@@ -356,27 +379,16 @@ async fn main() -> anyhow::Result<()> {
         .transpose()
         .context("failed to construct host key pair from seed")?
         .map(Arc::new);
-    let nats_key = args
-        .nats_seed
-        .as_deref()
-        .map(KeyPair::from_seed)
-        .transpose()
-        .context("failed to construct NATS key pair from seed")?
-        .map(Arc::new);
-    let ctl_key = args
-        .ctl_seed
-        .as_deref()
-        .map(KeyPair::from_seed)
-        .transpose()
-        .context("failed to construct control interface key pair from seed")?
-        .map(Arc::new);
-    let rpc_key = args
-        .rpc_seed
-        .as_deref()
-        .map(KeyPair::from_seed)
-        .transpose()
-        .context("failed to construct RPC key pair from seed")?
-        .map(Arc::new);
+    let (nats_jwt, nats_key) =
+        parse_nats_credentials(args.nats_creds, args.nats_jwt, args.nats_seed)
+            .await
+            .context("failed to parse NATS credentials from provided arguments")?;
+    let (ctl_jwt, ctl_key) = parse_nats_credentials(args.ctl_creds, args.ctl_jwt, args.ctl_seed)
+        .await
+        .context("failed to parse control interface credentials from provided arguments")?;
+    let (rpc_jwt, rpc_key) = parse_nats_credentials(args.rpc_creds, args.rpc_jwt, args.rpc_seed)
+        .await
+        .context("failed to parse RPC credentials from provided arguments")?;
     let oci_opts = OciConfig {
         additional_ca_paths: args.tls_ca_paths.unwrap_or_default(),
         allow_latest: args.allow_latest,
@@ -434,13 +446,13 @@ async fn main() -> anyhow::Result<()> {
         labels,
         provider_shutdown_delay: Some(args.provider_shutdown_delay),
         oci_opts,
-        ctl_jwt: args.ctl_jwt.or_else(|| args.nats_jwt.clone()),
+        ctl_jwt: ctl_jwt.or_else(|| nats_jwt.clone()),
         ctl_key: ctl_key.or_else(|| nats_key.clone()),
         ctl_tls: args.ctl_tls,
         ctl_topic_prefix: args.ctl_topic_prefix,
         rpc_nats_url,
         rpc_timeout: args.rpc_timeout_ms,
-        rpc_jwt: args.rpc_jwt.or_else(|| args.nats_jwt.clone()),
+        rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
         rpc_key: rpc_key.or_else(|| nats_key.clone()),
         rpc_tls: args.rpc_tls,
         allow_file_load: args.allow_file_load,
@@ -523,6 +535,49 @@ fn parse_label(labelpair: &str) -> anyhow::Result<(String, String)> {
     }
 }
 
+static JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-----BEGIN NATS USER JWT-----\n(?<jwt>.*)\n------END NATS USER JWT------").unwrap()
+});
+
+static SEED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-----BEGIN USER NKEY SEED-----\n(?<seed>.*)\n------END USER NKEY SEED------")
+        .unwrap()
+});
+
+async fn parse_nats_credentials(
+    nats_creds: Option<PathBuf>,
+    nats_jwt: Option<String>,
+    nats_seed: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<Arc<KeyPair>>)> {
+    match (nats_creds, nats_jwt, nats_seed) {
+        (Some(creds), None, None) => {
+            let contents = tokio::fs::read_to_string(creds).await?;
+            Ok(parse_jwt_and_key_from_creds(&contents)?)
+        }
+        (None, Some(jwt), Some(seed)) => {
+            let kp =
+                KeyPair::from_seed(&seed).context("failed to construct NATS key pair from seed")?;
+            Ok((Some(jwt), Some(Arc::new(kp))))
+        }
+        _ => Ok((None, None)),
+    }
+}
+
+fn parse_jwt_and_key_from_creds(
+    contents: &str,
+) -> anyhow::Result<(Option<String>, Option<Arc<KeyPair>>)> {
+    let jwt = JWT_RE
+        .captures(contents)
+        .map(|capture| capture["jwt"].to_owned())
+        .context("failed to parse JWT from NATS credentials")?;
+    let kp = SEED_RE
+        .captures(contents)
+        .and_then(|capture| KeyPair::from_seed(&capture["seed"]).ok())
+        .map(Arc::new)
+        .context("failed to construct key pair from NATS credentials")?;
+    Ok((Some(jwt), Some(kp)))
+}
+
 fn ensure_certs_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<()> {
     if wasmcloud_core::tls::load_certs_from_paths(&paths)
         .context("failed to load certificates from the provided path")?
@@ -536,6 +591,9 @@ fn ensure_certs_for_paths(paths: Vec<PathBuf>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn test_nats_subject_validation() {
@@ -558,5 +616,133 @@ mod tests {
         assert!(validate_nats_subject("spaced words").is_err()); // Contains space
         assert!(validate_nats_subject("invalid!chars").is_err()); // Contains !
         assert!(validate_nats_subject("invalid@chars").is_err()); // Contains @
+    }
+
+    #[tokio::test]
+    async fn test_parse_nats_credentials() {
+        let expected_jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJPSTZNRlRQMlpPTlVaSlhTSjVGQ01CUVFGR0xIRUlZTkpXWVJTR0xRQkRHS1JKTVlDQlpBIiwiaWF0IjoxNzI0NzczMDMzLCJpc3MiOiJBQUo3S0s3TkFQQURLM0dUSVNPQ1BFUVk1UVFRMk1MUFdVWlVTWVVNN0pRQVYyNExYSUZGQkU0WCIsIm5hbWUiOiJqdXN0LWZvci10ZXN0aW5nIiwic3ViIjoiVUI2NzJSWk9VQkxaNFZWTjdNVlpPNktHS1JCTDJFSTVLQldYUkhUVlBKUlA3UDY0WEc2NU5YRDciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.YgaVafvKp_VLmlQsN26zrhtX8yHMpnxjcUtX51ctd8hh_KqqiSdHtHOlFRapHbpHaiFS_kp9e67L0aqdSn87BA";
+        let expected_seed = "SUAO2CXJCBHGBKIR5TPLXQH6WV2QEEP3YQLLPNVLYVTNSDCZFJMCBHEIN4";
+
+        // Test that passing in `--nats-creds` a creds file works
+        let creds = format!(
+            r#"
+-----BEGIN NATS USER JWT-----
+{expected_jwt}
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+{expected_seed}
+------END USER NKEY SEED------
+"#,
+        );
+        let tmpdir = tempdir().expect("should have created a temporary directory");
+        let nats_creds_path = tmpdir.path().join("nats.creds");
+        let mut nats_creds = File::create(nats_creds_path.clone())
+            .expect("should have created nats.creds in temporary directory");
+        let _ = nats_creds.write_all(creds.as_bytes());
+        let _ = nats_creds.flush();
+
+        let (jwt, kp) = parse_nats_credentials(Some(nats_creds_path), None, None)
+            .await
+            .unwrap();
+        assert_eq!(jwt.unwrap(), expected_jwt);
+        assert_eq!(kp.unwrap().seed().unwrap(), expected_seed);
+        drop(nats_creds);
+        tmpdir
+            .close()
+            .expect("should have closed the temporary directory handle");
+
+        // Test that passing in `--nats-jwt` and `--nats-seed` works
+        let (jwt, kp) = parse_nats_credentials(
+            None,
+            Some(String::from(expected_jwt)),
+            Some(String::from(expected_seed)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(jwt.unwrap(), expected_jwt);
+        assert_eq!(kp.unwrap().seed().unwrap(), expected_seed);
+
+        let expected_jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJPSTZNRlRQMlpPTlVaSlhTSjVGQ01CUVFGR0xIRUlZTkpXWVJTR0xRQkRHS1JKTVlDQlpBIiwiaWF0IjoxNzI0NzczMDMzLCJpc3MiOiJBQUo3S0s3TkFQQURLM0dUSVNPQ1BFUVk1UVFRMk1MUFdVWlVTWVVNN0pRQVYyNExYSUZGQkU0WCIsIm5hbWUiOiJqdXN0LWZvci10ZXN0aW5nIiwic3ViIjoiVUI2NzJSWk9VQkxaNFZWTjdNVlpPNktHS1JCTDJFSTVLQldYUkhUVlBKUlA3UDY0WEc2NU5YRDciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.YgaVafvKp_VLmlQsN26zrhtX8yHMpnxjcUtX51ctd8hh_KqqiSdHtHOlFRapHbpHaiFS_kp9e67L0aqdSn87BA";
+        let expected_seed = "SUAO2CXJCBHGBKIR5TPLXQH6WV2QEEP3YQLLPNVLYVTNSDCZFJMCBHEIN4";
+        let (jwt, kp) = parse_nats_credentials(
+            None,
+            Some(String::from(expected_jwt)),
+            Some(String::from(expected_seed)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(jwt.unwrap(), expected_jwt);
+        assert_eq!(kp.unwrap().seed().unwrap(), expected_seed);
+
+        // Test that passing in nothing also works
+        let (no_nats_jwt, no_nats_key) = parse_nats_credentials(None, None, None).await.unwrap();
+        assert!(no_nats_jwt.is_none());
+        assert!(no_nats_key.is_none());
+    }
+
+    #[test]
+    fn test_parse_jwt_and_key_from_creds() {
+        let expected_jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJPSTZNRlRQMlpPTlVaSlhTSjVGQ01CUVFGR0xIRUlZTkpXWVJTR0xRQkRHS1JKTVlDQlpBIiwiaWF0IjoxNzI0NzczMDMzLCJpc3MiOiJBQUo3S0s3TkFQQURLM0dUSVNPQ1BFUVk1UVFRMk1MUFdVWlVTWVVNN0pRQVYyNExYSUZGQkU0WCIsIm5hbWUiOiJqdXN0LWZvci10ZXN0aW5nIiwic3ViIjoiVUI2NzJSWk9VQkxaNFZWTjdNVlpPNktHS1JCTDJFSTVLQldYUkhUVlBKUlA3UDY0WEc2NU5YRDciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.YgaVafvKp_VLmlQsN26zrhtX8yHMpnxjcUtX51ctd8hh_KqqiSdHtHOlFRapHbpHaiFS_kp9e67L0aqdSn87BA";
+        let expected_seed = "SUAO2CXJCBHGBKIR5TPLXQH6WV2QEEP3YQLLPNVLYVTNSDCZFJMCBHEIN4";
+
+        let creds = format!(
+            r#"
+-----BEGIN NATS USER JWT-----
+{}
+------END NATS USER JWT------
+
+************************* IMPORTANT *************************
+NKEY Seed printed below can be used to sign and prove identity.
+NKEYs are sensitive and should be treated as secrets.
+
+-----BEGIN USER NKEY SEED-----
+{}
+------END USER NKEY SEED------
+
+*************************************************************
+"#,
+            expected_jwt, expected_seed
+        );
+
+        let (jwt, kp) = parse_jwt_and_key_from_creds(&creds)
+            .expect("should have parsed the creds successfully");
+
+        assert!(jwt.is_some());
+        assert!(kp.is_some());
+        assert_eq!(jwt.unwrap(), expected_jwt);
+        assert_eq!(kp.unwrap().seed().unwrap(), expected_seed);
+
+        // Test error cases
+        let creds_missing_jwt = r#"
+-----BEGIN NATS USER JWT-----
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+SUAO2CXJCBHGBKIR5TPLXQH6WV2QEEP3YQLLPNVLYVTNSDCZFJMCBHEIN4
+------END USER NKEY SEED------
+"#;
+        assert!(parse_jwt_and_key_from_creds(creds_missing_jwt).is_err());
+
+        let creds_missing_seed = r#"
+-----BEGIN NATS USER JWT-----
+eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJPSTZNRlRQMlpPTlVaSlhTSjVGQ01CUVFGR0xIRUlZTkpXWVJTR0xRQkRHS1JKTVlDQlpBIiwiaWF0IjoxNzI0NzczMDMzLCJpc3MiOiJBQUo3S0s3TkFQQURLM0dUSVNPQ1BFUVk1UVFRMk1MUFdVWlVTWVVNN0pRQVYyNExYSUZGQkU0WCIsIm5hbWUiOiJqdXN0LWZvci10ZXN0aW5nIiwic3ViIjoiVUI2NzJSWk9VQkxaNFZWTjdNVlpPNktHS1JCTDJFSTVLQldYUkhUVlBKUlA3UDY0WEc2NU5YRDciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.YgaVafvKp_VLmlQsN26zrhtX8yHMpnxjcUtX51ctd8hh_KqqiSdHtHOlFRapHbpHaiFS_kp9e67L0aqdSn87BA
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+------END USER NKEY SEED------
+        "#;
+        assert!(parse_jwt_and_key_from_creds(creds_missing_seed).is_err());
+
+        let creds_invalid_seed = r#"
+-----BEGIN NATS USER JWT-----
+eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJPSTZNRlRQMlpPTlVaSlhTSjVGQ01CUVFGR0xIRUlZTkpXWVJTR0xRQkRHS1JKTVlDQlpBIiwiaWF0IjoxNzI0NzczMDMzLCJpc3MiOiJBQUo3S0s3TkFQQURLM0dUSVNPQ1BFUVk1UVFRMk1MUFdVWlVTWVVNN0pRQVYyNExYSUZGQkU0WCIsIm5hbWUiOiJqdXN0LWZvci10ZXN0aW5nIiwic3ViIjoiVUI2NzJSWk9VQkxaNFZWTjdNVlpPNktHS1JCTDJFSTVLQldYUkhUVlBKUlA3UDY0WEc2NU5YRDciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e30sInN1YnMiOi0xLCJkYXRhIjotMSwicGF5bG9hZCI6LTEsInR5cGUiOiJ1c2VyIiwidmVyc2lvbiI6Mn19.YgaVafvKp_VLmlQsN26zrhtX8yHMpnxjcUtX51ctd8hh_KqqiSdHtHOlFRapHbpHaiFS_kp9e67L0aqdSn87BA
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+SUANOPE
+------END USER NKEY SEED------
+        "#;
+        assert!(parse_jwt_and_key_from_creds(creds_invalid_seed).is_err());
     }
 }
