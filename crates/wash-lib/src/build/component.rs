@@ -18,7 +18,7 @@ use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
-    build::{convert_wit_dir_to_world, SignConfig, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
+    build::{convert_wit_dir_to_world, SignConfig, WASMCLOUD_WASM_TAG_EXPERIMENTAL, WIT_DIR},
     cli::{
         claims::{sign_file, ComponentMetadata, GenerateCommon, SignCommand},
         OutputKind,
@@ -58,13 +58,10 @@ pub fn build_component(
                 {
                     embed_wasm_component_metadata(
                         &common_config.path,
-                        component_config
-                        .wit_world
-                        .as_ref()
-                        .context("missing `wit_world` in wasmcloud.toml ([component] section) for creating preview1 or preview2 components")?,
+                        component_config.wit_world.as_deref(),
                         &component_wasm_path,
                         &component_wasm_path,
-                )?;
+                    )?;
                 };
                 component_wasm_path
             }
@@ -281,15 +278,13 @@ fn build_tinygo_component(
     // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
     // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
     // we check for the `wit` directory which would be passed through to bindgen.
-    if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
+    if !tinygo_config.disable_go_generate {
         generate_tinygo_bindgen(
             &output_dir,
-            common_config.path.join("wit"),
-            component_config.wit_world.as_ref().context(
-                "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
-            )?,
+            common_config.path.join(WIT_DIR),
+            component_config.wit_world.as_deref(),
         )
-                .context("generating golang bindgen code failed")?;
+        .context("generating golang bindgen code failed")?;
     }
 
     let result = command
@@ -392,7 +387,7 @@ const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
 fn generate_tinygo_bindgen(
     bindgen_dir: impl AsRef<Path>,
     wit_dir: impl AsRef<Path>,
-    wit_world: impl AsRef<str>,
+    wit_world: Option<&str>,
 ) -> Result<()> {
     if !bindgen_dir.as_ref().exists() {
         bail!(
@@ -506,12 +501,12 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ComponentConfig) -> Resul
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
     project_path: impl AsRef<Path>,
-    wit_world: impl AsRef<str>,
+    wit_world: Option<&str>,
     input_wasm: impl AsRef<Path>,
     output_wasm: impl AsRef<Path>,
 ) -> Result<()> {
     // Find the the WIT directory for the project
-    let wit_dir = project_path.as_ref().join("wit");
+    let wit_dir = project_path.as_ref().join(WIT_DIR);
     if !wit_dir.is_dir() {
         bail!(
             "expected 'wit' directory under project path at [{}] is missing",
@@ -593,6 +588,7 @@ mod tests {
     use wascap::{jwt::Token, wasm::extract_claims};
     use wasmparser::{Parser, Payload};
 
+    use crate::build::WIT_DIR;
     use crate::parser::RegistryConfig;
     use crate::{
         build::WASMCLOUD_WASM_TAG_EXPERIMENTAL,
@@ -651,7 +647,7 @@ world downstream {
     /// which includes a `test.wasm` file along with a `wit` directory
     fn setup_build_component(base_dir: impl AsRef<Path>) -> Result<PathBuf> {
         // Write the test wit world
-        let wit_dir = base_dir.as_ref().join("wit");
+        let wit_dir = base_dir.as_ref().join(WIT_DIR);
         fs::create_dir_all(&wit_dir)?;
         fs::write(wit_dir.join("world.wit"), COMPONENT_BASIC_WIT)?;
 
@@ -671,7 +667,7 @@ world downstream {
         let wasm_path = setup_build_component(&project_dir)?;
 
         // Embed component metadata into the wasm module, to build a component
-        embed_wasm_component_metadata(&project_dir, "test-world", &wasm_path, &wasm_path)
+        embed_wasm_component_metadata(&project_dir, Some("test-world"), &wasm_path, &wasm_path)
             .context("failed to embed wasm component metadata")?;
 
         let wasm_bytes = fs::read(&wasm_path)
@@ -760,7 +756,7 @@ world downstream {
         let project_dir = tempfile::tempdir()?;
 
         // Set up directories
-        let wit_dir = project_dir.path().join("wit");
+        let wit_dir = project_dir.path().join(WIT_DIR);
         let output_dir = project_dir.path().join("generated");
         std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
@@ -770,7 +766,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&output_dir, &wit_dir, "test-world")
+        generate_tinygo_bindgen(&output_dir, &wit_dir, Some("test-world"))
             .context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
@@ -799,7 +795,7 @@ world downstream {
         let project_dir = tempfile::tempdir()?;
 
         // Set up directories
-        let wit_dir = project_dir.path().join("wit");
+        let wit_dir = project_dir.path().join(WIT_DIR);
         let output_dir = project_dir.path().join("generated");
         std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
@@ -811,7 +807,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&output_dir, &wit_dir, "downstream")
+        generate_tinygo_bindgen(&output_dir, &wit_dir, Some("downstream"))
             .context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
