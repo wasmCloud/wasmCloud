@@ -252,7 +252,9 @@ pub async fn create_nats_client_from_opts(
             opts = opts.add_root_certificates(ca_file).require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
+        opts.connect(&nats_url)
+            .await
+            .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
     Ok(nc)
 }
