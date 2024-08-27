@@ -5717,8 +5717,7 @@ dependencies = [
 [[package]]
 name = "syn"
 version = "2.0.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "578e081a14e0cefc3279b0472138c513f37b41a08d5a3cca9b6e4e8ceb6cd525"
+source = "git+https://github.com/dtolnay/syn?tag=2.0.76#ef3e9c6dde79be7590fc90278772663ca31c1a73"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9148,8 +9147,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "prettyplease"
-version = "0.2.20"
-source = "git+https://github.com/dtolnay/prettyplease?tag=0.2.20#179974cc93c8d54894483463c1eea4df9e70a694"

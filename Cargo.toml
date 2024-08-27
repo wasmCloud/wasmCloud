@@ -375,7 +375,13 @@ wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
 wrpc-transport = { version = "0.26.7", default-features = false }
 wrpc-transport-nats = { version = "0.22.3", default-features = false }
 
-# prettyplease (v0.2.22) is a tarnsitive dep of wit-binden-wrpc and uses a newer version of syn (2.0.76)
-# this conflicts with versions of syn resolved by other dependencies 
+# syn is a transitive dep of various packages and two of it's downstream dependencies differ:
+#
+# - serde_derive @ 1.0.209 (^2.0.46)
+# - prettyplease @ 0.2.22 (^2.0.76)
+#
+# Normally this would resolve itself, but since we combine lock files, it's possible to get the wrong version in some transitive dependencies sneaking in (and locked to a different version).
+#
+# To ensure that the resulting (combined) Cargo.lock file can be used, we force syn t a specific version
 [patch.crates-io]
-prettyplease = { git = "https://github.com/dtolnay/prettyplease", tag = "0.2.20" }
+syn = { git = "https://github.com/dtolnay/syn", tag = "2.0.76" }
