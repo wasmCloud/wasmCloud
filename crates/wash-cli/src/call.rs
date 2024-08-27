@@ -605,7 +605,9 @@ async fn create_client_from_opts_wrpc(opts: &ConnectionOpts) -> Result<async_nat
                 .require_tls(true);
         }
 
-        opts.connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
+        opts.connect(&nats_url)
+            .await
+            .with_context(|| format!("Failed to connect to NATS {}", &nats_url))?
     };
     Ok(nc)
 }
