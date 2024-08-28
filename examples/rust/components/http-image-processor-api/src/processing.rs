@@ -5,18 +5,20 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use bytes::{Bytes, BytesMut};
 use image::{DynamicImage, ImageFormat, ImageReader};
 use multipart::server::MultipartField;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use url::{Host, Url};
 
-use crate::wasi::http::outgoing_handler;
-use crate::wasi::http::outgoing_handler::OutgoingRequest;
-use crate::wasi::http::types::{Fields, IncomingBody, IncomingRequest, Scheme};
-use crate::wasi::io::streams::StreamError;
-use crate::wasi::logging::logging::{log, Level};
+// use crate::bindings::wasi::http::outgoing_handler;
+// use crate::bindings::wasi::http::outgoing_handler::OutgoingRequest;
+use crate::bindings::wasi::http::types::{Fields, IncomingBody, IncomingRequest, Scheme};
+use crate::bindings::wasi::io::streams::StreamError;
+use crate::bindings::wasi::logging::logging::{log, Level};
 
-use crate::http::{fuzzy_parse_image_format_from_mime, FromHttpHeader, RequestBodyBytes};
+use crate::http::{
+    extract_headers, fuzzy_parse_image_format_from_mime, FromHttpHeader, RequestBodyBytes,
+};
 use crate::objstore::read_object;
-use crate::{extract_headers, LOG_CONTEXT, MAX_READ_BYTES};
+use crate::{LOG_CONTEXT, MAX_READ_BYTES};
 
 /// Image that can be used by default if no image is provided (wasmcloud logo)
 const DEFAULT_IMAGE_BYTES: &[u8] = std::include_bytes!("../wasmcloud-logo.png");
@@ -31,7 +33,7 @@ type Bucket = String;
 type Key = String;
 
 /// Source of an image
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[serde(tag = "type")]
 pub(crate) enum ImagePath {
@@ -50,9 +52,8 @@ pub(crate) enum ImagePath {
 }
 
 /// Information necessary to direct an upload or download from a blobstore
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BlobstorePath {
-    pub(crate) link_name: LinkName,
     pub(crate) bucket: Bucket,
     pub(crate) key: Key,
 }
@@ -76,22 +77,7 @@ impl TryFrom<Url> for BlobstorePath {
             _ => bail!("invalid host version it must be in the DNS domain-name style (ex. 's3://bucket/key')"),
         };
         let key = url.path().to_string();
-        let link_name = url
-            .query_pairs()
-            .find_map(|v| {
-                if v.0 == "link_name" {
-                    Some(v.1.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "default".into());
-
-        Ok(Self {
-            link_name,
-            bucket,
-            key,
-        })
+        Ok(Self { bucket, key })
     }
 }
 
@@ -113,22 +99,8 @@ impl FromStr for ImagePath {
                             _ => bail!("invalid host version it must be in the DNS domain-name style (ex. 's3://bucket/key')"),
                         };
                         let key = url.path().to_string();
-                        let link_name = url
-                            .query_pairs()
-                            .find_map(|v| {
-                                if v.0 == "link_name" {
-                                    Some(v.1.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_else(|| "default".into());
                         Ok(Self::Blobstore {
-                            path: BlobstorePath {
-                                link_name,
-                                bucket,
-                                key,
-                            },
+                            path: BlobstorePath { bucket, key },
                         })
                     }
                     "https" => Ok(Self::RemoteHttps { url }),
@@ -140,7 +112,7 @@ impl FromStr for ImagePath {
 }
 
 /// Operations that can be done on the image
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[serde(tag = "type")]
 pub(crate) enum ImageOperation {
@@ -188,31 +160,19 @@ impl FromStr for ImageOperation {
 }
 
 /// Image processing
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ImageProcessingRequest {
     /// Source of the image
     pub(crate) image_source: ImagePath,
     /// Format of the image
-    #[serde(deserialize_with = "deserialize_image_format_opt")]
-    pub(crate) image_format: Option<ImageFormat>,
+    pub(crate) image_format: Option<String>,
     /// Operations to perform on the image
     pub(crate) operations: Vec<ImageOperation>,
-    /// If specified, where to upload the original image to S3
-    pub(crate) blobstore_upload_original: Option<BlobstorePath>,
-    /// Whether to upload the transformed image to S3
-    pub(crate) blobstore_upload_output: Option<BlobstorePath>,
-    /// Whether to perform AI analysis on the incoming image rather than performing any operations
-    ///
-    /// This is a separate option (and if specified operations should be ignored) because the response
-    /// is dramatically different from just the returned image
-    #[serde(default)]
-    #[allow(unused)]
-    pub(crate) analyze_with_ai: bool,
     /// Image data
     ///
     /// This *may* be empty in the case that the image source is remote and has not been fetched yet
-    #[serde(default)]
-    image_data: Bytes,
+    #[serde(skip)]
+    pub(crate) image_data: Option<Bytes>,
 }
 
 impl ImageProcessingRequest {
@@ -299,50 +259,11 @@ impl ImageProcessingRequest {
             path_segment = rhs;
         }
 
-        let mut blobstore_upload_original = None;
-        let mut blobstore_upload_output = None;
-        let mut analyze_with_ai = false;
-        for (k, v) in query_params {
-            match k.to_lowercase().as_str() {
-                "blobstore_upload_original" => match BlobstorePath::from_str(v) {
-                    Ok(path) => {
-                        blobstore_upload_original = Some(path);
-                    }
-                    Err(e) => {
-                        log(
-                            Level::Warn,
-                            LOG_CONTEXT,
-                            &format!("failed to parse blobstore_upload_original value: {e}"),
-                        );
-                    }
-                },
-                "blobstore_upload_output" => match BlobstorePath::from_str(v) {
-                    Ok(path) => {
-                        blobstore_upload_output = Some(path);
-                    }
-                    Err(e) => {
-                        log(
-                            Level::Warn,
-                            LOG_CONTEXT,
-                            &format!("failed to parse blobstore_upload_output value: {e}"),
-                        );
-                    }
-                },
-                "analyze_with_ai" => {
-                    analyze_with_ai = true;
-                }
-                _ => continue,
-            }
-        }
-
         Ok(Self {
             image_source: image_source.context("failed to find parse source")?,
-            image_format,
+            image_format: image_format.and_then(image_format_to_string),
             operations,
-            blobstore_upload_original,
-            blobstore_upload_output,
-            analyze_with_ai,
-            image_data: Bytes::new(),
+            image_data: Some(Bytes::new()),
         })
     }
 
@@ -364,9 +285,6 @@ impl ImageProcessingRequest {
         let mut image_source = None;
         let mut image_format = None;
         let mut operations = Vec::new();
-        let mut blobstore_upload_original = None;
-        let mut blobstore_upload_output = None;
-        let mut analyze_with_ai = false;
         let mut image_data = None;
         while let Ok(Some(MultipartField { headers, mut data })) = multipart_body.read_entry() {
             let mut value = Vec::new();
@@ -413,37 +331,6 @@ impl ImageProcessingRequest {
                         );
                     }
                 },
-                "blobstore_upload_original" => {
-                    match BlobstorePath::from_str(&String::from_utf8(value)?) {
-                        Ok(bp) => {
-                            blobstore_upload_original = Some(bp);
-                        }
-                        Err(e) => {
-                            log(
-                                Level::Warn,
-                                LOG_CONTEXT,
-                                &format!("failed to parse blobstore_upload_original value: {e}"),
-                            );
-                        }
-                    }
-                }
-                "blobstore_upload_output" => {
-                    match BlobstorePath::from_str(&String::from_utf8(value)?) {
-                        Ok(bp) => {
-                            blobstore_upload_output = Some(bp);
-                        }
-                        Err(e) => {
-                            log(
-                                Level::Warn,
-                                LOG_CONTEXT,
-                                &format!("failed to parse blobstore_upload_output value: {e}"),
-                            );
-                        }
-                    }
-                }
-                "analyze_with_ai" => {
-                    analyze_with_ai = true;
-                }
                 "image" => {
                     image_data = Some(Bytes::from(value));
                 }
@@ -451,18 +338,11 @@ impl ImageProcessingRequest {
             }
         }
 
-        if image_data.is_none() && image_source.is_none() {
-            bail!("either image_source or image (a file) must be supplied");
-        }
-
         Ok(Self {
             image_source: image_source.context("failed to parse image source")?,
-            image_format,
+            image_format: image_format.and_then(image_format_to_string),
             operations,
-            blobstore_upload_original,
-            blobstore_upload_output,
-            analyze_with_ai,
-            image_data: image_data.unwrap_or_default(),
+            image_data,
         })
     }
 
@@ -474,74 +354,70 @@ impl ImageProcessingRequest {
     }
 
     /// Fetch the bytes that make up the image
-    pub(crate) fn fetch_image(&self) -> Result<Bytes> {
+    pub(crate) fn fetch_image(&self) -> Result<Option<Bytes>> {
         match &self.image_source {
-            ImagePath::DefaultImage => Ok(Bytes::from(DEFAULT_IMAGE_BYTES)),
+            ImagePath::DefaultImage => Ok(Some(Bytes::from(DEFAULT_IMAGE_BYTES))),
             ImagePath::Attached => Ok(self.image_data.clone()),
             ImagePath::RemoteHttps { url } => {
-                let req = OutgoingRequest::new(Fields::new());
-                req.set_scheme(Some(&Scheme::Https))
-                    .map_err(|()| anyhow!("failed to set scheme"))?;
-                req.set_authority(Some(url.authority()))
-                    .map_err(|()| anyhow!("failed to set authority"))?;
-                req.set_path_with_query(Some(url.path()))
-                    .map_err(|()| anyhow!("failed to set path and query"))?;
-                req.fetch_bytes()
+                // let req = OutgoingRequest::new(Fields::new());
+                // req.set_scheme(Some(&Scheme::Https))
+                //     .map_err(|()| anyhow!("failed to set scheme"))?;
+                // req.set_authority(Some(url.authority()))
+                //     .map_err(|()| anyhow!("failed to set authority"))?;
+                // req.set_path_with_query(Some(url.path()))
+                //     .map_err(|()| anyhow!("failed to set path and query"))?;
+                // req.fetch_bytes()
+                bail!("not supported")
             }
             ImagePath::Blobstore {
-                path:
-                    BlobstorePath {
-                        link_name,
-                        bucket,
-                        key,
-                    },
-            } => read_object(link_name, bucket, key),
+                path: BlobstorePath { bucket, key },
+            } => read_object(bucket, key).map(Option::Some),
         }
     }
 }
 
-impl OutgoingRequest {
-    fn fetch_bytes(self) -> Result<Bytes> {
-        let resp =
-            outgoing_handler::handle(self, None).map_err(|e| anyhow!("request failed: {e}"))?;
-        resp.subscribe().block();
-        let response = resp
-            .get()
-            .context("HTTP request response missing")?
-            .map_err(|()| anyhow!("HTTP request response requested more than once"))?
-            .map_err(|code| anyhow!("HTTP request failed (error code {code})"))?;
+// impl OutgoingRequest {
+//     fn fetch_bytes(self) -> Result<Bytes> {
+//         let resp =
+//             outgoing_handler::handle(self, None).map_err(|e| anyhow!("request failed: {e}"))?;
+//         resp.subscribe().block();
+//         let response = resp
+//             .get()
+//             .context("HTTP request response missing")?
+//             .map_err(|()| anyhow!("HTTP request response requested more than once"))?
+//             .map_err(|code| anyhow!("HTTP request failed (error code {code})"))?;
 
-        if response.status() != 200 {
-            bail!("response failed, status code [{}]", response.status());
-        }
+//         if response.status() != 200 {
+//             bail!("response failed, status code [{}]", response.status());
+//         }
 
-        let response_body = response
-            .consume()
-            .map_err(|()| anyhow!("failed to get incoming request body"))?;
+//         let response_body = response
+//             .consume()
+//             .map_err(|()| anyhow!("failed to get incoming request body"))?;
 
-        let mut buf = BytesMut::with_capacity(MAX_READ_BYTES);
-        let stream = response_body
-            .stream()
-            .expect("failed to get HTTP request response stream");
-        loop {
-            match stream.read(MAX_READ_BYTES as u64) {
-                Ok(bytes) if bytes.is_empty() => break,
-                Ok(bytes) => {
-                    ensure!(
-                        bytes.len() <= MAX_READ_BYTES,
-                        "read more bytes than requested"
-                    );
-                    buf.extend(bytes);
-                }
-                Err(StreamError::Closed) => break,
-                Err(e) => bail!("failed to read bytes: {e}"),
-            }
-        }
-        let _ = IncomingBody::finish(response_body);
+//         let mut buf = BytesMut::with_capacity(MAX_READ_BYTES);
+//         let stream = response_body
+//             .stream()
+//             .expect("failed to get HTTP request response stream");
+//         loop {
+//             match stream.read(MAX_READ_BYTES as u64) {
+//                 Ok(bytes) if bytes.is_empty() => break,
+//                 Ok(bytes) => {
+//                     ensure!(
+//                         bytes.len() <= MAX_READ_BYTES,
+//                         "read more bytes than requested"
+//                     );
+//                     buf.extend(bytes);
+//                 }
+//                 Err(StreamError::Closed) => break,
+//                 Err(e) => bail!("failed to read bytes: {e}"),
+//             }
+//         }
+//         let _ = IncomingBody::finish(response_body);
 
-        Ok(buf.freeze())
-    }
-}
+//         Ok(buf.freeze())
+//     }
+// }
 
 /// Transform the bytes of a given image
 pub(crate) fn transform_image(
@@ -586,21 +462,54 @@ pub(crate) fn transform_image(
     Ok(image)
 }
 
-pub(crate) fn deserialize_image_format_opt<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<ImageFormat>, D::Error> {
-    use serde::de::Error;
-    let s = Option::<String>::deserialize(deserializer)?;
-    match s.as_ref().map(String::as_str) {
-        None => Ok(None),
-        Some("image/jpeg") => Ok(Some(ImageFormat::Jpeg)),
-        Some("image/jpg") => Ok(Some(ImageFormat::Jpeg)),
-        Some("image/tiff") => Ok(Some(ImageFormat::Tiff)),
-        Some("image/webp") => Ok(Some(ImageFormat::WebP)),
-        Some("image/gif") => Ok(Some(ImageFormat::Gif)),
-        Some("image/bmp") => Ok(Some(ImageFormat::Bmp)),
-        _ => Err(D::Error::custom(format!(
-            "unrecognized image format (use content MIME types like 'image/jpeg')"
-        ))),
+fn image_format_to_string(format: ImageFormat) -> Option<String> {
+    match format {
+        ImageFormat::Jpeg => Some("image/jpeg".into()),
+        ImageFormat::Tiff => Some("image/tiff".into()),
+        ImageFormat::WebP => Some("image/webp".into()),
+        ImageFormat::Gif => Some("image/gif".into()),
+        ImageFormat::Bmp => Some("image/bmp".into()),
+        _ => None,
     }
 }
+
+// pub(crate) fn deserialize_image_format_opt<'de, D: serde::Deserializer<'de>>(
+//     deserializer: D,
+// ) -> Result<Option<ImageFormat>, D::Error> {
+//     use serde::de::Error;
+//     let s = Option::<String>::deserialize(deserializer)?;
+//     match s.as_ref().map(String::as_str) {
+//         None => Ok(None),
+//         Some("image/jpeg") => Ok(Some(ImageFormat::Jpeg)),
+//         Some("image/jpg") => Ok(Some(ImageFormat::Jpeg)),
+//         Some("image/tiff") => Ok(Some(ImageFormat::Tiff)),
+//         Some("image/webp") => Ok(Some(ImageFormat::WebP)),
+//         Some("image/gif") => Ok(Some(ImageFormat::Gif)),
+//         Some("image/bmp") => Ok(Some(ImageFormat::Bmp)),
+//         _ => Err(D::Error::custom(format!(
+//             "unrecognized image format (use content MIME types like 'image/jpeg')"
+//         ))),
+//     }
+// }
+
+// /// Serde Serializer that works for sorting maps on the fly
+// fn serialize_image_format_opt<S, K, V>(
+//     value: &ImageFormat,
+//     serializer: S,
+// ) -> Result<S::Ok, S::Error>
+// where
+//     S: Serializer,
+//     K: Serialize + Ord,
+//     V: Serialize,
+// {
+//     match value {
+//         ImageFormat::Jpeg => "image/jpeg".serialize(serializer),
+//         ImageFormat::Tiff => "image/tiff".serialize(serializer),
+//         ImageFormat::WebP => "image/webp".serialize(serializer),
+//         ImageFormat::Gif => "image/gif".serialize(serializer),
+//         ImageFormat::Bmp => "image/bmp".serialize(serializer),
+//         _ => Err(S::Error::custom(format!(
+//             "failed to serialize unexpeted image format"
+//         ))),
+//     }
+// }

@@ -3,11 +3,12 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
+use crate::bindings::wasi::blobstore::container::Container;
+use crate::bindings::wasi::blobstore::types::{IncomingValue, OutgoingValue};
+use crate::bindings::wasi::logging::logging::{log, Level};
+
 use crate::blobstore;
-use crate::blobstore::Container;
-use crate::wasi::blobstore::types::{IncomingValue, OutgoingValue};
-use crate::wasi::logging::logging::{log, Level};
-use crate::wasmcloud::bus::lattice::{self, CallTargetInterface};
+
 use crate::MAX_WRITE_BYTES;
 
 /// A helper that will automatically create a container if it doesn't exist and returns an owned copy of the name for immediate use
@@ -28,15 +29,9 @@ pub(crate) fn ensure_container(name: &String) -> Result<Container> {
 /// Write a binary blob to object storage
 pub(crate) fn write_object(
     object_bytes: Bytes,
-    link_name: &str,
     bucket: &str,
     key: &String,
 ) -> Result<()> {
-    lattice::set_link_name(
-        &link_name,
-        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
-    );
-
     let container = ensure_container(&String::from(bucket))?;
 
     let data = OutgoingValue::new_outgoing_value();
@@ -52,21 +47,11 @@ pub(crate) fn write_object(
         .write_data(key, &data)
         .map_err(|e| anyhow!("failed to write data: {e}"))?;
 
-    lattice::set_link_name(
-        "default",
-        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
-    );
-
     Ok(())
 }
 
 /// Read a binary blob from object storage
-pub(crate) fn read_object(link_name: &str, bucket: &str, key: &str) -> Result<Bytes> {
-    lattice::set_link_name(
-        &link_name,
-        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
-    );
-
+pub(crate) fn read_object(bucket: &str, key: &str) -> Result<Bytes> {
     let key = &String::from(key);
     let container = ensure_container(&String::from(bucket))?;
     let metadata = container
@@ -77,11 +62,6 @@ pub(crate) fn read_object(link_name: &str, bucket: &str, key: &str) -> Result<By
         .map_err(|e| anyhow!("failed to get data: {e}"))?;
     let body = IncomingValue::incoming_value_consume_sync(incoming)
         .map_err(|e| anyhow!("failed to consume incoming value: {e}"))?;
-
-    lattice::set_link_name(
-        "default",
-        vec![CallTargetInterface::new("wasi", "blobstore", "blobstore")],
-    );
 
     Ok(Bytes::from(body))
 }

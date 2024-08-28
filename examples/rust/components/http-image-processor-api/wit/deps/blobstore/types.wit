@@ -52,7 +52,23 @@ interface types {
   // Soon: switch to `resource value { ... }`
   resource outgoing-value {
     new-outgoing-value: static func() -> outgoing-value;
+
+    /// Returns a stream for writing the value contents.
+    ///
+    /// The returned `output-stream` is a child resource: it must be dropped
+    /// before the parent `outgoing-value` resource is dropped (or finished),
+    /// otherwise the `outgoing-value` drop or `finish` will trap.
+    ///
+    /// Returns success on the first call: the `output-stream` resource for
+    /// this `outgoing-value` may be retrieved at most once. Subsequent calls
+    /// will return error.
     outgoing-value-write-body: func() -> result<output-stream>;
+
+    /// Finalize an outgoing value. This must be
+    /// called to signal that the outgoing value is complete. If the `outgoing-value`
+    /// is dropped without calling `outgoing-value.finalize`, the implementation
+    /// should treat the value as corrupted.
+    finish: static func(this: outgoing-value) -> result<_, error>;
   }
 
   /// A incoming-value is a wrapper around a value. It provides a way to read the value

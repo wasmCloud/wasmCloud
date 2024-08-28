@@ -1,0 +1,90 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+/// Functionality for working with tasks
+interface tasks {
+  use types.{group-id, task, task-id, worker-id, json-string, lease-id, offset-pagination};
+
+  /// Errors that can occur while performing retrieving tasks
+  variant get-tasks-error {
+    /// Invalid group-id
+    invalid-group-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Errors that can occur while performing retrieving tasks
+  variant get-task-error {
+    /// Invalid task-id
+    invalid-task-id,
+    /// Invalid group-id
+    invalid-group-id,
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Options for performing a tasks query
+  record get-tasks-query-options {
+    /// Include only tasks with the given group-id (if specified)
+    group-id: option<group-id>,
+
+    /// Settings to use for offset-based pagination
+    pagination: offset-pagination,
+  }
+
+  /// Get all tasks
+  get-tasks: func(
+    options: get-tasks-query-options,
+  ) -> result<list<task>, get-tasks-error>;
+
+  /// Get a single task under a given group ID
+  get-task: func(
+    task-id: task-id
+  ) -> result<task, get-task-error>;
+
+  /// Errors that can occur while submitting a single task
+  variant submit-task-error {
+    /// Invalid task data
+    invalid-task-data(string),
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Submit a single task
+  submit-task: func(
+    group-id: string,
+    data: json-string,
+  ) -> result<task, submit-task-error>;
+
+  /// Errors that can occur while updating a single task
+  variant update-task-error {
+    /// Unexpected error
+    unexpected(string),
+  }
+
+  /// Lease a task for completion
+  lease-task: func(
+    task-id: task-id,
+    worker-id: worker-id,
+  ) -> result<lease-id, update-task-error>;
+
+  /// Release a task so that it can be picked up by other workers
+  release-task: func(
+    task-id: task-id,
+    worker-id: worker-id,
+    lease-id: lease-id,
+  ) -> result<_, update-task-error>;
+
+  /// Mark a single task completed
+  mark-task-completed: func(
+    lease-id: lease-id,
+    worker-id: worker-id,
+  ) -> result<_, update-task-error>;
+
+  /// Mark a single task failed
+  mark-task-failed: func(
+    lease-id: lease-id,
+    worker-id: worker-id,
+    reason: worker-id,
+  ) -> result<_, update-task-error>;
+
+}

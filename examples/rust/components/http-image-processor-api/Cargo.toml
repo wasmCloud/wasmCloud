@@ -19,6 +19,7 @@ multipart = { workspace = true, features = [ "server" ] }
 serde = { workspace = true, features = [ "std", "derive" ] }
 serde_json = { workspace = true, features = [ "std" ] }
 url = { workspace = true, features = [ "serde" ] }
+uuid = { workspace = true, features = [ "std", "v7" ] }
 wit-bindgen = { workspace = true, features = [ "default" ] }
 
 [workspace.dependencies]
@@ -29,4 +30,5 @@ multipart = { version = "0.18", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
+uuid = { version = "1", default-features = false }
 wit-bindgen = { version = "0.28", default-features = false }

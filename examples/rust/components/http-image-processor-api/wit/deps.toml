@@ -1,4 +1,6 @@
+blobstore = "../../../../../crates/runtime/wit/deps/blobstore"
+config = "https://github.com/WebAssembly/wasi-runtime-config/archive/main.tar.gz"
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
-blobstore = "../../../../../crates/runtime/wit/deps/blobstore"
-wasmcloud = "../../../../../crates/runtime/wit/deps/wasmcloud"
+messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
+task-manager = "../../http-task-manager/wit"
