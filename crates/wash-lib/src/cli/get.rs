@@ -24,6 +24,10 @@ pub struct GetHostInventoriesCommand {
     /// Host ID to retrieve inventory for. If not provided, wash will query the inventories of all running hosts.
     #[clap(name = "host-id", value_parser)]
     pub host_id: Option<ServerId>,
+
+    /// Switches to a real-time, live-updating host inventory
+    #[clap(long, num_args = 0..=1, default_missing_value = "5000", value_parser = parse_watch_interval)]
+    pub watch: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -101,4 +105,9 @@ pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
                 .collect::<Vec<_>>()
         })
         .context("Was able to connect to NATS, but failed to get hosts.")
+}
+
+fn parse_watch_interval(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
+    let milis = arg.parse::<u64>()?;
+    Ok(std::time::Duration::from_millis(milis))
 }
