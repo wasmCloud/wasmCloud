@@ -105,13 +105,13 @@ spec:
             value: {{ .Values.config.policyService.timeoutMs | quote }}
           {{- end }}
         {{- end }}
-          {{- if .Values.config.secrets_topic_prefix }}
+          {{- if .Values.config.secretsTopicPrefix }}
           - name: WASMCLOUD_SECRETS_TOPIC
-            value: {{ .Values.config.secrets_topic_prefix | quote }}
+            value: {{ .Values.config.secretsTopicPrefix | quote }}
           {{- end }}
           {{- if .Values.config.maxLinearMemoryBytes }}
           - name: WASMCLOUD_MAX_LINEAR_MEMORY
-            value: {{ .Values.config.maxLinearMemoryBytes | int64 }}
+            value: {{ .Values.config.maxLinearMemoryBytes | int64 | quote }}
           {{- end }}
         {{- if .Values.config.hostLabels }}
           {{- range $key, $value := .Values.config.hostLabels }}
@@ -123,11 +123,11 @@ spec:
         {{- end }}
           - name: WASMCLOUD_LABEL_kubernetes
             value: "true"
-          - name: WASMCLOUD_LABEL_pod_name
+          - name: WASMCLOUD_LABEL_kubernetes_pod_name
             valueFrom:
               fieldRef:
                 fieldPath: metadata.name
-          - name: WASMCLOUD_LABEL_node_name
+          - name: WASMCLOUD_LABEL_kubernetes_node_name
             valueFrom:
               fieldRef:
                 fieldPath: spec.nodeName
