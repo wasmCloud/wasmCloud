@@ -183,9 +183,9 @@ impl Guest for ApiServerComponent {
                 };
 
                 // Upload image data to blobstore if it was uploaded
-                if let Some(image_data) = ipr.image_data {
+                if let Some(ref image_data) = ipr.image_data {
                     // Upload the image to object storage
-                    if let Err(e) = write_object(image_data, &upload_bucket, &upload_key) {
+                    if let Err(e) = write_object(image_data.clone(), &upload_bucket, &upload_key) {
                         log(
                             Level::Error,
                             LOG_CONTEXT,
@@ -203,24 +203,7 @@ impl Guest for ApiServerComponent {
                 }
 
                 // Submit a processing task to the task manager
-                let task = match tasks::submit_task(
-                    TASK_GROUP_ID.into(),
-                    &json!({
-                        "req": ImageProcessingRequest {
-                            image_source: ImagePath::Blobstore{ path: BlobstorePath {
-                                bucket: upload_bucket.into(),
-                                key: upload_key.into(),
-                            }},
-                            image_format: None,
-                            operations: vec![
-                                // TODO: read operations from request/URL
-                                ImageOperation::Grayscale,
-                            ],
-                            image_data: None,
-                        },
-                    })
-                    .to_string(),
-                ) {
+                let task = match tasks::submit_task(TASK_GROUP_ID.into(), &json!(ipr).to_string()) {
                     Ok(t) => t,
                     Err(e) => {
                         log(
