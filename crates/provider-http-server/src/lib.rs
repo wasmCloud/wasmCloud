@@ -111,18 +111,30 @@ impl Provider for HttpServerProvider {
 
         // Save the component and server instance locally
         self.actors
-            .insert(link_config.target_id.to_string(), http_server);
-
+        self.component_handlers.insert(
+            (
+                link_config.target_id.to_string(),
+                link_config.link_name.to_string(),
+            ),
+            http_server,
+        );
         Ok(())
     }
 
     /// Handle notification that a link is dropped - stop the http listener
     #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
     async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_source_id();
-        if let Some((_, server)) = self.actors.remove(component_id) {
-            info!(component_id, "httpserver stopping listener for component");
-            server.handle.shutdown();
+    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let component_id = info.get_target_id();
+        let link_name = info.get_link_name();
+        if let Some((_, server)) = self
+            .component_handlers
+            .remove(&(component_id.to_string(), link_name.to_string()))
+        {
+            info!(
+                component_id,
+                link_name, "httpserver stopping listener for component"
+            );
         }
         Ok(())
     }
@@ -131,7 +143,7 @@ impl Provider for HttpServerProvider {
     async fn shutdown(&self) -> anyhow::Result<()> {
         // empty the component link data and stop all servers
         self.actors.clear();
-        Ok(())
+        self.component_handlers.clear();
     }
 }
 
