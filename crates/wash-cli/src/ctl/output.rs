@@ -55,8 +55,10 @@ pub fn link_del_output(
     }
 }
 
-/// Helper function to transform a LinkDefinitionList into a table string for printing
-pub fn links_table(list: Vec<InterfaceLinkDefinition>) -> String {
+pub fn links_table(mut list: Vec<InterfaceLinkDefinition>) -> String {
+    // Sort the list based on the `source_id` field in ascending order
+    list.sort_by(|a, b| a.source_id.cmp(&b.source_id));
+
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
 
@@ -84,7 +86,10 @@ pub fn links_table(list: Vec<InterfaceLinkDefinition>) -> String {
 }
 
 /// Helper function to transform a Host list into a table string for printing
-pub fn hosts_table(hosts: Vec<Host>) -> String {
+pub fn hosts_table(mut hosts: Vec<Host>) -> String {
+    // Sort hosts by uptime_seconds in descending order
+    hosts.sort_by(|a, b| b.uptime_seconds.cmp(&a.uptime_seconds));
+
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
 
@@ -93,6 +98,7 @@ pub fn hosts_table(hosts: Vec<Host>) -> String {
         TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
         TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
     ]));
+
     hosts.iter().for_each(|h| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(h.id.clone(), 2, Alignment::Left),
@@ -105,11 +111,14 @@ pub fn hosts_table(hosts: Vec<Host>) -> String {
 }
 
 /// Helper function to transform a HostInventory into a table string for printing
-pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
+pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 3);
 
-    invs.into_iter().for_each(|inv| {
+    // Sort the host inventories alphabetically by host_id
+    invs.sort_by(|a, b| a.host_id.cmp(&b.host_id));
+
+    invs.into_iter().for_each(|mut inv| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Host ID", 2, Alignment::Left),
             TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
@@ -119,7 +128,11 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             TableCell::new_with_alignment(inv.friendly_name.clone(), 1, Alignment::Left),
         ]));
 
-        if !inv.labels.is_empty() {
+        // Sort the labels alphabetically by key
+        let mut sorted_labels: Vec<_> = inv.labels.iter().collect();
+        sorted_labels.sort_by(|a, b| a.0.cmp(b.0));
+
+        if !sorted_labels.is_empty() {
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 "",
                 3,
@@ -130,7 +143,7 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
                 1,
                 Alignment::Left,
             )]));
-            inv.labels.iter().for_each(|(k, v)| {
+            sorted_labels.into_iter().for_each(|(k, v)| {
                 table.add_row(Row::new(vec![
                     TableCell::new_with_alignment(k, 1, Alignment::Left),
                     TableCell::new_with_alignment(v, 1, Alignment::Left),
@@ -149,6 +162,10 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
             4,
             Alignment::Center,
         )]));
+
+        // Sort the components alphabetically by name
+        inv.components.sort_by(|a, b| a.name.cmp(&b.name));
+
         if !inv.components.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
@@ -170,11 +187,16 @@ pub fn host_inventories_table(invs: Vec<HostInventory>) -> String {
                 Alignment::Left,
             )]));
         }
+
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
             "",
             4,
             Alignment::Left,
         )]));
+
+        // Sort the providers alphabetically by name
+        inv.providers.sort_by(|a, b| a.name.cmp(&b.name));
+
         if !inv.providers.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
