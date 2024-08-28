@@ -1,7 +1,7 @@
 {
   "name": "@wasmcloud/lattice-client-core",
   "license": "Apache-2.0",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Framework-agnostic core package for the wasmCloud Lattice Client",
   "author": "wasmCloud",
   "repository": {
@@ -13,16 +13,10 @@
   "type": "module",
   "exports": {
     ".": {
-      "import": {
-        "types": "./build/index.d.ts",
-        "default": "./build/index.js"
-      },
-      "require": {
-        "types": "./build/index.d.ts",
-        "default": "./build/index.cjs"
-      }
-    },
-    "./package.json": "./package.json"
+      "types": "./build/index.d.ts",
+      "import": "./build/lattice-client-core.js",
+      "require": "./build/lattice-client-core.cjs"
+    }
   },
   "files": [
     "build",
@@ -34,8 +28,8 @@
     "lint:eslint": "eslint --ext .ts,.tsx ./src",
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
-    "dev": "tsup --watch",
-    "build": "tsup",
+    "dev": "vite build --watch --emptyOutDir false --clearScreen false",
+    "build": "vite build",
     "prepublish": "yarn build",
     "publish": "yarn npm publish --access public"
   },
@@ -45,10 +39,14 @@
   },
   "devDependencies": {
     "@types/eslint": "~8.56.10",
-    "@wasmcloud/eslint-config": "workspace:^",
-    "@wasmcloud/tsconfig": "workspace:^",
+    "@wasmcloud/eslint-config": "workspace:*",
+    "@wasmcloud/tsconfig": "workspace:*",
+    "rollup-plugin-sourcemaps": "^0.6.3",
     "tsup": "^8.3.0",
-    "type-fest": "^4.26.1"
+    "type-fest": "^4.26.1",
+    "vite": "^5.4.2",
+    "vite-plugin-dts": "^4.0.3",
+    "vite-tsconfig-paths": "^5.0.1"
   },
   "dependencies": {
     "nats.ws": "^1.29.2"

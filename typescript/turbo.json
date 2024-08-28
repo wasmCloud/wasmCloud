@@ -1,54 +1,32 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": [
-    "**/.env.*local"
-  ],
+  "globalDependencies": ["**/.env.*local"],
   "tasks": {
     "lint": {
-      "dependsOn": [
-        "^lint",
-        "^build"
-      ]
+      "dependsOn": ["^lint", "^build"]
     },
     "lint:fix": {
-      "dependsOn": [
-        "^lint:fix"
-      ]
+      "dependsOn": ["^lint:fix"]
     },
     "format": {
-      "dependsOn": [
-        "^format"
-      ]
+      "dependsOn": ["^format"]
     },
     "format:fix": {
-      "dependsOn": [
-        "^format:fix"
-      ]
+      "dependsOn": ["^format:fix"]
     },
     "test:e2e": {
-      "outputs": [
-        "playwright-report",
-        "test-results"
-      ]
+      "outputs": ["playwright-report", "test-results"]
     },
-    "test:unit": {},
+    "test:unit": {
+      "outputs": []
+    },
     "test": {
-      "dependsOn": [
-        "test:unit",
-        "test:e2e"
-      ]
+      "dependsOn": ["test:unit", "test:e2e"]
     },
     "build": {
-      "dependsOn": [
-        "^build"
-      ],
-      "outputs": [
-        "dist/**",
-        "build/**"
-      ],
-      "env": [
-        "NODE_ENV"
-      ],
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "build/**"],
+      "env": ["NODE_ENV"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".env.production.local",
@@ -58,6 +36,7 @@
       ]
     },
     "dev": {
+      "dependsOn": ["build", "^build"],
       "cache": false,
       "persistent": true,
       "inputs": [
