@@ -40,7 +40,7 @@ use core::time::Duration;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, bail, Context as _};
 use axum::extract;
 use axum::handler::Handler as _;
 use axum_server::tls_rustls::RustlsConfig;
@@ -63,9 +63,22 @@ pub(crate) use hashmap_ci::make_case_insensitive;
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
 
+#[derive(Debug, Default, Clone)]
+pub enum RoutingMode {
+    #[default]
+    Address,
+    /// Path-based routing mode enables listening on a single
+    /// address and routing requests to different components
+    /// based on the path of the request.
+    Path(String),
+    // Dns
+}
+
 /// `wrpc:http/incoming-handler` provider implementation.
 #[derive(Clone, Default)]
 pub struct HttpServerProvider {
+    /// The routing mode for the provider
+    routing_mode: RoutingMode,
     // Map from (component_id, link_name) to HttpServerCore
     /// Stores http_server handlers for each linked component
     component_handlers: Arc<dashmap::DashMap<(String, String), HttpServerCore>>,
@@ -73,8 +86,30 @@ pub struct HttpServerProvider {
 
 impl HttpServerProvider {
     /// Create a new instance of the HTTP server provider
-    pub fn new(_host_data: &HostData) -> anyhow::Result<Self> {
+    pub fn new(host_data: &HostData) -> anyhow::Result<Self> {
+        let routing_mode = match host_data
+            .config
+            .get("routing_mode")
+            .map(|s| s.to_lowercase())
+        {
+            Some(v) if v == "address" => RoutingMode::Address,
+            // Path based routing must listen on a single address
+            Some(v) if v == "path" => {
+                if let Some(listen_address) = host_data.config.get("listen_address") {
+                    RoutingMode::Path(listen_address.clone())
+                } else {
+                    bail!("routing_mode is 'path' but no `listen_address` is specified")
+                }
+            }
+            // If specified, routing_mode must be a valid `RoutingMode`
+            Some(v) => {
+                bail!("invalid routing_mode: {v}");
+            }
+            // Default to address-based routing
+            None => RoutingMode::Address,
+        };
         Ok(Self {
+            routing_mode,
             component_handlers: Default::default(),
         })
     }

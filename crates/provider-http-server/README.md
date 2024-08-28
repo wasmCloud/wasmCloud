@@ -12,7 +12,14 @@ wash build -p src/bin/http-server-provider
 
 ## Provider Configuration
 
-The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys should be lowercased, as well as their values when applicable. See the [provider config documentation](https://wasmcloud.com/docs/developer/providers/configure) for information about defining and using this configuration.
+The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys should be lowercased, as well as their values when applicable. See the [provider config](https://wasmcloud.com/docs/developer/providers/configure) documentation for information about defining and using this configuration.
+
+| Key              | Value                  | Default        | Description                                                                                                                                                                                                            |
+| ---------------- | ---------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `routing_mode`   | "address","path"       | `address`      | Dictates the routing mode of the capability provider. `address` mode will listen on a new address for each component, and `path` mode will listen on a single address and route to components based on a provided path |
+| `listen_address` | A valid listen address | "0.0.0.0:8080" | Must be provided when using the `path` routing mode. The listen address to listen on and route to components based on path                                                                                             |
+
+<!-- TODO: consider setting this up as the default address? -->
 
 ## Link Configuration
 
