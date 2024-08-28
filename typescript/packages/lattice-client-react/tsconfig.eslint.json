@@ -9,7 +9,6 @@
     "./**/*.config.ts",
     "./**/*.config.cjs",
     ".eslintrc.cjs",
-    "tsup.config.js",
     "vite.config.ts",
     "turbo"
   ]
