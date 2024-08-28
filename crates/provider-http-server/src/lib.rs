@@ -1,7 +1,7 @@
-//! The httpserver capability provider allows wasmcloud actors to receive
+//! The httpserver capability provider allows wasmcloud components to receive
 //! and process http(s) messages from web browsers, command-line tools
 //! such as curl, and other http clients. The server is fully asynchronous,
-//! and built on Rust's high-performance warp engine, which is in turn based
+//! and built on Rust's high-performance axum library, which is in turn based
 //! on hyper, and can process a large number of simultaneous connections.
 //!
 //! ## Features:
@@ -14,7 +14,6 @@
 //!   for production if a more secure configuration is required.
 //! - All settings can be specified at runtime, using per-component link settings:
 //!   - bind interface/port
-//!   - logging level
 //!   - TLS
 //!   - Cors
 //! - Flexible confiuration loading: from host, or from local toml or json file.
@@ -53,7 +52,8 @@ use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
 use tracing::{debug, error, info, instrument, trace};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, run_provider, LinkConfig, LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, load_host_data, run_provider, HostData, LinkConfig,
+    LinkDeleteInfo, Provider,
 };
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
@@ -61,15 +61,23 @@ mod hashmap_ci;
 pub(crate) use hashmap_ci::make_case_insensitive;
 
 mod settings;
-pub use settings::{load_settings, ServiceSettings, CONTENT_LEN_LIMIT, DEFAULT_MAX_CONTENT_LEN};
-
-use crate::settings::Tls;
+pub use settings::{load_settings, ServiceSettings};
 
 /// `wrpc:http/incoming-handler` provider implementation.
 #[derive(Clone, Default)]
 pub struct HttpServerProvider {
-    // map to store http server (and its link parameters) for each linked component
-    actors: Arc<dashmap::DashMap<String, HttpServerCore>>,
+    // Map from (component_id, link_name) to HttpServerCore
+    /// Stores http_server handlers for each linked component
+    component_handlers: Arc<dashmap::DashMap<(String, String), HttpServerCore>>,
+}
+
+impl HttpServerProvider {
+    /// Create a new instance of the HTTP server provider
+    pub fn new(_host_data: &HostData) -> anyhow::Result<Self> {
+        Ok(Self {
+            component_handlers: Default::default(),
+        })
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -77,7 +85,11 @@ pub async fn run() -> anyhow::Result<()> {
         "http-server-provider",
         std::env::var_os("PROVIDER_HTTP_SERVER_FLAMEGRAPH_PATH")
     );
-    let shutdown = run_provider(HttpServerProvider::default(), "http-server-provider")
+
+    let host_data = load_host_data().context("failed to load host data")?;
+    let http_server_provider = HttpServerProvider::new(host_data)
+        .context("failed to create provider from hostdata configuration")?;
+    let shutdown = run_provider(http_server_provider, "http-server-provider")
         .await
         .context("failed to run provider")?;
     shutdown.await;
@@ -85,8 +97,11 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 impl Provider for HttpServerProvider {
-    /// Provider should perform any operations needed for a new link,
-    /// including setting up per-component resources, and checking authorization.
+    /// This is called when the HTTP server provider is linked to a component
+    ///
+    /// Based on the [`RoutingMode`], the HTTP server will either listen on a new
+    /// address (if the routing mode is [`RoutingMode::Address`]) or register the
+    /// set of paths for the existing address (if the routing mode is [`RoutingMode::Path`]).
     async fn receive_link_config_as_source(
         &self,
         link_config: LinkConfig<'_>,
@@ -110,7 +125,6 @@ impl Provider for HttpServerProvider {
             .context("httpserver failed to start listener for component")?;
 
         // Save the component and server instance locally
-        self.actors
         self.component_handlers.insert(
             (
                 link_config.target_id.to_string(),
@@ -122,8 +136,7 @@ impl Provider for HttpServerProvider {
     }
 
     /// Handle notification that a link is dropped - stop the http listener
-    #[instrument(level = "info", skip_all, fields(source_id = info.get_source_id()))]
-    async fn delete_link_as_target(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
     async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
         let component_id = info.get_target_id();
         let link_name = info.get_link_name();
@@ -135,6 +148,7 @@ impl Provider for HttpServerProvider {
                 component_id,
                 link_name, "httpserver stopping listener for component"
             );
+            server.handle.shutdown();
         }
         Ok(())
     }
@@ -142,8 +156,8 @@ impl Provider for HttpServerProvider {
     /// Handle shutdown request by shutting down all the http server threads
     async fn shutdown(&self) -> anyhow::Result<()> {
         // empty the component link data and stop all servers
-        self.actors.clear();
         self.component_handlers.clear();
+        Ok(())
     }
 }
 
@@ -286,6 +300,7 @@ async fn handle_request(
         body,
     ) = request.into_parts();
     let http::uri::Parts { path_and_query, .. } = uri.into_parts();
+
     let mut uri = http::Uri::builder().scheme(scheme);
     if !authority.is_empty() {
         uri = uri.authority(authority);
@@ -359,7 +374,7 @@ impl HttpServerCore {
             "httpserver starting listener for target",
         );
 
-        let allow_origin = settings.cors.allowed_origins.as_ref();
+        let allow_origin = settings.cors_allowed_origins.as_ref();
         let allow_origin: Vec<_> = allow_origin
             .map(|origins| {
                 origins
@@ -376,7 +391,7 @@ impl HttpServerCore {
         } else {
             cors::AllowOrigin::list(allow_origin)
         };
-        let allow_headers = settings.cors.allowed_headers.as_ref();
+        let allow_headers = settings.cors_allowed_headers.as_ref();
         let allow_headers: Vec<_> = allow_headers
             .map(|headers| {
                 headers
@@ -393,7 +408,7 @@ impl HttpServerCore {
         } else {
             cors::AllowHeaders::list(allow_headers)
         };
-        let allow_methods = settings.cors.allowed_methods.as_ref();
+        let allow_methods = settings.cors_allowed_methods.as_ref();
         let allow_methods: Vec<_> = allow_methods
             .map(|methods| {
                 methods
@@ -410,7 +425,7 @@ impl HttpServerCore {
         } else {
             cors::AllowMethods::list(allow_methods)
         };
-        let expose_headers = settings.cors.exposed_headers.as_ref();
+        let expose_headers = settings.cors_exposed_headers.as_ref();
         let expose_headers: Vec<_> = expose_headers
             .map(|headers| {
                 headers
@@ -432,7 +447,7 @@ impl HttpServerCore {
             .allow_headers(allow_headers)
             .allow_methods(allow_methods)
             .expose_headers(expose_headers);
-        if let Some(max_age) = settings.cors.max_age_secs {
+        if let Some(max_age) = settings.cors_max_age_secs {
             cors = cors.max_age(Duration::from_secs(max_age));
         }
         let service = handle_request.layer(cors);
@@ -458,10 +473,8 @@ impl HttpServerCore {
         let listener = socket.listen(1024).context("unable to listen on socket")?;
         let listener = listener.into_std().context("Unable to get listener")?;
 
-        let task = if let Tls {
-            cert_file: Some(crt),
-            priv_key_file: Some(key),
-        } = &settings.tls
+        let task = if let (Some(crt), Some(key)) =
+            (&settings.tls_cert_file, &settings.tls_priv_key_file)
         {
             debug!(?addr, "bind HTTPS listener");
             let tls = RustlsConfig::from_pem_file(crt, key)
