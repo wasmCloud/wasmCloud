@@ -1,20 +1,31 @@
 # wasmCloud HTTP Server Provider
 
-This capability provider implements the `wasmcloud:httpserver` capability contract, and enables a component to accept incoming HTTP(s) requests. It is implemented in Rust with the [warp](https://docs.rs/warp/) web server framework and the fast and scalable [hyper](https://docs.rs/hyper/) http implementation.
+This capability provider imports the `wasi:http/incoming-handler` interface and enables a component to accept incoming HTTP(s) requests. It is implemented in Rust with the [axum](https://docs.rs/axum/) web server framework and the fast and scalable [hyper](https://docs.rs/hyper/) HTTP implementation.
 
-For more information on the operations supported by this provider, please check out its corresponding [interface](https://github.com/wasmCloud/interfaces/blob/main/httpserver/httpserver.smithy).
+## Building
 
-Run `make` to compile to a native executable and build the par file.
-The par file is created in `build/httpserver.par.gz`.
+This HTTP server can be built from the root of this repository with `wash build`.
 
-## Link Definition Configuration Settings
-Configuration settings for the httpserver provider are described in [settings](./settings.md). 
+```shell
+wash build -p src/bin/http-server-provider
+```
 
-The default listen address is 127.0.0.1 port 8000.
+## Provider Configuration
 
-### ⚠️ Caution - Port Ownership
-If the instance of this capability provider running on a single host is linked to multiple components attempting to claim the same port, only the first **link definition** for that port will succeed, and the subsequent attempts will fail. During development, 
-it is recommended to check ("tail") the wasmCloud host logs for success and error messages.
+The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys should be lowercased, as well as their values when applicable. See the [provider config documentation](https://wasmcloud.com/docs/developer/providers/configure) for information about defining and using this configuration.
 
-For more hands-on tutorials on building components, including HTTP server components,
-see the [wasmcloud.dev](https://wasmcloud.dev) website.
+## Link Configuration
+
+| Key                    | Default                                                             | Description                                                                                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `address`              | "127.0.0.1:8000"                                                    | Address is a string in the form "IP:PORT". The default bind address is "127.0.0.1:8000". The IP address may be an IPV4 or IPV6 address.                                                                                                                                                                                         |
+| `cache_control`        | N/A                                                                 | An optional set of cache-control values that will appear in the header if they are not already set.                                                                                                                                                                                                                             |
+| `readonly_mode`        | false                                                               | A mode that only allows `GET` and `HEAD` requests                                                                                                                                                                                                                                                                               |
+| `cors_allowed_origins` | '[]'                                                                | a list of allowed origin addresses. See [`Access-Control-Allow-Origin`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin) Each origin must begin with either 'http:' or 'https:'. If the list is empty (the default) all origins are allowed. The default setting allows all origin hosts. |
+| `cors_allowed_headers` | '["accept", "accept-language", "content-type", "content-language"]' | a list of allowed headers, case-insensitive. See [`Access-Control-Allow-Headers`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Headers)                                                                                                                                                       |
+| `cors_allowed_methods` | '["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"]'               | a list of upper case http methods. See [`Access-Control-Allow-Headers`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Methods)                                                                                                                                                                 |
+| `cors_exposed_headers` | []                                                                  | see [`Access-Control-Expose-Headers`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Expose-Headers)                                                                                                                                                                                                  |
+| `cors_max_age_secs`    | 300                                                                 | sets the `Access-Control-Max-Age` header.                                                                                                                                                                                                                                                                                       |
+| `tls_cert_file`        | N/A                                                                 | path to server X.509 cert chain file. Must be PEM-encoded                                                                                                                                                                                                                                                                       |
+| `tls_priv_key_file`    | N/A                                                                 | path to server TLS private key file.                                                                                                                                                                                                                                                                                            |
+| `timeout_ms`           | N/A                                                                 | How long (milliseconds) to wait for component's response. Returns a 408 response to the client if exceeded                                                                                                                                                                                                                      |
