@@ -218,6 +218,7 @@ mod test {
             CtlCliCommand::Get(CtlGetCommand::HostInventories(GetHostInventoriesCommand {
                 opts,
                 host_id,
+                watch: _,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
