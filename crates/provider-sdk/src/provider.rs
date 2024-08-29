@@ -67,6 +67,14 @@ pub fn load_host_data() -> ProviderInitResult<&'static HostData> {
     HOST_DATA.get_or_try_init(_load_host_data)
 }
 
+/// Initializes the host data with the provided data. This is useful for testing or if the host data
+/// is not being provided over stdin.
+///
+/// If the host data has already been initialized, this function will return the existing host data.
+pub fn initialize_host_data(host_data: HostData) -> ProviderInitResult<&'static HostData> {
+    HOST_DATA.get_or_try_init(|| Ok(host_data))
+}
+
 // Internal function for populating the host data
 fn _load_host_data() -> ProviderInitResult<HostData> {
     let mut buffer = String::new();
