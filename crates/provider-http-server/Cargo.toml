@@ -33,3 +33,8 @@ tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wrpc-interface-http = { workspace = true, features = ["http-body"] }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+wasmcloud-test-util = { workspace = true }
+testcontainers = { workspace = true }

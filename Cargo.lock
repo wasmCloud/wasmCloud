@@ -7523,14 +7523,17 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.1",
  "pin-project-lite",
+ "reqwest 0.12.7",
  "serde",
  "serde_json",
+ "testcontainers",
  "thiserror",
  "tokio",
  "toml 0.8.19",
  "tower-http",
  "tracing",
  "wasmcloud-provider-sdk",
+ "wasmcloud-test-util",
  "wrpc-interface-http",
 ]
 
