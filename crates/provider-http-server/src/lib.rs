@@ -37,12 +37,12 @@ use core::str::FromStr as _;
 use core::task::{ready, Context, Poll};
 use core::time::Duration;
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context as _};
 use axum::extract;
-use axum::handler::Handler as _;
+use axum::handler::Handler;
 use axum_server::tls_rustls::RustlsConfig;
 use bytes::Bytes;
 use futures::Stream;
@@ -58,6 +58,7 @@ use wasmcloud_provider_sdk::{
 };
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
+mod path_router;
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
 
@@ -104,23 +105,48 @@ pub async fn run() -> anyhow::Result<()> {
     );
 
     let host_data = load_host_data().context("failed to load host data")?;
-    let shutdown = run_provider(
-        HttpServerProvider::new(host_data)
-            .context("failed to create provider from hostdata configuration")?,
-        "http-server-provider",
-    )
-    .await
-    .context("failed to run provider")?;
-    shutdown.await;
+
+    match host_data.config.get("routing_mode").map(|s| s.as_str()) {
+        Some("address") | None => run_provider(
+            HttpServerProvider::new(host_data).context(
+                "failed to create address-mode HTTP server provider from hostdata configuration",
+            )?,
+            "http-server-provider",
+        )
+        .await?
+        .await,
+
+        Some("path") => {
+            // TODO: handle better by making settings the base for the other HTTP server too
+            // as you can see in the test I have to supply things globally for path, but link for address
+            let default_address = host_data
+                .config
+                .get("default_address")
+                .map(|s| SocketAddr::from_str(s))
+                .transpose()
+                .context("failed to parse default_address")?
+                .unwrap_or_else(default_listen_address);
+            let settings = load_settings(default_address, &host_data.config)
+                .context("httpserver failed to load settings for component")?;
+            run_provider(
+                path_router::HttpServerProvider::new(Arc::new(settings))
+                    .await
+                    .context(
+                    "failed to create path-mode HTTP server provider from hostdata configuration",
+                )?,
+                "http-server-provider",
+            ).await?.await;
+        }
+        Some(other) => return Err(anyhow!("unknown routing_mode: {}", other)),
+    };
+
     Ok(())
 }
 
 impl Provider for HttpServerProvider {
     /// This is called when the HTTP server provider is linked to a component
     ///
-    /// Based on the [`RoutingMode`], the HTTP server will either listen on a new
-    /// address (if the routing mode is [`RoutingMode::Address`]) or register the
-    /// set of paths for the existing address (if the routing mode is [`RoutingMode::Path`]).
+    /// This HTTP server mode will listen on a new address for each component that it links to.
     async fn receive_link_config_as_source(
         &self,
         link_config: LinkConfig<'_>,
@@ -361,109 +387,16 @@ impl HttpServerCore {
         let addr = settings.address;
         info!(
             %addr,
-            %target,
+            component_id = target,
             "httpserver starting listener for target",
         );
-
-        let allow_origin = settings.cors_allowed_origins.as_ref();
-        let allow_origin: Vec<_> = allow_origin
-            .map(|origins| {
-                origins
-                    .iter()
-                    .map(AsRef::as_ref)
-                    .map(http::HeaderValue::from_str)
-                    .collect::<Result<_, _>>()
-                    .context("failed to parse allowed origins")
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let allow_origin = if allow_origin.is_empty() {
-            cors::AllowOrigin::any()
-        } else {
-            cors::AllowOrigin::list(allow_origin)
-        };
-        let allow_headers = settings.cors_allowed_headers.as_ref();
-        let allow_headers: Vec<_> = allow_headers
-            .map(|headers| {
-                headers
-                    .iter()
-                    .map(AsRef::as_ref)
-                    .map(http::HeaderName::from_str)
-                    .collect::<Result<_, _>>()
-                    .context("failed to parse allowed header names")
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let allow_headers = if allow_headers.is_empty() {
-            cors::AllowHeaders::any()
-        } else {
-            cors::AllowHeaders::list(allow_headers)
-        };
-        let allow_methods = settings.cors_allowed_methods.as_ref();
-        let allow_methods: Vec<_> = allow_methods
-            .map(|methods| {
-                methods
-                    .iter()
-                    .map(AsRef::as_ref)
-                    .map(http::Method::from_str)
-                    .collect::<Result<_, _>>()
-                    .context("failed to parse allowed methods")
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let allow_methods = if allow_methods.is_empty() {
-            cors::AllowMethods::any()
-        } else {
-            cors::AllowMethods::list(allow_methods)
-        };
-        let expose_headers = settings.cors_exposed_headers.as_ref();
-        let expose_headers: Vec<_> = expose_headers
-            .map(|headers| {
-                headers
-                    .iter()
-                    .map(AsRef::as_ref)
-                    .map(http::HeaderName::from_str)
-                    .collect::<Result<_, _>>()
-                    .context("failed to parse exposeed header names")
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let expose_headers = if expose_headers.is_empty() {
-            cors::ExposeHeaders::any()
-        } else {
-            cors::ExposeHeaders::list(expose_headers)
-        };
-        let mut cors = CorsLayer::new()
-            .allow_origin(allow_origin)
-            .allow_headers(allow_headers)
-            .allow_methods(allow_methods)
-            .expose_headers(expose_headers);
-        if let Some(max_age) = settings.cors_max_age_secs {
-            cors = cors.max_age(Duration::from_secs(max_age));
-        }
+        let cors = get_cors_layer(settings.clone())?;
         let service = handle_request.layer(cors);
-
-        let settings = Arc::clone(&settings);
         let handle = axum_server::Handle::new();
+        let listener = get_tcp_listener(settings.clone())?;
 
-        let task_handle = handle.clone();
         let target = target.to_owned();
-        let socket = match &addr {
-            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
-            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
-        }
-        .context("Unable to open socket")?;
-        // Copied this option from
-        // https://github.com/bytecodealliance/wasmtime/blob/05095c18680927ce0cf6c7b468f9569ec4d11bd7/src/commands/serve.rs#L319.
-        // This does increase throughput by 10-15% which is why we're creating the socket. We're
-        // using the tokio one because it exposes the `reuseaddr` option.
-        socket
-            .set_reuseaddr(!cfg!(windows))
-            .context("Error when setting socket to reuseaddr")?;
-        socket.bind(addr).context("Unable to bind to address")?;
-        let listener = socket.listen(1024).context("unable to listen on socket")?;
-        let listener = listener.into_std().context("Unable to get listener")?;
-
+        let task_handle = handle.clone();
         let task = if let (Some(crt), Some(key)) =
             (&settings.tls_cert_file, &settings.tls_priv_key_file)
         {
@@ -523,9 +456,117 @@ impl Drop for HttpServerCore {
     }
 }
 
+/// Helper function to construct a [`CorsLayer`] according to the [`ServiceSettings`].
+pub(crate) fn get_cors_layer(settings: Arc<ServiceSettings>) -> anyhow::Result<CorsLayer> {
+    let allow_origin = settings.cors_allowed_origins.as_ref();
+    let allow_origin: Vec<_> = allow_origin
+        .map(|origins| {
+            origins
+                .iter()
+                .map(AsRef::as_ref)
+                .map(http::HeaderValue::from_str)
+                .collect::<Result<_, _>>()
+                .context("failed to parse allowed origins")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let allow_origin = if allow_origin.is_empty() {
+        cors::AllowOrigin::any()
+    } else {
+        cors::AllowOrigin::list(allow_origin)
+    };
+    let allow_headers = settings.cors_allowed_headers.as_ref();
+    let allow_headers: Vec<_> = allow_headers
+        .map(|headers| {
+            headers
+                .iter()
+                .map(AsRef::as_ref)
+                .map(http::HeaderName::from_str)
+                .collect::<Result<_, _>>()
+                .context("failed to parse allowed header names")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let allow_headers = if allow_headers.is_empty() {
+        cors::AllowHeaders::any()
+    } else {
+        cors::AllowHeaders::list(allow_headers)
+    };
+    let allow_methods = settings.cors_allowed_methods.as_ref();
+    let allow_methods: Vec<_> = allow_methods
+        .map(|methods| {
+            methods
+                .iter()
+                .map(AsRef::as_ref)
+                .map(http::Method::from_str)
+                .collect::<Result<_, _>>()
+                .context("failed to parse allowed methods")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let allow_methods = if allow_methods.is_empty() {
+        cors::AllowMethods::any()
+    } else {
+        cors::AllowMethods::list(allow_methods)
+    };
+    let expose_headers = settings.cors_exposed_headers.as_ref();
+    let expose_headers: Vec<_> = expose_headers
+        .map(|headers| {
+            headers
+                .iter()
+                .map(AsRef::as_ref)
+                .map(http::HeaderName::from_str)
+                .collect::<Result<_, _>>()
+                .context("failed to parse exposeed header names")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let expose_headers = if expose_headers.is_empty() {
+        cors::ExposeHeaders::any()
+    } else {
+        cors::ExposeHeaders::list(expose_headers)
+    };
+    let mut cors = CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_headers(allow_headers)
+        .allow_methods(allow_methods)
+        .expose_headers(expose_headers);
+    if let Some(max_age) = settings.cors_max_age_secs {
+        cors = cors.max_age(Duration::from_secs(max_age));
+    }
+
+    Ok(cors)
+}
+
+/// Helper function to create and listen on a [`TcpListener`] from the given [`ServiceSettings`].
+///
+/// Note that this function actually calls the `bind` method on the [`TcpSocket`], it's up to the
+/// caller to ensure that the address is not already in use (or to handle the error if it is).
+pub(crate) fn get_tcp_listener(settings: Arc<ServiceSettings>) -> anyhow::Result<TcpListener> {
+    let socket = match &settings.address {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4(),
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6(),
+    }
+    .context("Unable to open socket")?;
+    // Copied this option from
+    // https://github.com/bytecodealliance/wasmtime/blob/05095c18680927ce0cf6c7b468f9569ec4d11bd7/src/commands/serve.rs#L319.
+    // This does increase throughput by 10-15% which is why we're creating the socket. We're
+    // using the tokio one because it exposes the `reuseaddr` option.
+    socket
+        .set_reuseaddr(!cfg!(windows))
+        .context("Error when setting socket to reuseaddr")?;
+    socket
+        .bind(settings.address)
+        .context("Unable to bind to address")?;
+    let listener = socket.listen(1024).context("unable to listen on socket")?;
+    let listener = listener.into_std().context("Unable to get listener")?;
+
+    Ok(listener)
+}
+
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
 
     use anyhow::Result;
     use futures::StreamExt;
@@ -538,7 +579,7 @@ mod test {
         provider::initialize_host_data, run_provider, HostData, InterfaceLinkDefinition,
     };
 
-    use crate::HttpServerProvider;
+    use crate::{path_router, HttpServerProvider};
 
     // This test is ignored by default as it requires a container runtime to be installed
     // to run the testcontainer. In GitHub Actions CI, this is only works on `linux`
@@ -619,6 +660,137 @@ mod test {
             .await
             .expect("should be able to get a message");
         assert!(msg.subject.contains("test-component"));
+        provider_handle.abort();
+        let _ = nats_container.stop().await;
+
+        Ok(())
+    }
+
+    // This test is ignored by default as it requires a container runtime to be installed
+    // to run the testcontainer. In GitHub Actions CI, this is only works on `linux`
+    #[ignore]
+    #[tokio::test]
+    async fn can_support_path_based_routing() -> Result<()> {
+        let nats_container = GenericImage::new("nats", "2.10.18-alpine")
+            .with_exposed_port(ContainerPort::Tcp(4222))
+            .with_wait_for(WaitFor::message_on_stderr(
+                "Listening for client connections on 0.0.0.0:4222",
+            ))
+            .start()
+            .await
+            .expect("failed to start nats-server container");
+        let nats_port = nats_container
+            .get_host_port_ipv4(4222)
+            .await
+            .expect("should be able to find the NATS port");
+        let nats_address = format!("nats://127.0.0.1:{nats_port}");
+
+        let default_address = "0.0.0.0:8080";
+        let host_data = HostData {
+            lattice_rpc_url: nats_address.clone(),
+            lattice_rpc_prefix: "lattice".to_string(),
+            provider_key: "http-server-provider-test".to_string(),
+            config: std::collections::HashMap::from([
+                ("default_address".to_string(), default_address.to_string()),
+                ("routing_mode".to_string(), "path".to_string()),
+                ("timeout_ms".to_string(), "100".to_string()),
+            ]),
+            link_definitions: vec![
+                InterfaceLinkDefinition {
+                    source_id: "http-server-provider-test".to_string(),
+                    target: "test-component-one".to_string(),
+                    name: "default".to_string(),
+                    wit_namespace: "wasi".to_string(),
+                    wit_package: "http".to_string(),
+                    interfaces: vec!["incoming-handler".to_string()],
+                    source_config: std::collections::HashMap::from([
+                        ("path".to_string(), "/foo".to_string()),
+                        ("timeout_ms".to_string(), "100".to_string()),
+                    ]),
+                    target_config: HashMap::new(),
+                    source_secrets: None,
+                    target_secrets: None,
+                },
+                InterfaceLinkDefinition {
+                    source_id: "http-server-provider-test".to_string(),
+                    target: "test-component-two".to_string(),
+                    name: "default".to_string(),
+                    wit_namespace: "wasi".to_string(),
+                    wit_package: "http".to_string(),
+                    interfaces: vec!["incoming-handler".to_string()],
+                    source_config: std::collections::HashMap::from([
+                        ("path".to_string(), "/bar".to_string()),
+                        ("timeout_ms".to_string(), "100".to_string()),
+                    ]),
+                    target_config: HashMap::new(),
+                    source_secrets: None,
+                    target_secrets: None,
+                },
+            ],
+            ..Default::default()
+        };
+        initialize_host_data(host_data.clone()).expect("should be able to initialize host data");
+
+        // TODO: should better use settings as a base for the other HTTP server too
+        let settings =
+            crate::settings::load_settings(default_address.parse().unwrap(), &host_data.config)
+                .expect("should be able to load settings");
+        let provider = run_provider(
+            path_router::HttpServerProvider::new(Arc::new(settings))
+                .await
+                .expect("should be able to create provider"),
+            "http-server-provider-test",
+        )
+        .await
+        .expect("should be able to run provider");
+
+        // Use a separate task to listen for the component message
+        let conn = async_nats::connect(nats_address)
+            .await
+            .expect("should be able to connect");
+        let mut subscriber_one = conn
+            .subscribe("lattice.test-component-one.wrpc.>")
+            .await
+            .expect("should be able to subscribe");
+        let mut subscriber_two = conn
+            .subscribe("lattice.test-component-two.wrpc.>")
+            .await
+            .expect("should be able to subscribe");
+
+        let provider_handle = tokio::spawn(provider);
+        // Let the provider have a second to setup the listeners
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        // Unknown path should return 404
+        let resp = reqwest::get("http://127.0.0.1:8080/some/other/route/idk")
+            .await
+            .expect("should be able to make request");
+        assert_eq!(resp.status(), 404);
+
+        // Invoke component one
+        let resp = reqwest::get("http://127.0.0.1:8080/foo")
+            .await
+            .expect("should be able to make request");
+        // Should have timed out
+        assert_eq!(resp.status(), 408);
+        let msg = subscriber_one
+            .next()
+            .await
+            .expect("should be able to get a message");
+        assert!(msg.subject.contains("test-component-one"));
+
+        // Invoke component two
+        let resp = reqwest::get("http://127.0.0.1:8080/bar")
+            .await
+            .expect("should be able to make request");
+        // Should have timed out
+        assert_eq!(resp.status(), 408);
+        let msg = subscriber_two
+            .next()
+            .await
+            .expect("should be able to get a message");
+        assert!(msg.subject.contains("test-component-two"));
+
         provider_handle.abort();
         let _ = nats_container.stop().await;
 
