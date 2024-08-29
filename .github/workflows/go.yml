@@ -6,71 +6,13 @@ on:
       - main
     paths:
       - "go/*"
-      - "go.work"
-      - "go.work.sum"
-    tags:
-      - "secrets-kubernetes-v*"
   pull_request:
     branches:
       - main
     paths:
       - "go/*"
-      - "go.work"
-      - "go.work.sum"
-
-env:
-  GOLANGCI_LINT_VERSION: v1.59
 
 jobs:
-  detect-modules:
-    runs-on: ubuntu-latest
-    outputs:
-      modules: ${{ steps.set-modules.outputs.modules }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
-      - id: set-modules
-        run: echo "modules=$(go list -m -json | jq -s '.' | jq -c '[.[].Dir]')" >> $GITHUB_OUTPUT
-
-  build:
-    needs: detect-modules
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        modules: ${{ fromJSON(needs.detect-modules.outputs.modules) }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
-      - name: Build ${{ matrix.modules }}
-        working-directory: ${{ matrix.modules }}
-        run: go build -v ./...
-
-      - name: Test ${{ matrix.modules }}
-        working-directory: ${{ matrix.modules }}
-        run: go test -v ./...
-
-  lint:
-    needs: detect-modules
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        modules: ${{ fromJSON(needs.detect-modules.outputs.modules) }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.work
-      - name: golangci-lint ${{ matrix.modules }}
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: ${{ matrix.modules }}
-
   vanity-urls:
     runs-on: node16
     steps:

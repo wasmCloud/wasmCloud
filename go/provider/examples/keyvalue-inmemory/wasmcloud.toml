@@ -1,8 +1,0 @@
-name = "KeyValue Go"
-language = "go"
-type = "provider"
-version = "0.1.0"
-
-[provider]
-bin_name = "keyvalue-inmemory"
-vendor = "wasmCloud"
