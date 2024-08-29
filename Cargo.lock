@@ -7532,6 +7532,7 @@ dependencies = [
  "toml 0.8.19",
  "tower-http",
  "tracing",
+ "unicase",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wrpc-interface-http",

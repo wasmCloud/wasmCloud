@@ -29,6 +29,7 @@ use base64::prelude::BASE64_STANDARD_NO_PAD;
 use http::Uri;
 use serde::{de, de::Deserializer, de::Visitor, Deserialize, Serialize};
 use tracing::{instrument, trace};
+use unicase::UniCase;
 
 use crate::HttpServerError;
 
@@ -198,28 +199,26 @@ pub fn load_settings(
     values: &HashMap<String, String>,
 ) -> Result<ServiceSettings, HttpServerError> {
     trace!("load settings");
-    // Allow keys to be UPPERCASE, as an accommodation
-    // for the lost souls who prefer ugly all-caps variable names.
-    let values: HashMap<String, String> = crate::make_case_insensitive(values).ok_or_else(|| HttpServerError::InvalidParameter(
-        "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
-            .to_string(),
-    ))?;
+    // Allow keys to be case insensitive, as an accommodation
+    // for the lost souls who prefer sPoNgEbOb CaSe variable names.
+    let values: HashMap<UniCase<&str>, &String> =
+        HashMap::from_iter(values.iter().map(|(k, v)| (UniCase::new(k.as_str()), v)));
 
-    if let Some(str) = values.get("config_b64") {
+    if let Some(str) = values.get(&UniCase::new("config_b64")) {
         let bytes = BASE64_STANDARD_NO_PAD
             .decode(str)
             .map_err(|e| HttpServerError::Settings(format!("invalid base64 encoding: {e}")))?;
         return ServiceSettings::from_json(&String::from_utf8_lossy(&bytes));
     }
 
-    if let Some(str) = values.get("config_json") {
+    if let Some(str) = values.get(&UniCase::new("config_json")) {
         return ServiceSettings::from_json(str);
     }
 
     let mut settings = ServiceSettings::default();
 
     // accept port, for compatibility with previous implementations
-    if let Some(addr) = values.get("port") {
+    if let Some(addr) = values.get(&UniCase::new("port")) {
         let port = addr
             .parse::<u16>()
             .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {addr}")))?;
@@ -227,7 +226,7 @@ pub fn load_settings(
     }
     // accept address as value parameter
     settings.address = values
-        .get("address")
+        .get(&UniCase::new("address"))
         .map(|addr| {
             SocketAddr::from_str(addr)
                 .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {addr}")))
@@ -236,48 +235,48 @@ pub fn load_settings(
         .unwrap_or(default_address);
 
     // accept cache-control header values
-    if let Some(cache_control) = values.get("cache_control") {
+    if let Some(cache_control) = values.get(&UniCase::new("cache_control")) {
         settings.cache_control = Some(cache_control.to_string());
     }
     // accept read only mode flag
-    if let Some(readonly_mode) = values.get("readonly_mode") {
+    if let Some(readonly_mode) = values.get(&UniCase::new("readonly_mode")) {
         settings.readonly_mode = Some(readonly_mode.to_string().parse().unwrap_or(false));
     }
     // accept timeout_ms flag
-    if let Some(Ok(timeout_ms)) = values.get("timeout_ms").map(|s| s.parse()) {
+    if let Some(Ok(timeout_ms)) = values.get(&UniCase::new("timeout_ms")).map(|s| s.parse()) {
         settings.timeout_ms = Some(timeout_ms)
     }
 
     // TLS
-    if let Some(tls_cert_file) = values.get("tls_cert_file") {
+    if let Some(tls_cert_file) = values.get(&UniCase::new("tls_cert_file")) {
         settings.tls_cert_file = Some(tls_cert_file.to_string());
     }
-    if let Some(tls_priv_key_file) = values.get("tls_priv_key_file") {
+    if let Some(tls_priv_key_file) = values.get(&UniCase::new("tls_priv_key_file")) {
         settings.tls_priv_key_file = Some(tls_priv_key_file.to_string());
     }
 
     // CORS
-    if let Some(cors_allowed_origins) = values.get("cors_allowed_origins") {
+    if let Some(cors_allowed_origins) = values.get(&UniCase::new("cors_allowed_origins")) {
         let origins: Vec<CorsOrigin> = serde_json::from_str(cors_allowed_origins)
             .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_origins: {e}")))?;
         settings.cors_allowed_origins = Some(AllowedOrigins(origins));
     }
-    if let Some(cors_allowed_headers) = values.get("cors_allowed_headers") {
+    if let Some(cors_allowed_headers) = values.get(&UniCase::new("cors_allowed_headers")) {
         let headers: Vec<String> = serde_json::from_str(cors_allowed_headers)
             .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_headers: {e}")))?;
         settings.cors_allowed_headers = Some(AllowedHeaders(headers));
     }
-    if let Some(cors_allowed_methods) = values.get("cors_allowed_methods") {
+    if let Some(cors_allowed_methods) = values.get(&UniCase::new("cors_allowed_methods")) {
         let methods: Vec<String> = serde_json::from_str(cors_allowed_methods)
             .map_err(|e| HttpServerError::Settings(format!("invalid cors_allowed_methods: {e}")))?;
         settings.cors_allowed_methods = Some(AllowedMethods(methods));
     }
-    if let Some(cors_exposed_headers) = values.get("cors_exposed_headers") {
+    if let Some(cors_exposed_headers) = values.get(&UniCase::new("cors_exposed_headers")) {
         let headers: Vec<String> = serde_json::from_str(cors_exposed_headers)
             .map_err(|e| HttpServerError::Settings(format!("invalid cors_exposed_headers: {e}")))?;
         settings.cors_exposed_headers = Some(ExposedHeaders(headers));
     }
-    if let Some(cors_max_age_secs) = values.get("cors_max_age_secs") {
+    if let Some(cors_max_age_secs) = values.get(&UniCase::new("cors_max_age_secs")) {
         let max_age_secs: u64 = cors_max_age_secs.parse().map_err(|_| {
             HttpServerError::InvalidParameter("Invalid cors_max_age_secs".to_string())
         })?;
