@@ -17,7 +17,7 @@ use wash_lib::{
     component::{scale_component, ScaleComponentArgs},
     config::host_pid_file,
     generate::emoji,
-    id::{ModuleId, ServerId},
+    id::ServerId,
     parser::get_config,
 };
 use wasmcloud_control_interface::Host;
@@ -173,7 +173,6 @@ pub async fn handle_command(
 
     // If we started our own instance, wait for one host to be present
     if !existing_instance {
-        eprintln!("⏳ ");
         eprintln!(
             "{} {}",
             emoji::HOURGLASS_DRAINING,
@@ -355,18 +354,21 @@ pub async fn handle_command(
 
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
+    let server_id = ServerId::from_str(&host.id)
+        .with_context(|| format!("failed to parse host ID [{}]", host.id))?;
     loop {
         select! {
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
                 run_dev_loop(
                     &project_cfg,
-                    ModuleId::from_str(&component_id)?,
+                    &component_id,
                     &component_ref,
-                    ServerId::from_str(&host.id)?,
+                    &server_id,
                     &ctl_client,
                     sign_cfg.clone(),
-                ).await?;
+                ).await
+                    .context("dev loop refresh failed")?;
                 pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
             },
