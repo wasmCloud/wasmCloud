@@ -5,7 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.32.0 (2024-08-29)
+
+### Chore
+
+ - <csr-id-e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b/> help styling to streamline cli markdown
+
+### New Features
+
+ - <csr-id-66ac0d86d36509fda0db37fffbf8ce32d81c92c5/> give a nicer error to wash app for no responders
+
+### Bug Fixes
+
+ - <csr-id-fa945c6bcc094afda0babfc2255b38a25a129e1b/> wash dev on non-xkeys component IDs
+   This commit fixes an issue wher `wash dev` assumed that component IDs
+   had to be `ModuleId`s (i.e. nkeys).
+   
+   While in the past component IDs *were* nkeys, they are no longer
+   required to be, and can be user-friendly names.
+ - <csr-id-5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5/> remove misleading creds error message
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 2 calendar days.
+ - 5 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash dev on non-xkeys component IDs ([`fa945c6`](https://github.com/wasmCloud/wasmCloud/commit/fa945c6bcc094afda0babfc2255b38a25a129e1b))
+    - Give a nicer error to wash app for no responders ([`66ac0d8`](https://github.com/wasmCloud/wasmCloud/commit/66ac0d86d36509fda0db37fffbf8ce32d81c92c5))
+    - Remove misleading creds error message ([`5efa281`](https://github.com/wasmCloud/wasmCloud/commit/5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5))
+    - Help styling to streamline cli markdown ([`e0d4c09`](https://github.com/wasmCloud/wasmCloud/commit/e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b))
+</details>
+
 ## v0.31.0 (2024-08-23)
+
+<csr-id-82927d995dabea1fdd08b14f10dd2b584b7f393b/>
+<csr-id-4264e444de95e7af88c04dfa48a2ecd072b93fb3/>
+<csr-id-4c41168230f8b78f142f40adf24aaf41c8ae90ca/>
+<csr-id-325a1b038cfb239384f2d433acaf2bb8e43fce58/>
+<csr-id-13fd60edd0c25f38577524d0a950f039a4beb73a/>
 
 ### Chore
 
@@ -15,7 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-325a1b038cfb239384f2d433acaf2bb8e43fce58/> consistent casing for FROM/AS in Dockerfiles
  - <csr-id-13fd60edd0c25f38577524d0a950f039a4beb73a/> more explicit error for failing to build provider
 
+### Other
+
+ - <csr-id-8403350432a2387d4a2bce9c096f002005ba54be/> bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates
+   SAFETY BUMP: wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wash-cli v0.31.0, wasmcloud-secrets-client v0.4.0
+
 ### New Features
+
+<csr-id-cab9a620c34ae8fc3b9173c46921ad1273d03789/>
 
  - <csr-id-fe2963134f2770b63e613edf289f27ff2a9cb495/> restore changes lost in rebase
  - <csr-id-6f99ed677647a305f7d5ebefc157a377ba60d408/> move clap_markdown logic to avoid double parse
@@ -26,7 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-756168465a34f484adaf37ecdb5f677ce82843bd/> Added secrets-topic and policy-topic flags to wash up
  - <csr-id-4b08262301d6845a71343b4bf0e2928eb956f7d6/> disallow wash drain when host or wadm is running
    - prevents wash drain all and wash drain downloads when wasmcloud.pid or wadm.pid are present on disk
- - <csr-id-cab9a620c34ae8fc3b9173c46921ad1273d03789/> limit terminal to width
 
 ### New Features (BREAKING)
 
@@ -37,9 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 16 commits contributed to the release over the course of 17 calendar days.
+ - 17 commits contributed to the release over the course of 17 calendar days.
  - 21 days passed between releases.
- - 16 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -49,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates ([`8403350`](https://github.com/wasmCloud/wasmCloud/commit/8403350432a2387d4a2bce9c096f002005ba54be))
     - Restore changes lost in rebase ([`fe29631`](https://github.com/wasmCloud/wasmCloud/commit/fe2963134f2770b63e613edf289f27ff2a9cb495))
     - Move clap_markdown logic to avoid double parse ([`6f99ed6`](https://github.com/wasmCloud/wasmCloud/commit/6f99ed677647a305f7d5ebefc157a377ba60d408))
     - Exit after help-markdown, conflict with help ([`556a6cf`](https://github.com/wasmCloud/wasmCloud/commit/556a6cfb70a6be173a9baf7cb82f2765b12e0395))
@@ -67,7 +122,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - More explicit error for failing to build provider ([`13fd60e`](https://github.com/wasmCloud/wasmCloud/commit/13fd60edd0c25f38577524d0a950f039a4beb73a))
 </details>
 
+<csr-unknown>
+ limit terminal to width<csr-unknown/>
+
 ## v0.30.0 (2024-08-02)
+
+<csr-id-e39430bbdba29d70ee0afbb0f62270189d8e74c7/>
+<csr-id-1ec12a7fa8af603a850bb1dbaca03c32d5f36ddd/>
+<csr-id-8199616e5e77d32137a319b54c2e7ee83e3c04b7/>
+<csr-id-7e26ac135ff6e6f9678f21e44e9631734311c264/>
+<csr-id-82cbef77367f1728773268c1ee52b98ac7f31dcf/>
+<csr-id-11cd438cc029c79495a4e50c9dbb3acb73be3df6/>
+<csr-id-94bfb0e23d4f1f58b70500eaa635717a6ba83484/>
+<csr-id-d3c0ca7643beab0fa002c6a4dedf724303bffcaa/>
+<csr-id-24e459251eaff69820180c8aaf7663ecc4e76b35/>
+<csr-id-a886882ae688dc4955c0d74188388f178f3b13dd/>
+<csr-id-af742d076970001af13eaa241927db2ab8f0a9bb/>
+<csr-id-6724e2c3d1e5f1de91827a6e542415cef09a278c/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-702514d8db4366c29df8e6e20018af3b22c0446a/>
+<csr-id-aa460011c243f363158f80952b386bb33992d3ea/>
+<csr-id-c666ef50fecc1ee248bf78d486a915ee077e3b4a/>
+<csr-id-2ea22a28ca9fd1838fc03451f33d75690fc28f2a/>
+<csr-id-b56982f437209ecaff4fa6946f8fe4c3068a62cd/>
+<csr-id-03f0ce7d5269c6230ae49812c7d3e71ab30310f9/>
+<csr-id-daed5047dd8b76f248d2d63c18d3f7ff3773f8f6/>
+<csr-id-176150022cc86e98f871a6fcd05df725bd9e3419/>
+<csr-id-1346aa09cabc0418fba1e929c3f6eac6508ee533/>
+<csr-id-1582729d2da6763217ab3106e56f2f2353ae4398/>
 
 ### Chore
 
@@ -88,6 +170,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features
 
+<csr-id-8e4b40218360e4b033f367c413eb6b53c786aca7/>
+<csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/>
+<csr-id-4eba7f8b738ee83c53040cb22494f5b249cd79af/>
+
  - <csr-id-832dced17224fc6a8e8cde6cb30cf42ee2c3c2e0/> include simple invocation in wash call tests
  - <csr-id-1870276d4e99987dd7ba6804c1df078fa44e289e/> support new secret reference structure
  - <csr-id-abd804417409bf79e41d4d310af1947efa31eca7/> add secrets subcommand for managing secrets references
@@ -101,14 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-77e0db9281aa94fbb253f869356942671c90f7fc/> add test for building rust provider in debug mode
  - <csr-id-a570a3565e129fc13b437327eb1ba18835c69f57/> add Host level configurability for max_execution_time by flag and env variables
    - Introduce humantime::Duration for capturing human readable input time.
-   - Add the `--max-execution-time` flag (alias: --max-time) to wasmcloud binary and wash up command, allowing for configuration of the max execution time for the Host runtime.
-   - Set Default to 10min and Time format to Milliseconds.
- - <csr-id-8e4b40218360e4b033f367c413eb6b53c786aca7/> Improved the output of wash get inventory command, as outlined in issue #2398. Signed-off-by: ossfellow <masoudbahar@gmail.com>
- - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
- - <csr-id-4eba7f8b738ee83c53040cb22494f5b249cd79af/> Adds flag to wash up to allow reading custom NATS config
-   - Updated NATS server startup command to handle a configuration file (any file ending with .conf).
-   - Modified NATS startup function to dynamically build the command.
-   - Added requirements for the `nats-config-file` flag to specify the nats host and nats port.
+- Add the `--max-execution-time` flag (alias: --max-time) to wasmcloud binary and wash up command, allowing for configuration of the max execution time for the Host runtime.
+- Set Default to 10min and Time format to Milliseconds.
+- Updated NATS server startup command to handle a configuration file (any file ending with .conf).
+- Modified NATS startup function to dynamically build the command.
+- Added requirements for the `nats-config-file` flag to specify the nats host and nats port.
    Signed-off-by: Aditya Salunkhe <aditya.salunkh919@gmail.com>
 
 ### Bug Fixes
@@ -259,7 +342,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Replace actor by component ([`a886882`](https://github.com/wasmCloud/wasmCloud/commit/a886882ae688dc4955c0d74188388f178f3b13dd))
 </details>
 
+<csr-unknown>
+ Improved the output of wash get inventory command, as outlined in issue #2398. Signed-off-by: ossfellow masoudbahar@gmail.commasoudbahar@gmail.com upgrade wrpc, async-nats, wasmtime Adds flag to wash up to allow reading custom NATS config<csr-unknown/>
+
 ## v0.29.2 (2024-06-17)
+
+<csr-id-4100f5841caa80e23db787380e3e64748016e928/>
+<csr-id-8e73b54804e290f24499397f0dd7fc54dbd83a01/>
+<csr-id-353e0ca7761757fbd8f6e7b992d6aaa1d1fa15bd/>
 
 ### Chore
 
@@ -290,6 +380,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.29.1 (2024-06-13)
+
+<csr-id-105fdb63b67485bf3de2b49ebc20a1d406a769e7/>
+<csr-id-ac0f3399de80770fd97c1cd2f622697228ddf2b3/>
+<csr-id-3cd6d232ed4359d69973dc6ee5a766115d0823d4/>
+<csr-id-6cc63eb91260bc44c79a7e7c4a208f679ac90792/>
 
 ### Chore
 
@@ -373,6 +468,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-358a616f4b0e542228ba143aa8c238adf35ad483/>
 <csr-id-6018d3730b3d78e21b064b7c71d5478ed86399b6/>
 <csr-id-4b38dddf2295316677cbe75695eb4bffadfe1d18/>
+<csr-id-ffbd0310c5e35f9e10b29674b1d0f63473687be7/>
 
  - <csr-id-fd79e99ef8d8ef14f3e7efae0b3904dade4d7fc3/> display max instances count in washboard output
    feat(wash-cli): display max instances count in wash get inventory output
@@ -390,9 +486,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    For now, it checks:
    - interface names (ex. typos, misnamed host-supported interfaces)
- - <csr-id-ffbd0310c5e35f9e10b29674b1d0f63473687be7/> enable undeploying models by file name
-   This commit adds the ability to `wash undeploy` a model via file
-   rather than only model name.
 
 ### Bug Fixes
 
@@ -468,7 +561,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-dangling providers/components which aren’t linked to anything<csr-unknown/>
+ enable undeploying models by file nameThis commit adds the ability to wash undeploy a model via filerather than only model name.<csr-unknown/>
 
 ## v0.28.1 (2024-05-10)
 
@@ -1493,8 +1586,9 @@ dangling providers/components which aren’t linked to anything<csr-unknown/>
 
 <csr-read-only-do-not-edit/>
 
- - 26 commits contributed to the release over the course of 4 calendar days.
- - 25 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 20 commits contributed to the release over the course of 4 calendar days.
+ - 4 days passed between releases.
+ - 19 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -1524,6 +1618,42 @@ dangling providers/components which aren’t linked to anything<csr-unknown/>
     - Bump eslint-plugin-unicorn ([`82e8bc2`](https://github.com/wasmCloud/wasmCloud/commit/82e8bc2e8c2cd6ddcd88232c503241c024dc1ec1))
     - Bump eslint-plugin-react-refresh ([`c5845c0`](https://github.com/wasmCloud/wasmCloud/commit/c5845c0aed2d12174986f6cfa875f89704cb04d7))
     - Merge pull request #807 from rvolosatovs/merge/wash ([`f2bc010`](https://github.com/wasmCloud/wasmCloud/commit/f2bc010110d96fc21bc3502798543b7d5b68b1b5))
+</details>
+
+## v0.0.0-rc1 (2023-10-30)
+
+### Chore
+
+ - <csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/> integrate `wash` into the workspace
+
+### Other
+
+ - <csr-id-6343ebfdf155cbfb3b70b1f2cbdcf38651946010/> move nextest config to root
+ - <csr-id-413e395b60d3ee0c187ec398a2cb6429fd27d009/> revert to upstream `wash` dev doc
+ - <csr-id-3d47e91e7a836ff04fd7bc809a036fadc42c01a7/> move completion doc to `wash-cli` crate
+ - <csr-id-abc075095e5df96e0b3c155bf1afb8dbeea4a6e5/> build for Windows msvc
+   Unfortunately, `wash` cannot be built for mingw due to
+   https://github.com/rust-lang/rust/issues/92212
+
+### Refactor
+
+ - <csr-id-d1ee13ed7c1668b55f4644b1c1673f521ba9d9f8/> reorder target-specific dep
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release.
+ - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
     - Move nextest config to root ([`6343ebf`](https://github.com/wasmCloud/wasmCloud/commit/6343ebfdf155cbfb3b70b1f2cbdcf38651946010))
     - Revert to upstream `wash` dev doc ([`413e395`](https://github.com/wasmCloud/wasmCloud/commit/413e395b60d3ee0c187ec398a2cb6429fd27d009))
     - Move completion doc to `wash-cli` crate ([`3d47e91`](https://github.com/wasmCloud/wasmCloud/commit/3d47e91e7a836ff04fd7bc809a036fadc42c01a7))
