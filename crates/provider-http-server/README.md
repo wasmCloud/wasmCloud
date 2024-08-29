@@ -12,7 +12,7 @@ wash build -p src/bin/http-server-provider
 
 ## Provider Configuration
 
-The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys should be lowercased, as well as their values when applicable. See the [provider config](https://wasmcloud.com/docs/developer/providers/configure) documentation for information about defining and using this configuration.
+The wasmCloud HTTP server has optional configuration that you can provide to it at startup. All configuration keys are case insensitive, as in two configuration values "ROUTING_MODE" and "routing_mode" will conflict, so ensure they are unique. See the [provider config](https://wasmcloud.com/docs/developer/providers/configure) documentation for information about defining and using this configuration.
 
 | Key              | Value                  | Default        | Description                                                                                                                                                                                                            |
 | ---------------- | ---------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

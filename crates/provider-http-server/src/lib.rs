@@ -58,9 +58,6 @@ use wasmcloud_provider_sdk::{
 };
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
-mod hashmap_ci;
-pub(crate) use hashmap_ci::make_case_insensitive;
-
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
 
