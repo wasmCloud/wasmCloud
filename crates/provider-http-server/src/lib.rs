@@ -37,7 +37,7 @@ use core::str::FromStr as _;
 use core::task::{ready, Context, Poll};
 use core::time::Duration;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context as _};
@@ -47,6 +47,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use bytes::Bytes;
 use futures::Stream;
 use pin_project_lite::pin_project;
+use settings::default_listen_address;
 use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
@@ -63,15 +64,20 @@ pub(crate) use hashmap_ci::make_case_insensitive;
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub enum RoutingMode {
-    #[default]
-    Address,
+    Address(SocketAddr),
     /// Path-based routing mode enables listening on a single
     /// address and routing requests to different components
     /// based on the path of the request.
-    Path(String),
+    Path(SocketAddr),
     // Dns
+}
+
+impl Default for RoutingMode {
+    fn default() -> Self {
+        RoutingMode::Address(default_listen_address())
+    }
 }
 
 /// `wrpc:http/incoming-handler` provider implementation.
@@ -87,26 +93,28 @@ pub struct HttpServerProvider {
 impl HttpServerProvider {
     /// Create a new instance of the HTTP server provider
     pub fn new(host_data: &HostData) -> anyhow::Result<Self> {
+        let default_address = host_data
+            .config
+            .get("default_address")
+            .map(|s| SocketAddr::from_str(s))
+            .transpose()
+            .context("failed to parse default_address")?
+            .unwrap_or_else(default_listen_address);
+
         let routing_mode = match host_data
             .config
             .get("routing_mode")
             .map(|s| s.to_lowercase())
         {
-            Some(v) if v == "address" => RoutingMode::Address,
+            Some(v) if v == "address" => RoutingMode::Address(default_address),
             // Path based routing must listen on a single address
-            Some(v) if v == "path" => {
-                if let Some(listen_address) = host_data.config.get("listen_address") {
-                    RoutingMode::Path(listen_address.clone())
-                } else {
-                    bail!("routing_mode is 'path' but no `listen_address` is specified")
-                }
-            }
+            Some(v) if v == "path" => RoutingMode::Path(default_address),
             // If specified, routing_mode must be a valid `RoutingMode`
             Some(v) => {
                 bail!("invalid routing_mode: {v}");
             }
             // Default to address-based routing
-            None => RoutingMode::Address,
+            None => RoutingMode::Address(default_address),
         };
         Ok(Self {
             routing_mode,
@@ -141,7 +149,11 @@ impl Provider for HttpServerProvider {
         &self,
         link_config: LinkConfig<'_>,
     ) -> anyhow::Result<()> {
-        let settings = match load_settings(link_config.config)
+        let default_address = match self.routing_mode {
+            RoutingMode::Address(addr) => addr,
+            RoutingMode::Path(addr) => addr,
+        };
+        let settings = match load_settings(default_address, link_config.config)
             .context("httpserver failed to load settings for component")
         {
             Ok(settings) => settings,
@@ -400,9 +412,7 @@ async fn handle_request(
 impl HttpServerCore {
     #[instrument]
     pub async fn new(settings: Arc<ServiceSettings>, target: &str) -> anyhow::Result<Self> {
-        let addr = settings
-            .address
-            .unwrap_or_else(|| (Ipv4Addr::UNSPECIFIED, 8000).into());
+        let addr = settings.address;
         info!(
             %addr,
             %target,
@@ -564,5 +574,113 @@ impl Drop for HttpServerCore {
     fn drop(&mut self) {
         self.handle.shutdown();
         self.task.abort();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use anyhow::Result;
+    use futures::StreamExt;
+    use testcontainers::{
+        core::{ContainerPort, WaitFor},
+        runners::AsyncRunner,
+        GenericImage,
+    };
+    use wasmcloud_provider_sdk::{
+        provider::initialize_host_data, run_provider, HostData, InterfaceLinkDefinition,
+    };
+
+    use crate::HttpServerProvider;
+
+    // This test is ignored by default as it requires a container runtime to be installed
+    // to run the testcontainer. In CI, this is only works on `linux`
+    #[ignore]
+    #[tokio::test]
+    async fn can_listen_and_invoke_with_timeout() -> Result<()> {
+        let nats_container = GenericImage::new("nats", "2.10.18-alpine")
+            .with_exposed_port(ContainerPort::Tcp(4222))
+            .with_wait_for(WaitFor::message_on_stderr(
+                "Listening for client connections on 0.0.0.0:4222",
+            ))
+            .start()
+            .await
+            .expect("failed to start squid-proxy container");
+        let nats_port = nats_container
+            .get_host_port_ipv4(4222)
+            .await
+            .expect("should be able to find the NATS port");
+        let nats_address = format!("nats://127.0.0.1:{nats_port}");
+
+        let default_address = "0.0.0.0:8080";
+        let host_data = HostData {
+            lattice_rpc_url: nats_address.clone(),
+            lattice_rpc_prefix: "lattice".to_string(),
+            provider_key: "http-server-provider-test".to_string(),
+            config: std::collections::HashMap::from([
+                ("default_address".to_string(), default_address.to_string()),
+                ("routing_mode".to_string(), "address".to_string()),
+            ]),
+            link_definitions: vec![InterfaceLinkDefinition {
+                source_id: "http-server-provider-test".to_string(),
+                target: "test-component".to_string(),
+                name: "default".to_string(),
+                wit_namespace: "wasi".to_string(),
+                wit_package: "http".to_string(),
+                interfaces: vec!["incoming-handler".to_string()],
+                source_config: std::collections::HashMap::from([(
+                    "timeout_ms".to_string(),
+                    "100".to_string(),
+                )]),
+                target_config: HashMap::new(),
+                source_secrets: None,
+                target_secrets: None,
+            }],
+            ..Default::default()
+        };
+        initialize_host_data(host_data.clone()).expect("should be able to initialize host data");
+
+        let provider = run_provider(
+            HttpServerProvider::new(&host_data).expect("should be able to create provider"),
+            "http-server-provider-test",
+        )
+        .await
+        .expect("should be able to run provider");
+
+        // Use a separate task to listen for the component message
+        let component_handle = tokio::spawn(async move {
+            let conn = async_nats::connect(nats_address)
+                .await
+                .expect("should be able to connect");
+            let mut subscriber = conn
+                .subscribe("lattice.test-component.wrpc.>")
+                .await
+                .expect("should be able to subscribe");
+
+            let msg = subscriber
+                .next()
+                .await
+                .expect("should be able to get a message");
+
+            assert!(msg.subject.contains("test-component"));
+        });
+        let provider_handle = tokio::spawn(async move { provider.await });
+
+        // Let the provider have a second to setup the listener
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let resp = reqwest::get(format!("http://127.0.0.1:8080",))
+            .await
+            .expect("should be able to make request");
+
+        // Should have timed out
+        assert_eq!(resp.status(), 408);
+        component_handle
+            .await
+            .expect("should be able to wait for component");
+        provider_handle.abort();
+        let _ = nats_container.stop().await;
+
+        Ok(())
     }
 }

@@ -32,7 +32,6 @@ use tracing::{instrument, trace};
 
 use crate::HttpServerError;
 
-const DEFAULT_ADDR: &str = "127.0.0.1:8000";
 const CORS_ALLOWED_ORIGINS: &[&str] = &[];
 const CORS_ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"];
 const CORS_ALLOWED_HEADERS: &[&str] = &[
@@ -44,11 +43,15 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
 
+pub(crate) fn default_listen_address() -> SocketAddr {
+    (Ipv4Addr::UNSPECIFIED, 8000).into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceSettings {
     /// Bind address
-    #[serde(default)]
-    pub address: Option<SocketAddr>,
+    #[serde(default = "default_listen_address")]
+    pub address: SocketAddr,
     /// cache control options
     #[serde(default)]
     pub cache_control: Option<String>,
@@ -85,10 +88,7 @@ impl Default for ServiceSettings {
     fn default() -> ServiceSettings {
         #[allow(deprecated)]
         ServiceSettings {
-            address: Some(
-                SocketAddr::from_str(DEFAULT_ADDR)
-                    .expect("failed to parse default address, please file a bug report"),
-            ),
+            address: default_listen_address(),
             cors_allowed_origins: Some(AllowedOrigins::default()),
             cors_allowed_headers: Some(AllowedHeaders::default()),
             cors_allowed_methods: Some(AllowedMethods::default()),
@@ -135,10 +135,7 @@ impl ServiceSettings {
     /// All errors found are combined into a single error message
     fn validate(&self) -> Result<(), HttpServerError> {
         let mut errors = Vec::new();
-        // 1. make sure address is valid
-        if self.address.is_none() {
-            errors.push("missing bind address".to_string());
-        }
+        // 1. make sure tls config is valid
         match (&self.tls_cert_file, &self.tls_priv_key_file) {
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
@@ -196,7 +193,10 @@ impl ServiceSettings {
 ///   (later names override earlier names in the list)
 ///
 #[instrument]
-pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, HttpServerError> {
+pub fn load_settings(
+    default_address: SocketAddr,
+    values: &HashMap<String, String>,
+) -> Result<ServiceSettings, HttpServerError> {
     trace!("load settings");
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
@@ -218,23 +218,23 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     let mut settings = ServiceSettings::default();
 
-    // accept address as value parameter
-    if let Some(addr) = values.get("address") {
-        settings.address =
-            Some(SocketAddr::from_str(addr).map_err(|_| {
-                HttpServerError::InvalidParameter(format!("invalid address: {addr}"))
-            })?);
-    }
     // accept port, for compatibility with previous implementations
     if let Some(addr) = values.get("port") {
         let port = addr
             .parse::<u16>()
             .map_err(|_| HttpServerError::InvalidParameter(format!("Invalid port: {addr}")))?;
-        settings.address = Some(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            port,
-        ));
+        settings.address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     }
+    // accept address as value parameter
+    settings.address = values
+        .get("address")
+        .map(|addr| {
+            SocketAddr::from_str(addr)
+                .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {addr}")))
+        })
+        .transpose()?
+        .unwrap_or(default_address);
+
     // accept cache-control header values
     if let Some(cache_control) = values.get("cache_control") {
         settings.cache_control = Some(cache_control.to_string());
@@ -543,7 +543,7 @@ mod test {
     #[test]
     fn settings_init() {
         let s = ServiceSettings::default();
-        assert!(s.address.is_some());
+        assert!(s.address.is_ipv4());
         assert!(s.cors_allowed_methods.is_some());
         assert!(s.cors_allowed_origins.is_some());
         assert!(s.cors_allowed_origins.unwrap().0.is_empty());
