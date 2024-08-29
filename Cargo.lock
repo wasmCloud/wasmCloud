@@ -6823,7 +6823,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -6896,7 +6896,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "async-compression",
