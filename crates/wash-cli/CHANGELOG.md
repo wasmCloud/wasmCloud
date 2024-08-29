@@ -5,7 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.31.1 (2024-08-29)
+
+### Chore
+
+ - <csr-id-e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b/> help styling to streamline cli markdown
+
+### New Features
+
+ - <csr-id-66ac0d86d36509fda0db37fffbf8ce32d81c92c5/> give a nicer error to wash app for no responders
+
+### Bug Fixes
+
+ - <csr-id-fa945c6bcc094afda0babfc2255b38a25a129e1b/> wash dev on non-xkeys component IDs
+   This commit fixes an issue wher `wash dev` assumed that component IDs
+   had to be `ModuleId`s (i.e. nkeys).
+
+   While in the past component IDs *were* nkeys, they are no longer
+   required to be, and can be user-friendly names.
+ - <csr-id-5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5/> remove misleading creds error message
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 2 calendar days.
+ - 5 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Wash dev on non-xkeys component IDs ([`fa945c6`](https://github.com/wasmCloud/wasmCloud/commit/fa945c6bcc094afda0babfc2255b38a25a129e1b))
+    - Give a nicer error to wash app for no responders ([`66ac0d8`](https://github.com/wasmCloud/wasmCloud/commit/66ac0d86d36509fda0db37fffbf8ce32d81c92c5))
+    - Remove misleading creds error message ([`5efa281`](https://github.com/wasmCloud/wasmCloud/commit/5efa281da43f2b6f4ae29d5ec8c90822b0bc27f5))
+    - Help styling to streamline cli markdown ([`e0d4c09`](https://github.com/wasmCloud/wasmCloud/commit/e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b))
+</details>
+
 ## v0.31.0 (2024-08-23)
+
+<csr-id-82927d995dabea1fdd08b14f10dd2b584b7f393b/>
+<csr-id-4264e444de95e7af88c04dfa48a2ecd072b93fb3/>
+<csr-id-4c41168230f8b78f142f40adf24aaf41c8ae90ca/>
+<csr-id-325a1b038cfb239384f2d433acaf2bb8e43fce58/>
+<csr-id-13fd60edd0c25f38577524d0a950f039a4beb73a/>
 
 ### Chore
 
