@@ -7,7 +7,6 @@ use std::time::Duration;
 use anyhow::{bail, ensure, Context, Result};
 use bytes::{Bytes, BytesMut};
 use clap::Args;
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -17,7 +16,6 @@ use wash_lib::cli::{validate_component_id, CommandOutput};
 use wash_lib::config::DEFAULT_LATTICE;
 use wasmcloud_core::parse_wit_meta_from_operation;
 use wit_bindgen_wrpc::wrpc_transport::InvokeExt as _;
-use wrpc_interface_http::InvokeIncomingHandler as _;
 
 use crate::util::{default_timeout_ms, extract_arg_value, msgpack_to_json_val};
 
@@ -379,6 +377,9 @@ async fn wrpc_invoke_http_handler(
     request: http::request::Request<String>,
     extract_json: bool,
 ) -> Result<CommandOutput> {
+    use futures::StreamExt;
+    use wrpc_interface_http::InvokeIncomingHandler as _;
+
     let result = tokio::time::timeout(
        std::time::Duration::from_millis(timeout_ms),
         client
