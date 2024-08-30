@@ -13,22 +13,13 @@
 //!   work as-is for development purposes, and may need refinement
 //!   for production if a more secure configuration is required.
 //! - All settings can be specified at runtime, using per-component link settings:
-//!   - bind interface/port
+//!   - bind path/address
 //!   - TLS
 //!   - Cors
 //! - Flexible confiuration loading: from host, or from local toml or json file.
 //! - Fully asynchronous, using tokio lightweight "green" threads
 //! - Thread pool (for managing a pool of OS threads). The default
 //!   thread pool has one thread per cpu core.
-//! - Packaged as a rust library crate for implementation flexibility
-//!
-//! ## More tech info:
-//!
-//! Each component that links to this provider gets
-//! its own bind address (interface ip and port) and a lightweight
-//! tokio thread (lighter weight than an OS thread, more like "green threads").
-//! Tokio can manage a thread pool (of OS threads) to be shared
-//! by the all of the server green threads.
 //!
 
 use core::future::Future;
@@ -40,63 +31,24 @@ use core::time::Duration;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, bail, Context as _};
 use axum::extract;
-use axum::handler::Handler;
-use axum_server::tls_rustls::RustlsConfig;
 use bytes::Bytes;
 use futures::Stream;
 use pin_project_lite::pin_project;
-use settings::default_listen_address;
 use tokio::task::JoinHandle;
 use tokio::{spawn, time};
 use tower_http::cors::{self, CorsLayer};
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, trace};
 use wasmcloud_provider_sdk::{
-    get_connection, initialize_observability, load_host_data, run_provider, HostData, LinkConfig,
-    LinkDeleteInfo, Provider,
+    get_connection, initialize_observability, load_host_data, run_provider,
 };
 use wrpc_interface_http::InvokeIncomingHandler as _;
 
-mod path_router;
+mod address;
+mod path;
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
-
-/// `wrpc:http/incoming-handler` provider implementation.
-#[derive(Clone)]
-pub struct HttpServerProvider {
-    default_address: SocketAddr,
-    // Map from (component_id, link_name) to HttpServerCore
-    /// Stores http_server handlers for each linked component
-    component_handlers: Arc<dashmap::DashMap<(String, String), HttpServerCore>>,
-}
-
-impl Default for HttpServerProvider {
-    fn default() -> Self {
-        Self {
-            default_address: default_listen_address(),
-            component_handlers: Default::default(),
-        }
-    }
-}
-
-impl HttpServerProvider {
-    /// Create a new instance of the HTTP server provider
-    pub fn new(host_data: &HostData) -> anyhow::Result<Self> {
-        let default_address = host_data
-            .config
-            .get("default_address")
-            .map(|s| SocketAddr::from_str(s))
-            .transpose()
-            .context("failed to parse default_address")?
-            .unwrap_or_else(default_listen_address);
-
-        Ok(Self {
-            default_address,
-            component_handlers: Default::default(),
-        })
-    }
-}
 
 pub async fn run() -> anyhow::Result<()> {
     initialize_observability!(
@@ -105,121 +57,31 @@ pub async fn run() -> anyhow::Result<()> {
     );
 
     let host_data = load_host_data().context("failed to load host data")?;
-
     match host_data.config.get("routing_mode").map(|s| s.as_str()) {
+        // Run provider in address mode by default
         Some("address") | None => run_provider(
-            HttpServerProvider::new(host_data).context(
+            address::HttpServerProvider::new(host_data).context(
                 "failed to create address-mode HTTP server provider from hostdata configuration",
             )?,
             "http-server-provider",
         )
         .await?
         .await,
-
+        // Run provider in path mode
         Some("path") => {
-            // TODO: handle better by making settings the base for the other HTTP server too
-            // as you can see in the test I have to supply things globally for path, but link for address
-            let default_address = host_data
-                .config
-                .get("default_address")
-                .map(|s| SocketAddr::from_str(s))
-                .transpose()
-                .context("failed to parse default_address")?
-                .unwrap_or_else(default_listen_address);
-            let settings = load_settings(default_address, &host_data.config)
-                .context("httpserver failed to load settings for component")?;
             run_provider(
-                path_router::HttpServerProvider::new(Arc::new(settings))
-                    .await
-                    .context(
+                path::HttpServerProvider::new(host_data).await.context(
                     "failed to create path-mode HTTP server provider from hostdata configuration",
                 )?,
                 "http-server-provider",
-            ).await?.await;
+            )
+            .await?
+            .await;
         }
-        Some(other) => return Err(anyhow!("unknown routing_mode: {}", other)),
+        Some(other) => bail!("unknown routing_mode: {other}"),
     };
 
     Ok(())
-}
-
-impl Provider for HttpServerProvider {
-    /// This is called when the HTTP server provider is linked to a component
-    ///
-    /// This HTTP server mode will listen on a new address for each component that it links to.
-    async fn receive_link_config_as_source(
-        &self,
-        link_config: LinkConfig<'_>,
-    ) -> anyhow::Result<()> {
-        let settings = match load_settings(self.default_address, link_config.config)
-            .context("httpserver failed to load settings for component")
-        {
-            Ok(settings) => settings,
-            Err(e) => {
-                error!(
-                    config = ?link_config.config,
-                    "httpserver failed to load settings for component: {}", e.to_string()
-                );
-                return Err(e);
-            }
-        };
-
-        // Start a server instance that calls the given component
-        let http_server = HttpServerCore::new(Arc::new(settings), link_config.target_id)
-            .await
-            .context("httpserver failed to start listener for component")?;
-
-        // Save the component and server instance locally
-        self.component_handlers.insert(
-            (
-                link_config.target_id.to_string(),
-                link_config.link_name.to_string(),
-            ),
-            http_server,
-        );
-        Ok(())
-    }
-
-    /// Handle notification that a link is dropped - stop the http listener
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
-    async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
-        let component_id = info.get_target_id();
-        let link_name = info.get_link_name();
-        if let Some((_, server)) = self
-            .component_handlers
-            .remove(&(component_id.to_string(), link_name.to_string()))
-        {
-            info!(
-                component_id,
-                link_name, "httpserver stopping listener for component"
-            );
-            server.handle.shutdown();
-        }
-        Ok(())
-    }
-
-    /// Handle shutdown request by shutting down all the http server threads
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        // empty the component link data and stop all servers
-        self.component_handlers.clear();
-        Ok(())
-    }
-}
-
-/// An asynchronous `wrpc:http/incoming-handler` with support for CORS and TLS
-#[derive(Debug)]
-pub struct HttpServerCore {
-    /// The handle to the server handling incoming requests
-    handle: axum_server::Handle,
-    /// The asynchronous task running the server
-    task: tokio::task::JoinHandle<()>,
-}
-
-#[derive(Clone, Debug)]
-struct RequestContext {
-    target: String,
-    settings: Arc<ServiceSettings>,
-    scheme: http::uri::Scheme,
 }
 
 pin_project! {
@@ -285,17 +147,13 @@ impl http_body::Body for ResponseBody {
     }
 }
 
-#[instrument(level = "debug", skip(settings))]
-async fn handle_request(
-    extract::State(RequestContext {
-        target,
-        settings,
-        scheme,
-    }): extract::State<RequestContext>,
-    extract::Host(authority): extract::Host,
+/// Build a request from the incoming request
+pub(crate) fn build_request(
     request: extract::Request,
-) -> impl axum::response::IntoResponse {
-    let timeout = settings.timeout_ms.map(Duration::from_millis);
+    scheme: http::uri::Scheme,
+    authority: String,
+    settings: Arc<ServiceSettings>,
+) -> Result<http::Request<axum::body::Body>, (http::StatusCode, String)> {
     let method = request.method();
     if let Some(readonly_mode) = settings.readonly_mode {
         if readonly_mode
@@ -305,7 +163,7 @@ async fn handle_request(
             debug!("only GET and HEAD allowed in read-only mode");
             Err((
                 http::StatusCode::METHOD_NOT_ALLOWED,
-                "only GET and HEAD allowed in read-only mode",
+                "only GET and HEAD allowed in read-only mode".to_string(),
             ))?;
         }
     }
@@ -333,7 +191,7 @@ async fn handle_request(
     let mut req = http::Request::builder();
     *req.headers_mut().ok_or((
         http::StatusCode::INTERNAL_SERVER_ERROR,
-        "invalid request generated",
+        "invalid request generated".to_string(),
     ))? = headers;
     let req = req
         .uri(uri)
@@ -341,6 +199,15 @@ async fn handle_request(
         .body(body)
         .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
 
+    Ok(req)
+}
+
+pub(crate) async fn invoke_component(
+    target: impl AsRef<str>,
+    req: http::Request<axum::body::Body>,
+    timeout: Option<Duration>,
+    settings: Arc<ServiceSettings>,
+) -> impl axum::response::IntoResponse {
     // Create a new wRPC client with all headers from the current span injected
     let mut cx = async_nats::HeaderMap::new();
     for (k, v) in
@@ -351,8 +218,12 @@ async fn handle_request(
         cx.insert(k.as_str(), v.as_str())
     }
 
-    let wrpc = get_connection().get_wrpc_client_custom(target.as_str(), None);
-    trace!(?req, "httpserver calling component");
+    let wrpc = get_connection().get_wrpc_client_custom(target.as_ref(), None);
+    trace!(
+        ?req,
+        component_id = target.as_ref(),
+        "httpserver calling component"
+    );
     let fut = wrpc.invoke_handle_http(Some(cx), req);
     let res = if let Some(timeout) = timeout {
         let Ok(res) = time::timeout(timeout, fut).await else {
@@ -379,81 +250,6 @@ async fn handle_request(
         errors,
         io,
     }))
-}
-
-impl HttpServerCore {
-    #[instrument]
-    pub async fn new(settings: Arc<ServiceSettings>, target: &str) -> anyhow::Result<Self> {
-        let addr = settings.address;
-        info!(
-            %addr,
-            component_id = target,
-            "httpserver starting listener for target",
-        );
-        let cors = get_cors_layer(settings.clone())?;
-        let service = handle_request.layer(cors);
-        let handle = axum_server::Handle::new();
-        let listener = get_tcp_listener(settings.clone())?;
-
-        let target = target.to_owned();
-        let task_handle = handle.clone();
-        let task = if let (Some(crt), Some(key)) =
-            (&settings.tls_cert_file, &settings.tls_priv_key_file)
-        {
-            debug!(?addr, "bind HTTPS listener");
-            let tls = RustlsConfig::from_pem_file(crt, key)
-                .await
-                .context("failed to construct TLS config")?;
-
-            tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp_rustls(listener, tls)
-                    .handle(task_handle)
-                    .serve(
-                        service
-                            .with_state(RequestContext {
-                                target: target.clone(),
-                                settings,
-                                scheme: http::uri::Scheme::HTTPS,
-                            })
-                            .into_make_service(),
-                    )
-                    .await
-                {
-                    error!(error = %e, component_id = target, "failed to serve HTTPS for component");
-                }
-            })
-        } else {
-            debug!(?addr, "bind HTTP listener");
-
-            tokio::spawn(async move {
-                if let Err(e) = axum_server::from_tcp(listener)
-                    .handle(task_handle)
-                    .serve(
-                        service
-                            .with_state(RequestContext {
-                                target: target.clone(),
-                                settings,
-                                scheme: http::uri::Scheme::HTTP,
-                            })
-                            .into_make_service(),
-                    )
-                    .await
-                {
-                    error!(error = %e, component_id = target, "failed to serve HTTP for component");
-                }
-            })
-        };
-
-        Ok(Self { handle, task })
-    }
-}
-
-impl Drop for HttpServerCore {
-    /// Drop the client connection. Does not block or fail if the client has already been closed.
-    fn drop(&mut self) {
-        self.handle.shutdown();
-        self.task.abort();
-    }
 }
 
 /// Helper function to construct a [`CorsLayer`] according to the [`ServiceSettings`].
@@ -566,7 +362,7 @@ pub(crate) fn get_tcp_listener(settings: Arc<ServiceSettings>) -> anyhow::Result
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
 
     use anyhow::Result;
     use futures::StreamExt;
@@ -579,7 +375,7 @@ mod test {
         provider::initialize_host_data, run_provider, HostData, InterfaceLinkDefinition,
     };
 
-    use crate::{path_router, HttpServerProvider};
+    use crate::{address, path};
 
     // This test is ignored by default as it requires a container runtime to be installed
     // to run the testcontainer. In GitHub Actions CI, this is only works on `linux`
@@ -629,7 +425,8 @@ mod test {
         initialize_host_data(host_data.clone()).expect("should be able to initialize host data");
 
         let provider = run_provider(
-            HttpServerProvider::new(&host_data).expect("should be able to create provider"),
+            address::HttpServerProvider::new(&host_data)
+                .expect("should be able to create provider"),
             "http-server-provider-test",
         )
         .await
@@ -685,7 +482,7 @@ mod test {
             .expect("should be able to find the NATS port");
         let nats_address = format!("nats://127.0.0.1:{nats_port}");
 
-        let default_address = "0.0.0.0:8080";
+        let default_address = "0.0.0.0:8081";
         let host_data = HostData {
             lattice_rpc_url: nats_address.clone(),
             lattice_rpc_prefix: "lattice".to_string(),
@@ -703,10 +500,10 @@ mod test {
                     wit_namespace: "wasi".to_string(),
                     wit_package: "http".to_string(),
                     interfaces: vec!["incoming-handler".to_string()],
-                    source_config: std::collections::HashMap::from([
-                        ("path".to_string(), "/foo".to_string()),
-                        ("timeout_ms".to_string(), "100".to_string()),
-                    ]),
+                    source_config: std::collections::HashMap::from([(
+                        "path".to_string(),
+                        "/foo".to_string(),
+                    )]),
                     target_config: HashMap::new(),
                     source_secrets: None,
                     target_secrets: None,
@@ -718,10 +515,10 @@ mod test {
                     wit_namespace: "wasi".to_string(),
                     wit_package: "http".to_string(),
                     interfaces: vec!["incoming-handler".to_string()],
-                    source_config: std::collections::HashMap::from([
-                        ("path".to_string(), "/bar".to_string()),
-                        ("timeout_ms".to_string(), "100".to_string()),
-                    ]),
+                    source_config: std::collections::HashMap::from([(
+                        "path".to_string(),
+                        "/bar".to_string(),
+                    )]),
                     target_config: HashMap::new(),
                     source_secrets: None,
                     target_secrets: None,
@@ -731,12 +528,8 @@ mod test {
         };
         initialize_host_data(host_data.clone()).expect("should be able to initialize host data");
 
-        // TODO: should better use settings as a base for the other HTTP server too
-        let settings =
-            crate::settings::load_settings(default_address.parse().unwrap(), &host_data.config)
-                .expect("should be able to load settings");
         let provider = run_provider(
-            path_router::HttpServerProvider::new(Arc::new(settings))
+            path::HttpServerProvider::new(&host_data)
                 .await
                 .expect("should be able to create provider"),
             "http-server-provider-test",
@@ -761,14 +554,8 @@ mod test {
         // Let the provider have a second to setup the listeners
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        // Unknown path should return 404
-        let resp = reqwest::get("http://127.0.0.1:8080/some/other/route/idk")
-            .await
-            .expect("should be able to make request");
-        assert_eq!(resp.status(), 404);
-
         // Invoke component one
-        let resp = reqwest::get("http://127.0.0.1:8080/foo")
+        let resp = reqwest::get("http://127.0.0.1:8081/foo")
             .await
             .expect("should be able to make request");
         // Should have timed out
@@ -780,7 +567,7 @@ mod test {
         assert!(msg.subject.contains("test-component-one"));
 
         // Invoke component two
-        let resp = reqwest::get("http://127.0.0.1:8080/bar")
+        let resp = reqwest::get("http://127.0.0.1:8081/bar")
             .await
             .expect("should be able to make request");
         // Should have timed out
@@ -790,6 +577,37 @@ mod test {
             .await
             .expect("should be able to get a message");
         assert!(msg.subject.contains("test-component-two"));
+
+        // Invoke component two with a query parameter
+        let resp = reqwest::get("http://127.0.0.1:8081/bar?someparam=foo")
+            .await
+            .expect("should be able to make request");
+        // Should have timed out
+        assert_eq!(resp.status(), 408);
+        let msg = subscriber_two
+            .next()
+            .await
+            .expect("should be able to get a message");
+        assert!(msg.subject.contains("test-component-two"));
+
+        // Unknown path should return 404
+        let resp = reqwest::get("http://127.0.0.1:8081/some/other/route/idk")
+            .await
+            .expect("should be able to make request");
+        assert_eq!(resp.status(), 404);
+
+        // No other messages should have been received
+        // (the assertion is that the operation timed out)
+        assert!(
+            tokio::time::timeout(tokio::time::Duration::from_secs(1), subscriber_one.next())
+                .await
+                .is_err(),
+        );
+        assert!(
+            tokio::time::timeout(tokio::time::Duration::from_secs(1), subscriber_two.next())
+                .await
+                .is_err(),
+        );
 
         provider_handle.abort();
         let _ = nats_container.stop().await;
