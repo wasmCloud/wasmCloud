@@ -234,5 +234,11 @@ async fn handle_request(
     let Some(target_component) = router.read().await.get(path).cloned() else {
         return Err((http::StatusCode::NOT_FOUND, "path not found".to_string()));
     };
-    Ok(invoke_component(target_component, req, timeout, settings).await)
+    Ok(invoke_component(
+        target_component,
+        req,
+        timeout,
+        settings.cache_control.as_ref(),
+    )
+    .await)
 }

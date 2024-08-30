@@ -84,70 +84,7 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-pin_project! {
-    struct ResponseBody {
-        #[pin]
-        body: wrpc_interface_http::HttpBody,
-        #[pin]
-        errors: Box<dyn Stream<Item = wrpc_interface_http::HttpBodyError<axum::Error>> + Send + Unpin>,
-        #[pin]
-        io: Option<JoinHandle<anyhow::Result<()>>>,
-    }
-}
-
-impl http_body::Body for ResponseBody {
-    type Data = Bytes;
-    type Error = anyhow::Error;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        let mut this = self.as_mut().project();
-        if let Some(io) = this.io.as_mut().as_pin_mut() {
-            match io.poll(cx) {
-                Poll::Ready(Ok(Ok(()))) => {
-                    this.io.take();
-                }
-                Poll::Ready(Ok(Err(err))) => {
-                    return Poll::Ready(Some(Err(
-                        anyhow!(err).context("failed to complete async I/O")
-                    )))
-                }
-                Poll::Ready(Err(err)) => {
-                    return Poll::Ready(Some(Err(anyhow!(err).context("I/O task failed"))))
-                }
-                Poll::Pending => {}
-            }
-        }
-        match this.errors.poll_next(cx) {
-            Poll::Ready(Some(err)) => {
-                if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
-                }
-                return Poll::Ready(Some(Err(anyhow!(err).context("failed to process body"))));
-            }
-            Poll::Ready(None) | Poll::Pending => {}
-        }
-        match ready!(this.body.poll_frame(cx)) {
-            Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
-            Some(Err(err)) => {
-                if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
-                }
-                Poll::Ready(Some(Err(err)))
-            }
-            None => {
-                if let Some(io) = this.io.as_pin_mut() {
-                    io.abort()
-                }
-                Poll::Ready(None)
-            }
-        }
-    }
-}
-
-/// Build a request from the incoming request
+/// Build a request to send to the component from the incoming request
 pub(crate) fn build_request(
     request: extract::Request,
     scheme: http::uri::Scheme,
@@ -202,11 +139,12 @@ pub(crate) fn build_request(
     Ok(req)
 }
 
+/// Invoke a component with the given request
 pub(crate) async fn invoke_component(
     target: impl AsRef<str>,
     req: http::Request<axum::body::Body>,
     timeout: Option<Duration>,
-    settings: Arc<ServiceSettings>,
+    cache_control: Option<&String>,
 ) -> impl axum::response::IntoResponse {
     // Create a new wRPC client with all headers from the current span injected
     let mut cx = async_nats::HeaderMap::new();
@@ -240,7 +178,7 @@ pub(crate) async fn invoke_component(
     // TODO: Convert this to http status code
     let mut res =
         res.map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}")))?;
-    if let Some(cache_control) = settings.cache_control.as_ref() {
+    if let Some(cache_control) = cache_control {
         let cache_control = http::HeaderValue::from_str(cache_control)
             .map_err(|err| (http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         res.headers_mut().append("Cache-Control", cache_control);
@@ -358,6 +296,69 @@ pub(crate) fn get_tcp_listener(settings: Arc<ServiceSettings>) -> anyhow::Result
     let listener = listener.into_std().context("Unable to get listener")?;
 
     Ok(listener)
+}
+
+pin_project! {
+    struct ResponseBody {
+        #[pin]
+        body: wrpc_interface_http::HttpBody,
+        #[pin]
+        errors: Box<dyn Stream<Item = wrpc_interface_http::HttpBodyError<axum::Error>> + Send + Unpin>,
+        #[pin]
+        io: Option<JoinHandle<anyhow::Result<()>>>,
+    }
+}
+
+impl http_body::Body for ResponseBody {
+    type Data = Bytes;
+    type Error = anyhow::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let mut this = self.as_mut().project();
+        if let Some(io) = this.io.as_mut().as_pin_mut() {
+            match io.poll(cx) {
+                Poll::Ready(Ok(Ok(()))) => {
+                    this.io.take();
+                }
+                Poll::Ready(Ok(Err(err))) => {
+                    return Poll::Ready(Some(Err(
+                        anyhow!(err).context("failed to complete async I/O")
+                    )))
+                }
+                Poll::Ready(Err(err)) => {
+                    return Poll::Ready(Some(Err(anyhow!(err).context("I/O task failed"))))
+                }
+                Poll::Pending => {}
+            }
+        }
+        match this.errors.poll_next(cx) {
+            Poll::Ready(Some(err)) => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                return Poll::Ready(Some(Err(anyhow!(err).context("failed to process body"))));
+            }
+            Poll::Ready(None) | Poll::Pending => {}
+        }
+        match ready!(this.body.poll_frame(cx)) {
+            Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
+            Some(Err(err)) => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                Poll::Ready(Some(Err(err)))
+            }
+            None => {
+                if let Some(io) = this.io.as_pin_mut() {
+                    io.abort()
+                }
+                Poll::Ready(None)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -222,7 +222,6 @@ command-group = { version = "5", default-features = false }
 config = { version = "0.13", default-features = false }
 console = { version = "0.15", default-features = false }
 crossterm = {version = "0.28.1",default-features = false }
-dashmap = { version = "5", default-features = false }
 data-encoding = { version = "2", default-features = false }
 deadpool-postgres = { version = "0.13", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
