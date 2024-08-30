@@ -203,7 +203,7 @@ pub enum HttpServerError {
 ///
 #[instrument]
 pub fn load_settings(
-    default_address: SocketAddr,
+    default_address: Option<SocketAddr>,
     values: &HashMap<String, String>,
 ) -> Result<ServiceSettings, HttpServerError> {
     trace!("load settings");
@@ -240,7 +240,8 @@ pub fn load_settings(
                 .map_err(|_| HttpServerError::InvalidParameter(format!("invalid address: {addr}")))
         })
         .transpose()?
-        .unwrap_or(default_address);
+        .or(default_address)
+        .unwrap_or_else(default_listen_address);
 
     // accept cache-control header values
     if let Some(cache_control) = values.get(&UniCase::new("cache_control")) {
