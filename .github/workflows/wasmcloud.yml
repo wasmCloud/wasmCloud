@@ -192,7 +192,7 @@ jobs:
       - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
       - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
 
-      - uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
         with:
           name: wasmcloud-x86_64-pc-windows-msvc
           path: artifact
@@ -224,7 +224,7 @@ jobs:
       - run: chmod +x ./artifact/bin/wasmcloud
       - run: ./artifact/bin/wasmcloud --version
 
-      - uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a
+      - uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
         with:
           name: wasmcloud-universal-darwin
           path: artifact
