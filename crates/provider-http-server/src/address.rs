@@ -144,7 +144,9 @@ async fn handle_request(
 ) -> impl axum::response::IntoResponse {
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, settings.clone())?;
-    Ok::<_, (http::StatusCode, String)>(invoke_component(target, req, timeout, settings).await)
+    Ok::<_, (http::StatusCode, String)>(
+        invoke_component(target, req, timeout, settings.cache_control.as_ref()).await,
+    )
 }
 
 /// An asynchronous `wrpc:http/incoming-handler` with support for CORS and TLS
