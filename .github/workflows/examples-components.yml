@@ -16,6 +16,7 @@ on:
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
   pull_request:
     branches: [main]
     paths:
@@ -135,6 +136,10 @@ jobs:
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
+            test_deploy: local.wadm.yaml
+          - name: "http-task-manager"
+            lang: "rust"
+            wasm-bin: "http_task_manager_s.wasm"
             test_deploy: local.wadm.yaml
           # Python example components
           - name: "http-hello-world"
@@ -283,6 +288,9 @@ jobs:
           - name: "sqldb-postgres-query"
             lang: "rust"
             wasm-bin: "sqldb_postgres_query_s.wasm"
+          - name: "http-task-manager"
+            lang: "rust"
+            wasm-bin: "http_task_manager_s.wasm"
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       # Determine tag version (if this is a release tag), without the 'v'
