@@ -26,7 +26,7 @@
     "@types/node": "^20.16.1",
     "@wasmcloud/prettier-config": "workspace:*",
     "eslint": "^8.57.0",
-    "eslint-config-turbo": "^2.0.14",
+    "eslint-config-turbo": "^2.1.1",
     "prettier": "^3.3.3",
     "turbo": "^2.0.14",
     "typescript": "^5.5.4"
