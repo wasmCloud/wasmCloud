@@ -1,0 +1,143 @@
+{{- /*
+This template is a convenience resource, used for leveraging the wasmCloud Operator to create and manage one or more wasmCloud hosts.
+*/ -}}
+{{- with $.Values.hostConfig}}
+{{- if .enabled }}
+apiVersion: k8s.wasmcloud.dev/v1alpha1
+kind: WasmCloudHostConfig
+metadata:
+  name: {{ default "wasmcloud-host" (default $.Release.Name .name) }}
+  namespace: {{ default "default" (default $.Release.Namespace .namespace) }}
+  # Common labels
+  labels:
+    {{- include "wasmcloud.labels" $ | nindent 4 }}
+spec:
+  # Optional: Number of hosts (pods). Defaults to 1.
+  hostReplicas: {{ default 1 .hostReplicas }}
+  # Required: The lattice to connect the hosts to.
+  lattice: {{ default "default" .lattice }}
+  # Optional: Additional labels to apply to the host other than the defaults set in the controller.
+  hostLabels:
+    {{- range $key, $value := .hostLabels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+  # Required: Which wasmCloud version to use.
+  version: {{ default "latest" .version }}
+  # Optional: The image to use for the wasmCloud host.
+  {{- if .image }}
+  # If provided, the 'version' field will be ignored.
+  image: {{ .image  }}
+  {{- end }}
+  # Optional: The image to use for the NATS leaf that is deployed alongside the wasmCloud host.
+  # If not provided, the default upstream image will be used.
+  {{- if .natsLeafImage }}
+  natsLeafImage: {{ .natsLeafImage }}
+  {{- end }}
+  # Optional. The name of a secret containing a set of NATS credentials under 'nats.creds' key.
+  {{- if or .secretName .natsCredentialsFile }}
+  secretName: {{ default (printf "%s-secret" (base .natsCredentialsFile)) .secretName }}
+  {{- end }}
+  # Optional: Enable structured logging for host logs. Defaults to "false".
+  enableStructuredLogging: {{ default false .enableStructuredLogging }}
+  # Optional: The name of a secret containing the registry credentials.
+  # See https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/#create-a-secret-by-providing-credentials-on-the-command-line
+  {{- if or .registryCredentialsSecret .registryCredentialsFile }}
+  registryCredentialsSecret: {{ default (printf "%s-secret" (base .registryCredentialsFile)) .registryCredentialsSecret }}
+  {{- end }}
+  # Optional: The control topic prefix to use for the host. Defaults to "wasmbus.ctl"
+  controlTopicPrefix: {{ default "wasmbus.ctl" .controlTopicPrefix }}
+  # Optional: The leaf node domain to use for the NATS sidecar. Defaults to "leaf".
+  leafNodeDomain: {{ default "leaf" .leafNodeDomain }}
+  # Optional: Enable the config service for this host. Defaults to "false".
+  # Makes wasmCloud host issue requests to a config service on startup.
+  configServiceEnabled: {{ default false .configServiceEnabled }}
+  # Optional: The log level to use for the host. Defaults to "INFO".
+  logLevel: {{ default "INFO" .logLevel }}
+  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats.default.svc.cluster.local".
+  natsAddress: {{ default "nats://nats.default.svc.cluster.local" .natsAddress }}
+  # Optional: Allow the host to deploy using the latest tag on OCI components or providers. Defaults to "false".
+  allowLatest: {{ default false .allowLatest }}
+  # Optional: Allow the host to pull artifacts from OCI registries insecurely.
+  {{- with .allowedInsecure }}{{- if ne (len .) 0 }}
+  allowedInsecure:
+    {{- range .allowedInsecure }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}{{- end }}
+  # Optional: Policy service configuration.
+  {{- with .policyService }}
+  policyService:
+    # If provided, enables policy checks on start actions and component invocations.
+    {{- if .topic }}
+    topic: {{ .topic }}
+    # If provided, allows the host to subscribe to updates on past policy decisions. Requires 'topic' above to be set.
+    {{- if .changesTopic }}
+    changesTopic: {{ .changesTopic }}
+    {{- end }}
+    # If provided, allows setting a custom timeout for requesting policy decisions. Defaults to 1000. Requires 'topic' to be set.
+    timeoutMs: {{ default 1000 .timeoutMs }}
+    {{- end }}
+  {{- end }}
+  # Optional: Observability options for configuring the OpenTelemetry integration.
+  {{- with .observability }}
+  observability:
+    # NOTE: Enables all signals (logs/metrics/traces) at once. Set it to 'false' and enable each signal individually in case you don't need all of them.
+    enable: {{ default true .enable }}
+    endpoint: {{ default "otel-collector.svc" .endpoint }}
+    # Either 'grpc' or 'http'
+    protocol: {{ default "http" .protocol }}
+    logs:
+      enable: {{ default false .logs.enable }}
+      endpoint: {{ default "logs-specific-otel-collector.svc" .logs.endpoint }}
+    metrics:
+      enable: {{ default false .metrics.enable }}
+      endpoint: {{ default "metrics-specific-otel-collector.svc" .metrics.endpoint }}
+    traces:
+      enable: {{ default false .traces.enable }}
+      endpoint: {{ default "traces-specific-otel-collector.svc" .traces.endpoint }}
+  {{- end }}
+  # Optional: Subject prefix that will be used by the host to query for wasmCloud Secrets.
+  # See https://wasmcloud.com/docs/concepts/secrets for more context
+  secretsTopicPrefix: {{ default "wasmcloud.secrets" .secretsTopicPrefix }}
+  # Optional: The maximum amount of memory bytes that a component can allocate.
+  maxLinearMemoryBytes: {{ default 20000000 .maxLinearMemoryBytes }}
+  # Optional: Additional options to control how the underlying wasmCloud hosts are scheduled in Kubernetes.
+  # This includes setting resource requirements for the nats and wasmCloud host
+  # containers along with any additional pot template settings.
+  {{- with .schedulingOptions }}
+  schedulingOptions:
+    # Optional: Enable the following to run the wasmCloud hosts as a DaemonSet. Defaults to "false".
+    daemonset: {{ if and (eq .hostReplicas 1) (eq .daemonset true) }}true{{ else }}false{{ end }}
+    # Optional: Set the resource requirements for the nats and wasmCloud host containers.
+    # See https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ for valid values
+    {{- with .resources }}
+    resources:
+      nats:
+        requests:
+          cpu: {{ .nats.requests.cpu }}
+          memory: {{ .nats.requests.memory }}
+        limits:
+          cpu: {{ .nats.limits.cpu }}
+          memory: {{ .nats.limits.memory }}
+      wasmCloudHost:
+        requests:
+          cpu: {{ .wasmCloudHost.requests.cpu }}
+          memory: {{ .wasmCloudHost.requests.memory }}
+        limits:
+          cpu: {{ .wasmCloudHost.limits.cpu }}
+          memory: {{ .wasmCloudHost.limits.memory }}
+    {{- end }}
+    # Optional: Any additional pod template settings to apply to the wasmCloud host pods.
+    # See https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#podspec-v1-core for all valid options.
+    # Note that you *cannot* set the `containers` field here as it is managed by the controller.
+    podTemplateAdditions:
+      {{- if .podTemplateAdditions }}
+      {{- tpl (.podTemplateAdditions | toYaml) . | nindent 4 }}
+      {{- else }}
+      spec:
+        nodeSelector:
+          kubernetes.io/os: "linux"
+      {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
