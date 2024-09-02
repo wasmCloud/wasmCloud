@@ -8,8 +8,8 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm_client::Result;
 use wadm_types::api::ModelSummary;
-use wadm_types::validation::{validate_manifest_file, ValidationFailure, ValidationOutput};
-use wash_lib::app::{load_app_manifest, AppManifest};
+use wadm_types::validation::{ValidationFailure, ValidationOutput};
+use wash_lib::app::{load_app_manifest, validate_manifest_file, AppManifest};
 use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
 use wash_lib::config::WashConnectionOptions;
 
@@ -153,6 +153,9 @@ pub struct ValidateCommand {
     /// Path to the application manifest to validate
     #[clap(name = "application")]
     application: PathBuf,
+    /// Whether to check image references in the manifest
+    #[clap(long)]
+    check_image_refs: bool,
 }
 
 pub async fn handle_command(
@@ -196,10 +199,7 @@ pub async fn handle_command(
         }
         Validate(cmd) => {
             sp.update_spinner_message("Validating application manifest ... ".to_string());
-            let (_manifest, validation_results) = validate_manifest_file(&cmd.application)
-                .await
-                .context("failed to validate Wadm manifest")?;
-            Ok(show_validate_manifest_results(validation_results))
+            handle_validate(cmd).await
         }
     };
 
@@ -216,6 +216,14 @@ pub async fn handle_command(
     sp.finish_and_clear();
 
     Ok(command_output?)
+}
+/// Validate a Wadm manifest file
+async fn handle_validate(cmd: ValidateCommand) -> Result<CommandOutput> {
+    let (_manifest, validation_results) =
+        validate_manifest_file(&cmd.application, cmd.check_image_refs)
+            .await
+            .context("failed to validate Wadm manifest")?;
+    Ok(show_validate_manifest_results(validation_results))
 }
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
