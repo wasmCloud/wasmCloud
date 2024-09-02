@@ -100,6 +100,7 @@ wasmcloud-core = { workspace = true, features = [
     "reqwest",
     "rustls-native-certs",
 ] }
+wasmcloud-host = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, optional = true, features = [
     "cranelift",

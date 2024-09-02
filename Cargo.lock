@@ -6957,6 +6957,7 @@ dependencies = [
  "wasm-encoder 0.216.0",
  "wasmcloud-control-interface 1.0.0",
  "wasmcloud-core 0.9.0",
+ "wasmcloud-host",
  "wasmparser 0.215.0",
  "wasmtime",
  "wasmtime-wasi",

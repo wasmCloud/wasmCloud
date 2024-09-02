@@ -2,7 +2,6 @@
 //!
 //! This crate is essentially a wrapper around the wadm_client crate, and it's recommended to use
 //! that crate directly instead.
-
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
@@ -10,14 +9,15 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use async_nats::Client;
 use regex::Regex;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::warn;
+use url::Url;
 use wadm_client::Result;
 use wadm_types::api::{ModelSummary, Status, VersionInfo};
-
-use tokio::io::{AsyncRead, AsyncReadExt};
-use url::Url;
-use wadm_types::Manifest;
+use wadm_types::validation::{validate_manifest, ValidationFailure, ValidationFailureLevel};
+use wadm_types::{Manifest, Properties};
 use wasmcloud_core::tls;
+use wasmcloud_host::oci::Fetcher;
 
 use crate::config::DEFAULT_LATTICE;
 
@@ -417,6 +417,70 @@ pub async fn load_app_manifest(source: AppManifestSource) -> anyhow::Result<AppM
     tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
         .await
         .context("app manifest loader timed out")?
+}
+
+/// Validate the contents of a manifest file and optionally validate the OCI references
+pub async fn validate_manifest_file(
+    manifest_file_path: &Path,
+    oci_check: bool,
+) -> Result<(Manifest, Vec<ValidationFailure>)> {
+    let content = tokio::fs::read_to_string(manifest_file_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to read manifest file [{}]",
+                manifest_file_path.display()
+            )
+        })?;
+
+    let manifest = serde_yaml::from_slice(content.as_ref()).with_context(|| {
+        format!(
+            "failed to parse manifest content in file: {}",
+            manifest_file_path.display()
+        )
+    })?;
+
+    let mut failures = validate_manifest(&manifest).await.with_context(|| {
+        format!(
+            "failed to validate manifest in file: {}",
+            manifest_file_path.display()
+        )
+    })?;
+
+    if oci_check {
+        let image_references = extract_image_references(&manifest);
+        validate_oci_references(image_references, &mut failures).await;
+    }
+    Ok((manifest, failures))
+}
+
+pub async fn validate_oci_references(refs: Vec<String>, failures: &mut Vec<ValidationFailure>) {
+    let fetcher = Fetcher::default();
+
+    for image in refs {
+        if let Err(err) = fetcher.fetch_component(&image).await {
+            let mut fetch_failure = ValidationFailure::default();
+            fetch_failure.level = ValidationFailureLevel::Error;
+            fetch_failure.msg = format!("Failed to fetch OCI component '{}': {}", image, err);
+            failures.push(fetch_failure);
+        }
+    }
+}
+
+/// Extract image references from a given manifest
+pub fn extract_image_references(manifest: &Manifest) -> Vec<String> {
+    let mut image_refs = Vec::new();
+    for component in &manifest.spec.components {
+        match &component.properties {
+            Properties::Component { properties } => {
+                image_refs.push(properties.image.clone());
+            }
+            Properties::Capability { properties } => {
+                image_refs.push(properties.image.clone());
+            }
+        }
+    }
+    image_refs
 }
 
 #[cfg(test)]
