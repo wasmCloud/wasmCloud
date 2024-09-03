@@ -10,12 +10,12 @@ use anyhow::Context;
 use tokio::sync::oneshot;
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
-/// Default max linear memory for a component
-pub const MAX_LINEAR_MEMORY: u64 = 10 * 1024 * 1024;
-/// Default max component size
+/// Default max linear memory for a component (256 MiB)
+pub const MAX_LINEAR_MEMORY: u64 = 256 * 1024 * 1024;
+/// Default max component size (50 MiB)
 pub const MAX_COMPONENT_SIZE: u64 = 50 * 1024 * 1024;
 /// Default max number of components
-pub const MAX_COMPONENTS: u32 = 10000;
+pub const MAX_COMPONENTS: u32 = 10_000;
 
 /// [`RuntimeBuilder`] used to configure and build a [Runtime]
 #[derive(Clone, Default)]

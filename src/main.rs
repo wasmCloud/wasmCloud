@@ -200,16 +200,16 @@ struct Args {
     /// If provided, allows to set a custom Max Execution time for the Host in ms.
     #[clap(long = "max-execution-time-ms", default_value = "600000", env = "WASMCLOUD_MAX_EXECUTION_TIME_MS", value_parser = parse_duration_millis)]
     max_execution_time: Duration,
-    /// The maximum amount of memory bytes that a component can allocate
-    #[clap(long = "max-linear-memory-bytes", default_value_t = 10 * 1024 * 1024, env = "WASMCLOUD_MAX_LINEAR_MEMORY")]
+    /// The maximum amount of memory bytes that a component can allocate (default 256 MiB)
+    #[clap(long = "max-linear-memory-bytes", default_value_t = 256 * 1024 * 1024, env = "WASMCLOUD_MAX_LINEAR_MEMORY")]
     max_linear_memory: u64,
-    /// The maximum byte size of a component binary that can be loaded
+    /// The maximum byte size of a component binary that can be loaded (default 50 MiB)
     #[clap(long = "max-component-size-bytes", default_value_t = 50 * 1024 * 1024, env = "WASMCLOUD_MAX_COMPONENT_SIZE")]
     max_component_size: u64,
     /// The maximum number of components that can be run simultaneously
     #[clap(
         long = "max-components",
-        default_value_t = 10000,
+        default_value_t = 10_000,
         env = "WASMCLOUD_MAX_COMPONENTS"
     )]
     max_components: u32,
