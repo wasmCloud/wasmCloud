@@ -16,7 +16,6 @@ nats:
       replicas: 3
     leafnodes:
       enabled: true
-      # port: 4222
     websocket:
       enabled: true
       port: 4223

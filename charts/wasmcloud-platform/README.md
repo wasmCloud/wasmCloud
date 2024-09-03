@@ -23,22 +23,19 @@ To take full advantage of the chart features, it's best to use wasmcloud-operato
 ### Deploy wasmCloud Platform
 
 ```bash
+# By default, the chart installs NATS, Wadm, and wasmCloud Operator subcharts
 helm upgrade --install \
     --create-namespace \
     wasmcloud-platform \
     --values https://raw.githubusercontent.com/wasmCloud/wasmcloud/main/charts/wasmcloud-platform/values.yaml \
     oci://ghcr.io/wasmcloud/charts/wasmcloud-platform \
-    --dependency-update \
-    --set "nats.enabled=true" \
-    --set "wadm.enabled=true" \
-    --set "operator.enabled=true" \
-    --set "host.enabled=false" \
-    --set "hostConfig.enabled=false"
+    --dependency-update
 ```
 
 Wait for all components to install and wadm-nats communications to establish:
 
 ```bash
+kubectl rollout status deploy,sts -l app.kubernetes.io/name=nats
 kubectl wait --for=condition=available --timeout=600s deploy -l app.kubernetes.io/name=wadm
 kubectl wait --for=condition=available --timeout=600s deploy -l app.kubernetes.io/name=wasmcloud-operator
 ```
@@ -52,10 +49,6 @@ helm upgrade --install \
     --values https://raw.githubusercontent.com/wasmCloud/wasmcloud/main/charts/wasmcloud-platform/values.yaml \
     oci://ghcr.io/wasmcloud/charts/wasmcloud-platform \
     --dependency-update \
-    --set "nats.enabled=true" \
-    --set "wadm.enabled=true" \
-    --set "operator.enabled=true" \
-    --set "host.enabled=false" \
     --set "hostConfig.enabled=true"
 ```
 
