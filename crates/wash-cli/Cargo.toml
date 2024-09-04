@@ -18,13 +18,8 @@ maintenance = { status = "actively-developed" }
 anstyle = { workspace = true }
 anyhow = { workspace = true, features = ["backtrace"] }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
-# We use a separate version of async-nats that has some code that isn't upstream
-# to support the needs of wRPC libraries.
-#
-# TODO: Unify upstream async-nats and wrpc-nats if/when https://github.com/nats-io/nats.rs/pull/1267
-# or something similar is implemented
 async-nats = { workspace = true }
-async-nats-0_33 = { workspace = true }
+async-nats-0_33 = { package = "async-nats", version = "0.33", default-features = false }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"] }
 clap_complete = { workspace = true }
@@ -86,7 +81,7 @@ wash-lib = { workspace = true, features = [
     "start",
     "plugin",
 ] }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = { version = "1" } # TODO: Revert once wadm is published with async-nats 0.36
 wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
 wasmcloud-secrets-types = { workspace = true }

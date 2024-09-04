@@ -54,13 +54,13 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
         )
         .init();
 
-    let ((nats_server, nats_url, _, nats_client_0_33), (redis_server, redis_url)) = try_join!(
+    let ((nats_server, nats_url, nats_client), (redis_server, redis_url)) = try_join!(
         async { start_nats().await.context("failed to start NATS") },
         async { start_redis().await.context("failed to start Redis") },
     )?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client_0_33)
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice(LATTICE.to_string())
         .build();
     // Build the host

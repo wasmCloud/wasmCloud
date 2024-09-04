@@ -8,12 +8,7 @@ use url::Url;
 
 use super::{free_port, tempdir, BackgroundServer};
 
-pub async fn start_nats() -> Result<(
-    BackgroundServer,
-    Url,
-    async_nats::Client,
-    async_nats_0_33::Client,
-)> {
+pub async fn start_nats() -> Result<(BackgroundServer, Url, async_nats::Client)> {
     let port = free_port().await?;
     let url =
         Url::parse(&format!("nats://localhost:{port}")).context("failed to parse NATS URL")?;
@@ -55,13 +50,6 @@ pub async fn start_nats() -> Result<(
     .await
     .context("failed to ensure connection to NATS server")?;
 
-    // Wait until nats is ready to take connections
-    let client_0_33 = async_nats_0_33::connect_with_options(
-        url.as_str(),
-        async_nats_0_33::ConnectOptions::new().retry_on_initial_connect(),
-    )
-    .await
-    .context("failed to build NATS client")?;
     let client = timeout(Duration::from_secs(3), async move {
         loop {
             if client.connection_state() == State::Connected {
@@ -73,5 +61,5 @@ pub async fn start_nats() -> Result<(
     .await
     .context("failed to ensure connection to NATS server")?;
 
-    Ok((server, url, client, client_0_33))
+    Ok((server, url, client))
 }
