@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -365,7 +365,7 @@ impl HttpHandlerInvocationOpts {
 struct HttpResponse {
     status: u16,
     headers: HashMap<String, String>,
-    body: Bytes,
+    body: String,
 }
 
 /// Invoke a wRPC endpoint that takes a HTTP request (usually `wasi:http/incoming-handler.handle`);
@@ -425,10 +425,11 @@ async fn wrpc_invoke_http_handler(
                 let http_resp = HttpResponse {
                     status,
                     headers,
-                    body,
+                    body: String::from_utf8(Vec::from(body))
+                        .context("failed to parse returned bytes as string")?,
                 };
                 CommandOutput::new(
-                    serde_json::to_string(&http_resp)
+                    serde_json::to_string_pretty(&http_resp)
                         .context("failed to print http response JSON")?,
                     HashMap::from([(
                         "response".into(),
