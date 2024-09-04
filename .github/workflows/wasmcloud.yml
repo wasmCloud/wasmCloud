@@ -18,6 +18,7 @@ on:
           - wascap
           - wasmcloud-host
           - wasmcloud-runtime
+          - wasmcloud-secrets-client
       do-release:
         type: boolean
         description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
