@@ -10,22 +10,20 @@ use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
-use wash_lib::{
-    build::{build_project, SignConfig},
-    cli::dev::run_dev_loop,
-    cli::{sanitize_component_id, CommandOutput},
-    component::{scale_component, ScaleComponentArgs},
-    config::host_pid_file,
-    generate::emoji,
-    id::ServerId,
-    parser::get_config,
-};
+use wit_parser::{Resolve, WorldId};
+
+use wash_lib::build::{build_project, SignConfig};
+use wash_lib::cli::dev::run_dev_loop;
+use wash_lib::cli::{sanitize_component_id, CommandOutput};
+use wash_lib::component::{scale_component, ScaleComponentArgs};
+use wash_lib::config::host_pid_file;
+use wash_lib::generate::emoji;
+use wash_lib::id::ServerId;
+use wash_lib::parser::{get_config, ProjectConfig};
 use wasmcloud_control_interface::Host;
 
-use crate::{
-    down::{handle_down, DownCommand},
-    up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts},
-};
+use crate::down::{handle_down, DownCommand};
+use crate::up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts};
 
 #[derive(Debug, Clone, Parser)]
 pub struct DevCommand {
@@ -85,6 +83,173 @@ impl Drop for HostSubprocess {
             handle.abort();
         }
     }
+}
+
+/// WADM components (either WebAssembly components or providers) that can be
+/// used to supply requested functionality in WIT interfaces for components under
+/// development.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KnownDep {
+    /// wasmCloud keyvalue provider (normally corresponds to `wasi:keyvalue`)
+    KeyValueProvider,
+    /// wasmCloud HTTP server provider (normally corresponds to `wasi:incoming-handler`)
+    HttpServerProvider,
+    /// wasmCloud HTTP client provider (normally corresponds to `wasi:outgoing-handler`)
+    HttpClientProvider,
+    /// wasmCloud NATS messaging provider (normally corresponds to `wasi:messaging`)
+    NatsMessagingProvider,
+    /// wasmCloud blobstore (normally corresponds to `wasi:blobstore`)
+    BlobstoreFsProvider,
+    /// Custom provider of some interface (whether a provider or component),
+    /// including the necessary information to identify it as a dependency.
+    #[allow(unused)]
+    Custom {
+        import_interfaces: Vec<String>,
+        export_interfaces: Vec<String>,
+        name: String,
+        image_ref: String,
+    },
+}
+
+impl KnownDep {
+    /// Derive which local component should be used given a WIT interface to be satisified
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let v = from_wit_import_face("wasi:keyvalue/atomics");
+    /// # assert!(v.is_some())
+    /// ```
+    fn from_wit_import_iface(iface: &str) -> Option<Self> {
+        let (iface, version) = match iface.split_once('@') {
+            None => (iface, None),
+            Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
+        };
+        match (iface, version) {
+            // Deal with known prefixes
+            ("wasi:keyvalue/atomics" | "wasi:keyvalue/store" | "wasi:keyvalue/batch", _) => {
+                Some(KnownDep::KeyValueProvider)
+            }
+            ("wasi:http/outgoing-handler", _) => Some(KnownDep::HttpClientProvider),
+            ("wasi:blobstore/blobstore" | "wrpc:blobstore/blobstore", _) => {
+                Some(KnownDep::BlobstoreFsProvider)
+            }
+            ("wasmcloud:messaging/consumer", _) => Some(KnownDep::NatsMessagingProvider),
+            _ => None,
+        }
+    }
+
+    /// Derive which local component should be used given a WIT interface to be satisified
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let v = from_wit_export_face("wasi:http/incoming-handler");
+    /// # assert!(v.is_some())
+    /// ```
+    fn from_wit_export_iface(iface: &str) -> Option<Self> {
+        let (iface, version) = match iface.split_once('@') {
+            None => (iface, None),
+            Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
+        };
+        match (iface, version) {
+            // Deal with known prefixes
+            ("wasi:http/incoming-handler", _) => Some(KnownDep::HttpServerProvider),
+            ("wasmcloud:messaging/handler", _) => Some(KnownDep::NatsMessagingProvider),
+            // Ignore all other combinations
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            KnownDep::KeyValueProvider => "provider-key-value",
+            KnownDep::HttpServerProvider => "provider-http-server",
+            KnownDep::HttpClientProvider => "provider-http-client",
+            KnownDep::NatsMessagingProvider => "provider-messaging-nats",
+            KnownDep::BlobstoreFsProvider => "provider-blobstore-fs",
+            KnownDep::Custom { name, .. } => name.as_str(),
+        }
+    }
+}
+
+/// Parse Build a [`wit_parser::Resolve`] from a provided directory
+/// and select a given world
+pub fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldId)> {
+    let project_dir = &project_cfg.common.path;
+    let wit_dir = project_dir.join("wit");
+    let world = project_cfg.project_type.wit_world();
+
+    // Resolve the WIT directory packages & worlds
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve
+        .push_dir(wit_dir)
+        .with_context(|| format!("failed to add WIT directory @ [{}]", project_dir.display()))?;
+
+    // Select the target world that was specified by the user
+    let world_id = resolve
+        .select_world(package_id, world.as_deref())
+        .context("failed to select world from built resolver")?;
+
+    Ok((resolve, world_id))
+}
+
+/// Resolve the dependencies of a given WIT world that map to WADM components
+///
+/// Normally, this means converting imports that the component depends on to
+/// components that can be run on the lattice.
+fn resolve_dependent_components(resolve: Resolve, world_id: WorldId) -> Result<Vec<KnownDep>> {
+    let mut deps = Vec::new();
+    let world = resolve
+        .worlds
+        .get(world_id)
+        .context("selected WIT world is missing")?;
+    // Process imports
+    for (_key, item) in world.imports.iter() {
+        if let wit_parser::WorldItem::Interface { id, .. } = item {
+            let iface = resolve
+                .interfaces
+                .get(*id)
+                .context("unexpectedly missing iface")?;
+            let pkg = resolve
+                .packages
+                .get(iface.package.context("iface missing package")?)
+                .context("failed to find package")?;
+            let iface_name = &format!(
+                "{}:{}/{}",
+                pkg.name.namespace,
+                pkg.name.name,
+                iface.name.as_ref().context("interface missing name")?,
+            );
+            if let Some(dep) = KnownDep::from_wit_import_iface(iface_name) {
+                deps.push(dep);
+            }
+        }
+    }
+    // Process exports
+    for (_key, item) in world.exports.iter() {
+        if let wit_parser::WorldItem::Interface { id, .. } = item {
+            let iface = resolve
+                .interfaces
+                .get(*id)
+                .context("unexpectedly missing iface")?;
+            let pkg = resolve
+                .packages
+                .get(iface.package.context("iface missing package")?)
+                .context("failed to find package")?;
+            let iface_name = &format!(
+                "{}:{}/{}",
+                pkg.name.namespace,
+                pkg.name.name,
+                iface.name.as_ref().context("interface missing name")?,
+            );
+            if let Some(dep) = KnownDep::from_wit_export_iface(iface_name) {
+                deps.push(dep);
+            }
+        }
+    }
+
+    Ok(deps)
 }
 
 /// Handle `wash dev`
@@ -352,14 +517,37 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
-    // Watch FS for changes and listen for Ctrl + C in tandem
-    eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
     let server_id = ServerId::from_str(&host.id)
         .with_context(|| format!("failed to parse host ID [{}]", host.id))?;
+
+    // Watch FS for changes and listen for Ctrl + C in tandem
+    eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
     loop {
         select! {
+            // Process a file change/reload
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
+
+                // After the project is built, we must ensure dependencies are set up and running
+                let (resolve, world_id) = parse_project_wit(&project_cfg).with_context(|| {
+                    format!(
+                        "failed to parse WIT from project dir [{}]",
+                        project_cfg.common.path.display(),
+                    )
+                })?;
+
+                // Resolve dependencies for the component
+                let component_deps = resolve_dependent_components(resolve, world_id)
+                    .context("failed to resolve dependent components")?;
+                eprintln!(
+                    "Detected component dependencies: {:?}",
+                    component_deps
+                        .iter()
+                        .map(KnownDep::as_str)
+                        .collect::<Vec<&str>>()
+                );
+
+                // Re-run the dev-loop
                 run_dev_loop(
                     &project_cfg,
                     &component_id,
@@ -372,6 +560,8 @@ pub async fn handle_command(
                 pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
             },
+
+            // Process a stop
             _ = stop_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
                 eprintln!("🛑 received Ctrl + c, stopping devloop...");

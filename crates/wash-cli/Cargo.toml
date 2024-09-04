@@ -93,6 +93,7 @@ wasmcloud-secrets-types = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
+wit-parser = { workspace = true }
 wrpc-interface-http = { workspace = true, features = [ "http-body" ] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
