@@ -33,6 +33,15 @@ pub enum TypeConfig {
     Provider(ProviderConfig),
 }
 
+impl TypeConfig {
+    pub fn wit_world(&self) -> &Option<String> {
+        match self {
+            TypeConfig::Component(c) => &c.wit_world,
+            TypeConfig::Provider(c) => &c.wit_world,
+        }
+    }
+}
+
 /// Project configuration, normally specified in the root keys of a wasmcloud.toml file
 #[derive(Deserialize, Debug, Clone)]
 pub struct ProjectConfig {
