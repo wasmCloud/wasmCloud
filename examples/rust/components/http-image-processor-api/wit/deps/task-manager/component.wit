@@ -1,0 +1,9 @@
+package wasmcloud:task-manager@0.1.0-draft;
+
+world http-task-mangaer {
+  import wasi:logging/logging;
+  import wasmcloud:postgres/query@0.1.1-draft;
+
+  export tasks;
+  export wasi:http/incoming-handler@0.2.0;
+}
