@@ -279,6 +279,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-nats"
+version = "0.36.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f71e5a1bab60f46b0b005f4808b8ee83ef6d577608923de938403393c9a30cf8"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "memchr",
+ "nkeys 0.4.3",
+ "nuid 0.5.0",
+ "once_cell",
+ "portable-atomic",
+ "rand 0.8.5",
+ "regex",
+ "ring",
+ "rustls-native-certs 0.7.3",
+ "rustls-pemfile 2.1.3",
+ "rustls-webpki 0.102.6",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-rustls 0.26.0",
+ "tokio-util",
+ "tracing",
+ "tryhard",
+ "url",
+]
+
+[[package]]
 name = "async-nats-wrpc"
 version = "0.35.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6666,7 +6700,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a1dab42d9eb3412b2fcab8189d79de99a9db2f48cf9e48aedf7c3c163b10f07"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "futures",
  "nkeys 0.4.3",
@@ -6687,7 +6721,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "253b4a5c06d99f8d6768d69a1ba264652731cd298c87fd880077ad0e554840f2"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -6829,7 +6863,7 @@ dependencies = [
  "anyhow",
  "assert-json-diff",
  "async-compression",
- "async-nats",
+ "async-nats 0.33.0",
  "async-nats-wrpc",
  "bytes",
  "clap",
@@ -6893,7 +6927,7 @@ dependencies = [
  "wit-parser 0.215.0",
  "wrpc-interface-http",
  "wrpc-transport 0.26.7",
- "wrpc-transport-nats 0.22.3",
+ "wrpc-transport-nats 0.22.4",
 ]
 
 [[package]]
@@ -6902,7 +6936,7 @@ version = "0.25.0"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
@@ -7188,7 +7222,7 @@ name = "wasmcloud"
 version = "1.2.1"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-nats-wrpc",
  "base64 0.22.1",
  "bytes",
@@ -7242,7 +7276,7 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-interface-http",
  "wrpc-transport 0.26.7",
- "wrpc-transport-nats 0.22.3",
+ "wrpc-transport-nats 0.22.4",
 ]
 
 [[package]]
@@ -7262,7 +7296,7 @@ name = "wasmcloud-control-interface"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-trait",
  "bytes",
  "cloudevents-sdk",
@@ -7285,7 +7319,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa9ce0245be791548d153536d4a849f7db9abc9340657bae00250e8a0f7f6bbc"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-trait",
  "bytes",
  "cloudevents-sdk",
@@ -7308,7 +7342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a646a51b5c4410c6bd93aecbcc98f24921c88712de4549ab64617d88fb4acb88"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-trait",
  "bytes",
  "futures",
@@ -7404,7 +7438,7 @@ dependencies = [
  "wasmcloud-secrets-types 0.4.0",
  "wasmcloud-tracing",
  "wrpc-transport 0.26.7",
- "wrpc-transport-nats 0.22.3",
+ "wrpc-transport-nats 0.22.4",
 ]
 
 [[package]]
@@ -7671,7 +7705,7 @@ dependencies = [
  "wasmcloud-tracing",
  "wrpc-interface-http",
  "wrpc-transport 0.26.7",
- "wrpc-transport-nats 0.22.3",
+ "wrpc-transport-nats 0.22.4",
 ]
 
 [[package]]
@@ -7788,7 +7822,7 @@ name = "wasmcloud-test-util"
 version = "0.12.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "cloudevents-sdk",
  "nkeys 0.4.3",
  "rmp-serde",
@@ -9000,7 +9034,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7a40219678cc9e65164487ff3540cddc463d2040950f010bd1d8ce27c8c9a6c"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "futures",
  "tokio",
@@ -9011,12 +9045,12 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport-nats"
-version = "0.22.3"
+version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87731a7eb3f5201548239f229c3334341d43afa9a6363cb80546e1e976895f90"
+checksum = "897601f5cd2d9de950151ae97e8a5e73e18d3365e9396072b80094db33744d0f"
 dependencies = [
  "anyhow",
- "async-nats-wrpc",
+ "async-nats 0.36.0",
  "bytes",
  "futures",
  "tokio",
