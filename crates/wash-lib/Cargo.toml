@@ -94,7 +94,7 @@ walkdir = { workspace = true }
 wascap = { workspace = true }
 wasi-preview1-component-adapter-provider = { workspace = true }
 wasm-encoder = { workspace = true }
-wasmcloud-control-interface = { workspace = true }
+wasmcloud-control-interface = { version = "1" } # TODO: Revert once wadm is published with async-nats 0.36
 wasmcloud-core = { workspace = true, features = [
     "oci-distribution",
     "reqwest",

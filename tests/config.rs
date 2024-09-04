@@ -35,7 +35,7 @@ const PONGER_COMPONENT_ID: &str = "ponger_component";
 #[instrument(skip_all, ret)]
 #[tokio::test(flavor = "multi_thread")]
 async fn config_updates() -> Result<()> {
-    let (nats_server, _, nats_client, _) = start_nats()
+    let (nats_server, _, nats_client) = start_nats()
         .await
         .context("failed to start backing services")?;
 
@@ -139,11 +139,11 @@ async fn config_e2e() -> anyhow::Result<()> {
         .init();
 
     // Start NATS server
-    let (nats_server, nats_url, nats_client, nats_client_0_33) =
+    let (nats_server, nats_url, nats_client) =
         start_nats().await.expect("should be able to start NATS");
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client_0_33)
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client.clone())
         .lattice(LATTICE.to_string())
         .build();
     let wrpc_client = wrpc_transport_nats::Client::new(

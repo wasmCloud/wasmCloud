@@ -40,11 +40,11 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
         )
         .init();
 
-    let (nats_server, nats_url, _, nats_client_0_33) =
+    let (nats_server, nats_url, nats_client) =
         start_nats().await.context("failed to start NATS")?;
 
     // Build client for interacting with the lattice
-    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client_0_33)
+    let ctl_client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice(LATTICE.to_string())
         .build();
     // Build the host

@@ -135,7 +135,6 @@ wasmcloud-tracing = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
 async-nats = { workspace = true, features = ["ring"] }
-async-nats-0_33 = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
@@ -191,8 +190,7 @@ anstyle = { version = "1.0.8", default-features = false }
 anyhow = { version = "1", default-features = false }
 assert-json-diff = { version = "2", default-features = false }
 async-compression = { version = "0.3", default-features = false }
-async-nats = { package = "async-nats-wrpc", version = "0.35.1", default-features = false }
-async-nats-0_33 = { package = "async-nats", version = "0.33", default-features = false }
+async-nats = { package = "async-nats", version = "0.36", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 aws-config = { version = "1.5", default-features = false }
 aws-sdk-s3 = { version = "1.34", default-features = false }
@@ -375,4 +373,4 @@ wrpc-interface-blobstore = { version = "0.18", default-features = false }
 wrpc-interface-http = { version = "0.27", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
 wrpc-transport = { version = "0.26.7", default-features = false }
-wrpc-transport-nats = { version = "0.22.3", default-features = false }
+wrpc-transport-nats = { version = "0.23.0", default-features = false }

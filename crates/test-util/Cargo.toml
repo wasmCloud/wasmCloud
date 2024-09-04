@@ -17,7 +17,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { version = "0.33" }
+async-nats = { workspace = true }
 cloudevents-sdk = { workspace = true }
 nkeys = { workspace = true }
 rmp-serde = { workspace = true}
