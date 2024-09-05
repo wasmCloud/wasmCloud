@@ -102,6 +102,6 @@ jobs:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: install wash (current)
         if: ${{ matrix.wash-version == 'current' }}
-        run: cargo install --path ./crates/wash-cli
+        run: cargo install --locked --path ./crates/wash-cli
       - name: Ensure `wash new` works
         run: wash new component ${{ matrix.template }}  --template-name ${{ matrix.template }}
