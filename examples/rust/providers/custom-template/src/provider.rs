@@ -102,7 +102,7 @@ impl Handler<Option<Context>> for CustomTemplateProvider {
             Kind::Os => std::env::consts::OS,
             Kind::Arch => std::env::consts::ARCH,
         };
-        Ok(format!("{info}"))
+        Ok(info.into())
     }
 
     /// Request the provider to send some data to all linked components

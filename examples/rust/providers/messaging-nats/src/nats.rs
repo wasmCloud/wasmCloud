@@ -148,7 +148,7 @@ impl NatsMessagingProvider {
 
 async fn dispatch_msg(component_id: &str, nats_msg: async_nats::Message) {
     let msg = BrokerMessage {
-        body: nats_msg.payload.into(),
+        body: nats_msg.payload,
         reply_to: nats_msg.reply.map(|s| s.to_string()),
         subject: nats_msg.subject.to_string(),
     };
