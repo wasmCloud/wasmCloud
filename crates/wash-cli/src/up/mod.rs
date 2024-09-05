@@ -285,6 +285,26 @@ pub struct WasmcloudOpts {
 }
 
 impl WasmcloudOpts {
+    /// Create a NATS client from the current WasmcloudOpts
+    pub(crate) async fn create_nats_client(&self) -> Result<async_nats_0_33::Client> {
+        let ctl_host = self.ctl_host.as_deref().unwrap_or(DEFAULT_NATS_HOST);
+        let ctl_port = self
+            .ctl_port
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
+            .to_string();
+        create_nats_client_from_opts(
+            ctl_host,
+            &ctl_port,
+            self.ctl_jwt.clone(),
+            self.ctl_seed.clone(),
+            self.ctl_credsfile.clone(),
+            self.ctl_tls_ca_file.clone(),
+        )
+        .await
+        .context("failed to create NATS client")
+    }
+
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
         let lattice = self.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
         let ctl_host = self
