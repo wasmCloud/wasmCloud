@@ -9,16 +9,17 @@ on:
         type: choice
         description: crate to smart-release
         options:
-          - wasmcloud
-          - wasmcloud-core
-          - wasmcloud-test-util
-          - wasmcloud-tracing
+          - wascap
           - wash-cli
           - wash-lib
-          - wascap
+          - wasmcloud
+          - wasmcloud-component
+          - wasmcloud-core
           - wasmcloud-host
           - wasmcloud-runtime
           - wasmcloud-secrets-client
+          - wasmcloud-test-util
+          - wasmcloud-tracing
       do-release:
         type: boolean
         description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
