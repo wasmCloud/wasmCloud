@@ -39,6 +39,7 @@ oci-distribution = { workspace = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
+rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = { workspace = true }
@@ -98,7 +99,6 @@ notify = { workspace = true, features = ["macos_fsevent"] }
 
 [dev-dependencies]
 assert-json-diff = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }

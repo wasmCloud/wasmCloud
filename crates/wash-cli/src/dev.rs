@@ -1,29 +1,49 @@
-use std::collections::HashMap;
-use std::str::FromStr;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context as _, Result};
 use clap::Parser;
 use console::style;
 use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
+use rand::{distributions::Alphanumeric, Rng};
+use semver::Version;
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tokio::{select, sync::mpsc};
+use wash_lib::app::AppManifest;
 use wit_parser::{Resolve, WorldId};
 
+use wadm_types::{
+    CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
+    Metadata, Policy, Properties, SecretProperty, Specification, SpreadScalerProperty,
+    TargetConfig, TraitProperty,
+};
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::dev::run_dev_loop;
-use wash_lib::cli::{sanitize_component_id, CommandOutput};
-use wash_lib::component::{scale_component, ScaleComponentArgs};
+use wash_lib::cli::CommandOutput;
 use wash_lib::config::host_pid_file;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{get_config, ProjectConfig};
-use wasmcloud_control_interface::Host;
+use wasmcloud_core::{
+    parse_wit_meta_from_operation, LinkName, WitInterface, WitNamespace, WitPackage,
+};
 
+use crate::app::deploy_model_from_manifest;
 use crate::down::{handle_down, DownCommand};
 use crate::up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts};
+
+const DEFAULT_KEYVALUE_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/keyvalue-nats:0.1.0";
+const DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/http-client:0.11.0";
+const DEFAULT_HTTP_SERVER_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/http-server:0.22.0";
+const DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/blobstore-fs:0.8.0";
+const DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/messaging-nats:0.22.0";
+
+const DEFAULT_INCOMING_HANDLER_ADDRESS: &str = "127.0.0.1:8000";
+const DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION: &str = "wasmcloud.dev";
+const DEFAULT_BLOBSTORE_ROOT_DIR: &str = "/tmp";
+const DEFAULT_KEYVALUE_BUCKET: &str = "wasmcloud";
 
 #[derive(Debug, Clone, Parser)]
 pub struct DevCommand {
@@ -85,33 +105,117 @@ impl Drop for HostSubprocess {
     }
 }
 
-/// WADM components (either WebAssembly components or providers) that can be
-/// used to supply requested functionality in WIT interfaces for components under
-/// development.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum KnownDep {
-    /// wasmCloud keyvalue provider (normally corresponds to `wasi:keyvalue`)
-    KeyValueProvider,
-    /// wasmCloud HTTP server provider (normally corresponds to `wasi:incoming-handler`)
-    HttpServerProvider,
-    /// wasmCloud HTTP client provider (normally corresponds to `wasi:outgoing-handler`)
-    HttpClientProvider,
-    /// wasmCloud NATS messaging provider (normally corresponds to `wasi:messaging`)
-    NatsMessagingProvider,
-    /// wasmCloud blobstore (normally corresponds to `wasi:blobstore`)
-    BlobstoreFsProvider,
-    /// Custom provider of some interface (whether a provider or component),
-    /// including the necessary information to identify it as a dependency.
+/// Keys that index the list of dependencies in a [`ProjectDeps`]
+///
+/// # Examples
+///
+/// ```
+/// let project_key = ProjectDependencyKey::Project {
+///   name: "http-hello-world".into(),
+///   imports: vec![ ("wasi".into(), "http".into(), "incoming-handler".into(), None) ],
+///   exports: vec![ ("wasi".into(), "http".into(), "incoming-handler".into(), None) ],
+///   in_workspace: None,
+/// };
+///
+/// let workspace_key = ProjectDependencyKey::Workspace; // alternatively ProjectDependencyKey::default()
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ProjectDependencyKey {
     #[allow(unused)]
-    Custom {
-        import_interfaces: Vec<String>,
-        export_interfaces: Vec<String>,
+    RootWorkspace { name: String, path: PathBuf },
+    /// Identifies a nested workspace inside the root workspace
+    ///
+    /// Workspaces are hierarchical: they may contain one or more projects *or* other workspaces,
+    /// with the path structure of workspaces being the arbiter of which workspaces are above others.
+    ///
+    /// Only one workspace can be the *top-most* workspace, in that it contains
+    /// all other workspaces and projects.
+    #[allow(unused)]
+    Workspace {
         name: String,
-        image_ref: String,
+        path: PathBuf,
+        root: bool,
     },
+    /// Identifies a project inside the root workspace
+    Project { name: String, path: PathBuf },
 }
 
-impl KnownDep {
+impl ProjectDependencyKey {
+    /// Create a [`ProjectDependencyKey`] from the name of a project
+    ///
+    /// The supplied `project_dir` must be a folder containing a `wasmcloud.toml`
+    fn from_project(name: &str, project_dir: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self::Project {
+            name: name.into(),
+            path: project_dir.as_ref().into(),
+        })
+    }
+}
+
+/// Specification for a single dependency in a given project
+///
+/// [`DependencySpec`]s are normally gleaned from some source of project metadata, for example:
+///
+/// - dependency overrides in a project-level `wasmcloud.toml`
+/// - dependency overrides in a workspace-level `wasmcloud.toml`
+/// - WIT interface of a project
+///
+/// A `DependencySpec` represents a single dependency in the project, categorized into what part it is expected
+/// to play in in fulfilling WIT interfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DependencySpec {
+    /// A dependency that receives invocations (ex. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
+    Exports(DependencySpecInner),
+    /// A dependency that performs invocations (ex. `http-server` invoking a component's `wasi:http/incoming-handler` export)
+    Imports(DependencySpecInner),
+}
+
+impl DependencySpec {
+    /// Retrieve the name for this dependency
+    fn name(&self) -> String {
+        match self {
+            DependencySpec::Exports(inner) => inner.name(),
+            DependencySpec::Imports(inner) => inner.name(),
+        }
+    }
+
+    /// Retrieve the image_ref for this dependency
+    fn image_ref(&self) -> Option<&str> {
+        match self {
+            DependencySpec::Exports(inner) => inner.image_ref(),
+            DependencySpec::Imports(inner) => inner.image_ref(),
+        }
+    }
+
+    /// Retrieve whether this spec is a component or not
+    ///
+    /// Components must be especially noted because by default providers are expected
+    /// to provide functionality, but it also possible for components to do so.
+    fn is_component(&self) -> bool {
+        match self {
+            DependencySpec::Exports(inner) => inner.is_component(),
+            DependencySpec::Imports(inner) => inner.is_component(),
+        }
+    }
+
+    /// Retrieve configs for this component spec
+    fn configs(&self) -> &Vec<ConfigProperty> {
+        match self {
+            DependencySpec::Exports(inner) => &inner.configs,
+            DependencySpec::Imports(inner) => &inner.configs,
+        }
+    }
+
+    /// Retrieve secrets for this component spec
+    fn secrets(&self) -> &Vec<SecretProperty> {
+        match self {
+            DependencySpec::Exports(inner) => &inner.secrets,
+            DependencySpec::Imports(inner) => &inner.secrets,
+        }
+    }
+}
+
+impl DependencySpec {
     /// Derive which local component should be used given a WIT interface to be satisified
     ///
     /// # Examples
@@ -125,17 +229,80 @@ impl KnownDep {
             None => (iface, None),
             Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
         };
-        match (iface, version) {
+        let (ns, pkg, iface, _) = parse_wit_meta_from_operation(format!("{iface}.none")).ok()?;
+        match (ns.as_str(), pkg.as_str(), iface.as_str()) {
+            // Skip explicitly ignored (normally internal) interfaces
+            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => None,
             // Deal with known prefixes
-            ("wasi:keyvalue/atomics" | "wasi:keyvalue/store" | "wasi:keyvalue/batch", _) => {
-                Some(KnownDep::KeyValueProvider)
+            ("wasi", "keyvalue", "atomics" | "store" | "batch") => {
+                Some(Self::Exports(DependencySpecInner {
+                    wit: (
+                        ns,
+                        pkg,
+                        iface,
+                        version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                    ),
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_KEYVALUE_PROVIDER_IMAGE.into()),
+                    // TODO: needs config on the source->target link (Bucket name)
+                    ..Default::default()
+                }))
             }
-            ("wasi:http/outgoing-handler", _) => Some(KnownDep::HttpClientProvider),
-            ("wasi:blobstore/blobstore" | "wrpc:blobstore/blobstore", _) => {
-                Some(KnownDep::BlobstoreFsProvider)
+            ("wasi", "http", "outgoing-handler") => Some(Self::Exports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE.into()),
+                ..Default::default()
+            })),
+            ("wasi", "blobstore", "blobstore") | ("wrpc", "blobstore", "blobstore") => {
+                Some(Self::Exports(DependencySpecInner {
+                    wit: (
+                        ns,
+                        pkg,
+                        iface,
+                        version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                    ),
+                    delegated_to_workspace: false,
+                    link_name: "default".into(),
+                    image_ref: Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE.into()),
+                    // TODO: needs config on source->target link (ROOT)
+                    ..Default::default()
+                }))
             }
-            ("wasmcloud:messaging/consumer", _) => Some(KnownDep::NatsMessagingProvider),
-            _ => None,
+            ("wasmcloud", "messaging", "consumer") => Some(Self::Exports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                ..Default::default()
+            })),
+            // Treat all other dependencies as custom, and track them as dependencies,
+            // though they cannot be resolved to a proper dependency without an explicit override/
+            // other configuration method
+            _ => Some(Self::Exports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: None,
+                ..Default::default()
+            })),
         }
     }
 
@@ -152,25 +319,470 @@ impl KnownDep {
             None => (iface, None),
             Some((iface, version)) => (iface, semver::Version::parse(version).ok()),
         };
-        match (iface, version) {
-            // Deal with known prefixes
-            ("wasi:http/incoming-handler", _) => Some(KnownDep::HttpServerProvider),
-            ("wasmcloud:messaging/handler", _) => Some(KnownDep::NatsMessagingProvider),
-            // Ignore all other combinations
-            _ => None,
+        let (ns, pkg, iface, _) = parse_wit_meta_from_operation(format!("{iface}.none")).ok()?;
+        match (ns.as_ref(), pkg.as_ref(), iface.as_ref()) {
+            // Skip explicitly ignored (normally internal) interfaces
+            (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => None,
+            // Handle known interfaces
+            ("wasi", "http", "incoming-handler") => Some(Self::Imports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE.into()),
+                ..Default::default()
+            })),
+            ("wasmcloud", "messaging", "handler") => Some(Self::Imports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                // TODO: needs config on the provider->component link (subscriptions)
+                ..Default::default()
+            })),
+            // Treat all other dependencies as custom, and track them as dependencies,
+            // though they cannot be resolved to a proper dependency without an explicit override/
+            // other configuration method
+            _ => Some(Self::Imports(DependencySpecInner {
+                wit: (
+                    ns,
+                    pkg,
+                    iface,
+                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
+                ),
+                delegated_to_workspace: false,
+                link_name: "default".into(),
+                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
+                // TODO: needs config on the provider->component link (subscriptions)
+                ..Default::default()
+            })),
         }
     }
 
-    fn as_str(&self) -> &str {
-        match self {
-            KnownDep::KeyValueProvider => "provider-key-value",
-            KnownDep::HttpServerProvider => "provider-http-server",
-            KnownDep::HttpClientProvider => "provider-http-client",
-            KnownDep::NatsMessagingProvider => "provider-messaging-nats",
-            KnownDep::BlobstoreFsProvider => "provider-blobstore-fs",
-            KnownDep::Custom { name, .. } => name.as_str(),
+    fn generate_properties(&self, name: &str) -> Result<Properties> {
+        let properties = match self.image_ref() {
+            Some(
+                DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE
+                | DEFAULT_HTTP_SERVER_PROVIDER_IMAGE
+                | DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE
+                | DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE
+                | DEFAULT_KEYVALUE_PROVIDER_IMAGE,
+            ) => Properties::Capability {
+                properties: CapabilityProperties {
+                    image: self
+                        .image_ref()
+                        .with_context(|| {
+                            format!(
+                                "missing image ref for generated (known) component dependency [{}]",
+                                name,
+                            )
+                        })?
+                        .into(),
+                    id: None,
+                    config: self.configs().clone(),
+                    secrets: self.secrets().clone(),
+                },
+            },
+            // For image refs that we don't recognize, we can't tell easily
+            // if they are capabilities or components and could well be either.
+            _ => {
+                if self.is_component() {
+                    Properties::Component {
+                        properties: ComponentProperties {
+                            image: self
+                                .image_ref()
+                                .with_context(|| {
+                                    format!(
+                                        "missing image ref for generated component dependency [{}]",
+                                        self.name()
+                                    )
+                                })?
+                                .into(),
+                            id: None,
+                            config: self.configs().clone(),
+                            secrets: self.secrets().clone(),
+                        },
+                    }
+                } else {
+                    Properties::Capability {
+                        properties: CapabilityProperties {
+                            image: self
+                                .image_ref()
+                                .with_context(|| {
+                                    format!(
+                                        "missing image ref for generated provider dependency [{}]",
+                                        self.name()
+                                    )
+                                })?
+                                .into(),
+                            id: None,
+                            config: self.configs().clone(),
+                            secrets: self.secrets().clone(),
+                        },
+                    }
+                }
+            }
+        };
+        Ok(properties)
+    }
+
+    /// Convert to a component that can be used in a [`Manifest`] with a given suffix for uniqueness
+    fn generate_component(&self, suffix: &str) -> Result<Component> {
+        let name = format!("{}-{}", suffix, self.name());
+        let properties = self
+            .generate_properties(suffix)
+            .context("failed to generate properties for component")?;
+        Ok(Component {
+            name,
+            properties,
+            traits: Some(Vec::new()),
+        })
+    }
+}
+
+/// Versions of interfaces (in this context WIT interfaces) that are covered
+///
+/// Generally, this enum is used to resolve conflicts between providers
+/// that satisfy similar (possibly just slightly differently versioned) interfaces.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+enum VersionCoverage {
+    #[default]
+    All,
+    SemVer(Version),
+}
+
+/// Specification of a dependency (possibly implied)
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct DependencySpecInner {
+    /// Relevant WIT information that represents the dependency
+    ///
+    /// The interfaces that the dependency receives
+    ///
+    /// This generally means that the component will
+    wit: (WitNamespace, WitPackage, WitInterface, VersionCoverage),
+
+    /// Whether this dependency should delegated to the workspace
+    delegated_to_workspace: bool,
+
+    /// Image reference to the component that should be inserted/used
+    ///
+    /// This reference *can* be missing if an override is specified with no image,
+    /// which can happen in at least two cases:
+    /// - custom WIT-defined interface imports/exports (we may not know at WIT processing what their overrides will be)
+    /// - project-level with workspace delegation  (we may not know what the image ref is at the project level)
+    image_ref: Option<String>,
+
+    /// Whether this dependency represents a WebAssembly component, rather than a (standalone binary) provider
+    is_component: bool,
+
+    /// The link name this dependency should be connected over
+    ///
+    /// In the vast majority of cases, this will be "default", but it may not be
+    /// if the same interface is used to link to multiple different providers/components
+    link_name: LinkName,
+
+    /// Configurations that must be created and/or consumed by this dependency
+    configs: Vec<wadm_types::ConfigProperty>,
+
+    /// Secrets that must be created and/or consumed by this dependency
+    ///
+    /// [`SecretProperty`] here support a special `policy` value which is 'env'.
+    /// Paired with a key that looks like "$SOME_VALUE", the value will be extracted from ENV *prior* and
+    secrets: Vec<wadm_types::SecretProperty>,
+}
+
+impl DependencySpecInner {
+    /// Retrieve the name for this dependency
+    fn name(&self) -> String {
+        match self.image_ref.as_deref() {
+            Some(DEFAULT_KEYVALUE_PROVIDER_IMAGE) => "keyvalue-nats".into(),
+            Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE) => "http-client".into(),
+            Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE) => "http-server".into(),
+            Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE) => "blobstore-fs".into(),
+            Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE) => "messaging-nats".into(),
+            _ => format!("custom-{}-{}", self.wit.0, self.wit.1),
         }
     }
+
+    /// Retrieve the image reference for this dependency
+    fn image_ref(&self) -> Option<&str> {
+        self.image_ref.as_deref()
+    }
+
+    /// Retrieve whether this dependency spec is a component
+    fn is_component(&self) -> bool {
+        self.is_component
+    }
+}
+
+/// Information related to the dependencies of a given project
+///
+/// Projects can either be inside workspaces, or not (single component/provider).
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct ProjectDeps {
+    /// ID of a session
+    ///
+    /// This is normally used when generating sessions to be used with `wash dev`, in order
+    /// to make sure various dependencies and related files can be uniquely identified.
+    pub(crate) session_id: Option<String>,
+
+    /// Lookup of dependencies by project key, with lookups into the pool
+    dependencies: HashMap<ProjectDependencyKey, DependencySpec>,
+
+    /// Dependencies that receive invocations for given interfaces (i.e. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
+    ///
+    /// The keys to this structure are indices into the `dependencies` member.
+    exporters: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+
+    /// Dependencies that perform invocations for given interfaces (i.e. `http-server` invoking a component's `wasi:http/incoming-handler` export)
+    importers: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+}
+
+impl ProjectDeps {
+    /// Build a [`ProjectDeps`] for a project/workspace entirely from [`DependencySpec`]s
+    pub fn from_known_deps(
+        pkey: ProjectDependencyKey,
+        deps: impl IntoIterator<Item = DependencySpec>,
+    ) -> Result<Self> {
+        let mut pdeps = Self::default();
+        pdeps
+            .add_known_deps(deps.into_iter().map(|dep| (pkey.clone(), dep)))
+            .context("failed to add deps while building project dependencies")?;
+        Ok(pdeps)
+    }
+
+    /// Build a [`ProjectDeps`] from a given project/workspace configuration
+    pub fn from_project_config(_cfg: &ProjectConfig) -> Result<Self> {
+        // TODO: implement overrides
+        Ok(Self::default())
+    }
+
+    /// Add one or more [`DependencySpec`]s to the current [`ProjectDeps`]
+    ///
+    /// To add a known dependency to this list of project dependencies, we must know *which* project
+    /// the dependency belongs to, or whether it corresponds to the workspace.
+    pub fn add_known_deps(
+        &mut self,
+        deps: impl IntoIterator<Item = (ProjectDependencyKey, DependencySpec)>,
+    ) -> Result<()> {
+        for (pkey, dep) in deps.into_iter() {
+            self.dependencies.insert(pkey, dep);
+        }
+        Ok(())
+    }
+
+    /// Merge another bundle of dependencies (possibly derived from some other source of metadata)
+    ///
+    /// Note that the `other` will override the values `self`, where necessary.
+    fn merge_override(&mut self, other: Self) -> Result<()> {
+        // ProjectDeps should have matching sessions, if specified
+        if self.session_id != other.session_id {
+            bail!(
+                "session IDs (if specified) must match for merging deps. Session ID [{}] does not match [{}]",
+                self.session_id.as_deref().unwrap_or("<none>"),
+                other.session_id.as_deref().unwrap_or("<none>"),
+            );
+        }
+
+        // Add dependencies from other
+        self.dependencies.extend(other.dependencies);
+
+        // TODO: merge dependencies with identical keys, while implementing overrides
+
+        Ok(())
+    }
+
+    /// Generate a WADM manifest from the current group of project dependencies
+    ///
+    /// A session ID, when provided, is uses to distinguish resources from others that might be running in the lattice.
+    /// Primarily this session ID is used to distinguish the names of WADM application manifests, enabling them to
+    /// be easily referenced/compared, and replaced if necessary.
+    ///
+    /// Project dependencies, spread across large/nested enough workspace can lead to *multiple* Applications manifests
+    /// being produced -- in general every workspace *should* produce a distinct manifest, but it is possible a workspace
+    /// could produce zero manifests (for example, if all resources are delegated to a higher level manifest).
+    fn generate_wadm_manifests(
+        &self,
+        mut app_component: Component,
+        session_id: Option<&str>,
+    ) -> Result<impl IntoIterator<Item = Manifest>> {
+        let mut manifests = Vec::<Manifest>::new();
+        let session_id = session_id.unwrap_or("");
+        let app_name = format!("dev-{}", app_component.name);
+
+        // Generate components for all the dependencies
+        let mut components = Vec::new();
+
+        // For each dependency, go through and generate the component along with necessary links
+        for dep in self.dependencies.values() {
+            let dep = dep.clone();
+            let mut dep_component = dep
+                .generate_component(session_id)
+                .context("failed to generate component")?;
+
+            // Generate links for the given component and it's spec, for known interfaces
+            match dep {
+                DependencySpec::Exports(DependencySpecInner {
+                    wit: (ns, pkg, iface, version),
+                    ..
+                }) => {
+                    // Build the relevant app->dep link trait
+                    let mut link_property = LinkProperty {
+                        namespace: ns.clone(),
+                        package: pkg.clone(),
+                        interfaces: vec![iface.clone()],
+                        target: TargetConfig {
+                            name: dep_component.name.clone(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+
+                    // Make interface-specific changes
+                    match (ns.as_ref(), pkg.as_ref(), iface.as_ref(), version) {
+                        ("wasi", "blobstore", "blobstore", _)
+                        | ("wrpc", "blobstore", "blobstore", _) => {
+                            link_property.target.config.push(ConfigProperty {
+                                name: "default".into(),
+                                properties: Some(HashMap::from([(
+                                    "root".into(),
+                                    DEFAULT_BLOBSTORE_ROOT_DIR.into(),
+                                )])),
+                            });
+                        }
+                        ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
+                            link_property.target.config.push(ConfigProperty {
+                                name: "default".into(),
+                                properties: Some(HashMap::from([(
+                                    "bucket".into(),
+                                    DEFAULT_KEYVALUE_BUCKET.into(),
+                                )])),
+                            });
+                        }
+                        _ => {}
+                    }
+
+                    let link_trait = wadm_types::Trait {
+                        trait_type: "link".into(),
+                        properties: TraitProperty::Link(link_property),
+                    };
+
+                    // TODO: Check for on-dep overrides/additional configuration to add to the link
+
+                    // Add the trait to the app component
+                    app_component
+                        .traits
+                        .get_or_insert(Vec::new())
+                        .push(link_trait);
+                }
+                DependencySpec::Imports(DependencySpecInner {
+                    wit: (ns, pkg, iface, version),
+                    ..
+                }) => {
+                    // Build the relevant dep->app link trait
+                    let mut link_property = LinkProperty {
+                        namespace: ns.clone(),
+                        package: pkg.clone(),
+                        interfaces: vec![iface.clone()],
+                        target: TargetConfig {
+                            name: app_component.name.clone(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+
+                    // Make interface-specific tweaks to the generated trait
+                    match (ns.as_ref(), pkg.as_ref(), iface.as_ref(), version) {
+                        ("wasi", "http", "incoming-handler", _) => {
+                            link_property
+                                .source
+                                .get_or_insert(Default::default())
+                                .config
+                                .push(ConfigProperty {
+                                    name: "default".into(),
+                                    properties: Some(HashMap::from([(
+                                        "address".into(),
+                                        DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
+                                    )])),
+                                });
+                        }
+                        ("wasmcloud", "messaging", "handler", _) => {
+                            link_property
+                                .source
+                                .get_or_insert(Default::default())
+                                .config
+                                .push(ConfigProperty {
+                                    name: "default".into(),
+                                    properties: Some(HashMap::from([(
+                                        "subscriptions".into(),
+                                        DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
+                                    )])),
+                                });
+                        }
+                        _ => {}
+                    }
+
+                    // TODO: Check for on-dep overrides/additional configuration to add to the link
+
+                    let link_trait = wadm_types::Trait {
+                        trait_type: "link".into(),
+                        properties: TraitProperty::Link(link_property),
+                    };
+
+                    // Add the trait
+                    dep_component
+                        .traits
+                        .get_or_insert(Vec::new())
+                        .push(link_trait);
+                }
+            }
+
+            // Add the dependency component after we've made necessary links
+            components.push(dep_component);
+        }
+
+        // Add the application component after we've made necessary links
+        components.push(app_component);
+
+        manifests.push(Manifest {
+            api_version: "0.0.0".into(),
+            kind: "Application".into(),
+            metadata: Metadata {
+                name: app_name,
+                annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
+                labels: BTreeMap::new(),
+            },
+            spec: Specification {
+                components,
+                policies: Vec::from([Policy {
+                    name: "nats-kv".into(),
+                    policy_type: "policy.secret.wasmcloud.dev/v1alpha1".into(),
+                    properties: BTreeMap::from([("backend".into(), "nats-kv".into())]),
+                }]),
+            },
+        });
+
+        Ok(manifests)
+    }
+}
+
+/// Check whether the provided interface is ignored for the purpose of building dependencies.
+///
+/// Dependencies are ignored normally if they are known-internal packages.
+fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
+    matches!(
+        (ns, pkg, iface),
+        ("wasi", "io", _) | ("wasi", "clocks", _) | ("wasi", "http", "types")
+    )
 }
 
 /// Parse Build a [`wit_parser::Resolve`] from a provided directory
@@ -198,7 +810,10 @@ pub fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldI
 ///
 /// Normally, this means converting imports that the component depends on to
 /// components that can be run on the lattice.
-fn resolve_dependent_components(resolve: Resolve, world_id: WorldId) -> Result<Vec<KnownDep>> {
+fn discover_dependencies_from_wit(
+    resolve: Resolve,
+    world_id: WorldId,
+) -> Result<Vec<DependencySpec>> {
     let mut deps = Vec::new();
     let world = resolve
         .worlds
@@ -221,7 +836,7 @@ fn resolve_dependent_components(resolve: Resolve, world_id: WorldId) -> Result<V
                 pkg.name.name,
                 iface.name.as_ref().context("interface missing name")?,
             );
-            if let Some(dep) = KnownDep::from_wit_import_iface(iface_name) {
+            if let Some(dep) = DependencySpec::from_wit_import_iface(iface_name) {
                 deps.push(dep);
             }
         }
@@ -243,13 +858,50 @@ fn resolve_dependent_components(resolve: Resolve, world_id: WorldId) -> Result<V
                 pkg.name.name,
                 iface.name.as_ref().context("interface missing name")?,
             );
-            if let Some(dep) = KnownDep::from_wit_export_iface(iface_name) {
+            if let Some(dep) = DependencySpec::from_wit_export_iface(iface_name) {
                 deps.push(dep);
             }
         }
     }
 
     Ok(deps)
+}
+
+/// Generate a WADM component from a project configuration
+fn generate_component_from_project_cfg(
+    session_id: &str,
+    cfg: &ProjectConfig,
+    image_ref: &str,
+) -> Result<Component> {
+    let name = format!("{}-{}", session_id, cfg.common.name.clone());
+    Ok(Component {
+        name: name.clone(),
+        properties: match &cfg.project_type {
+            wash_lib::parser::TypeConfig::Component(_c) => Properties::Component {
+                properties: ComponentProperties {
+                    image: image_ref.into(),
+                    id: None,
+                    config: Vec::with_capacity(0),
+                    secrets: Vec::with_capacity(0),
+                },
+            },
+            wash_lib::parser::TypeConfig::Provider(_p) => Properties::Capability {
+                properties: CapabilityProperties {
+                    image: image_ref.into(),
+                    id: None,
+                    config: Vec::with_capacity(0),
+                    secrets: Vec::with_capacity(0),
+                },
+            },
+        },
+        traits: Some(vec![wadm_types::Trait {
+            trait_type: "spreadscaler".into(),
+            properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
+                instances: 1,
+                spread: Vec::new(),
+            }),
+        }]),
+    })
 }
 
 /// Handle `wash dev`
@@ -327,6 +979,8 @@ pub async fn handle_command(
         );
     }
 
+    let nats_client = cmd.wasmcloud_opts.create_nats_client().await?;
+
     // Connect to the wasmcloud instance
     let ctl_client = Arc::new(
         cmd.wasmcloud_opts
@@ -393,7 +1047,7 @@ pub async fn handle_command(
         .get_hosts()
         .await
         .or_else(|e| bail!("failed to retrieve hosts from lattice: {e}"))?;
-    let host: Host = match &hosts[..] {
+    match &hosts[..] {
         [] => bail!("0 hosts detected, is wasmCloud running?"),
         [h] => h
             .response
@@ -443,29 +1097,8 @@ pub async fn handle_command(
         "✅ successfully built project at [{}]",
         artifact_path.display()
     );
-
     // Since we're using the component from file on disk, the ref should be the file path (canonicalized) on disk as URI
     let component_ref = format!("file://{}", artifact_path.display());
-    // Since the only restriction on component_id is that it must be unique, we can just use the artifact path as the component_id
-    // to ensure uniqueness
-    let component_id = sanitize_component_id(&artifact_path.display().to_string());
-
-    // Scale the component to one max replica
-    scale_component(ScaleComponentArgs {
-        client: &ctl_client,
-        host_id: &host.id,
-        component_id: &component_id,
-        component_ref: &component_ref,
-        max_instances: 1,
-        annotations: Some(HashMap::from_iter(vec![(
-            "wash_dev".to_string(),
-            "true".to_string(),
-        )])),
-        config: vec![],
-        skip_wait: false,
-        timeout_ms: None,
-    })
-    .await?;
 
     // Set up a oneshot channel to remove
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
@@ -517,8 +1150,14 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
-    let server_id = ServerId::from_str(&host.id)
-        .with_context(|| format!("failed to parse host ID [{}]", host.id))?;
+    // Generate a session ID for dev
+    let session_id: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect();
+
+    let lattice = &ctl_client.lattice;
 
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
@@ -529,34 +1168,77 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
 
                 // After the project is built, we must ensure dependencies are set up and running
-                let (resolve, world_id) = parse_project_wit(&project_cfg).with_context(|| {
-                    format!(
-                        "failed to parse WIT from project dir [{}]",
-                        project_cfg.common.path.display(),
-                    )
-                })?;
+                let (resolve, world_id) = parse_project_wit(&project_cfg).context(                        "failed to parse WIT from project dir")?;
 
-                // Resolve dependencies for the component
-                let component_deps = resolve_dependent_components(resolve, world_id)
+                // Pull implied dependencies from WIT
+                let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
                     .context("failed to resolve dependent components")?;
                 eprintln!(
                     "Detected component dependencies: {:?}",
-                    component_deps
+                    wit_implied_deps
                         .iter()
-                        .map(KnownDep::as_str)
-                        .collect::<Vec<&str>>()
+                        .map(DependencySpec::name)
+                        .collect::<Vec<String>>()
                 );
+                let pkey = ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path).context("failed to build key for project")?;
+                let mut project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps).context("failed to build project dependencies")?;
 
-                // Re-run the dev-loop
-                run_dev_loop(
-                    &project_cfg,
-                    &component_id,
-                    &component_ref,
-                    &server_id,
-                    &ctl_client,
-                    sign_cfg.clone(),
-                ).await
-                    .context("dev loop refresh failed")?;
+                // Pull and merge in implied dependencies from project-level wasmcloud.toml
+                let implied_project_deps = ProjectDeps::from_project_config(&project_cfg)
+                    .with_context(|| format!(
+                        "failed to discover project dependencies from config [{}]",
+                        project_cfg.common.path.display(),
+                    ))?;
+                project_deps.merge_override(implied_project_deps).context("failed to merge & override project-specified deps")?;
+
+                // Generate component that represents the app
+                let app_component = generate_component_from_project_cfg(&session_id, &project_cfg, &component_ref).context("failed to generate app component")?;
+
+                // Convert the project deps into a fully-baked WADM manifests
+                let manifests = project_deps.generate_wadm_manifests(
+                    app_component,
+                    Some(&session_id),
+                ).context("failed to generate a WADM manifest from (session [{}])")?;
+
+                // Apply all manifests
+                for manifest in manifests {
+                    let model_yaml = serde_json::to_string(&manifest).context("failed to convert manifest to string")?;
+
+                    // TODO: allow writing out of the manifest to a local file
+
+                    // Put the manifest
+                    match wash_lib::app::put_model(
+                        &nats_client,
+                        Some(lattice.clone()),
+                        &model_yaml
+                    )
+                        .await {
+                            Ok(_) => {},
+                            Err(e) if e.to_string().contains("already exists") => {},
+                            Err(e) => bail!("failed to put model [{}]: {e}", manifest.metadata.name),
+                        }
+
+                    // Deploy the manifest
+                    deploy_model_from_manifest(
+                        &nats_client,
+                        Some(lattice.clone()),
+                        AppManifest::ModelName(manifest.metadata.name.clone()),
+                        None,
+                    )
+                        .await
+                        .context("failed to deploy manifest")?;
+
+                    eprintln!(
+                        "{} {}",
+                        emoji::RECYCLE,
+                        style(format!(
+                            "deployed development manifest for application [{}]",
+                            manifest.metadata.name,
+                        ))
+                            .bold(),
+                    );
+                }
+
                 pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
             },
