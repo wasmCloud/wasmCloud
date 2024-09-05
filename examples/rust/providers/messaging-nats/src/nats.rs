@@ -11,7 +11,7 @@ use tracing::{debug, error};
 use wasmcloud_provider_sdk::core::HostData;
 use wasmcloud_provider_sdk::{
     get_connection, load_host_data, run_provider, serve_provider_exports, Context, LinkConfig,
-    Provider,
+    LinkDeleteInfo, Provider,
 };
 
 use crate::connection::ConnectionConfig;
@@ -196,7 +196,8 @@ impl Provider for NatsMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection which removes all subscriptions
-    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
+    async fn delete_link_as_target(&self, link: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let source_id = link.get_source_id();
         let mut all_components = self.components.write().await;
 
         if all_components.remove(source_id).is_some() {

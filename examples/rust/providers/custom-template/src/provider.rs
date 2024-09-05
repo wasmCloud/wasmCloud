@@ -5,7 +5,8 @@ use anyhow::Context as _;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use wasmcloud_provider_sdk::{
-    run_provider, serve_provider_exports, Context, LinkConfig, Provider, ProviderInitConfig,
+    run_provider, serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
+    ProviderInitConfig,
 };
 
 use crate::config::ProviderConfig;
@@ -215,7 +216,8 @@ impl Provider for CustomTemplateProvider {
     /// When a link is deleted from your provider to a component, this method will be called with the target ID
     /// of the component that was unlinked. You can use this method to clean up any state or resources that were
     /// associated with the linked component.
-    async fn delete_link_as_source(&self, target: &str) -> anyhow::Result<()> {
+    async fn delete_link_as_source(&self, link: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let target = link.get_target_id();
         self.linked_to.write().await.remove(target);
 
         debug!(
@@ -228,7 +230,8 @@ impl Provider for CustomTemplateProvider {
     /// When a link is deleted from a component to your provider, this method will be called with the source ID
     /// of the component that was unlinked. You can use this method to clean up any state or resources that were
     /// associated with the linked component.
-    async fn delete_link_as_target(&self, source_id: &str) -> anyhow::Result<()> {
+    async fn delete_link_as_target(&self, link: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        let source_id = link.get_source_id();
         self.linked_from.write().await.remove(source_id);
 
         debug!(
