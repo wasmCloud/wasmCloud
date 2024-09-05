@@ -40,3 +40,4 @@ wrpc-transport = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
+testcontainers = { workspace = true }

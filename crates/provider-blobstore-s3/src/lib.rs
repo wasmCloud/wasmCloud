@@ -324,19 +324,19 @@ impl StorageClient {
     /// Create a bucket
     #[instrument(level = "debug", skip(self))]
     pub async fn create_container(&self, bucket: &str) -> anyhow::Result<()> {
-        // Build bucket config, using location constraint if necessary
-        let bucket_config = CreateBucketConfiguration::builder()
-            .set_location_constraint(self.bucket_region.clone())
-            .build();
+        let mut builder = self.s3_client.create_bucket();
 
-        match self
-            .s3_client
-            .create_bucket()
-            .create_bucket_configuration(bucket_config)
-            .bucket(bucket)
-            .send()
-            .await
-        {
+        // Only add BucketLocationConstraint if bucket_region was set.
+        if let Some(bucket_region) = &self.bucket_region {
+            // Build bucket config, using location constraint if necessary
+            let bucket_config = CreateBucketConfiguration::builder()
+                .set_location_constraint(Some(bucket_region.clone()))
+                .build();
+
+            builder = builder.create_bucket_configuration(bucket_config);
+        }
+
+        match builder.bucket(bucket).send().await {
             Ok(CreateBucketOutput { location, .. }) => {
                 debug!(?location, "bucket created");
                 Ok(())

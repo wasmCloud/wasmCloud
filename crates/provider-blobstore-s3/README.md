@@ -149,22 +149,18 @@ however, the prefix is not required.
 
 
 ## Running the Tests
-To run `make test` successfully, this provider requires either:
-- AWS configuration (see [Configuration](#Configuration) above)
-- A running s3 replacement like minio
 
-To test locally without AWS configuration, you can run minio with:
-```shell
-docker run -p 9000:9000 --name minio \
-    --env MINIO_ROOT_USER="minioadmin" \
-    --env MINIO_ROOT_PASSWORD="minioadmin" bitnami/minio:latest
-```
+To run `cargo test` successfully, this provider requires either:
+1. A local docker setup, so that [testcontainers](https://github.com/testcontainers/testcontainers-rs) can be used to run a [localstack](https://github.com/localstack/localstack) container for S3.
+2. AWS configuration (see [Configuration](#Configuration) above)
 
 Then set your environment variables and run the test
 ```shell
 export AWS_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=minioadmin
-export AWS_SECRET_ACCESS_KEY=minioadmin
-export AWS_ENDPOINT=http://localhost:9000
-make test
+export AWS_ACCESS_KEY_ID=YOUR_AWS_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY=YOUR_AWS_SECRET_ACCESS_KEY
+export AWS_ENDPOINT=AWS_ENDPOINT_URL
+cargo test
 ```
+
+Please note that if `AWS_ENDPOINT` environment variable is not set, a [localstack](https://github.com/localstack/localstack) testcontainer will be used instead.
