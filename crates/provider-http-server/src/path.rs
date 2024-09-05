@@ -25,15 +25,21 @@ use crate::{
     ServiceSettings,
 };
 
+/// This struct holds both the forward and reverse mappings for path-based routing
+/// so that they can be modified by just acquiring a single lock in the [`HttpServerProvider`]
+#[derive(Debug, Default)]
+struct Router {
+    /// Lookup from a path to the component ID that is handling that path
+    paths: HashMap<String, String>,
+    /// Reverse lookup to find the path for a (component,link_name) pair
+    components: HashMap<(String, String), String>,
+}
+
 /// `wrpc:http/incoming-handler` provider implementation with path-based routing
 #[derive(Clone)]
 pub struct HttpServerProvider {
-    // NOTE: When acquiring locks to both of these maps, always acquire the `paths` lock first
-    // to avoid a deadlock
-    /// Map from a path to the component ID that is handling that path
-    router: Arc<RwLock<HashMap<String, String>>>,
-    /// Reverse lookup to find the path for a (component,link_name) pair
-    paths: Arc<RwLock<HashMap<(String, String), String>>>,
+    /// Struct that holds the routing information based on path/component_id
+    path_router: Arc<RwLock<Router>>,
     /// [`Handle`] to the server task
     handle: Handle,
     /// Task handle for the server task
@@ -59,8 +65,8 @@ impl HttpServerProvider {
             load_settings(default_address, &host_data.config)
                 .context("failed to load settings in path mode")?,
         );
-        let router = Arc::new(RwLock::new(HashMap::new()));
-        let paths = Arc::new(RwLock::new(HashMap::new()));
+
+        let path_router = Arc::new(RwLock::new(Router::default()));
 
         let addr = settings.address;
         info!(
@@ -73,7 +79,7 @@ impl HttpServerProvider {
 
         let handle = axum_server::Handle::new();
         let task_handle = handle.clone();
-        let task_router = router.clone();
+        let task_router = path_router.clone();
         let task = if let (Some(crt), Some(key)) =
             (&settings.tls_cert_file, &settings.tls_priv_key_file)
         {
@@ -122,8 +128,7 @@ impl HttpServerProvider {
         };
 
         Ok(Self {
-            router,
-            paths,
+            path_router,
             handle,
             task: Arc::new(task),
         })
@@ -147,13 +152,8 @@ impl Provider for HttpServerProvider {
             );
         };
 
-        // Acquire the locks in the same order as `delete_link_as_source`
-        //
-        // We want to acquire both locks here to make sure we can verify that the path is not already in use
-        // before we insert it into the paths map
-        let mut paths = self.paths.write().await;
-        let mut router = self.router.write().await;
-        if paths.contains_key(&(
+        let mut path_router = self.path_router.write().await;
+        if path_router.components.contains_key(&(
             link_config.target_id.to_string(),
             link_config.link_name.to_string(),
         )) {
@@ -164,20 +164,22 @@ impl Provider for HttpServerProvider {
                 link_config.link_name
             );
         }
-        if router.contains_key(path.as_str()) {
+        if path_router.paths.contains_key(path.as_str()) {
             // When we can return errors from links, tell the host this was invalid
             bail!("Path {path} already in use by a different component");
         }
 
         // Insert the path into the paths map for future lookups
-        paths.insert(
+        path_router.components.insert(
             (
                 link_config.target_id.to_string(),
                 link_config.link_name.to_string(),
             ),
             path.to_string(),
         );
-        router.insert(path.to_string(), link_config.target_id.to_string());
+        path_router
+            .paths
+            .insert(path.to_string(), link_config.target_id.to_string());
 
         Ok(())
     }
@@ -188,14 +190,12 @@ impl Provider for HttpServerProvider {
         let component_id = info.get_target_id();
         let link_name = info.get_link_name();
 
-        // NOTE: acquire the paths lock first to match the order in `receive_link_config_as_source`
-        let path = self
-            .paths
-            .write()
-            .await
+        let mut path_router = self.path_router.write().await;
+        let path = path_router
+            .components
             .remove(&(component_id.to_string(), link_name.to_string()));
         if let Some(path) = path {
-            self.router.write().await.remove(&path);
+            path_router.paths.remove(&path);
         }
 
         Ok(())
@@ -212,7 +212,7 @@ impl Provider for HttpServerProvider {
 
 #[derive(Clone, Debug)]
 struct RequestContext {
-    router: Arc<RwLock<HashMap<String, String>>>,
+    router: Arc<RwLock<Router>>,
     scheme: http::uri::Scheme,
     settings: Arc<ServiceSettings>,
 }
@@ -231,7 +231,7 @@ async fn handle_request(
     let timeout = settings.timeout_ms.map(Duration::from_millis);
     let req = build_request(request, scheme, authority, settings.clone())?;
     let path = req.uri().path();
-    let Some(target_component) = router.read().await.get(path).cloned() else {
+    let Some(target_component) = router.read().await.paths.get(path).cloned() else {
         return Err((http::StatusCode::NOT_FOUND, "path not found".to_string()));
     };
     Ok(invoke_component(
