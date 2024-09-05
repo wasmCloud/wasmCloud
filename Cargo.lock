@@ -7477,6 +7477,7 @@ dependencies = [
  "rustls 0.22.4",
  "serde",
  "serde_json",
+ "testcontainers",
  "tokio",
  "tokio-stream",
  "tokio-util",

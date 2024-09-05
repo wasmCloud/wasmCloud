@@ -31,32 +31,95 @@
 use std::collections::HashMap;
 use std::env;
 
+use anyhow::{Context as _, Result};
+use testcontainers::{core::WaitFor, runners::AsyncRunner as _, ContainerAsync, Image, ImageExt};
 use wasmcloud_provider_blobstore_s3::{StorageClient, StorageConfig};
 
-/// Helper function to create a `StorageClient` with local testing overrides
-async fn test_client() -> StorageClient {
-    let conf = StorageConfig {
-        endpoint: env::var("AWS_ENDPOINT").ok(),
-        access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
-        secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
-        aliases: HashMap::new(),
-        max_attempts: None,
-        region: Some("local".into()),
-        session_token: None,
-        sts_config: None,
-        bucket_region: None,
-    };
+#[derive(Default, Debug, Clone)]
+pub struct LocalStack {
+    _priv: (),
+}
 
-    StorageClient::new(conf, &HashMap::new()).await
+impl Image for LocalStack {
+    fn name(&self) -> &str {
+        "localstack/localstack"
+    }
+
+    fn tag(&self) -> &str {
+        "3.7.0"
+    }
+
+    fn ready_conditions(&self) -> Vec<WaitFor> {
+        vec![WaitFor::message_on_stdout("Ready."), WaitFor::millis(3000)]
+    }
+}
+
+struct TestEnv {
+    _container: Option<ContainerAsync<LocalStack>>,
+    endpoint: String,
+}
+
+impl TestEnv {
+    pub async fn new() -> Result<Self> {
+        let (endpoint, container) = if let Ok(ep) = env::var("AWS_ENDPOINT") {
+            (ep, None)
+        } else {
+            let node = LocalStack::default()
+                .with_env_var("SERVICES", "s3")
+                .start()
+                .await
+                .context("should have started localstack")?;
+            let host_ip = node
+                .get_host()
+                .await
+                .context("should have gotten localstack ip")?;
+            let host_port = node
+                .get_host_port_ipv4(4566)
+                .await
+                .context("should have gotten localstack port")?;
+            (format!("http://{host_ip}:{host_port}"), Some(node))
+        };
+
+        Ok(Self {
+            endpoint,
+            _container: container,
+        })
+    }
+
+    pub async fn configure_test_client(&self) -> StorageClient {
+        let conf = StorageConfig {
+            endpoint: Some(self.endpoint.clone()),
+            access_key_id: Self::env_var_or_default("AWS_ACCESS_KEY_ID", Some("test".to_string())),
+            secret_access_key: Self::env_var_or_default(
+                "AWS_SECRET_ACCESS_KEY",
+                Some("test".to_string()),
+            ),
+            aliases: HashMap::new(),
+            max_attempts: None,
+            region: Self::env_var_or_default("AWS_REGION", Some("us-east-1".to_string())),
+            session_token: None,
+            sts_config: None,
+            bucket_region: Self::env_var_or_default("BUCKET_REGION", None),
+        };
+
+        StorageClient::new(conf, &HashMap::new()).await
+    }
+
+    fn env_var_or_default(key: &str, default: Option<String>) -> Option<String> {
+        std::env::var(key).ok().or(default)
+    }
 }
 
 /// Tests
 /// - create_container
-/// - remove_container
 /// - container_exists
 #[tokio::test]
 async fn test_create_container() {
-    let s3 = test_client().await;
+    let env = TestEnv::new()
+        .await
+        .expect("should have setup the test environment");
+
+    let s3 = env.configure_test_client().await;
 
     let num = rand::random::<u64>();
     let bucket = format!("test.bucket.{num}");
