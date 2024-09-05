@@ -375,4 +375,4 @@ wrpc-interface-blobstore = { version = "0.18", default-features = false }
 wrpc-interface-http = { version = "0.27", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
 wrpc-transport = { version = "0.26.7", default-features = false }
-wrpc-transport-nats = { version = "0.22.3", default-features = false }
+wrpc-transport-nats = { version = "=0.22.3", default-features = false }
