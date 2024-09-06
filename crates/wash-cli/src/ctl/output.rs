@@ -65,20 +65,39 @@ pub fn links_table(mut list: Vec<InterfaceLinkDefinition>) -> String {
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Source ID", 1, Alignment::Left),
         TableCell::new_with_alignment("Target", 1, Alignment::Left),
-        TableCell::new_with_alignment("WIT", 1, Alignment::Left),
-        TableCell::new_with_alignment("Interfaces", 1, Alignment::Left),
+        TableCell::new_with_alignment("Interface(s)", 1, Alignment::Left),
+        TableCell::new_with_alignment("Name", 1, Alignment::Left),
     ]));
 
     list.iter().for_each(|l| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(l.source_id.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(l.target.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                format!("{}:{}", l.wit_namespace, l.wit_package),
-                1,
-                Alignment::Left,
-            ),
-            TableCell::new_with_alignment(l.interfaces.join(","), 1, Alignment::Left),
+            if l.interfaces.len() == 1 {
+                TableCell::new_with_alignment(
+                    // SAFETY: We know that there is at least one element in the interfaces vector
+                    format!(
+                        "{}:{}/{}",
+                        l.wit_namespace,
+                        l.wit_package,
+                        l.interfaces.get(0).unwrap()
+                    ),
+                    1,
+                    Alignment::Left,
+                )
+            } else {
+                TableCell::new_with_alignment(
+                    format!(
+                        "{}:{}/{}",
+                        l.wit_namespace,
+                        l.wit_package,
+                        l.interfaces.join(",")
+                    ),
+                    1,
+                    Alignment::Left,
+                )
+            },
+            TableCell::new_with_alignment(l.name.clone(), 1, Alignment::Left),
         ]))
     });
 
