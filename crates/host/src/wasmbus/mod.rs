@@ -2685,6 +2685,19 @@ impl Host {
                 .await?
                 .unwrap_or_default();
 
+            // If the link is defined from this source on the same interface and link name, but to a different target,
+            // we need to reject this link and suggest deleting the existing link or using a different link name.
+            if let Some(existing_conflict_link) = component_spec.links.iter().find(|link| {
+                link.source_id == source_id
+                    && link.wit_namespace == wit_namespace
+                    && link.wit_package == wit_package
+                    && link.name == name
+                    && link.target != target
+            }) {
+                error!(source_id, desired_target = target, existing_target = existing_conflict_link.target, ns_and_package, name, "link already exists with different target, consider deleting the existing link or using a different link name");
+                bail!("link already exists with different target, consider deleting the existing link or using a different link name");
+            }
+
             // If we can find an existing link with the same source, target, namespace, package, and name, update it.
             // Otherwise, add the new link to the component specification.
             if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
@@ -2755,7 +2768,7 @@ impl Host {
 
         // If we can find an existing link with the same source, namespace, package, and name, remove it
         // and update the component specification.
-        let deleted_link_target = if let Some(existing_link_index) =
+        let deleted_link = if let Some(existing_link_index) =
             component_spec.links.iter().position(|link| {
                 link.source_id == source_id
                     && link.wit_namespace == wit_namespace
@@ -2764,7 +2777,7 @@ impl Host {
             }) {
             // Sanity safety check since `swap_remove` will panic if the index is out of bounds
             if existing_link_index < component_spec.links.len() {
-                Some(component_spec.links.swap_remove(existing_link_index).target)
+                Some(component_spec.links.swap_remove(existing_link_index))
             } else {
                 None
             }
@@ -2772,18 +2785,28 @@ impl Host {
             None
         };
 
-        // Update component specification with the new link
-        self.store_component_spec(&source_id, &component_spec)
-            .await?;
+        if let Some(link) = deleted_link.as_ref() {
+            // Update component specification with the deleted link
+            self.store_component_spec(&source_id, &component_spec)
+                .await?;
 
+            // Send the link to providers for deletion
+            self.del_provider_link(&link).await?;
+        }
+
+        // For idempotency, we always publish the deleted event, even if the link didn't exist
         self.publish_event(
             "linkdef_deleted",
-            event::linkdef_deleted(&source_id, name, wit_namespace, wit_package),
+            event::linkdef_deleted(
+                &source_id,
+                deleted_link.as_ref().map(|link| &link.target),
+                name,
+                wit_namespace,
+                wit_package,
+                deleted_link.as_ref().map(|link| &link.interfaces),
+            ),
         )
         .await?;
-
-        self.del_provider_link(&source_id, deleted_link_target, payload.to_owned().into())
-            .await?;
 
         Ok(CtlResponse::success())
     }
@@ -3161,38 +3184,43 @@ impl Host {
     /// Right now this is publishing _both_ to the source and the target in order to
     /// ensure that the provider is aware of the link delete. This would cause problems if a provider
     /// is linked to a provider (which it should never be.)
-    ///
-    /// TODO: Instead of delivering the named config, deliver the actual source and target config to the provider
-    #[instrument(level = "debug", skip(self, payload))]
-    async fn del_provider_link(
-        &self,
-        source_id: &str,
-        target: Option<String>,
-        payload: Bytes,
-    ) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip(self))]
+    async fn del_provider_link(&self, link: &InterfaceLinkDefinition) -> anyhow::Result<()> {
         let lattice = &self.host_config.lattice;
-        let source_provider = self
-            .rpc_nats
-            .publish_with_headers(
+        // The provider expects the [`wasmcloud_core::InterfaceLinkDefinition`]
+        let link = wasmcloud_core::InterfaceLinkDefinition {
+            source_id: link.source_id.clone(),
+            target: link.target.clone(),
+            wit_namespace: link.wit_namespace.clone(),
+            wit_package: link.wit_package.clone(),
+            name: link.name.clone(),
+            interfaces: link.interfaces.clone(),
+            // Configuration isn't needed for deletion
+            ..Default::default()
+        };
+        let source_id = &link.source_id;
+        let target = &link.target;
+        let payload: Bytes = serde_json::to_vec(&link)
+            .context("failed to serialize provider link definition for deletion")?
+            .into();
+
+        let (source_result, target_result) = futures::future::join(
+            self.rpc_nats.publish_with_headers(
                 format!("wasmbus.rpc.{lattice}.{source_id}.linkdefs.del"),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload.clone(),
-            )
-            .await
-            .context("failed to publish provider link definition del");
-        if let Some(target) = target {
-            self.rpc_nats
-                .publish_with_headers(
-                    format!("wasmbus.rpc.{lattice}.{target}.linkdefs.del"),
-                    injector_to_headers(&TraceContextInjector::default_with_span()),
-                    payload,
-                )
-                .await
-                .context("failed to publish provider link definition del")?;
-        }
+            ),
+            self.rpc_nats.publish_with_headers(
+                format!("wasmbus.rpc.{lattice}.{target}.linkdefs.del"),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
+                payload,
+            ),
+        )
+        .await;
 
-        source_provider?;
-        Ok(())
+        source_result
+            .and(target_result)
+            .context("failed to publish provider link definition delete")
     }
 
     /// Retrieve a component specification based on the provided ID. The outer Result is for errors
