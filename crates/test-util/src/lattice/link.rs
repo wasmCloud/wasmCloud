@@ -1,7 +1,7 @@
 //! Utilities for managing lattice links
 
 use anyhow::{anyhow, Result};
-use wasmcloud_control_interface::InterfaceLinkDefinition;
+use wasmcloud_control_interface::{CtlResponse, InterfaceLinkDefinition};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn assert_advertise_link(
@@ -14,7 +14,7 @@ pub async fn assert_advertise_link(
     interfaces: Vec<String>,
     source_config: Vec<String>,
     target_config: Vec<String>,
-) -> Result<()> {
+) -> Result<CtlResponse<()>> {
     let client = client.into();
     let source_id = source_id.as_ref();
     let target = target.as_ref();
@@ -33,8 +33,7 @@ pub async fn assert_advertise_link(
             target_config,
         })
         .await
-        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    Ok(())
+        .map_err(|e| anyhow!(e).context("failed to advertise link"))
 }
 
 pub async fn assert_remove_link(
