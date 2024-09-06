@@ -2791,7 +2791,7 @@ impl Host {
                 .await?;
 
             // Send the link to providers for deletion
-            self.del_provider_link(&link).await?;
+            self.del_provider_link(link).await?;
         }
 
         // For idempotency, we always publish the deleted event, even if the link didn't exist
