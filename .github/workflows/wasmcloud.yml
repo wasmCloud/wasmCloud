@@ -18,6 +18,7 @@ on:
           - wasmcloud-host
           - wasmcloud-runtime
           - wasmcloud-secrets-client
+          - wasmcloud-secrets-types
           - wasmcloud-test-util
           - wasmcloud-tracing
       do-release:
