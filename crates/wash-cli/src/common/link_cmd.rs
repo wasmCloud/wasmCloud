@@ -29,7 +29,7 @@ pub fn link_put_output(
                 map,
             ))
         }
-        Some(f) => bail!("Error advertising link: {}", f),
+        Some(f) => bail!("Error putting link: {f}"),
     }
 }
 
@@ -100,7 +100,11 @@ pub async fn handle_command(
                 },
             )
             .await
-            .map_or_else(|e| Some(format!("{e}")), |_| None);
+            .map_or_else(
+                |e| Some(format!("{e}")),
+                // If the operation was unsuccessful, return the error message
+                |ctl_response| (!ctl_response.success).then_some(ctl_response.message),
+            );
 
             link_put_output(&source_id, &target, failure)?
         }
