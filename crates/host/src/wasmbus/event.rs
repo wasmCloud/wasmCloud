@@ -127,16 +127,31 @@ pub fn linkdef_set_failed(
 
 pub fn linkdef_deleted(
     source_id: impl AsRef<str>,
+    target: Option<&String>,
     name: impl AsRef<str>,
     wit_namespace: impl AsRef<str>,
     wit_package: impl AsRef<str>,
+    interfaces: Option<&Vec<String>>,
 ) -> serde_json::Value {
-    json!({
-        "source_id": source_id.as_ref(),
-        "name": name.as_ref(),
-        "wit_namespace": wit_namespace.as_ref(),
-        "wit_package": wit_package.as_ref(),
-    })
+    // Target and interfaces aren't known if the link didn't exist, so we omit them from the
+    // event data in that case.
+    if let (Some(target), Some(interfaces)) = (target, interfaces) {
+        json!({
+            "source_id": source_id.as_ref(),
+            "target": target,
+            "name": name.as_ref(),
+            "wit_namespace": wit_namespace.as_ref(),
+            "wit_package": wit_package.as_ref(),
+            "interfaces": interfaces,
+        })
+    } else {
+        json!({
+            "source_id": source_id.as_ref(),
+            "name": name.as_ref(),
+            "wit_namespace": wit_namespace.as_ref(),
+            "wit_package": wit_package.as_ref(),
+        })
+    }
 }
 
 pub fn provider_started(
