@@ -316,6 +316,8 @@ async fn subscribe_link_del(
                     if let Err(err) = rx.await {
                         error!(%err, "failed to await link_del");
                     }
+                } else {
+                    error!("received invalid link on link_del");
                 }
             });
         }
@@ -619,6 +621,10 @@ async fn delete_link_for_provider<P>(
 where
     P: Provider,
 {
+    debug!(
+        provider_id = &connection.provider_id.to_string(),
+        "Deleting link for provider {ld:?}"
+    );
     if *ld.source_id == *connection.provider_id {
         if let Err(e) = provider.delete_link_as_source(&ld).await {
             error!(error = %e, target = &ld.target, "failed to delete link to component");
@@ -699,10 +705,11 @@ async fn handle_provider_commands(
             req = link_put.recv() => {
                 if let Some((ld, tx)) = req {
                     // If the link has already been put, return early
-                    if connection.is_linked(&ld.source_id, &ld.target).await {
+                    if connection.is_linked(&ld.source_id, &ld.target, &ld.wit_namespace, &ld.wit_package, &ld.name).await {
                         warn!(
                             source = &ld.source_id,
                             target = &ld.target,
+                            link_name = &ld.name,
                             "Ignoring duplicate link put"
                         );
                     } else {
@@ -1087,15 +1094,39 @@ impl ProviderConnection {
     }
 
     /// Returns true if the source is linked to this provider or if the provider is linked to the target
-    pub async fn is_linked(&self, source_id: &str, target_id: &str) -> bool {
+    /// on the given interface and link name
+    pub async fn is_linked(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        wit_namespace: &str,
+        wit_package: &str,
+        link_name: &str,
+    ) -> bool {
         // Provider is the source of the link, so we check if the target is linked
         if &*self.provider_id == source_id {
-            self.source_links.read().await.contains_key(target_id)
+            if let Some(link) = self.source_links.read().await.get(target_id) {
+                // In older host versions, the wit_namespace and wit_package are not provided
+                // so we should see if it's empty
+                (link.wit_namespace.is_empty() || link.wit_namespace == wit_namespace)
+                    && (link.wit_package.is_empty() || link.wit_package == wit_package)
+                    && link.name == link_name
+            } else {
+                false
+            }
         // Provider is the target of the link, so we check if the source is linked
         } else if &*self.provider_id == target_id {
-            self.target_links.read().await.contains_key(source_id)
-        // Shouldn't occur, but if the provider is neither source nor target, it's not linked
+            if let Some(link) = self.target_links.read().await.get(source_id) {
+                // In older host versions, the wit_namespace and wit_package are not provided
+                // so we should see if it's empty
+                (link.wit_namespace.is_empty() || link.wit_namespace == wit_namespace)
+                    && (link.wit_package.is_empty() || link.wit_package == wit_package)
+                    && link.name == link_name
+            } else {
+                false
+            }
         } else {
+            // Shouldn't occur, but if the provider is neither source nor target then it's not linked
             false
         }
     }
