@@ -185,8 +185,14 @@ impl Provider for HttpServerProvider {
     }
 
     /// Remove the path for a particular component/link_name pair
-    #[instrument(level = "info", skip_all, fields(target_id = info.get_target_id()))]
+    #[instrument(level = "debug", skip_all, fields(target_id = info.get_target_id()))]
     async fn delete_link_as_source(&self, info: impl LinkDeleteInfo) -> anyhow::Result<()> {
+        debug!(
+            source = info.get_source_id(),
+            target = info.get_target_id(),
+            link = info.get_link_name(),
+            "deleting http path link"
+        );
         let component_id = info.get_target_id();
         let link_name = info.get_link_name();
 

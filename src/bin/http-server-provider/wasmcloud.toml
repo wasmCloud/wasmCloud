@@ -4,7 +4,7 @@ version = "0.22.0"
 type = "provider"
 
 [rust]
-target_dir = "../../"
+target_dir = "../../../"
 
 [provider]
 bin_name = "http-server-provider"
