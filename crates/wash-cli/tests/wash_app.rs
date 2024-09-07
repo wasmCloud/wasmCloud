@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
+use std::time::Duration;
 use tokio::process::Command;
-use wash_lib::{app::validate_manifest_file, cli::output::AppValidateOutput};
+use wash_lib::{
+    app::validate_manifest_file, cli::get::parse_watch_interval, cli::output::AppValidateOutput,
+};
 
 /// Ensure a simple WADM manifest passes validation
 #[tokio::test]
@@ -93,4 +96,29 @@ spec:
     tokio::fs::remove_dir_all(&test_dir)
         .await
         .expect("Failed to clean up test directory");
+}
+
+#[test]
+fn test_parse_watch_interval_milliseconds() {
+    // Test parsing normal millisecond input
+    let result = parse_watch_interval("1500").unwrap();
+    assert_eq!(result, Duration::from_millis(1500));
+}
+
+#[test]
+fn test_parse_watch_interval_humantime_seconds() {
+    // Test parsing humantime input (5s)
+    let result = parse_watch_interval("5s").unwrap();
+    assert_eq!(result, Duration::from_secs(5));
+}
+
+#[test]
+fn test_parse_watch_interval_invalid_input() {
+    // Test invalid input
+    let result = parse_watch_interval("invalid");
+    assert!(result.is_err());
+    assert_eq!(
+            result.unwrap_err(),
+            "Invalid duration: 'invalid'. Expected a duration like '5s', '1m', '100ms', or milliseconds as an integer."
+        );
 }

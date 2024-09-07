@@ -56,6 +56,7 @@ dialoguer = { workspace = true, optional = true }
 futures = { workspace = true }
 heck = { workspace = true, optional = true }
 home = { workspace = true }
+humantime = { workspace = true }
 ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
 nkeys = { workspace = true }
