@@ -10,6 +10,7 @@ use wadm_client::Result;
 use wadm_types::api::ModelSummary;
 use wadm_types::validation::{ValidationFailure, ValidationOutput};
 use wash_lib::app::{load_app_manifest, validate_manifest_file, AppManifest};
+use wash_lib::cli::get::parse_watch_interval;
 use wash_lib::cli::{CliConnectionOpts, CommandOutput, OutputKind};
 use wash_lib::config::WashConnectionOptions;
 
@@ -18,8 +19,7 @@ use crossterm::{
     cursor, execute,
     terminal::{Clear, ClearType},
 };
-use std::io::{stdout, Write};
-use tokio::time::sleep;
+use std::io::Write;
 
 mod output;
 
@@ -58,9 +58,10 @@ pub enum AppCliCommand {
 pub struct ListCommand {
     #[clap(flatten)]
     opts: CliConnectionOpts,
-    /// Switches to a real-time, live-updating application list
-    #[clap(long)]
-    watch: bool,
+
+    /// Enables Real-time updates, duration can be specified in ms or in humantime (eg: 5s, 2m, 15ms). Defaults to 1000 milliseconds.
+    #[clap(long,short, num_args = 0..=1, default_missing_value = "1000", value_parser = parse_watch_interval)]
+    pub watch: Option<std::time::Duration>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -452,11 +453,11 @@ async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutpu
 
     let client = connection_opts.into_nats_client().await?;
 
-    if cmd.watch {
+    if cmd.watch.is_some() {
         sp.finish_and_clear();
-        watch_applications(&client, lattice).await?;
+        watch_applications(&client, lattice, cmd.watch).await?;
         Ok(CommandOutput::new(
-            "Watching applications (press Ctrl+C to exit)".to_string(),
+            "Completed Watching Applications".to_string(),
             HashMap::new(),
         ))
     } else {
@@ -470,14 +471,28 @@ async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutpu
 async fn watch_applications(
     client: &async_nats_0_33::Client,
     lattice: Option<String>,
+    watch: Option<Duration>,
 ) -> Result<()> {
-    let mut stdout = stdout();
+    let mut stdout = std::io::stdout();
 
     execute!(stdout, Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0))
         .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
 
+    let mut ctrlc = std::pin::pin!(tokio::signal::ctrl_c());
+    let watch_interval = watch.unwrap_or(Duration::from_millis(1000));
+
     loop {
-        let models = wash_lib::app::get_models(client, lattice.clone()).await?;
+        let models = tokio::select! {
+            res = wash_lib::app::get_models(client, lattice.clone()) => res?,
+            _res = &mut ctrlc => {
+                execute!(stdout, Clear(ClearType::Purge), Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0), cursor::Show)
+                    .map_err(|e| anyhow::anyhow!("Failed to execute terminal commands: {}", e))?;
+                stdout.flush()
+                    .map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
+                return Ok(());
+            }
+        };
+
         let table = output::list_models_table(models);
 
         execute!(stdout, Clear(ClearType::Purge), cursor::MoveTo(0, 0))
@@ -490,6 +505,7 @@ async fn watch_applications(
         stdout
             .flush()
             .map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
+
         execute!(
             stdout,
             Clear(ClearType::CurrentLine),
@@ -497,29 +513,17 @@ async fn watch_applications(
         )
         .map_err(|e| anyhow::anyhow!("Failed to clear terminal: {}", e))?;
 
-        if crossterm::event::poll(Duration::from_millis(800))
-            .map_err(|e| anyhow::anyhow!("Failed to poll for events: {}", e))?
-        {
-            if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
-                if key.code == crossterm::event::KeyCode::Char('c')
-                    && key
-                        .modifiers
-                        .contains(crossterm::event::KeyModifiers::CONTROL)
-                {
-                    execute!(stdout, Clear(ClearType::Purge), cursor::MoveTo(0, 0)).map_err(
-                        |e| anyhow::anyhow!("Failed to execute terminal commands: {}", e),
-                    )?;
-                    break;
-                }
+        tokio::select! {
+            _ = tokio::time::sleep(watch_interval) => continue,
+            _res = &mut ctrlc => {
+                execute!(stdout, Clear(ClearType::Purge), Clear(ClearType::FromCursorUp), cursor::MoveTo(0, 0), cursor::Show)
+                    .map_err(|e| anyhow::anyhow!("Failed to execute terminal commands: {}", e))?;
+                stdout.flush()
+                    .map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
+                return Ok(());
             }
         }
-
-        sleep(Duration::from_millis(800)).await;
     }
-
-    execute!(stdout, cursor::Show).map_err(|e| anyhow::anyhow!("Failed to show cursor: {}", e))?;
-
-    Ok(())
 }
 
 fn show_validate_manifest_results(messages: impl AsRef<[ValidationFailure]>) -> CommandOutput {
