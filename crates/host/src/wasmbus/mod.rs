@@ -200,16 +200,6 @@ struct Component {
     max_memory_size: Option<usize>,
 }
 
-impl Component {
-    /// Returns the maximum amount of memory this component could use if all instances were running
-    /// and using the maximum amount of memory at once. If the maximum memory is not set, returns 0.
-    pub(crate) fn max_memory(&self) -> usize {
-        self.max_memory_size
-            .map(|m| m * self.max_instances.get())
-            .unwrap_or(0)
-    }
-}
-
 impl Deref for Component {
     type Target = wasmcloud_runtime::Component<Handler>;
 
@@ -1113,12 +1103,8 @@ impl Host {
     /// the maximum memory of all running components
     async fn get_free_memory(&self) -> u64 {
         self.system_info.read().await.free_memory()
-            - self
-                .components
-                .read()
-                .await
-                .iter()
-                .fold(0, |acc, (_, c)| acc + c.max_memory()) as u64
+        // NOTE(brooksmtownsend): If desired, we can subtract the memory of all
+        // running components here.
     }
 
     #[instrument(level = "debug", skip_all)]
