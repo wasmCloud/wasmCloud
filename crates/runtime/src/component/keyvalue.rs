@@ -1,6 +1,6 @@
 use super::{Ctx, Handler, ReplacedInstanceTarget};
 
-use crate::capability::keyvalue::{atomics, store};
+use crate::capability::keyvalue::{atomics, store, watcher};
 use crate::capability::wrpc;
 
 use std::sync::Arc;
@@ -180,6 +180,46 @@ where
         self.table
             .delete(bucket)
             .context("failed to delete bucket")?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<H> watcher::Host for Ctx<H>
+where
+    H: Handler,
+{
+    async fn on_set(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        key: String,
+        value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        wrpc::wrpc::keyvalue::watcher::on_set(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueWatch),
+            bucket,
+            &key,
+            &Bytes::copy_from_slice(&value.as_slice()),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn on_delete(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        key: String,
+    ) -> anyhow::Result<()> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        wrpc::wrpc::keyvalue::watcher::on_delete(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueWatch),
+            bucket,
+            &key,
+        )
+        .await?;
         Ok(())
     }
 }

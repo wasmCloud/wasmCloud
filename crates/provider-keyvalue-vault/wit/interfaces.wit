@@ -2,4 +2,5 @@ package wasmcloud:provider-keyvalue-vault;
 
 world interfaces {
     export wrpc:keyvalue/store@0.2.0-draft;
+    export wrpc:keyvalue/watcher@0.2.0-draft;
 }

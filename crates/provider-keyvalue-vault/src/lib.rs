@@ -26,6 +26,7 @@ mod bindings {
     wit_bindgen_wrpc::generate!({
         with: {
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
@@ -394,6 +395,24 @@ impl keyvalue::store::Handler<Option<Context>> for KvVaultProvider {
         Ok(self
             .list_keys(context, bucket, cursor.unwrap_or_default())
             .await)
+    }
+}
+
+impl keyvalue::watcher::Handler<Option<Context>> for KvVaultProvider {
+    async fn on_set(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+        value: wit_bindgen_wrpc::bytes::Bytes,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+    }
+    async fn on_delete(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
     }
 }
 

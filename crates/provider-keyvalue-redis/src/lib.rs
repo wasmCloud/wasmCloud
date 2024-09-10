@@ -30,6 +30,7 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
@@ -304,6 +305,34 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
     }
 }
 
+impl keyvalue::watcher::Handler<Option<Context>> for KvRedisProvider {
+    #[instrument(level = "debug", skip(self, value))]
+    async fn on_set(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+        value: Bytes,
+    ) -> anyhow::Result<()> {
+        propagate_trace_for_ctx!(cx);
+        info!(bucket = %bucket, key = %key, value_len = value.len(), "Key-value set event");
+        //TODO implement a way to inform concerned component about changes.
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn on_delete(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<()> {
+        propagate_trace_for_ctx!(cx);
+        info!(bucket = %bucket, key = %key, "Key-value delete event");
+        Ok(())
+    }
+}
+
 /// Handle provider control commands
 impl Provider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
@@ -364,6 +393,31 @@ impl Provider for KvRedisProvider {
         };
         let mut sources = self.sources.write().await;
         sources.insert((source_id.to_string(), link_name.to_string()), conn);
+
+        Ok(())
+    }
+
+    async fn receive_link_config_as_source(
+        &self,
+        link_config: LinkConfig<'_>,
+    ) -> anyhow::Result<()> {
+        let LinkConfig {
+            target_id, config, ..
+        } = link_config;
+
+        if config.get("contract_id") == Some(&"wasmcloud:keyvalue/watcher".to_string()) {
+            let bucket = config
+                .get("bucket")
+                .cloned()
+                .unwrap_or_else(|| "*".to_string());
+            self.setup_watcher(bucket, target_id.to_string()).await?;
+            info!("Established watcher link for component {}", target_id);
+        } else {
+            warn!(
+                "Received unexpected link config as source for contract: {:?}",
+                config.get("contract_id")
+            );
+        }
 
         Ok(())
     }

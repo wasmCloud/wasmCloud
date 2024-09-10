@@ -50,6 +50,8 @@ pub enum ReplacedInstanceTarget {
     KeyvalueAtomics,
     /// `wasi:keyvalue/store` instance replacement
     KeyvalueStore,
+    /// `wasi:keyvalue/watch` instance replacement
+    KeyvalueWatch,
     /// `wasi:http/incoming-handler` instance replacement
     HttpIncomingHandler,
     /// `wasi:http/outgoing-handler` instance replacement
@@ -86,6 +88,7 @@ macro_rules! skip_static_instances {
             | "wasi:io/streams@0.2.0"
             | "wasi:keyvalue/atomics@0.2.0-draft"
             | "wasi:keyvalue/store@0.2.0-draft"
+            | "wasi:keyvalue/watcher@0.2.0-draft"
             | "wasi:logging/logging"
             | "wasi:random/random@0.2.0"
             | "wasi:sockets/instance-network@0.2.0"
@@ -323,9 +326,10 @@ where
             .context("failed to link `wasi:keyvalue/atomics`")?;
         capability::keyvalue::store::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:keyvalue/store`")?;
+        capability::keyvalue::watcher::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasi:keyvalue/watch`")?;
         capability::logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:logging/logging`")?;
-
         capability::bus::lattice::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:bus/lattice`")?;
         capability::messaging::consumer::add_to_linker(&mut linker, |ctx| ctx)

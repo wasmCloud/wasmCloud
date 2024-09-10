@@ -32,6 +32,7 @@ mod bindings {
             "wrpc:keyvalue/atomics@0.2.0-draft": generate,
             "wrpc:keyvalue/batch@0.2.0-draft": generate,
             "wrpc:keyvalue/store@0.2.0-draft": generate,
+            "wrpc:keyvalue/watcher@0.2.0-draft": generate,
         }
     });
 }
@@ -489,6 +490,24 @@ impl keyvalue::atomics::Handler<Option<Context>> for KvNatsProvider {
                 "Failed to increment the value after 5 attempts".to_string(),
             )))
         }
+    }
+}
+
+impl keyvalue::watcher::Handler<Option<Context>> for KvNatsProvider {
+    async fn on_set(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+        value: wit_bindgen_wrpc::bytes::Bytes,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
+    }
+    async fn on_delete(
+        &self,
+        cx: Option<Context>,
+        bucket: String,
+        key: String,
+    ) -> wit_bindgen_wrpc::anyhow::Result<()> {
     }
 }
 
