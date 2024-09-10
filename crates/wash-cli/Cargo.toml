@@ -21,6 +21,7 @@ async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true }
 async-nats-0_33 = { package = "async-nats", version = "0.33", default-features = false }
 bytes = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"] }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
@@ -28,6 +29,7 @@ cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 crossterm ={ workspace = true, features = ["events","windows"] }
 dirs = { workspace = true }
+file-guard = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime.workspace = true
