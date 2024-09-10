@@ -60,6 +60,11 @@ impl CallTargetInterface {
         (&self.namespace, &self.package, &self.interface)
     }
 
+    /// Returns the fully qualified WIT interface in the form `namespace:package/interface`
+    pub fn as_instance(&self) -> String {
+        format!("{}:{}/{}", self.namespace, self.package, self.interface)
+    }
+
     /// Build a [`CallTargetInterface`] from constituent parts
     #[must_use]
     pub fn from_parts((ns, pkg, iface): (&str, &str, &str)) -> Self {

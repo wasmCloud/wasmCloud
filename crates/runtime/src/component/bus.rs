@@ -10,14 +10,15 @@ use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
 
 #[async_trait]
-/// `wasmcloud:bus/host` implementation
+/// `wasmcloud:bus/lattice` implementation
 pub trait Bus {
-    /// Set link name
+    /// Set the link name to use for a given list of interfaces, returning an error
+    /// if a link doesn't exist on the given interfaces for the given target
     async fn set_link_name(
         &self,
-        target: String,
+        link_name: String,
         interfaces: Vec<Arc<CallTargetInterface>>,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<std::result::Result<(), String>>;
 }
 
 #[async_trait]
@@ -26,7 +27,7 @@ impl<H: Handler> lattice::Host for Ctx<H> {
         &mut self,
         link_name: String,
         interfaces: Vec<Resource<Arc<CallTargetInterface>>>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<std::result::Result<(), String>> {
         let interfaces = interfaces
             .into_iter()
             .map(|interface| self.table.get(&interface).cloned())
@@ -35,8 +36,7 @@ impl<H: Handler> lattice::Host for Ctx<H> {
         self.handler
             .set_link_name(link_name, interfaces)
             .await
-            .context("failed to set link name")?;
-        Ok(())
+            .context("failed to set link name")
     }
 }
 

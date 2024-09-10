@@ -6,9 +6,13 @@ interface lattice {
         constructor(namespace: string, %package: string, %interface: string);
     }
 
-    /// Set an optional link name to use for all interfaces specified. This is advanced
-    /// functionality only available within wasmcloud and, as such, is exposed here as part of the
-    /// wasmcloud:bus package. This is used when you are linking multiple of the same interfaces
+    /// Set a link name to use for all interfaces specified. This is advanced functionality only
+    /// available within wasmcloud and, as such, is exposed here as part of the wasmcloud:bus package.
+    /// This is used when you are linking multiple of the same interfaces
     /// (i.e. a keyvalue implementation for caching and another one for secrets) to a component
     set-link-name: func(name: string, interfaces: list<call-target-interface>);
+
+    /// Set a link name to use for all interfaces specified. This is the same as `set-link-name`, but will
+    /// return an error if a link does not exist at runtime with the specified name for the specified interfaces.
+    set-link-name-checked: func(name: string, interfaces: list<call-target-interface>) -> result<_, string>;
 }
