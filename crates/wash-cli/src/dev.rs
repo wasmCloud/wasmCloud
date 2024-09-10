@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _, Result};
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use console::style;
+use notify::event::ModifyKind;
 use notify::{event::EventKind, Event as NotifyEvent, RecursiveMode, Watcher};
 use rand::{distributions::Alphanumeric, Rng};
 use semver::Version;
-use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use serde::{Deserialize, Serialize};
+use tokio::io::AsyncBufReadExt as _;
 use tokio::{select, sync::mpsc};
 use wash_lib::app::AppManifest;
 use wit_parser::{Resolve, WorldId};
@@ -21,8 +26,8 @@ use wadm_types::{
     TargetConfig, TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::CommandOutput;
-use wash_lib::config::host_pid_file;
+use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::cfg_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{get_config, ProjectConfig};
@@ -44,6 +49,12 @@ const DEFAULT_INCOMING_HANDLER_ADDRESS: &str = "127.0.0.1:8000";
 const DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION: &str = "wasmcloud.dev";
 const DEFAULT_BLOBSTORE_ROOT_DIR: &str = "/tmp";
 const DEFAULT_KEYVALUE_BUCKET: &str = "wasmcloud";
+
+const WASH_DEV_DIR: &str = "dev";
+const WASH_SESSIONS_FILE_NAME: &str = "wash-dev-sessions.json";
+
+const SESSIONS_FILE_VERSION: Version = Version::new(0, 1, 0);
+const SESSION_ID_LEN: usize = 6;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DevCommand {
@@ -84,25 +95,6 @@ pub struct DevCommand {
         help = "Run the wasmCloud host in a subprocess (rather than detached mode)"
     )]
     pub use_host_subprocess: bool,
-}
-
-/// Utility struct for holding a wasmCloud host subprocess.
-/// This struct ensures that the join handle is aborted once the
-/// subprocess is dropped.
-struct HostSubprocess(Option<JoinHandle<()>>);
-
-impl HostSubprocess {
-    fn into_inner(mut self) -> Option<JoinHandle<()>> {
-        self.0.take()
-    }
-}
-
-impl Drop for HostSubprocess {
-    fn drop(&mut self) {
-        if let Some(handle) = self.0.take() {
-            handle.abort();
-        }
-    }
 }
 
 /// Keys that index the list of dependencies in a [`ProjectDeps`]
@@ -904,190 +896,496 @@ fn generate_component_from_project_cfg(
     })
 }
 
-/// Handle `wash dev`
-pub async fn handle_command(
-    cmd: DevCommand,
-    output_kind: wash_lib::cli::OutputKind,
-) -> Result<CommandOutput> {
-    // Check if host is running
-    let pid_file = host_pid_file()?;
-    let existing_instance = tokio::fs::metadata(pid_file).await.is_ok();
+/// The path to the dev directory for wash
+async fn dev_dir() -> Result<PathBuf> {
+    let dir = cfg_dir()
+        .context("failed to resolve config dir")?
+        .join(WASH_DEV_DIR);
+    if !tokio::fs::try_exists(&dir)
+        .await
+        .context("failed to check if dev dir exists")?
+    {
+        tokio::fs::create_dir(&dir)
+            .await
+            .with_context(|| format!("failed to create dir [{}]", dir.display()))?
+    }
+    Ok(dir)
+}
 
-    let mut host_subprocess: Option<HostSubprocess> = None;
+/// Retrieve the path to the file that stores
+async fn sessions_file_path() -> Result<PathBuf> {
+    dev_dir()
+        .await
+        .map(|p| p.join(WASH_SESSIONS_FILE_NAME))
+        .context("failed to get dev dir")
+}
 
-    // Start host if it's not already running
-    if !existing_instance {
+/// Metadata related to a single `wash dev` session
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WashDevSession {
+    /// Session ID
+    id: String,
+    /// Absolute path to the directory in which `wash dev` was run
+    project_path: PathBuf,
+    /// ID of the host that this `wash dev` session acts upon
+    ///
+    /// This value may start out empty, but is filled in by hosts
+    host_id: Option<String>,
+    /// Whether this session is currently in use
+    in_use: bool,
+    /// When this session was created
+    created_at: DateTime<Utc>,
+    /// When the wash dev session was last used
+    last_used_at: DateTime<Utc>,
+}
+
+/// The structure of an a file containing sessions of `wash dev`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    /// Version of the sessions sessions file
+    version: Version,
+    /// Sessions of `wash dev` that have been run at some point
+    sessions: Vec<WashDevSession>,
+}
+
+impl SessionMetadata {
+    /// Get the session file
+    async fn open_sessions_file() -> Result<std::fs::File> {
+        let sessions_file_path = sessions_file_path().await?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .append(false)
+            .truncate(false)
+            .open(&sessions_file_path)
+            .with_context(|| {
+                format!(
+                    "failed to open sessions file [{}]",
+                    sessions_file_path.display()
+                )
+            })
+    }
+
+    /// Build metadata from default file on disk
+    async fn from_sessions_file() -> Result<Self> {
+        // Open and lock the sessions file
+        let mut sessions_file = Self::open_sessions_file().await?;
+        let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
+        // Load session metadata, if present
+        let file_size = (*lock)
+            .metadata()
+            .context("failed to get sessions file metadata")?
+            .len();
+        let session_metadata: SessionMetadata = if file_size == 0 {
+            SessionMetadata::default()
+        } else {
+            let sessions_file_path = sessions_file_path().await?;
+            tokio::task::block_in_place(move || {
+                let mut file_contents = Vec::with_capacity(
+                    usize::try_from(file_size).context("failed to convert file size to usize")?,
+                );
+                lock.read_to_end(&mut file_contents)
+                    .context("failed to read file contents")?;
+                serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                    format!(
+                        "failed to parse session metadata from file [{}]",
+                        sessions_file_path.display(),
+                    )
+                })
+            })
+            .context("failed to read session metadata")?
+        };
+        Ok(session_metadata)
+    }
+
+    /// Save the current sessions' metadata to the relevant session file
+    async fn modify_session_and_save(
+        &mut self,
+        modify_func: impl Fn(&mut WashDevSession),
+    ) -> Result<()> {
+        self.reload().await?;
+
+        let sessions_file_path = sessions_file_path().await?;
+        let mut sessions_file = Self::open_sessions_file().await?;
+        let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
+
+        // Read the session file and ensure that the content is exactly similar to what we have now
+        let file_size = (*lock)
+            .metadata()
+            .context("failed to get sessions file metadata")?
+            .len();
+        let mut existing_data = tokio::task::block_in_place(|| {
+            let mut file_contents = Vec::with_capacity(
+                usize::try_from(file_size).context("failed to convert file size to usize")?,
+            );
+            lock.read_to_end(&mut file_contents)
+                .context("failed to read file contents")?;
+            serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                format!(
+                    "failed to parse session metadata from file [{}]",
+                    sessions_file_path.display(),
+                )
+            })
+        })
+        .context("failed to read session metadata")?;
+
+        // Modify sessions
+        for session in existing_data.sessions.iter_mut() {
+            modify_func(session);
+        }
+
+        // Write the data to the file
+        tokio::fs::write(
+            sessions_file_path,
+            &serde_json::to_vec_pretty(&existing_data)
+                .context("failed to write session metadata")?,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Reload the data from the session file
+    async fn reload(&mut self) -> Result<()> {
+        let sessions_file_path = sessions_file_path().await?;
+        let mut sessions_file = Self::open_sessions_file().await?;
+        let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
+
+        // Read the session file and ensure that the content is exactly similar to what we have now
+        let file_size = (*lock)
+            .metadata()
+            .context("failed to get sessions file metadata")?
+            .len();
+        let existing_data = tokio::task::block_in_place(|| {
+            let mut file_contents = Vec::with_capacity(
+                usize::try_from(file_size).context("failed to convert file size to usize")?,
+            );
+            lock.read_to_end(&mut file_contents)
+                .context("failed to read file contents")?;
+            serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                format!(
+                    "failed to parse session metadata from file [{}]",
+                    sessions_file_path.display(),
+                )
+            })
+        })
+        .context("failed to read session metadata")?;
+
+        self.version = existing_data.version;
+        self.sessions = existing_data.sessions;
+
+        Ok(())
+    }
+
+    async fn update_session(&mut self, session: &WashDevSession) -> Result<()> {
+        self.modify_session_and_save(|s| {
+            if s.id == session.id {
+                *s = session.clone();
+            }
+        })
+        .await?;
+        Ok(())
+    }
+}
+
+impl Default for SessionMetadata {
+    fn default() -> Self {
+        Self {
+            version: SESSIONS_FILE_VERSION,
+            sessions: Vec::new(),
+        }
+    }
+}
+
+impl WashDevSession {
+    /// Retrieve a `wash dev` session from a file on disk which contains multiple `wash dev` sessions
+    async fn from_sessions_file(project_path: impl AsRef<Path>) -> Result<Self> {
+        let mut session_metadata = SessionMetadata::from_sessions_file()
+            .await
+            .context("failed to load session metadata")?;
+        let project_path = project_path.as_ref();
+
+        // Attempt to find an session with the given path, creating one if necessary
+        let session = match session_metadata
+            .sessions
+            .iter()
+            .find(|i| i.project_path == project_path)
+        {
+            Some(existing_session) => existing_session.clone(),
+            None => {
+                let session = WashDevSession {
+                    id: rand::thread_rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(SESSION_ID_LEN)
+                        .map(char::from)
+                        .collect(),
+                    project_path: project_path.into(),
+                    host_id: None,
+                    in_use: true,
+                    created_at: Utc::now(),
+                    last_used_at: Utc::now(),
+                };
+                session_metadata.sessions.push(session.clone());
+                session
+            }
+        };
+
+        Ok(session)
+    }
+
+    /// Start a host for the given session, if one is not present
+    async fn start_host(
+        &mut self,
+        mut wasmcloud_opts: WasmcloudOpts,
+        nats_opts: NatsOpts,
+        wadm_opts: WadmOpts,
+    ) -> Result<()> {
+        if self.host_id.is_some() {
+            return Ok(());
+        }
+
         eprintln!(
-            "{} {}{}",
-            emoji::WARN,
-            style("No running wasmcloud host detected (PID file missing), ").bold(),
+            "{} {}",
+            emoji::CONSTRUCTION_BARRIER,
             style("starting a new host...").bold()
         );
         // Ensure that file loads are allowed
-        let mut wasmcloud_opts = cmd.wasmcloud_opts.clone();
         wasmcloud_opts.allow_file_load = Some(true);
+        wasmcloud_opts.multi_local = true;
 
-        if cmd.use_host_subprocess {
-            // Use a subprocess
-            eprintln!(
-                "{} {}",
-                emoji::WRENCH,
-                style("starting wasmCloud host subprocess...").bold(),
-            );
-            let nats_opts = cmd.nats_opts.clone();
-            let wadm_opts = cmd.wadm_opts.clone();
-            host_subprocess = Some(HostSubprocess(Some(tokio::spawn(async move {
-                let _ = handle_up(
-                    UpCommand {
-                        detached: false,
-                        nats_opts,
-                        wasmcloud_opts,
-                        wadm_opts,
-                    },
-                    output_kind,
-                )
-                .await;
-                eprintln!(
-                    "{} {}",
-                    emoji::WRENCH,
-                    style("shutting down host subprocess...").bold(),
-                );
-            }))));
+        // Run a detached process via running the equivalent of `wash up`
 
-            // Wait a while for wasmcloud to start up
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        } else {
-            // Run a detached process via running the equivalent of `wash up`
-
-            // Run wash up to start the host if not already running
-            let _ = handle_up(
-                UpCommand {
-                    detached: true,
-                    nats_opts: cmd.nats_opts,
-                    wasmcloud_opts,
-                    wadm_opts: cmd.wadm_opts,
-                },
-                output_kind,
-            )
-            .await?;
-        }
+        // Run wash up to start the host if not already running
+        let resp = handle_up(
+            UpCommand {
+                detached: true,
+                nats_opts,
+                wasmcloud_opts,
+                wadm_opts,
+            },
+            OutputKind::Json,
+        )
+        .await
+        .with_context(|| format!("failed to start host for wash dev session [{}]", self.id))?;
 
         eprintln!(
             "{} {}",
             emoji::WRENCH,
             style("Successfully started wasmCloud instance").bold(),
         );
-    }
 
-    let nats_client = cmd.wasmcloud_opts.create_nats_client().await?;
-
-    // Connect to the wasmcloud instance
-    let ctl_client = Arc::new(
-        cmd.wasmcloud_opts
-            .into_ctl_client(None)
-            .await
-            .context("failed to create wasmcloud control client")?,
-    );
-    let wait_ctl_client = ctl_client.clone();
-
-    // If we started our own instance, wait for one host to be present
-    if !existing_instance {
-        eprintln!(
-            "{} {}",
-            emoji::HOURGLASS_DRAINING,
-            style("Waiting for host to become reachable...").bold(),
+        // Read the log until we get output that
+        let log_file_path = PathBuf::from(
+            resp.map["wasmcloud_log"]
+                .as_str()
+                .context("failed to find wasmcloud log in wash up output")?,
         );
 
-        // Wait for up to a minute to find the host
-        let _ = timeout(
-            Duration::from_secs(60),
-            tokio::spawn(async move {
-                loop {
-                    match wait_ctl_client.get_hosts().await {
-                        Ok(hs) => match &hs[..] {
-                            [] => {}
-                            [h] => {
-                                eprintln!(
-                                    "{} {}",
-                                    emoji::GREEN_CHECK,
-                                    style(format!(
-                                        "Found single host w/ ID [{}]",
-                                        h.response
-                                            .as_ref()
-                                            .map(|r| r.id.clone())
-                                            .unwrap_or_else(|| "N/A".to_string())
-                                    ))
-                                    .bold(),
-                                );
-                                break Ok(());
-                            }
-                            _hs => {
-                                bail!("Detected an unexpected number (>1) of hosts present.");
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!(
-                                "{} {}",
-                                emoji::WARN,
-                                style(format!("Failed to get hosts (will retry in 5s): {e}"))
-                                    .bold(),
-                            );
-                        }
+        let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
+            let log_file = tokio::fs::File::open(&log_file_path)
+                .await
+                .with_context(|| {
+                    format!("failed to open log file @ [{}]", log_file_path.display())
+                })?;
+            let mut lines = tokio::io::BufReader::new(log_file).lines();
+            loop {
+                if let Some(line) = lines
+                    .next_line()
+                    .await
+                    .context("failed to read line from file")?
+                {
+                    if let Some(host_id) = line
+                        .split_once("host_id=\"")
+                        .map(|(_, rhs)| &rhs[0..rhs.len() - 1])
+                    {
+                        return Ok(host_id.to_string()) as anyhow::Result<String>;
                     }
-                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
-            }),
+            }
+        })
+        .await
+        .context("timeout expired while reading for Host ID in logs")?
+        .context("failed to retrieve host ID from logs")?;
+
+        self.host_id = Some(host_id);
+
+        Ok(())
+    }
+}
+
+/// Run one iteration of the development loop
+async fn run_dev_loop(
+    nats_client: &async_nats_0_33::Client,
+    project_cfg: &ProjectConfig,
+    lattice: &str,
+    session_id: &str,
+    component_ref: &str,
+) -> Result<()> {
+    // After the project is built, we must ensure dependencies are set up and running
+    let (resolve, world_id) =
+        parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?;
+
+    // Pull implied dependencies from WIT
+    let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
+        .context("failed to resolve dependent components")?;
+    eprintln!(
+        "Detected component dependencies: {:?}",
+        wit_implied_deps
+            .iter()
+            .map(DependencySpec::name)
+            .collect::<Vec<String>>()
+    );
+    let pkey =
+        ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
+            .context("failed to build key for project")?;
+    let mut project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps)
+        .context("failed to build project dependencies")?;
+
+    // Pull and merge in implied dependencies from project-level wasmcloud.toml
+    let implied_project_deps =
+        ProjectDeps::from_project_config(project_cfg).with_context(|| {
+            format!(
+                "failed to discover project dependencies from config [{}]",
+                project_cfg.common.path.display(),
+            )
+        })?;
+    project_deps
+        .merge_override(implied_project_deps)
+        .context("failed to merge & override project-specified deps")?;
+
+    // Generate component that represents the app
+    let app_component = generate_component_from_project_cfg(session_id, project_cfg, component_ref)
+        .context("failed to generate app component")?;
+
+    // Convert the project deps into a fully-baked WADM manifests
+    let manifests = project_deps
+        .generate_wadm_manifests(app_component, Some(session_id))
+        .context("failed to generate a WADM manifest from (session [{}])")?;
+
+    // Apply all manifests
+    for manifest in manifests {
+        let model_yaml =
+            serde_json::to_string(&manifest).context("failed to convert manifest to string")?;
+
+        // TODO: allow writing out of the manifest to a local file
+
+        // Put the manifest
+        match wash_lib::app::put_model(nats_client, Some(lattice.into()), &model_yaml).await {
+            Ok(_) => {}
+            Err(e) if e.to_string().contains("already exists") => {}
+            Err(e) => bail!("failed to put model [{}]: {e}", manifest.metadata.name),
+        }
+
+        // Deploy the manifest
+        deploy_model_from_manifest(
+            nats_client,
+            Some(lattice.into()),
+            AppManifest::ModelName(manifest.metadata.name.clone()),
+            None,
         )
         .await
-        .context("wasmCloud host did not become reachable")?;
+        .context("failed to deploy manifest")?;
+
+        eprintln!(
+            "{} {}",
+            emoji::RECYCLE,
+            style(format!(
+                "deployed development manifest for application [{}]",
+                manifest.metadata.name,
+            ))
+            .bold(),
+        );
     }
+    Ok(())
+}
 
-    // Refresh host information (used in particular for existing instances)
-    let hosts = ctl_client
-        .get_hosts()
-        .await
-        .or_else(|e| bail!("failed to retrieve hosts from lattice: {e}"))?;
-    match &hosts[..] {
-        [] => bail!("0 hosts detected, is wasmCloud running?"),
-        [h] => h
-            .response
-            .clone()
-            .context("received control interface response with empty host")?,
-        _ => {
-            if let Some(host_id) = cmd.host_id.map(ServerId::into_string) {
-                hosts
-                    .into_iter()
-                    .filter_map(|h| h.response)
-                    .find(|h| h.id == host_id)
-                    .with_context(|| format!("failed to find host [{host_id}]"))?
-            } else {
-                bail!(
-                    "{} hosts detected, please specify the host on which to deploy with --host-id",
-                    hosts.len()
-                )
-            }
-        }
-    };
-
-    // Resolve project configuration from the current path
+/// Handle `wash dev`
+pub async fn handle_command(
+    cmd: DevCommand,
+    output_kind: wash_lib::cli::OutputKind,
+) -> Result<CommandOutput> {
     let current_dir = std::env::current_dir()?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
     let project_cfg = get_config(Some(project_path.clone()), Some(true))?;
 
+    let mut wash_dev_session = WashDevSession::from_sessions_file(&project_path)
+        .await
+        .context("failed to build wash dev session")?;
+    let session_id = wash_dev_session.id.clone();
+    eprintln!("{} Resolved wash session ID [{session_id}]", emoji::INFO);
+
+    // If there is not a running host for this session, then we can start one
+    if wash_dev_session.host_id.is_none() {
+        eprintln!(
+            "{} No running host for session, starting one...",
+            emoji::CONSTRUCTION_BARRIER
+        );
+        wash_dev_session
+            .start_host(
+                cmd.wasmcloud_opts.clone(),
+                cmd.nats_opts.clone(),
+                cmd.wadm_opts.clone(),
+            )
+            .await
+            .with_context(|| format!("failed to start host for session [{session_id}]"))?;
+    }
+    let mut host_id = wash_dev_session
+        .host_id
+        .as_ref()
+        .context("missing host_id, after ensuring host has started")?;
+
+    // Create NATS and control interface clients to use to connect
+    let nats_client = cmd.wasmcloud_opts.create_nats_client().await?;
+    let ctl_client = Arc::new(
+        cmd.wasmcloud_opts
+            .clone()
+            .into_ctl_client(None)
+            .await
+            .context("failed to create wasmcloud control client")?,
+    );
+    let lattice = &ctl_client.lattice;
+
+    // See if the host is running by retrieving an inventory
+    if let Err(_e) = ctl_client.get_host_inventory(host_id).await {
+        eprintln!(
+            "{} Failed to retrieve inventory from host [{host_id}]... Is it running?",
+            emoji::WARN
+        );
+        eprintln!(
+            "{} {}",
+            emoji::CONSTRUCTION_BARRIER,
+            style(format!(
+                "Starting host for wash dev session [{session_id}]...",
+            ))
+            .bold(),
+        );
+        wash_dev_session
+            .start_host(
+                cmd.wasmcloud_opts.clone(),
+                cmd.nats_opts.clone(),
+                cmd.wadm_opts.clone(),
+            )
+            .await
+            .context("failed to start host for session")?;
+        host_id = wash_dev_session
+            .host_id
+            .as_ref()
+            .context("missing host after start")?;
+    }
+
     // Build the project (equivalent to `wash build`)
+    eprintln!(
+        "{} {}",
+        emoji::CONSTRUCTION_BARRIER,
+        style("Starting project build").bold(),
+    );
     let sign_cfg: Option<SignConfig> = Some(SignConfig {
         keys_directory: None,
         issuer: None,
         subject: None,
         disable_keygen: false,
     });
-    eprintln!(
-        "{} {}",
-        emoji::CONSTRUCTION_BARRIER,
-        style("Starting project build").bold(),
-    );
-
-    // Build the project
     let artifact_path = build_project(&project_cfg, sign_cfg.as_ref())
         .await
         .context("failed to build project")?
@@ -1097,14 +1395,13 @@ pub async fn handle_command(
         "✅ successfully built project at [{}]",
         artifact_path.display()
     );
+
     // Since we're using the component from file on disk, the ref should be the file path (canonicalized) on disk as URI
     let component_ref = format!("file://{}", artifact_path.display());
 
-    // Set up a oneshot channel to remove
+    // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
     let (reload_tx, mut reload_rx) = mpsc::channel::<()>(1);
-
-    // Handle Ctrl + c with Tokio
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await
@@ -1128,7 +1425,7 @@ pub async fn handle_command(
                 ..
             }
             | NotifyEvent {
-                kind: EventKind::Modify(_),
+                kind: EventKind::Modify(ModifyKind::Data(_)),
                 ..
             }
             | NotifyEvent {
@@ -1150,15 +1447,6 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
-    // Generate a session ID for dev
-    let session_id: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(6)
-        .map(char::from)
-        .collect();
-
-    let lattice = &ctl_client.lattice;
-
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
     loop {
@@ -1166,79 +1454,15 @@ pub async fn handle_command(
             // Process a file change/reload
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-
-                // After the project is built, we must ensure dependencies are set up and running
-                let (resolve, world_id) = parse_project_wit(&project_cfg).context(                        "failed to parse WIT from project dir")?;
-
-                // Pull implied dependencies from WIT
-                let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
-                    .context("failed to resolve dependent components")?;
-                eprintln!(
-                    "Detected component dependencies: {:?}",
-                    wit_implied_deps
-                        .iter()
-                        .map(DependencySpec::name)
-                        .collect::<Vec<String>>()
-                );
-                let pkey = ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path).context("failed to build key for project")?;
-                let mut project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps).context("failed to build project dependencies")?;
-
-                // Pull and merge in implied dependencies from project-level wasmcloud.toml
-                let implied_project_deps = ProjectDeps::from_project_config(&project_cfg)
-                    .with_context(|| format!(
-                        "failed to discover project dependencies from config [{}]",
-                        project_cfg.common.path.display(),
-                    ))?;
-                project_deps.merge_override(implied_project_deps).context("failed to merge & override project-specified deps")?;
-
-                // Generate component that represents the app
-                let app_component = generate_component_from_project_cfg(&session_id, &project_cfg, &component_ref).context("failed to generate app component")?;
-
-                // Convert the project deps into a fully-baked WADM manifests
-                let manifests = project_deps.generate_wadm_manifests(
-                    app_component,
-                    Some(&session_id),
-                ).context("failed to generate a WADM manifest from (session [{}])")?;
-
-                // Apply all manifests
-                for manifest in manifests {
-                    let model_yaml = serde_json::to_string(&manifest).context("failed to convert manifest to string")?;
-
-                    // TODO: allow writing out of the manifest to a local file
-
-                    // Put the manifest
-                    match wash_lib::app::put_model(
-                        &nats_client,
-                        Some(lattice.clone()),
-                        &model_yaml
-                    )
-                        .await {
-                            Ok(_) => {},
-                            Err(e) if e.to_string().contains("already exists") => {},
-                            Err(e) => bail!("failed to put model [{}]: {e}", manifest.metadata.name),
-                        }
-
-                    // Deploy the manifest
-                    deploy_model_from_manifest(
-                        &nats_client,
-                        Some(lattice.clone()),
-                        AppManifest::ModelName(manifest.metadata.name.clone()),
-                        None,
-                    )
-                        .await
-                        .context("failed to deploy manifest")?;
-
-                    eprintln!(
-                        "{} {}",
-                        emoji::RECYCLE,
-                        style(format!(
-                            "deployed development manifest for application [{}]",
-                            manifest.metadata.name,
-                        ))
-                            .bold(),
-                    );
-                }
-
+                run_dev_loop(
+                    &nats_client,
+                    &project_cfg,
+                    lattice,
+                    &session_id,
+                    &component_ref,
+                )
+                    .await
+                    .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
             },
@@ -1248,12 +1472,21 @@ pub async fn handle_command(
                 pause_watch.store(true, Ordering::SeqCst);
                 eprintln!("🛑 received Ctrl + c, stopping devloop...");
 
+                // Update the sessions file with the fact that this session stopped
+                wash_dev_session.in_use = false;
+                let mut session_metadata = SessionMetadata::from_sessions_file()
+                    .await
+                    .context("failed to load session metadata")?;
+                session_metadata.update_session(&wash_dev_session).await?;
+
                 if !cmd.leave_host_running {
                     eprintln!("⏳ stopping wasmCloud instance...");
-                    handle_down(DownCommand::default(), output_kind).await.context("down command failed")?;
-                    if let Some(handle) = host_subprocess.and_then(|hs| hs.into_inner())  {
-                        handle.await?;
-                    }
+                    handle_down(
+                        DownCommand { host_id: Some(ServerId::from_str(host_id)?), ..Default::default() },
+                        output_kind,
+                    )
+                        .await
+                        .with_context(|| format!("failed to stop host [{host_id}]"))?;
                 }
 
                 break Ok(CommandOutput::default());

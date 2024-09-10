@@ -2326,6 +2326,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "file-guard"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ef72acf95ec3d7dbf61275be556299490a245f017cf084bd23b4f68cf9407c"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6832,6 +6842,7 @@ dependencies = [
  "async-nats 0.33.0",
  "async-nats 0.36.0",
  "bytes",
+ "chrono",
  "clap",
  "clap-markdown",
  "clap_complete",
@@ -6839,6 +6850,7 @@ dependencies = [
  "console",
  "crossterm",
  "dirs",
+ "file-guard",
  "futures",
  "http 1.1.0",
  "humantime",
@@ -7194,6 +7206,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap-markdown",
+ "file-guard",
  "futures",
  "http-body-util",
  "hyper 1.4.1",
