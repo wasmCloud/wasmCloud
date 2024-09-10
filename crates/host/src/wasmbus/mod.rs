@@ -1436,6 +1436,15 @@ impl Host {
             return Ok(None);
         }
 
+        if auction.max_instances > self.host_config.max_components {
+            debug!(
+                max_instances = auction.max_instances,
+                max_components = self.host_config.max_components,
+                "component max instances requested exceeds host max components"
+            );
+            return Ok(None);
+        }
+
         let requested_ram_amount = auction.max_memory * auction.max_instances as u64;
         self.refresh_ram_usage().await;
 

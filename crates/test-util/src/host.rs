@@ -1,5 +1,6 @@
 //! Utilities for managing wasmCloud hosts locally or remotely via the lattice
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
@@ -101,6 +102,7 @@ impl WasmCloudTestHost {
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
             secrets_topic_prefix,
+            labels: HashMap::from([("wasmcloud_test".to_string(), "true".to_string())]),
             ..Default::default()
         };
         if let Some(psc) = policy_service_config {

@@ -115,7 +115,7 @@ impl Default for Host {
             secrets_topic_prefix: None,
             version: env!("CARGO_PKG_VERSION").to_string(),
             max_execution_time: Duration::from_millis(10 * 60 * 1000),
-            // 10 MB
+            // 256 MB
             max_linear_memory: MAX_LINEAR_MEMORY,
             // 50 MB
             max_component_size: MAX_COMPONENT_SIZE,
