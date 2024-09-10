@@ -158,22 +158,31 @@ where
         let response = data
             .new_response_outparam(tx)
             .context("failed to create response")?;
+        let (fuel_tx, mut fuel_rx) = oneshot::channel();
         let handle = spawn(async move {
-            bindings
+            let res = bindings
                 .wasi_http_incoming_handler()
                 .call_handle(&mut store, request, response)
                 .await
-                .context("failed to call `wasi:http/incoming-handler.handle`")
+                .context("failed to call `wasi:http/incoming-handler.handle`");
+            if let Ok(fuel) = store.get_fuel().map(|f| u64::MAX - f) {
+                tracing::debug!("used {fuel} units of fuel to execute HTTP handler");
+                let _ = fuel_tx.send(fuel);
+            }
+
+            res
         });
         let res = async {
-            match rx.await {
+            let res = match rx.await {
                 Ok(Ok(res)) => Ok(Ok(res)),
                 Ok(Err(err)) => Ok(Err(err)),
                 Err(_) => {
                     handle.await.context("failed to join handle task")??;
                     bail!("component did not call `response-outparam::set`")
                 }
-            }
+            };
+            let _ = handle.await;
+            res
         }
         .await;
         let success = res.is_ok();
@@ -182,6 +191,7 @@ where
             .try_send(WrpcServeEvent::HttpIncomingHandlerHandleReturned {
                 context: cx,
                 success,
+                fuel_consumed: fuel_rx.try_recv().ok(),
             })
         {
             warn!(

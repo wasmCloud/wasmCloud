@@ -234,6 +234,10 @@ fn new_store<H: Handler>(
         },
     );
     store.set_epoch_deadline(max_execution_time.as_secs());
+    if store.set_fuel(u64::MAX).is_err() {
+        // This should only fail if fuel is disabled in the engine, which is not the case
+        warn!("failed to set fuel for store, fueling is not supported");
+    };
     store
 }
 
@@ -246,6 +250,8 @@ pub enum WrpcServeEvent<C> {
         context: C,
         /// Whether the invocation was successfully handled
         success: bool,
+        /// How much fuel was consumed during the component's execution
+        fuel_consumed: Option<u64>,
     },
     /// `wasmcloud:messaging/handler.handle-message` return event
     MessagingHandlerHandleMessageReturned {
@@ -253,6 +259,8 @@ pub enum WrpcServeEvent<C> {
         context: C,
         /// Whether the invocation was successfully handled
         success: bool,
+        /// How much fuel was consumed during the component's execution
+        fuel_consumed: Option<u64>,
     },
     /// dynamic export return event
     DynamicExportReturned {
@@ -260,6 +268,8 @@ pub enum WrpcServeEvent<C> {
         context: C,
         /// Whether the invocation was successfully handled
         success: bool,
+        /// How much fuel was consumed during the component's execution
+        fuel_consumed: Option<u64>,
     },
 }
 
@@ -481,6 +491,7 @@ where
                                     events.try_send(WrpcServeEvent::DynamicExportReturned {
                                         context: cx,
                                         success,
+                                        fuel_consumed: None,
                                     })
                                 {
                                     warn!(
@@ -536,6 +547,7 @@ where
                                                 WrpcServeEvent::DynamicExportReturned {
                                                     context: cx,
                                                     success,
+                                                    fuel_consumed: None,
                                                 },
                                             ) {
                                                 warn!(

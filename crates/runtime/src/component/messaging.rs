@@ -124,6 +124,7 @@ where
                 .try_send(WrpcServeEvent::MessagingHandlerHandleMessageReturned {
                     context: cx,
                     success,
+                    fuel_consumed: None,
                 })
         {
             warn!(

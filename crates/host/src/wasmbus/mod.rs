@@ -305,6 +305,7 @@ impl wrpc_transport::Serve for WrpcServer {
                             // TODO(metrics): insert information about the source once we have concrete context data
                             vec![
                                 KeyValue::new("component.ref", image_reference),
+                                KeyValue::new("component.id", id),
                                 KeyValue::new("lattice", metrics.lattice_id.clone()),
                                 KeyValue::new("host", metrics.host_id.clone()),
                                 KeyValue::new("operation", format!("{instance}/name")),
@@ -1261,20 +1262,24 @@ impl Host {
                                     WrpcServeEvent::HttpIncomingHandlerHandleReturned {
                                         context: (start_at, ref attributes),
                                         success,
+                                        fuel_consumed,
                                     }
                                     | WrpcServeEvent::MessagingHandlerHandleMessageReturned {
                                         context: (start_at, ref attributes),
                                         success,
+                                        fuel_consumed,
                                     }
                                     | WrpcServeEvent::DynamicExportReturned {
                                         context: (start_at, ref attributes),
                                         success,
+                                        fuel_consumed,
                                     } => {
                                         metrics.record_component_invocation(
                                             u64::try_from(start_at.elapsed().as_nanos())
                                                 .unwrap_or_default(),
                                             attributes,
                                             !success,
+                                            fuel_consumed,
                                         );
                                     }
                                 }

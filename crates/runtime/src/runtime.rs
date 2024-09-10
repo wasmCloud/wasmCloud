@@ -38,6 +38,7 @@ impl RuntimeBuilder {
         engine_config.epoch_interruption(true);
         engine_config.memory_init_cow(false);
         engine_config.wasm_component_model(true);
+        engine_config.consume_fuel(true);
 
         Self {
             engine_config,
