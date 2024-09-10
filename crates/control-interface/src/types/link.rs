@@ -33,6 +33,21 @@ pub struct InterfaceLinkDefinition {
     pub target_config: Vec<KnownConfigName>,
 }
 
+/// A request to remove a link definition and detach the relevant component
+/// from the given provider
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeleteInterfaceLinkDefinitionRequest {
+    /// The source component's identifier.
+    pub source_id: ComponentId,
+    /// Name of the link. Not providing this is equivalent to specifying Some("default")
+    #[serde(default = "default_link_name")]
+    pub name: LinkName,
+    /// WIT namespace of the link, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
+    pub wit_namespace: WitNamespace,
+    /// WIT package of the link, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
+    pub wit_package: WitPackage,
+}
+
 /// Helper function to provide a default link name
 pub(crate) fn default_link_name() -> LinkName {
     "default".to_string()

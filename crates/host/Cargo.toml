@@ -53,7 +53,7 @@ ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
-wasmcloud-control-interface = { workspace = true, features = ["v2alpha1"] }
+wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = [
     "oci-distribution",
     "otel",

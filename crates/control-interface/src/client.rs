@@ -11,18 +11,17 @@ use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
 
-use crate::types::link::InterfaceLinkDefinition;
+use crate::types::link::{DeleteInterfaceLinkDefinitionRequest, InterfaceLinkDefinition};
 
+use crate::types::auction::{
+    ComponentAuctionAck, ComponentAuctionRequest, ProviderAuctionAck, ProviderAuctionRequest,
+};
 use crate::types::ctl::{
     CtlResponse, ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateComponentCommand,
 };
 use crate::types::host::{Host, HostInventory, HostLabel};
 use crate::types::registry::RegistryCredential;
-use crate::types::rpc::{
-    ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
-    ProviderAuctionAck, ProviderAuctionRequest,
-};
 use crate::{
     broker, json_deserialize, json_serialize, otel, parse_identifier, IdentifierKind, Result,
 };
@@ -168,7 +167,7 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<CtlResponse<Host>>> {
         let subject = broker::v1::queries::hosts(&self.topic_prefix, &self.lattice);
-        debug!("get_hosts:publish {}", &subject);
+        debug!("get_hosts:publish {subject}");
         self.publish_and_wait(subject, Vec::new()).await
     }
 
@@ -180,7 +179,7 @@ impl Client {
             &self.lattice,
             parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
         );
-        debug!("get_host_inventory:request {}", &subject);
+        debug!("get_host_inventory:request {subject}");
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive host inventory from target host: {e}").into()),
@@ -191,7 +190,7 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<CtlResponse<Vec<HashMap<String, String>>>> {
         let subject = broker::v1::queries::claims(&self.topic_prefix, &self.lattice);
-        debug!("get_claims:request {}", &subject);
+        debug!("get_claims:request {subject}");
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive claims from lattice: {e}").into()),
@@ -206,17 +205,11 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn perform_component_auction(
         &self,
-        component_ref: &str,
-        component_id: &str,
-        constraints: HashMap<String, String>,
+        auction_request: ComponentAuctionRequest,
     ) -> Result<Vec<CtlResponse<ComponentAuctionAck>>> {
         let subject = broker::v1::component_auction_subject(&self.topic_prefix, &self.lattice);
-        let bytes = json_serialize(ComponentAuctionRequest {
-            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
-            component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
-            constraints,
-        })?;
-        debug!("component_auction:publish {}", &subject);
+        let bytes = json_serialize(auction_request)?;
+        debug!("component_auction:publish {subject}");
         self.publish_and_wait(subject, bytes).await
     }
 
@@ -238,7 +231,7 @@ impl Client {
             provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
             constraints,
         })?;
-        debug!("provider_auction:publish {}", &subject);
+        debug!("provider_auction:publish {subject}");
         self.publish_and_wait(subject, bytes).await
     }
 
@@ -273,10 +266,10 @@ impl Client {
             &self.lattice,
             host_id.as_str(),
         );
-        debug!("scale_component:request {}", &subject);
+        debug!("scale_component:request {subject}");
         let bytes = json_serialize(ScaleComponentCommand {
             max_instances,
-            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
+            component_ref: parse_identifier(&IdentifierKind::ComponentRef, component_ref)?,
             component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
             host_id,
             annotations,
@@ -302,7 +295,7 @@ impl Client {
         registries: HashMap<String, RegistryCredential>,
     ) -> Result<CtlResponse<()>> {
         let subject = broker::v1::publish_registries(&self.topic_prefix, &self.lattice);
-        debug!("put_registries:publish {}", &subject);
+        debug!("put_registries:publish {subject}");
         let bytes = json_serialize(&registries)?;
         let resp = self
             .nc
@@ -328,7 +321,7 @@ impl Client {
         parse_identifier(&IdentifierKind::LinkName, &link.name)?;
 
         let subject = broker::v1::put_link(&self.topic_prefix, &self.lattice);
-        debug!("put_link:request {}", &subject);
+        debug!("put_link:request {subject}");
 
         let bytes = crate::json_serialize(&link)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -367,7 +360,7 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     pub async fn get_links(&self) -> Result<CtlResponse<Vec<InterfaceLinkDefinition>>> {
         let subject = broker::v1::queries::link_definitions(&self.topic_prefix, &self.lattice);
-        debug!("get_links:request {}", &subject);
+        debug!("get_links:request {subject}");
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive a response to get links: {e}").into()),
@@ -515,11 +508,11 @@ impl Client {
             &self.lattice,
             host_id.as_str(),
         );
-        debug!("update_component:request {}", &subject);
+        debug!("update_component:request {subject}");
         let bytes = json_serialize(UpdateComponentCommand {
             host_id,
             component_id: parse_identifier(&IdentifierKind::ComponentId, existing_component_id)?,
-            new_component_ref: parse_identifier(&IdentifierKind::ActorRef, new_component_ref)?,
+            new_component_ref: parse_identifier(&IdentifierKind::ComponentRef, new_component_ref)?,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -551,7 +544,7 @@ impl Client {
             &self.lattice,
             host_id.as_str(),
         );
-        debug!("start_provider:request {}", &subject);
+        debug!("start_provider:request {subject}");
         let bytes = json_serialize(StartProviderCommand {
             host_id,
             provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
@@ -579,7 +572,7 @@ impl Client {
             &self.lattice,
             host_id.as_str(),
         );
-        debug!("stop_provider:request {}", &subject);
+        debug!("stop_provider:request {subject}");
         let bytes = json_serialize(StopProviderCommand {
             host_id,
             provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
@@ -604,7 +597,7 @@ impl Client {
         let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
         let subject =
             broker::v1::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
-        debug!("stop_host:request {}", &subject);
+        debug!("stop_host:request {subject}");
         let bytes = json_serialize(StopHostCommand {
             host_id,
             timeout: timeout_ms,
@@ -802,14 +795,16 @@ mod tests {
         assert!(host.response.is_some());
         let host = host.response.as_ref().unwrap();
         ////
-        // Actor operations
+        // Component operations
         ////
-        // Actor Auction
+        // Component Auction
         let auction_response = client
             .perform_component_auction(
-                "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0",
-                "echo",
-                HashMap::new(),
+                crate::ComponentAuctionRequestBuilder::new(
+                    "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0",
+                    "echo",
+                )
+                .build(),
             )
             .await
             .expect("should be able to auction an component");
@@ -817,7 +812,7 @@ mod tests {
         let first_ack = auction_response.first().expect("a single component ack");
         let auction_ack = first_ack.response.as_ref().unwrap();
         let (component_ref, component_id) = (&auction_ack.component_ref, &auction_ack.component_id);
-        // Actor Scale
+        // Component Scale
         let scale_response = client
             .scale_component(
                 &host.id,
@@ -832,7 +827,7 @@ mod tests {
         assert!(scale_response.success);
         assert!(scale_response.message.is_empty());
         assert!(scale_response.response.is_none());
-        // Actor Update (TODO(brooksmtownsend): we should test this with a real update, but I'm using a failure case)
+        // Component Update (TODO(brooksmtownsend): we should test this with a real update, but I'm using a failure case)
         let update_component_resp = client
             .update_component(
                 &host.id,

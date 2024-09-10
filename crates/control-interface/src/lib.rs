@@ -19,13 +19,13 @@ pub mod client;
 pub use client::{collect_sub_timeout, Client, ClientBuilder};
 
 mod types;
+pub use types::auction::*;
 pub use types::component::*;
 pub use types::ctl::*;
 pub use types::host::*;
-pub use types::link::InterfaceLinkDefinition;
+pub use types::link::*;
 pub use types::provider::*;
 pub use types::registry::*;
-pub use types::rpc::*;
 
 /// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
 /// - component public key
@@ -83,7 +83,7 @@ fn assert_non_empty_string(input: impl AsRef<str>, message: impl AsRef<str>) -> 
 enum IdentifierKind {
     HostId,
     ComponentId,
-    ActorRef,
+    ComponentRef,
     ProviderRef,
     LinkName,
 }
@@ -97,8 +97,8 @@ fn parse_identifier<T: AsRef<str>>(kind: &IdentifierKind, value: T) -> Result<St
         IdentifierKind::ComponentId => {
             assert_non_empty_string(value, "Component ID cannot be empty")
         }
-        IdentifierKind::ActorRef => {
-            assert_non_empty_string(value, "Actor OCI reference cannot be empty")
+        IdentifierKind::ComponentRef => {
+            assert_non_empty_string(value, "Component OCI reference cannot be empty")
         }
         IdentifierKind::ProviderRef => {
             assert_non_empty_string(value, "Provider OCI reference cannot be empty")

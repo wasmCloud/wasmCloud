@@ -43,18 +43,16 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
 use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
-use wasmcloud_control_interface::v2alpha1::auction::{
-    ComponentAuctionAck, ComponentAuctionRequest,
-};
 use wasmcloud_control_interface::{
-    ComponentDescription, CtlResponse, DeleteInterfaceLinkDefinitionRequest, HostInventory,
-    HostLabel, InterfaceLinkDefinition, ProviderAuctionAck, ProviderAuctionRequest,
-    ProviderDescription, RegistryCredential, ScaleComponentCommand, StartProviderCommand,
-    StopHostCommand, StopProviderCommand, UpdateComponentCommand,
+    ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
+    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, InterfaceLinkDefinition,
+    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
+    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+    UpdateComponentCommand,
 };
 use wasmcloud_core::{
     provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
-    CTL_API_VERSION_1, CTL_API_VERSION_2_ALPHA_1,
+    CTL_API_VERSION_1,
 };
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::component::WrpcServeEvent;
@@ -168,10 +166,6 @@ impl Queue {
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config.>"),
                 format!("{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.config"),
             )),
-            // v2alpha1
-            Either::Left(nats.subscribe(format!(
-                "{topic_prefix}.{CTL_API_VERSION_2_ALPHA_1}.{lattice}.*.auction",
-            ))),
         ])
         .await
         .into_iter()
