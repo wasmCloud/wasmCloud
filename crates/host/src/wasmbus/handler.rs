@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
-use tracing::{debug, error, instrument};
+use tracing::{error, instrument, warn};
 use wasmcloud_runtime::capability::config::runtime::ConfigError;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
@@ -163,13 +163,19 @@ impl wrpc_transport::Invoke for Handler {
             .map_or("default", AsRef::as_ref);
 
         let instances = links.get(link_name).with_context(|| {
+            warn!(
+                instance,
+                link_name,
+                ?target_instance,
+                ?self.component_id,
+                "no links with link name found for instance"
+            );
             format!("link `{link_name}` not found for instance `{target_instance}`")
         })?;
 
         // Determine the lattice target ID we should be sending to
         let id = instances.get(target_instance).with_context(||{
-            debug!(
-                ?links,
+            warn!(
                 instance,
                 ?target_instance,
                 ?self.component_id,
