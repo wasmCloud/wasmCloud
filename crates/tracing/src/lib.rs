@@ -82,10 +82,8 @@ pub(crate) fn get_http_client(otel_config: &OtelConfig) -> anyhow::Result<reqwes
     let mut certs = tls::NATIVE_ROOTS.to_vec();
     if !otel_config.additional_ca_paths.is_empty() {
         let additional_certs =
-            match wasmcloud_core::tls::load_certs_from_paths(&otel_config.additional_ca_paths) {
-                Ok(certs) => certs,
-                Err(_) => vec![],
-            };
+            wasmcloud_core::tls::load_certs_from_paths(&otel_config.additional_ca_paths)
+                .unwrap_or_default();
         certs.extend(additional_certs);
     }
 
