@@ -479,6 +479,7 @@ async fn init_provider(name: &str) -> ProviderInitResult<ProviderInitState> {
             }
         },
     )
+    .name(name)
     .connect(nats_addr)
     .await?;
     let store_client = nats.clone();
