@@ -139,8 +139,8 @@ export class LatticeClient {
     if (autoConnect !== false) {
       // try and connect, but don't throw an error if it fails. The connection will be in an error state accessible
       // through the `client.connection.status` property
-      this.#connect().catch(() => {
-        console.info('Failed to connect to lattice on creation');
+      this.#connect().catch((error) => {
+        console.info('Failed to connect to lattice on creation:', error.message ?? 'unknown error');
       });
     }
   }

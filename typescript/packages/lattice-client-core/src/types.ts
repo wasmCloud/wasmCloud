@@ -252,10 +252,4 @@ export type ApplicationSummary = {
 };
 
 /** Application deployment status */
-export enum DeploymentStatus {
-  Undeployed = 'undeployed',
-  Reconciling = 'reconciling',
-  Deployed = 'deployed',
-  Failed = 'failed',
-  Unknown = 'unknown',
-}
+export type DeploymentStatus = 'undeployed' | 'reconciling' | 'deployed' | 'failed' | 'unknown';
