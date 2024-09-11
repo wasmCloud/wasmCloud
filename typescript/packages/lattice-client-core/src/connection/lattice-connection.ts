@@ -5,7 +5,12 @@ type BucketResult<ResultType> = KvEntry & {
   json(): ResultType;
 };
 
-export type LatticeConnectionStatus = 'connected' | 'pending' | 'error' | 'disconnected';
+export type LatticeConnectionStatus =
+  | 'initial'
+  | 'connected'
+  | 'pending'
+  | 'error'
+  | 'disconnected';
 
 abstract class LatticeConnection {
   abstract status: LatticeConnectionStatus;
