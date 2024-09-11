@@ -43,8 +43,6 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
                 "--nats-connect-only",
                 "--ctl-port",
                 nats_port.to_string().as_ref(),
-                "--use-host-subprocess",
-                "--disable-wadm",
             ])
             .kill_on_drop(true)
             .spawn()

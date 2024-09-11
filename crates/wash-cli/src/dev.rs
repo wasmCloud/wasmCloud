@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::{select, sync::mpsc};
 use wash_lib::app::AppManifest;
+use wash_lib::component::{scale_component, ScaleComponentArgs};
+use wasmcloud_control_interface::Client as CtlClient;
 use wit_parser::{Resolve, WorldId};
 
 use wadm_types::{
@@ -85,16 +87,6 @@ pub struct DevCommand {
         help = "Leave the wasmCloud host running after stopping the devloop"
     )]
     pub leave_host_running: bool,
-
-    /// Run the host in a subprocess (rather than detached mode)
-    #[clap(
-        name = "use-host-subprocess",
-        long = "use-host-subprocess",
-        env = "WASH_DEV_USE_HOST_SUBPROCESS",
-        default_value = "false",
-        help = "Run the wasmCloud host in a subprocess (rather than detached mode)"
-    )]
-    pub use_host_subprocess: bool,
 
     /// Write generated WADM manifest(s) to a given folder (every time they are generated)
     #[clap(long = "manifest-output-dir", env = "WASH_DEV_MANIFEST_OUTPUT_DIR")]
@@ -534,6 +526,12 @@ struct ProjectDeps {
     /// Lookup of dependencies by project key, with lookups into the pool
     dependencies: HashMap<ProjectDependencyKey, DependencySpec>,
 
+    /// The component to which dependencies belong
+    ///
+    /// When used in the context of `wash dev` this is the component that is being developed
+    /// (either a provider or a component).
+    component: Option<Component>,
+
     /// Dependencies that receive invocations for given interfaces (i.e. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
     ///
     /// The keys to this structure are indices into the `dependencies` member.
@@ -606,14 +604,17 @@ impl ProjectDeps {
     /// Project dependencies, spread across large/nested enough workspace can lead to *multiple* Applications manifests
     /// being produced -- in general every workspace *should* produce a distinct manifest, but it is possible a workspace
     /// could produce zero manifests (for example, if all resources are delegated to a higher level manifest).
-    fn generate_wadm_manifests(
-        &self,
-        mut app_component: Component,
-        session_id: Option<&str>,
-    ) -> Result<impl IntoIterator<Item = Manifest>> {
+    fn generate_wadm_manifests(&self) -> Result<impl IntoIterator<Item = Manifest>> {
         let mut manifests = Vec::<Manifest>::new();
-        let session_id = session_id.unwrap_or("");
-        let app_name = format!("dev-{}", app_component.name);
+        let session_id = self
+            .session_id
+            .as_ref()
+            .context("missing/invalid session ID")?;
+        let mut component = self
+            .component
+            .clone()
+            .context("missing/invalid component under test")?;
+        let app_name = format!("dev-{}", component.name);
 
         // Generate components for all the dependencies
         let mut components = Vec::new();
@@ -675,10 +676,7 @@ impl ProjectDeps {
                     // TODO: Check for on-dep overrides/additional configuration to add to the link
 
                     // Add the trait to the app component
-                    app_component
-                        .traits
-                        .get_or_insert(Vec::new())
-                        .push(link_trait);
+                    component.traits.get_or_insert(Vec::new()).push(link_trait);
                 }
                 DependencySpec::Imports(DependencySpecInner {
                     wit: (ns, pkg, iface, version),
@@ -690,7 +688,7 @@ impl ProjectDeps {
                         package: pkg.clone(),
                         interfaces: vec![iface.clone()],
                         target: TargetConfig {
-                            name: app_component.name.clone(),
+                            name: component.name.clone(),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -747,7 +745,7 @@ impl ProjectDeps {
         }
 
         // Add the application component after we've made necessary links
-        components.push(app_component);
+        components.push(component);
 
         manifests.push(Manifest {
             api_version: "0.0.0".into(),
@@ -768,6 +766,32 @@ impl ProjectDeps {
         });
 
         Ok(manifests)
+    }
+
+    /// Delete all manifests associated with this [`ProjectDeps`]
+    async fn delete_manifests(
+        &self,
+        client: &async_nats_0_33::Client,
+        lattice: &str,
+    ) -> Result<()> {
+        for manifest in self
+            .generate_wadm_manifests()
+            .context("failed to generate manifests")?
+            .into_iter()
+        {
+            wash_lib::app::delete_model_version(
+                client,
+                Some(lattice.into()),
+                &manifest.metadata.name,
+                Some(manifest.version().into()),
+            )
+            .await
+            .with_context(|| {
+                format!("failed to delete application [{}]", manifest.metadata.name)
+            })?;
+        }
+
+        Ok(())
     }
 }
 
@@ -865,18 +889,17 @@ fn discover_dependencies_from_wit(
 
 /// Generate a WADM component from a project configuration
 fn generate_component_from_project_cfg(
-    session_id: &str,
     cfg: &ProjectConfig,
+    component_id: &str,
     image_ref: &str,
 ) -> Result<Component> {
-    let name = format!("{}-{}", session_id, cfg.common.name.clone());
     Ok(Component {
-        name: name.clone(),
+        name: component_id.into(),
         properties: match &cfg.project_type {
             wash_lib::parser::TypeConfig::Component(_c) => Properties::Component {
                 properties: ComponentProperties {
                     image: image_ref.into(),
-                    id: None,
+                    id: Some(component_id.into()),
                     config: Vec::with_capacity(0),
                     secrets: Vec::with_capacity(0),
                 },
@@ -884,7 +907,7 @@ fn generate_component_from_project_cfg(
             wash_lib::parser::TypeConfig::Provider(_p) => Properties::Capability {
                 properties: CapabilityProperties {
                     image: image_ref.into(),
-                    id: None,
+                    id: Some(component_id.into()),
                     config: Vec::with_capacity(0),
                     secrets: Vec::with_capacity(0),
                 },
@@ -931,10 +954,11 @@ pub struct WashDevSession {
     id: String,
     /// Absolute path to the directory in which `wash dev` was run
     project_path: PathBuf,
-    /// ID of the host that this `wash dev` session acts upon
+    /// Tuple containing data about the host, in particular the
+    /// host ID and path to log file
     ///
-    /// This value may start out empty, but is filled in by hosts
-    host_id: Option<String>,
+    /// This value may start out empty, but is filled in when a host is started
+    host_data: Option<(String, PathBuf)>,
     /// Whether this session is currently in use
     in_use: bool,
     /// When this session was created
@@ -976,6 +1000,7 @@ impl SessionMetadata {
         // Open and lock the sessions file
         let mut sessions_file = Self::open_sessions_file().await?;
         let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
+
         // Load session metadata, if present
         let file_size = (*lock)
             .metadata()
@@ -1065,7 +1090,7 @@ impl Default for SessionMetadata {
 }
 
 impl WashDevSession {
-    /// Retrieve a `wash dev` session from a file on disk which contains multiple `wash dev` sessions
+    /// Retrieve or create a `wash dev` session from a file on disk containing [`SessionMetadata`]
     async fn from_sessions_file(project_path: impl AsRef<Path>) -> Result<Self> {
         let mut session_metadata = SessionMetadata::from_sessions_file()
             .await
@@ -1076,7 +1101,7 @@ impl WashDevSession {
         let session = match session_metadata
             .sessions
             .iter()
-            .find(|i| i.project_path == project_path)
+            .find(|s| s.project_path == project_path && !s.in_use)
         {
             Some(existing_session) => existing_session.clone(),
             None => {
@@ -1087,7 +1112,7 @@ impl WashDevSession {
                         .map(char::from)
                         .collect(),
                     project_path: project_path.into(),
-                    host_id: None,
+                    host_data: None,
                     in_use: true,
                     created_at: Utc::now(),
                     last_used_at: Utc::now(),
@@ -1107,14 +1132,14 @@ impl WashDevSession {
         nats_opts: NatsOpts,
         wadm_opts: WadmOpts,
     ) -> Result<()> {
-        if self.host_id.is_some() {
+        if self.host_data.is_some() {
             return Ok(());
         }
 
         eprintln!(
             "{} {}",
             emoji::CONSTRUCTION_BARRIER,
-            style("starting a new host...").bold()
+            style("Starting a new host...").bold()
         );
         // Ensure that file loads are allowed
         wasmcloud_opts.allow_file_load = Some(true);
@@ -1148,11 +1173,12 @@ impl WashDevSession {
                 .context("failed to find wasmcloud log in wash up output")?,
         );
 
+        let _log_file_path = log_file_path.clone();
         let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
-            let log_file = tokio::fs::File::open(&log_file_path)
+            let log_file = tokio::fs::File::open(&_log_file_path)
                 .await
                 .with_context(|| {
-                    format!("failed to open log file @ [{}]", log_file_path.display())
+                    format!("failed to open log file @ [{}]", _log_file_path.display())
                 })?;
             let mut lines = tokio::io::BufReader::new(log_file).lines();
             loop {
@@ -1174,21 +1200,63 @@ impl WashDevSession {
         .context("timeout expired while reading for Host ID in logs")?
         .context("failed to retrieve host ID from logs")?;
 
-        self.host_id = Some(host_id);
+        eprintln!(
+            "{} {}",
+            emoji::GREEN_CHECK,
+            style(format!(
+                "Successfully started host, logs @ [{}]",
+                log_file_path.display()
+            ))
+            .bold()
+        );
+
+        self.host_data = Some((host_id, log_file_path));
 
         Ok(())
     }
 }
 
+struct RunDevLoopArgs<'a> {
+    dev_session: &'a WashDevSession,
+    nats_client: &'a async_nats_0_33::Client,
+    ctl_client: &'a CtlClient,
+    project_cfg: &'a ProjectConfig,
+    lattice: &'a str,
+    session_id: &'a str,
+    manifest_output_dir: Option<&'a PathBuf>,
+    previous_deps: &'a mut Option<ProjectDeps>,
+}
+
 /// Run one iteration of the development loop
 async fn run_dev_loop(
-    nats_client: &async_nats_0_33::Client,
-    project_cfg: &ProjectConfig,
-    lattice: &str,
-    session_id: &str,
-    component_ref: &str,
-    manifest_output_dir: Option<&PathBuf>,
+    RunDevLoopArgs {
+        dev_session,
+        nats_client,
+        ctl_client,
+        project_cfg,
+        lattice,
+        session_id,
+        manifest_output_dir,
+        previous_deps,
+    }: RunDevLoopArgs<'_>,
 ) -> Result<()> {
+    // Build the project (equivalent to `wash build`)
+    eprintln!(
+        "{} {}",
+        emoji::CONSTRUCTION_BARRIER,
+        style("Building project...").bold(),
+    );
+    let artifact_path = build_project(project_cfg, Some(&SignConfig::default()))
+        .await
+        .context("failed to build project")?
+        .canonicalize()
+        .context("failed to canonicalize path")?;
+    eprintln!(
+        "✅ successfully built project at [{}]",
+        artifact_path.display()
+    );
+    let component_ref = format!("file://{}", artifact_path.display());
+
     // After the project is built, we must ensure dependencies are set up and running
     let (resolve, world_id) =
         parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?;
@@ -1206,7 +1274,7 @@ async fn run_dev_loop(
     let pkey =
         ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
             .context("failed to build key for project")?;
-    let mut project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps)
+    let mut current_project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps)
         .context("failed to build project dependencies")?;
 
     // Pull and merge in implied dependencies from project-level wasmcloud.toml
@@ -1217,17 +1285,52 @@ async fn run_dev_loop(
                 project_cfg.common.path.display(),
             )
         })?;
-    project_deps
+    current_project_deps
         .merge_override(implied_project_deps)
         .context("failed to merge & override project-specified deps")?;
 
+    // After we've merged, we can update the session ID to belong to this session
+    current_project_deps.session_id = Some(session_id.into());
+
     // Generate component that represents the app
-    let app_component = generate_component_from_project_cfg(session_id, project_cfg, component_ref)
+    let component_id = format!("{}-{}", session_id, project_cfg.common.name.clone());
+    let component = generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
         .context("failed to generate app component")?;
 
+    // If deps haven't changed, then we can simply restart the component and return
+    if previous_deps
+        .as_ref()
+        .is_some_and(|deps| *deps == current_project_deps)
+    {
+        eprintln!(
+            "{} {}",
+            emoji::RECYCLE,
+            style(format!(
+                "(Fast-)Reloading component [{component_id}] (no dependencies have changed)..."
+            ))
+            .bold()
+        );
+        // Scale the component to zero, trusting that wadm will re-create it
+        scale_down_component(
+            ctl_client,
+            &dev_session
+                .host_data
+                .as_ref()
+                .context("missing host ID for session")?
+                .0,
+            &component_id,
+            &component_ref,
+        )
+        .await
+        .with_context(|| format!("failed to reload component [{component_id}]"))?;
+        return Ok(());
+    }
+
+    current_project_deps.component = Some(component);
+
     // Convert the project deps into a fully-baked WADM manifests
-    let manifests = project_deps
-        .generate_wadm_manifests(app_component, Some(session_id))
+    let manifests = current_project_deps
+        .generate_wadm_manifests()
         .with_context(|| {
             format!("failed to generate a WADM manifest from (session [{session_id}])")
         })?;
@@ -1281,12 +1384,62 @@ async fn run_dev_loop(
             "{} {}",
             emoji::RECYCLE,
             style(format!(
-                "deployed development manifest for application [{}]",
+                "Deployed development manifest for application [{}]",
                 manifest.metadata.name,
             ))
             .bold(),
         );
     }
+
+    eprintln!(
+        "{} {}",
+        emoji::RECYCLE,
+        style(format!("Reloading component [{component_id}]...")).bold()
+    );
+    // Scale the component to zero, trusting that wadm will re-create it
+    scale_down_component(
+        ctl_client,
+        &dev_session
+            .host_data
+            .as_ref()
+            .context("missing host ID for session")?
+            .0,
+        &component_id,
+        &component_ref,
+    )
+    .await
+    .with_context(|| format!("failed to reload component [{component_id}]"))?;
+
+    // Update deps, since they must be different
+    *previous_deps = Some(current_project_deps);
+
+    Ok(())
+}
+
+/// Scale a component to zero
+async fn scale_down_component(
+    client: &CtlClient,
+    host_id: &str,
+    component_id: &str,
+    component_ref: &str,
+) -> Result<()> {
+    // Now that backing infrastructure has changed, we should scale the component
+    // as the component (if it was running before) has *not* changed.
+    //
+    // Scale the component down, knowing that WADM should restore it (and trigger a reload)
+    scale_component(ScaleComponentArgs {
+        client,
+        host_id,
+        component_id,
+        component_ref,
+        max_instances: 0,
+        annotations: None,
+        config: vec![],
+        skip_wait: false,
+        timeout_ms: None,
+    })
+    .await
+    .with_context(|| format!("failed to scale down component [{component_id}] for reload"))?;
     Ok(())
 }
 
@@ -1306,7 +1459,7 @@ pub async fn handle_command(
     eprintln!("{} Resolved wash session ID [{session_id}]", emoji::INFO);
 
     // If there is not a running host for this session, then we can start one
-    if wash_dev_session.host_id.is_none() {
+    if wash_dev_session.host_data.is_none() {
         wash_dev_session
             .start_host(
                 cmd.wasmcloud_opts.clone(),
@@ -1317,9 +1470,10 @@ pub async fn handle_command(
             .with_context(|| format!("failed to start host for session [{session_id}]"))?;
     }
     let mut host_id = wash_dev_session
-        .host_id
+        .host_data
         .clone()
-        .context("missing host_id, after ensuring host has started")?;
+        .context("missing host_id, after ensuring host has started")?
+        .0;
 
     // Create NATS and control interface clients to use to connect
     let nats_client = match cmd.wasmcloud_opts.create_nats_client().await {
@@ -1329,7 +1483,7 @@ pub async fn handle_command(
                 "{} Failed to connect connect NATS client, host is likely not present, starting host...",
                 emoji::WARN
             );
-            wash_dev_session.host_id = None;
+            wash_dev_session.host_data = None;
             wash_dev_session
                 .start_host(
                     cmd.wasmcloud_opts.clone(),
@@ -1377,35 +1531,11 @@ pub async fn handle_command(
             .await
             .context("failed to start host for session")?;
         host_id = wash_dev_session
-            .host_id
+            .host_data
             .clone()
-            .context("missing host after start")?;
+            .context("missing host after start")?
+            .0;
     }
-
-    // Build the project (equivalent to `wash build`)
-    eprintln!(
-        "{} {}",
-        emoji::CONSTRUCTION_BARRIER,
-        style("Starting project build").bold(),
-    );
-    let sign_cfg: Option<SignConfig> = Some(SignConfig {
-        keys_directory: None,
-        issuer: None,
-        subject: None,
-        disable_keygen: false,
-    });
-    let artifact_path = build_project(&project_cfg, sign_cfg.as_ref())
-        .await
-        .context("failed to build project")?
-        .canonicalize()
-        .context("failed to canonicalize path")?;
-    eprintln!(
-        "✅ successfully built project at [{}]",
-        artifact_path.display()
-    );
-
-    // Since we're using the component from file on disk, the ref should be the file path (canonicalized) on disk as URI
-    let component_ref = format!("file://{}", artifact_path.display());
 
     // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
@@ -1455,6 +1585,21 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
+    // Run the dev loop once (building the application, deploying deps, etc), before we start watching
+    let mut dependencies = None;
+    run_dev_loop(RunDevLoopArgs {
+        dev_session: &wash_dev_session,
+        nats_client: &nats_client,
+        ctl_client: &ctl_client,
+        project_cfg: &project_cfg,
+        lattice,
+        session_id: &session_id,
+        manifest_output_dir: cmd.manifest_output_dir.as_ref(),
+        previous_deps: &mut dependencies,
+    })
+    .await
+    .context("failed to run initial dev loop iteration")?;
+
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
     loop {
@@ -1462,18 +1607,20 @@ pub async fn handle_command(
             // Process a file change/reload
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                run_dev_loop(
-                    &nats_client,
-                    &project_cfg,
+                run_dev_loop(RunDevLoopArgs {
+                    dev_session: &wash_dev_session,
+                    nats_client: &nats_client,
+                    ctl_client: &ctl_client,
+                    project_cfg: &project_cfg,
                     lattice,
-                    &session_id,
-                    &component_ref,
-                    cmd.manifest_output_dir.as_ref(),
-                )
+                    session_id: &session_id,
+                    manifest_output_dir: cmd.manifest_output_dir.as_ref(),
+                    previous_deps: &mut dependencies,
+                })
                     .await
                     .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
-                eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
+                eprintln!("\n👀 watching for file changes (press Ctrl+c to stop)...");
             },
 
             // Process a stop
@@ -1485,6 +1632,11 @@ pub async fn handle_command(
                 wash_dev_session.in_use = false;
                 SessionMetadata::persist_session(&wash_dev_session).await?;
 
+                // Delete manifests related to the application
+                if let Some(dependencies) = dependencies {
+                    eprintln!("🧹 Cleaning up deployed WADM application(s)...");
+                    dependencies.delete_manifests(&nats_client, lattice).await?;
+                }
 
                 if !cmd.leave_host_running {
                     eprintln!("⏳ stopping wasmCloud instance...");
