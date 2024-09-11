@@ -3298,7 +3298,7 @@ __metadata:
     tsup: "npm:^8.3.0"
     type-fest: "npm:^4.26.1"
     vite: "npm:^5.4.2"
-    vite-plugin-dts: "npm:^4.0.3"
+    vite-plugin-dts: "npm:^4.2.1"
     vite-tsconfig-paths: "npm:^5.0.1"
   peerDependencies:
     eslint: ^8.57.0
@@ -3322,7 +3322,7 @@ __metadata:
     tailwindcss: "npm:^3.4.12"
     tsup: "npm:^8.3.0"
     vite: "npm:^5.4.2"
-    vite-plugin-dts: "npm:^4.0.3"
+    vite-plugin-dts: "npm:^4.2.1"
     vite-tsconfig-paths: "npm:^5.0.1"
   peerDependencies:
     react: ^18.0.0
@@ -10200,9 +10200,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite-plugin-dts@npm:^4.0.3":
-  version: 4.2.2
-  resolution: "vite-plugin-dts@npm:4.2.2"
+"vite-plugin-dts@npm:^4.2.1":
+  version: 4.2.1
+  resolution: "vite-plugin-dts@npm:4.2.1"
   dependencies:
     "@microsoft/api-extractor": "npm:7.47.7"
     "@rollup/pluginutils": "npm:^5.1.0"
@@ -10219,7 +10219,7 @@ __metadata:
   peerDependenciesMeta:
     vite:
       optional: true
-  checksum: 10/699b9597c9d63bf87e8dcb02bad74472bc8f266704001969c6ed147dce2163a5ccd9dae229fa0efc12020e3a6e896f15a35809158cb1776f488631115c048ab4
+  checksum: 10/ad5bf2c735a2314eb7a1ce621cdf19165f17f389e5a0621b565694a96cd1579cf6e6a5b9008d01f031392b64ae312fdaf3a0110e6ce2f2e80c40ae7779a5efce
   languageName: node
   linkType: hard
 
