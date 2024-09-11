@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/wasmCloud/provider-sdk-go"
 	server "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings"
+	"go.wasmcloud.dev/provider"
 )
 
 func main() {
