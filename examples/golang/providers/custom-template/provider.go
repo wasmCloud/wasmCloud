@@ -6,8 +6,8 @@ import (
 	"runtime"
 
 	// Go provider SDK
-	sdk "github.com/wasmCloud/provider-sdk-go"
-	wrpcnats "github.com/wrpc/wrpc/go/nats"
+	sdk "go.wasmcloud.dev/provider"
+	wrpcnats "wrpc.io/go/nats"
 
 	// Generated bindings from the wit world
 	system_info "github.com/wasmCloud/wasmCloud/examples/go/providers/custom-template/bindings/exports/wasmcloud/example/system_info"
@@ -62,8 +62,7 @@ func (h *Handler) Call(ctx context.Context) (string, error) {
 		// Get the outgoing RPC client for the target
 		client := h.provider.OutgoingRpcClient(target)
 		// Send the data to the target for processing
-		res, close, err := process_data.Process(ctx, client, &data)
-		defer close()
+		res, err := process_data.Process(ctx, client, &data)
 		if err != nil {
 			return "", err
 		}
