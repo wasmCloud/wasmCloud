@@ -7,7 +7,6 @@ import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
   plugins: [react(), tsconfigPaths(), dts()],
-  resolve: {alias: {'@/': path.resolve('src/')}},
   build: {
     lib: {
       entry: path.resolve(import.meta.dirname, 'src/index.ts'),

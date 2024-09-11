@@ -45,7 +45,7 @@
     "tsup": "^8.3.0",
     "type-fest": "^4.26.1",
     "vite": "^5.4.2",
-    "vite-plugin-dts": "^4.0.3",
+    "vite-plugin-dts": "^4.2.1",
     "vite-tsconfig-paths": "^5.0.1"
   },
   "dependencies": {
