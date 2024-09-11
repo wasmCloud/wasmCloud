@@ -11,7 +11,7 @@ type NatsWsLatticeConnectionOptions = {
 class NatsWsLatticeConnection implements LatticeConnection {
   readonly #options: NatsWsLatticeConnectionOptions;
   #connection?: NatsConnection;
-  #status: typeof LatticeConnection.prototype.status = 'pending';
+  #status: typeof LatticeConnection.prototype.status = 'initial';
 
   get status() {
     return this.#status;
@@ -217,18 +217,24 @@ class NatsWsLatticeConnection implements LatticeConnection {
         return;
       }
 
+      const tryAgainAfterWaitingForALittleBit = () =>
+        new Promise<void>((resolve) => {
+          const aLittleBit = 500; // ms
+          setTimeout(() => resolve(), aLittleBit);
+        }).finally(() => resolve(this.#waitForConnection(count + 1)));
+
       try {
         if (this.#connection && this.#status === 'connected') {
           resolve(this.#connection);
           return;
         }
-        this.connect()
-          .catch(() => {
-            return new Promise<void>((resolve) => {
-              setTimeout(() => resolve(), 500);
-            });
-          })
-          .finally(() => resolve(this.#waitForConnection(count + 1)));
+
+        if (this.#status !== 'initial') {
+          tryAgainAfterWaitingForALittleBit();
+          return;
+        }
+
+        this.connect().catch(() => tryAgainAfterWaitingForALittleBit());
       } catch (error) {
         reject(error as Error);
       }

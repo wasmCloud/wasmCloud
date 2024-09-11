@@ -14,10 +14,12 @@ export function LatticeClientProvider({
   React.useEffect(() => {
     if (!client) return;
 
-    void client.instance.connect();
+    if (client.connection.status !== 'initial') return;
+
+    client.instance.connect();
 
     return () => {
-      void client.instance.disconnect();
+      client.instance.disconnect();
     };
   }, [client]);
 
