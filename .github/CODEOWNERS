@@ -49,3 +49,4 @@ crates/wash-lib @wasmCloud/wash-maintainers
 examples @wasmCloud/examples-maintainers
 vendor/capability-providers @wasmCloud/capability-provider-maintainers
 typescript @wasmCloud/washboard-maintainers
+examples/golang @wasmCloud/go-maintainers
