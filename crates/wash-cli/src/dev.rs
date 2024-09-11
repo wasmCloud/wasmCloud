@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, ensure, Context as _, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use console::style;
@@ -95,6 +95,10 @@ pub struct DevCommand {
         help = "Run the wasmCloud host in a subprocess (rather than detached mode)"
     )]
     pub use_host_subprocess: bool,
+
+    /// Write generated WADM manifest(s) to a given folder (every time they are generated)
+    #[clap(long = "manifest-output-dir", env = "WASH_DEV_MANIFEST_OUTPUT_DIR")]
+    pub manifest_output_dir: Option<PathBuf>,
 }
 
 /// Keys that index the list of dependencies in a [`ProjectDeps`]
@@ -994,18 +998,14 @@ impl SessionMetadata {
                     )
                 })
             })
-            .context("failed to read session metadata")?
+            .with_context(|| format!("failed to read session metadata ({file_size} bytes)"))?
         };
         Ok(session_metadata)
     }
 
-    /// Save the current sessions' metadata to the relevant session file
-    async fn modify_session_and_save(
-        &mut self,
-        modify_func: impl Fn(&mut WashDevSession),
-    ) -> Result<()> {
-        self.reload().await?;
-
+    /// Persist a single session to the metadata file that is on disk
+    async fn persist_session(session: &WashDevSession) -> Result<()> {
+        // Lock the session file
         let sessions_file_path = sessions_file_path().await?;
         let mut sessions_file = Self::open_sessions_file().await?;
         let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
@@ -1015,76 +1015,42 @@ impl SessionMetadata {
             .metadata()
             .context("failed to get sessions file metadata")?
             .len();
-        let mut existing_data = tokio::task::block_in_place(|| {
-            let mut file_contents = Vec::with_capacity(
-                usize::try_from(file_size).context("failed to convert file size to usize")?,
-            );
-            lock.read_to_end(&mut file_contents)
-                .context("failed to read file contents")?;
-            serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
-                format!(
-                    "failed to parse session metadata from file [{}]",
-                    sessions_file_path.display(),
-                )
+        let mut session_metadata = if file_size == 0 {
+            SessionMetadata::default()
+        } else {
+            tokio::task::block_in_place(|| {
+                let mut file_contents = Vec::with_capacity(
+                    usize::try_from(file_size).context("failed to convert file size to usize")?,
+                );
+                lock.read_to_end(&mut file_contents)
+                    .context("failed to read file contents")?;
+                serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
+                    format!(
+                        "failed to parse session metadata from file [{}]",
+                        sessions_file_path.display(),
+                    )
+                })
             })
-        })
-        .context("failed to read session metadata")?;
+            .context("failed to read session metadata while modifying session")?
+        };
 
-        // Modify sessions
-        for session in existing_data.sessions.iter_mut() {
-            modify_func(session);
+        // Update the session that was present
+        if let Some(s) = session_metadata
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == session.id)
+        {
+            *s = session.clone();
         }
 
-        // Write the data to the file
+        // Write current updated session metadata to file
         tokio::fs::write(
             sessions_file_path,
-            &serde_json::to_vec_pretty(&existing_data)
+            &serde_json::to_vec_pretty(&session_metadata)
                 .context("failed to write session metadata")?,
         )
         .await?;
 
-        Ok(())
-    }
-
-    /// Reload the data from the session file
-    async fn reload(&mut self) -> Result<()> {
-        let sessions_file_path = sessions_file_path().await?;
-        let mut sessions_file = Self::open_sessions_file().await?;
-        let mut lock = file_guard::lock(&mut sessions_file, file_guard::Lock::Exclusive, 0, 1)?;
-
-        // Read the session file and ensure that the content is exactly similar to what we have now
-        let file_size = (*lock)
-            .metadata()
-            .context("failed to get sessions file metadata")?
-            .len();
-        let existing_data = tokio::task::block_in_place(|| {
-            let mut file_contents = Vec::with_capacity(
-                usize::try_from(file_size).context("failed to convert file size to usize")?,
-            );
-            lock.read_to_end(&mut file_contents)
-                .context("failed to read file contents")?;
-            serde_json::from_slice::<SessionMetadata>(&file_contents).with_context(|| {
-                format!(
-                    "failed to parse session metadata from file [{}]",
-                    sessions_file_path.display(),
-                )
-            })
-        })
-        .context("failed to read session metadata")?;
-
-        self.version = existing_data.version;
-        self.sessions = existing_data.sessions;
-
-        Ok(())
-    }
-
-    async fn update_session(&mut self, session: &WashDevSession) -> Result<()> {
-        self.modify_session_and_save(|s| {
-            if s.id == session.id {
-                *s = session.clone();
-            }
-        })
-        .await?;
         Ok(())
     }
 }
@@ -1221,6 +1187,7 @@ async fn run_dev_loop(
     lattice: &str,
     session_id: &str,
     component_ref: &str,
+    manifest_output_dir: Option<&PathBuf>,
 ) -> Result<()> {
     // After the project is built, we must ensure dependencies are set up and running
     let (resolve, world_id) =
@@ -1261,14 +1228,37 @@ async fn run_dev_loop(
     // Convert the project deps into a fully-baked WADM manifests
     let manifests = project_deps
         .generate_wadm_manifests(app_component, Some(session_id))
-        .context("failed to generate a WADM manifest from (session [{}])")?;
+        .with_context(|| {
+            format!("failed to generate a WADM manifest from (session [{session_id}])")
+        })?;
 
     // Apply all manifests
     for manifest in manifests {
         let model_yaml =
-            serde_json::to_string(&manifest).context("failed to convert manifest to string")?;
+            serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
-        // TODO: allow writing out of the manifest to a local file
+        // Write out manifests to local file if provided
+        if let Some(output_dir) = manifest_output_dir {
+            ensure!(
+                tokio::fs::metadata(output_dir)
+                    .await
+                    .context("failed to get manifest output dir metadata")
+                    .is_ok_and(|f| f.is_dir()),
+                "manifest output directory [{}] must be a folder",
+                output_dir.display()
+            );
+            tokio::fs::write(
+                output_dir.join(format!("{}.yaml", manifest.metadata.name)),
+                serde_yaml::to_string(&manifest).context("failed to convert manifest to YAML")?,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write out manifest YAML to output dir [{}]",
+                    output_dir.display(),
+                )
+            })?
+        }
 
         // Put the manifest
         match wash_lib::app::put_model(nats_client, Some(lattice.into()), &model_yaml).await {
@@ -1317,10 +1307,6 @@ pub async fn handle_command(
 
     // If there is not a running host for this session, then we can start one
     if wash_dev_session.host_id.is_none() {
-        eprintln!(
-            "{} No running host for session, starting one...",
-            emoji::CONSTRUCTION_BARRIER
-        );
         wash_dev_session
             .start_host(
                 cmd.wasmcloud_opts.clone(),
@@ -1332,11 +1318,33 @@ pub async fn handle_command(
     }
     let mut host_id = wash_dev_session
         .host_id
-        .as_ref()
+        .clone()
         .context("missing host_id, after ensuring host has started")?;
 
     // Create NATS and control interface clients to use to connect
-    let nats_client = cmd.wasmcloud_opts.create_nats_client().await?;
+    let nats_client = match cmd.wasmcloud_opts.create_nats_client().await {
+        Ok(nc) => nc,
+        Err(_) => {
+            eprintln!(
+                "{} Failed to connect connect NATS client, host is likely not present, starting host...",
+                emoji::WARN
+            );
+            wash_dev_session.host_id = None;
+            wash_dev_session
+                .start_host(
+                    cmd.wasmcloud_opts.clone(),
+                    cmd.nats_opts.clone(),
+                    cmd.wadm_opts.clone(),
+                )
+                .await
+                .with_context(|| format!("failed to start host for session [{session_id}]"))?;
+            cmd.wasmcloud_opts
+                .create_nats_client()
+                .await
+                .context("failed to create nats client after starting new host")?
+        }
+    };
+
     let ctl_client = Arc::new(
         cmd.wasmcloud_opts
             .clone()
@@ -1347,7 +1355,7 @@ pub async fn handle_command(
     let lattice = &ctl_client.lattice;
 
     // See if the host is running by retrieving an inventory
-    if let Err(_e) = ctl_client.get_host_inventory(host_id).await {
+    if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {
         eprintln!(
             "{} Failed to retrieve inventory from host [{host_id}]... Is it running?",
             emoji::WARN
@@ -1370,7 +1378,7 @@ pub async fn handle_command(
             .context("failed to start host for session")?;
         host_id = wash_dev_session
             .host_id
-            .as_ref()
+            .clone()
             .context("missing host after start")?;
     }
 
@@ -1460,6 +1468,7 @@ pub async fn handle_command(
                     lattice,
                     &session_id,
                     &component_ref,
+                    cmd.manifest_output_dir.as_ref(),
                 )
                     .await
                     .context("failed to run dev loop iteration")?;
@@ -1474,15 +1483,13 @@ pub async fn handle_command(
 
                 // Update the sessions file with the fact that this session stopped
                 wash_dev_session.in_use = false;
-                let mut session_metadata = SessionMetadata::from_sessions_file()
-                    .await
-                    .context("failed to load session metadata")?;
-                session_metadata.update_session(&wash_dev_session).await?;
+                SessionMetadata::persist_session(&wash_dev_session).await?;
+
 
                 if !cmd.leave_host_running {
                     eprintln!("⏳ stopping wasmCloud instance...");
                     handle_down(
-                        DownCommand { host_id: Some(ServerId::from_str(host_id)?), ..Default::default() },
+                        DownCommand { host_id: Some(ServerId::from_str(&host_id)?), ..Default::default() },
                         output_kind,
                     )
                         .await
