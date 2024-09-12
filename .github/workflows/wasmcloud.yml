@@ -797,7 +797,7 @@ jobs:
           cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }}
       - name: Create Pull Request
         if: ${{ !inputs.do-release }}
-        uses: peter-evans/create-pull-request@8867c4aba1b742c39f8d0ba35429c2dfa4b6cb20
+        uses: peter-evans/create-pull-request@d121e62763d8cc35b5fb1710e887d6e69a52d3a4
         with:
           signoff: true
           committer: wasmCloud Automation <automation@wasmcloud.com>
