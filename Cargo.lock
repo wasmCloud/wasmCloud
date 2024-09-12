@@ -7446,6 +7446,7 @@ dependencies = [
  "path-clean",
  "serde",
  "serde_json",
+ "testcontainers",
  "time",
  "tokio",
  "tokio-stream",
@@ -7454,6 +7455,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc 0.6.4",
  "wrpc-transport 0.26.7",
+ "wrpc-transport-nats 0.23.0",
 ]
 
 [[package]]

@@ -38,3 +38,7 @@ tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 wit-bindgen-wrpc = { workspace = true }
 wrpc-transport = { workspace = true }
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+wrpc-transport-nats = { workspace = true }

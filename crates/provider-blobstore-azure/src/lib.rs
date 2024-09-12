@@ -7,10 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _, Result};
+use azure_storage::CloudLocation;
 use azure_storage_blobs::prelude::*;
 use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
-use futures::{Stream, StreamExt as _, TryStreamExt as _};
+use futures::{Stream, StreamExt as _};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, instrument};
@@ -23,8 +24,9 @@ use config::StorageConfig;
 
 mod config;
 
-mod bindings {
+pub mod bindings {
     wit_bindgen_wrpc::generate!({
+        world: "interfaces",
         with: {
             "wasi:blobstore/types@0.2.0-draft": generate,
             "wasi:io/error@0.2.0": generate,
@@ -66,9 +68,17 @@ impl Provider for BlobstoreAzblobProvider {
             }
         };
 
-        let client =
-            BlobServiceClient::builder(config.storage_account.clone(), config.access_key())
-                .blob_service_client();
+        let builder = match &link_config.config.get("CLOUD_LOCATION") {
+            Some(custom_location) => ClientBuilder::with_location(
+                CloudLocation::Custom {
+                    account: config.storage_account.clone(),
+                    uri: custom_location.to_string(),
+                },
+                config.access_key(),
+            ),
+            None => ClientBuilder::new(config.storage_account.clone(), config.access_key()),
+        };
+        let client = builder.blob_service_client();
 
         let mut update_map = self.config.write().await;
         update_map.insert(link_config.source_id.to_string(), client);
@@ -145,27 +155,25 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
                 .await
                 .context("failed to retrieve azure blobstore client")?;
 
-            let stream = client.list_containers().into_stream();
-            stream
-                .try_for_each_concurrent(None, |list_response| async {
-                    match futures::future::join_all(list_response.containers.into_iter().map(
-                        |container| async {
-                            client.container_client(container.name).delete().await
-                        },
-                    ))
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>, azure_storage::Error>>()
-                    {
-                        Ok(_) => Ok(()),
-                        Err(err) => Err(err.context("failed to delete container")),
-                    }
-                })
-                .await
-                .map_err(|e| anyhow::anyhow!(e))
+            let client = client.container_client(&name);
+            let mut blob_stream = client.list_blobs().into_stream();
+            while let Some(blob_entry) = blob_stream.next().await {
+                let blob_entry =
+                    blob_entry.with_context(|| format!("failed to list blobs in '{name}'"))?;
+                for blob in blob_entry.blobs.blobs() {
+                    client
+                        .blob_client(&blob.name)
+                        .delete()
+                        .await
+                        .with_context(|| {
+                            format!("failed to delete blob '{}' in '{name}'", blob.name)
+                        })?;
+                }
+            }
+            Ok(())
         }
         .await
-        .map_err(|err| format!("{err:#}")))
+        .map_err(|err: anyhow::Error| format!("{err:#}")))
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -497,7 +505,9 @@ impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
             // NOTE: The `created_at` format is currently undefined
             // https://github.com/WebAssembly/wasi-blobstore/issues/7
             let created_at = info
-                .date
+                .blob
+                .properties
+                .creation_time
                 .unix_timestamp()
                 .try_into()
                 .context("failed to convert created_at date to u64")?;
