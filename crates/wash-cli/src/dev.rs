@@ -1216,6 +1216,96 @@ impl WashDevSession {
     }
 }
 
+/// Find the first config value for provider  trait configuration configuration which has a certain name
+fn find_provider_source_trait_config_value<'a>(
+    component: &'a Component,
+    config_name: &'a str,
+    property_key: &'a str,
+) -> Option<&'a str> {
+    // Retrieve link traits
+    if let Some(link_traits) = component
+        .traits
+        .as_ref()
+        .map(|ts| ts.iter().filter(|t| t.trait_type == "link"))
+    {
+        // Find the first link config that is named "default" and has "address"
+        for link_trait in link_traits {
+            if let TraitProperty::Link(l) = &link_trait.properties {
+                if let Some(def) = &l.source {
+                    for cfg in &def.config {
+                        if let (name, Some(Some(value))) = (
+                            &cfg.name,
+                            cfg.properties.as_ref().map(|p| p.get(property_key)),
+                        ) {
+                            if name == config_name {
+                                return Some(value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Generate help text for manifest with components that we recognize
+fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
+    let mut lines = Vec::new();
+    for component in manifest.spec.components.iter() {
+        match &component.properties {
+            // Add help text for HTTP server
+            Properties::Capability { properties }
+                if properties
+                    .image
+                    .starts_with("ghcr.io/wasmcloud/http-server") =>
+            {
+                if let Some(address) =
+                    find_provider_source_trait_config_value(component, "default", "address")
+                {
+                    lines.push(format!(
+                        "{} {}",
+                        emoji::INFO_SQUARE,
+                        style(format!(
+                            "HTTP Server: Access your application at {}",
+                            if address.starts_with("http") {
+                                address.into()
+                            } else {
+                                format!("http://{address}")
+                            }
+                        ))
+                        .bold()
+                    ));
+                }
+            }
+            // Add help text for Messaging server
+            Properties::Capability { properties }
+                if properties
+                    .image
+                    .starts_with("ghcr.io/wasmcloud/messaging-nats") =>
+            {
+                if let Some(subscriptions) =
+                    find_provider_source_trait_config_value(component, "default", "subscriptions")
+                {
+                    lines.push(format!(
+                        "{} {}",
+                        emoji::INFO,
+                        style(format!(
+                            "Messaging NATS: Listening on the following subscriptions [{}]",
+                            subscriptions.split(",").collect::<Vec<&str>>().join(", "),
+                        ))
+                        .bold()
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    lines
+}
+
 struct RunDevLoopArgs<'a> {
     dev_session: &'a WashDevSession,
     nats_client: &'a async_nats_0_33::Client,
@@ -1337,6 +1427,9 @@ async fn run_dev_loop(
 
     // Apply all manifests
     for manifest in manifests {
+        // Generate all help text for this manifest
+        let help_text_lines = generate_help_text_for_manifest(&manifest);
+
         let model_yaml =
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
@@ -1389,6 +1482,9 @@ async fn run_dev_loop(
             ))
             .bold(),
         );
+
+        // Print all help text lines
+        eprintln!("{}", help_text_lines.join("\n"));
     }
 
     eprintln!(
