@@ -7526,6 +7526,7 @@ dependencies = [
  "futures",
  "path-clean",
  "serde",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-util",
