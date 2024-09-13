@@ -2980,9 +2980,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cde7055719c54e36e95e8719f95883f22072a48ede39db7fc17a4e1d5281e9b9"
+checksum = "da62f120a8a37763efb0cf8fdf264b884c7b8b9ac8660b900c8661030c00e6ba"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -6452,7 +6452,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
