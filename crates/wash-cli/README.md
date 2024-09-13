@@ -14,6 +14,9 @@
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
 
+> [!WARNING]  
+> This crate is being deprecated in favor of [wash](https://crates.io/crates/wash), where the wash CLI will be published from now on.
+
 - [Why wash](#why-wash)
 - [Installing wash](#installing-wash)
   - [Cargo](#cargo)
