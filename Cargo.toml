@@ -303,7 +303,11 @@ thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-postgres = { version = "0.7", default-features = false }
-tokio-postgres-rustls = { version = "0.12", default-features = false }
+# We are using our own fork of `tokio-postgres-rustls` with the changes from
+# https://github.com/jbg/tokio-postgres-rustls/pull/24 applied on top of it,
+# so that we can adhere to the CNCF licensing requirements.
+# tokio-postgres-rustls = { version = "0.12", default-features = false }
+tokio-postgres-rustls = { git = "https://github.com/wasmCloud/tokio-postgres-rustls.git", branch = "master", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
