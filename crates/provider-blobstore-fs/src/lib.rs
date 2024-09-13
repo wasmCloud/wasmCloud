@@ -552,6 +552,12 @@ impl Handler<Option<Context>> for FsProvider {
         Ok(async {
             propagate_trace_for_ctx!(cx);
             let path = self.get_object(cx, id).await?;
+            if let Some(parent) = path.parent() {
+                info!(parent = ?parent.display(), "creating directory");
+                fs::create_dir_all(parent)
+                    .await
+                    .context("failed to create parent directories")?;
+            }
             let mut file = File::options()
                 .create(true)
                 .truncate(true)
@@ -654,6 +660,9 @@ impl Provider for FsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::stream;
+    use tempfile::tempdir;
+    use wrpc_interface_blobstore::bindings::exports::wrpc::blobstore::blobstore::Handler;
 
     /// Ensure that only safe subpaths are resolved
     #[tokio::test]
@@ -666,5 +675,57 @@ mod tests {
     async fn resolve_fail_ancestor() {
         let res = resolve_subpath(&PathBuf::from("./"), "../").unwrap_err();
         assert_eq!(res.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn test_write_container_data() {
+        // Create a temporary directory
+        let temp_dir = tempdir().unwrap();
+        let root_path = temp_dir.path().to_path_buf();
+
+        // Create a mock FsProvider with the temporary directory as the root
+        let config = Arc::new(RwLock::new(HashMap::new()));
+        config.write().await.insert(
+            "test_source".to_string(),
+            FsProviderConfig {
+                root: Arc::new(root_path.clone()),
+            },
+        );
+        let provider = FsProvider { config };
+
+        // Create a mock Context and ObjectId
+        let context = Some(Context {
+            component: Some("test_source".to_string()),
+            ..Default::default()
+        });
+        let object_id = ObjectId {
+            container: "test_container".to_string(),
+            object: "test_object/with_slash.txt".to_string(),
+        };
+
+        // Create a stream of Bytes to write
+        let data = stream::iter(vec![Ok(Bytes::from("Hello, ")), Ok(Bytes::from("world!"))])
+            .map(|result: Result<Bytes, std::io::Error>| result.unwrap());
+
+        // Call the write_container_data function
+        let result = provider
+            .write_container_data(context, object_id, Box::pin(data))
+            .await;
+
+        // Ensure the result is Ok
+        assert!(result.is_ok());
+
+        // Get the future from the result and await it
+        let write_future = result.unwrap().unwrap();
+        let write_result = write_future.await;
+
+        // Ensure the write result is Ok
+        assert!(write_result.is_ok());
+
+        // File path with slashes
+        let file_path = root_path.join("test_container/test_object/with_slash.txt");
+        // Verify the file contents
+        let contents = tokio::fs::read_to_string(file_path).await.unwrap();
+        assert_eq!(contents, "Hello, world!");
     }
 }
