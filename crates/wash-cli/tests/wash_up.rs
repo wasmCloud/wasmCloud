@@ -1,11 +1,10 @@
-use std::{
-    fs::{read_to_string, remove_dir_all},
-    path::PathBuf,
-};
+use std::fs::{read_to_string, remove_dir_all};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use serial_test::serial;
+use tempfile::NamedTempFile;
 use tokio::{process::Command, time::Duration};
 
 mod common;
@@ -294,6 +293,34 @@ async fn integration_up_works_with_wadm_manifest() -> Result<()> {
         .deployed_wadm_manifest_path
         .as_ref()
         .is_some_and(|v| *v == manifest_path));
+
+    Ok(())
+}
+
+/// Ensure that wash up works with a custom log file
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_custom_log_file() -> Result<()> {
+    let tmp = NamedTempFile::new().context("failed to create temporary log file")?;
+    let tmp_path = format!("{}", tmp.path().display());
+
+    let _instance =
+        TestWashInstance::create_with_extra_args(vec!["--host-log-path", &tmp_path]).await?;
+
+    // Ensure that the log file is and has zzero
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if tokio::fs::metadata(tmp.path())
+                .await
+                .is_ok_and(|metadata| metadata.len() > 0)
+            {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .with_context(|| format!("timed out waiting for non-empty log path [{tmp_path}]",))?;
 
     Ok(())
 }
