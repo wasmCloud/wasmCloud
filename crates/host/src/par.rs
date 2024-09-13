@@ -6,7 +6,7 @@ use std::env::temp_dir;
 use std::path::{Path, PathBuf};
 use std::str;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use provider_archive::ProviderArchive;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
@@ -18,7 +18,17 @@ fn normalize_for_filename(input: &str) -> String {
         .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
 }
 
-pub(super) async fn create(path: impl AsRef<Path>) -> anyhow::Result<Option<File>> {
+/// Whether to use the par file cache
+#[derive(Default, Clone, PartialEq, Eq)]
+pub(super) enum UseParFileCache {
+    /// Use the par file cache
+    Ignore,
+    /// Use the par file cache
+    #[default]
+    Use,
+}
+
+pub(super) async fn create(path: impl AsRef<Path>) -> Result<Option<File>> {
     let path = path.as_ref();
     // Check if the file exists and return
     if fs::metadata(path).await.is_ok() {
@@ -29,6 +39,11 @@ pub(super) async fn create(path: impl AsRef<Path>) -> anyhow::Result<Option<File
         .await
         .context("failed to create parent directory")?;
 
+    open_file(path).await
+}
+
+async fn open_file(path: impl AsRef<Path>) -> Result<Option<File>> {
+    let path = path.as_ref();
     let mut open_opts = OpenOptions::new();
     open_opts.create(true).truncate(true).write(true);
     #[cfg(unix)]
@@ -37,7 +52,7 @@ pub(super) async fn create(path: impl AsRef<Path>) -> anyhow::Result<Option<File
         .open(path)
         .await
         .map(Some)
-        .context("failed to open path")
+        .with_context(|| format!("failed to open path [{}]", path.display()))
 }
 
 fn native_target() -> String {
@@ -73,21 +88,31 @@ pub async fn read(
     path: impl AsRef<Path>,
     host_id: impl AsRef<str>,
     provider_ref: impl AsRef<str>,
-) -> anyhow::Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
+    cache: UseParFileCache,
+) -> Result<(PathBuf, Option<jwt::Token<jwt::CapabilityProvider>>)> {
     let par = ProviderArchive::try_load_target_from_file(path, &native_target())
         .await
         .map_err(|e| anyhow!(e).context("failed to load provider archive"))?;
     let claims = par.claims_token();
-
     let exe = cache_path(host_id, provider_ref);
-    // Only write the file if it doesn't exist
-    if let Some(mut file) = create(&exe).await? {
-        let target = native_target();
-        let buf = par
-            .target_bytes(&target)
-            .with_context(|| format!("target `{target}` not found"))?;
-        file.write_all(&buf).await.context("failed to write")?;
-        file.flush().await.context("failed to flush")?;
-    }
+
+    let new_file = create(&exe).await?;
+    let mut file = match (cache, new_file) {
+        (UseParFileCache::Use, None) => {
+            return Ok((exe, claims));
+        }
+        (UseParFileCache::Ignore, None) => open_file(&exe)
+            .await?
+            .with_context(|| format!("failed to open file [{}]", exe.display()))?,
+        (UseParFileCache::Use, Some(file)) | (UseParFileCache::Ignore, Some(file)) => file,
+    };
+
+    let target = native_target();
+    let buf = par
+        .target_bytes(&target)
+        .with_context(|| format!("target `{target}` not found"))?;
+    file.write_all(&buf).await.context("failed to write")?;
+    file.flush().await.context("failed to flush")?;
+
     Ok((exe, claims))
 }

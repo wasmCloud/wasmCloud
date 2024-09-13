@@ -151,9 +151,14 @@ pub async fn fetch_provider(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            par::read(provider_path, host_id, provider_ref)
-                .await
-                .context("failed to read provider")
+            par::read(
+                provider_path,
+                host_id,
+                provider_ref,
+                par::UseParFileCache::Ignore,
+            )
+            .await
+            .context("failed to read provider")
         }
         ref oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
             .authority()

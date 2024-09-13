@@ -276,7 +276,7 @@ impl Fetcher {
             )
             .await
             .context("failed to fetch OCI path")?;
-        par::read(&path, host_id, oci_ref)
+        par::read(&path, host_id, oci_ref, par::UseParFileCache::Use)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))
     }
