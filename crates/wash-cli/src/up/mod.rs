@@ -284,6 +284,10 @@ pub struct WasmcloudOpts {
     /// If provided, enables policy checks on start actions and component invocations
     #[clap(long = "policy-topic", env = WASMCLOUD_POLICY_TOPIC)]
     pub policy_topic: Option<String>,
+
+    /// Path to which to log information from the wasmCloud host
+    #[clap(long = "host-log-path", env = WASMCLOUD_HOST_LOG_PATH)]
+    pub host_log_path: Option<PathBuf>,
 }
 
 impl WasmcloudOpts {
@@ -447,7 +451,10 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         .lattice
         .context("missing lattice prefix")?;
     let host_started = Arc::new(AtomicBool::new(false));
-    let wasmcloud_log_path = install_dir.join("wasmcloud.log");
+    let host_log_path = wasmcloud_opts
+        .host_log_path
+        .clone()
+        .unwrap_or_else(|| install_dir.join("wasmcloud.log"));
     let ctl_client = wasmcloud_opts.clone().into_ctl_client(None).await?;
 
     if !cmd.wasmcloud_opts.multi_local
@@ -498,7 +505,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             let _ = write!(
                 out_text,
                 "\n📜 Logs for the host are being written to {}",
-                wasmcloud_log_path.to_string_lossy()
+                host_log_path.to_string_lossy()
             );
             let _ = write!(out_text, "\n\n⬇️  To stop wasmCloud, run \"wash down\"");
             return Ok(CommandOutput::new(out_text, out_json));
@@ -583,7 +590,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
     spinner.update_spinner_message(" Starting wasmCloud ...".to_string());
     let stderr: Stdio = if cmd.detached {
-        tokio::fs::File::create(&wasmcloud_log_path)
+        tokio::fs::File::create(&host_log_path)
             .await?
             .into_std()
             .await
@@ -650,7 +657,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // If we're running in detached mode, then we can print out some logs, build output and return early.
     if cmd.detached {
-        out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
+        out_json.insert("wasmcloud_log".to_string(), json!(host_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
 
@@ -662,7 +669,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         let _ = write!(
             out_text,
             "\n📜 Logs for the host are being written to {}",
-            wasmcloud_log_path.to_string_lossy()
+            host_log_path.to_string_lossy()
         );
         let _ = write!(out_text, "\n\n⬇️  To stop wasmCloud, run \"wash down\"");
         return Ok(CommandOutput::new(out_text, out_json));
