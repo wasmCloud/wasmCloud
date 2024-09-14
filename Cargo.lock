@@ -7500,7 +7500,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-azure"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7521,14 +7521,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.5",
+ "wrpc-interface-blobstore",
  "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.1",
 ]
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7540,13 +7540,13 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.5",
+ "wrpc-interface-blobstore",
  "wrpc-transport 0.26.8",
 ]
 
 [[package]]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -7566,7 +7566,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
- "wit-bindgen-wrpc 0.6.5",
+ "wrpc-interface-blobstore",
  "wrpc-transport 0.26.8",
 ]
 

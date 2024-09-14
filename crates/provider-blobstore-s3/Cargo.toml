@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.10.0"
+version = "0.11.0"
 description = """
 S3-compatible object store capability provider for wasmcloud, satisfying the 'wasmcloud:blobstore' capability contract.
 """
@@ -35,7 +35,7 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
-wit-bindgen-wrpc = { workspace = true }
+wrpc-interface-blobstore = { workspace = true }
 wrpc-transport = { workspace = true }
 
 [dev-dependencies]

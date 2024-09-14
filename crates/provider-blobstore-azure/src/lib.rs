@@ -9,7 +9,6 @@ use std::sync::Arc;
 use anyhow::{bail, Context as _, Result};
 use azure_storage::CloudLocation;
 use azure_storage_blobs::prelude::*;
-use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _};
 use tokio::sync::{mpsc, RwLock};
@@ -19,24 +18,15 @@ use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, load_host_data, propagate_trace_for_ctx,
     run_provider, serve_provider_exports, Context, HostData, LinkConfig, LinkDeleteInfo, Provider,
 };
+use wrpc_interface_blobstore::bindings::{
+    exports::wrpc::blobstore::blobstore::Handler,
+    serve,
+    wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata},
+};
 
 use config::StorageConfig;
 
 mod config;
-
-pub mod bindings {
-    wit_bindgen_wrpc::generate!({
-        world: "interfaces",
-        with: {
-            "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:io/error@0.2.0": generate,
-            "wasi:io/poll@0.2.0": generate,
-            "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.2.0": generate,
-            "wrpc:blobstore/types@0.2.0": generate,
-        }
-    });
-}
 
 /// Blobstore Azblob provider
 ///
@@ -117,7 +107,7 @@ impl BlobstoreAzblobProvider {
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
-            bindings::serve,
+            serve,
         )
         .await
         .context("failed to serve provider exports")
@@ -139,9 +129,7 @@ impl BlobstoreAzblobProvider {
     }
 }
 
-impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
-    for BlobstoreAzblobProvider
-{
+impl Handler<Option<Context>> for BlobstoreAzblobProvider {
     #[instrument(level = "trace", skip(self))]
     async fn clear_container(
         &self,

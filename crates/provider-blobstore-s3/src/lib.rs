@@ -32,7 +32,6 @@ use aws_sdk_s3::types::{
 };
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use base64::Engine as _;
-use bindings::wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata};
 use bytes::{Bytes, BytesMut};
 use futures::{stream, Stream, StreamExt as _};
 use serde::Deserialize;
@@ -47,19 +46,11 @@ use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
     serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
-
-mod bindings {
-    wit_bindgen_wrpc::generate!({
-        with: {
-            "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:io/error@0.2.0": generate,
-            "wasi:io/poll@0.2.0": generate,
-            "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.2.0": generate,
-            "wrpc:blobstore/types@0.2.0": generate,
-        }
-    });
-}
+use wrpc_interface_blobstore::bindings::{
+    exports::wrpc::blobstore::blobstore::Handler,
+    serve,
+    wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata},
+};
 
 const ALIAS_PREFIX: &str = "alias_";
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
@@ -580,7 +571,7 @@ impl BlobstoreS3Provider {
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
-            bindings::serve,
+            serve,
         )
         .await
         .context("failed to serve provider exports")
@@ -602,9 +593,7 @@ impl BlobstoreS3Provider {
     }
 }
 
-impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>>
-    for BlobstoreS3Provider
-{
+impl Handler<Option<Context>> for BlobstoreS3Provider {
     #[instrument(level = "trace", skip(self))]
     async fn clear_container(
         &self,
