@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{anyhow, bail, Context as _};
-use bindings::wrpc::blobstore::types::{ObjectId, ObjectMetadata};
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use path_clean::PathClean;
@@ -27,21 +26,11 @@ use wasmcloud_provider_sdk::{
     get_connection, initialize_observability, propagate_trace_for_ctx, run_provider,
     serve_provider_exports, Context, LinkConfig, LinkDeleteInfo, Provider,
 };
-
-use crate::bindings::wrpc::blobstore::types::ContainerMetadata;
-
-mod bindings {
-    wit_bindgen_wrpc::generate!({
-        with: {
-            "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:io/error@0.2.0": generate,
-            "wasi:io/poll@0.2.0": generate,
-            "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.2.0": generate,
-            "wrpc:blobstore/types@0.2.0": generate,
-        }
-    });
-}
+use wrpc_interface_blobstore::bindings::{
+    exports::wrpc::blobstore::blobstore::Handler,
+    serve,
+    wrpc::blobstore::types::{ContainerMetadata, ObjectId, ObjectMetadata},
+};
 
 #[derive(Default, Debug, Clone)]
 struct FsProviderConfig {
@@ -74,7 +63,7 @@ impl FsProvider {
             &connection.get_wrpc_client(connection.provider_key()),
             provider,
             shutdown,
-            bindings::serve,
+            serve,
         )
         .await
         .context("failed to serve provider exports")
@@ -151,7 +140,7 @@ impl FsProvider {
     }
 }
 
-impl bindings::exports::wrpc::blobstore::blobstore::Handler<Option<Context>> for FsProvider {
+impl Handler<Option<Context>> for FsProvider {
     #[instrument(level = "trace", skip(self))]
     async fn clear_container(
         &self,

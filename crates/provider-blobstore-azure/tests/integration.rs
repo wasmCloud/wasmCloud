@@ -9,24 +9,9 @@ use wasmcloud_provider_sdk::{
     get_connection, provider::initialize_host_data, run_provider, serve_provider_exports, HostData,
     InterfaceLinkDefinition,
 };
-
-mod client_bindings {
-    wit_bindgen_wrpc::generate!({
-        world: "testing-client",
-        with: {
-            "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:io/error@0.2.0": generate,
-            "wasi:io/poll@0.2.0": generate,
-            "wasi:io/streams@0.2.0": generate,
-            "wrpc:blobstore/blobstore@0.2.0": generate,
-            "wrpc:blobstore/types@0.2.0": generate,
-        }
-    });
-}
-
-use client_bindings::{
-    wasi::blobstore::types::ObjectId,
-    wrpc::blobstore::blobstore::{self as client},
+use wrpc_interface_blobstore::bindings::{
+    serve,
+    wrpc::blobstore::{blobstore, types::ObjectId},
 };
 
 #[derive(Default, Debug, Clone)]
@@ -211,7 +196,7 @@ impl TestEnv {
                     &connection.get_wrpc_client(connection.provider_key()),
                     provider,
                     shutdown,
-                    wasmcloud_provider_blobstore_azure::bindings::serve,
+                    serve,
                 )
                 .await
                 .context("failed to serve provider exports")
@@ -303,7 +288,7 @@ async fn test_clear_container() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.clear-container`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::clear_container(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::clear_container(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
     assert!(res.is_ok());
@@ -343,7 +328,7 @@ async fn test_container_exists() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.container-exists`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::container_exists(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::container_exists(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
 
@@ -363,7 +348,7 @@ async fn test_container_exists() -> Result<()> {
     // blobstore.container_exists returns true when queried against existing container
     let res_container_exists = tokio::time::timeout(
         Duration::from_secs(1),
-        client::container_exists(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::container_exists(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
 
@@ -407,7 +392,7 @@ async fn test_create_container() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.create-container`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::create_container(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::create_container(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
     assert!(res.is_ok());
@@ -464,7 +449,7 @@ async fn test_delete_container() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.delete-container`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::delete_container(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::delete_container(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
     assert!(res.is_ok());
@@ -514,7 +499,7 @@ async fn test_get_container_info() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.get-container-info`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::get_container_info(&wrpc, env.wrpc_context(), test_container_name),
+        blobstore::get_container_info(&wrpc, env.wrpc_context(), test_container_name),
     )
     .await??;
 
@@ -577,7 +562,13 @@ async fn test_list_container_objects() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.list-container-objects`
     let (Ok((mut list_objects, _overall_result)), io) = tokio::time::timeout(
         Duration::from_secs(1),
-        client::list_container_objects(&wrpc, env.wrpc_context(), test_container_name, None, None),
+        blobstore::list_container_objects(
+            &wrpc,
+            env.wrpc_context(),
+            test_container_name,
+            None,
+            None,
+        ),
     )
     .await??
     else {
@@ -661,7 +652,7 @@ async fn test_copy_object_within_container() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.copy-object`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::copy_object(
+        blobstore::copy_object(
             &wrpc,
             env.wrpc_context(),
             &source_object,
@@ -742,7 +733,7 @@ async fn test_copy_object_across_containers() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.copy-object`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::copy_object(
+        blobstore::copy_object(
             &wrpc,
             env.wrpc_context(),
             &source_object,
@@ -820,7 +811,7 @@ async fn test_delete_object() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.delete-object`
     let res = tokio::time::timeout(
         Duration::from_secs(1),
-        client::delete_object(&wrpc, env.wrpc_context(), &test_object),
+        blobstore::delete_object(&wrpc, env.wrpc_context(), &test_object),
     )
     .await??;
     assert!(res.is_ok());
@@ -894,7 +885,7 @@ async fn test_delete_objects() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.delete-objects`
     let res_delete_objects = tokio::time::timeout(
         Duration::from_secs(1),
-        client::delete_objects(
+        blobstore::delete_objects(
             &wrpc,
             env.wrpc_context(),
             test_container_name,
@@ -969,7 +960,7 @@ async fn test_get_container_data() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.get-container-data`
     let (Ok((mut container_data_stream, _overall_result)), io) = tokio::time::timeout(
         Duration::from_secs(1),
-        client::get_container_data(&wrpc, env.wrpc_context(), &test_object, 0, 100),
+        blobstore::get_container_data(&wrpc, env.wrpc_context(), &test_object, 0, 100),
     )
     .await??
     else {
@@ -1049,7 +1040,7 @@ async fn test_get_object_info() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.get-object-info`
     let res_get_object_info = tokio::time::timeout(
         Duration::from_secs(1),
-        client::get_object_info(&wrpc, env.wrpc_context(), &test_object),
+        blobstore::get_object_info(&wrpc, env.wrpc_context(), &test_object),
     )
     .await??;
     assert!(res_get_object_info.is_ok());
@@ -1123,7 +1114,7 @@ async fn test_has_object() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.has-object`
     let res_has_object = tokio::time::timeout(
         Duration::from_secs(1),
-        client::has_object(&wrpc, env.wrpc_context(), &test_object),
+        blobstore::has_object(&wrpc, env.wrpc_context(), &test_object),
     )
     .await??;
     assert!(res_has_object.is_ok());
@@ -1187,7 +1178,7 @@ async fn test_move_object_within_container() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.move-object`
     let res_move_object = tokio::time::timeout(
         Duration::from_secs(1),
-        client::move_object(
+        blobstore::move_object(
             &wrpc,
             env.wrpc_context(),
             &source_object,
@@ -1281,7 +1272,7 @@ async fn test_move_object_across_containers() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.move-object`
     let res_move_object = tokio::time::timeout(
         Duration::from_secs(1),
-        client::move_object(
+        blobstore::move_object(
             &wrpc,
             env.wrpc_context(),
             &source_object,
@@ -1376,7 +1367,7 @@ async fn test_write_container_data() -> Result<()> {
     // Invoke `wrpc:blobstore/blobstore.write-container-data`
     let (res, io) = tokio::time::timeout(
         Duration::from_secs(1),
-        client::write_container_data(&wrpc, env.wrpc_context(), &test_object, input),
+        blobstore::write_container_data(&wrpc, env.wrpc_context(), &test_object, input),
     )
     .await??;
     assert!(res.is_ok());
