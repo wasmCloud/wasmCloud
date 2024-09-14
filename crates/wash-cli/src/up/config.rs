@@ -138,7 +138,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         }
     }
     if wasmcloud_opts.rpc_tls {
-        host_config.insert(WASMCLOUD_RPC_TLS.to_string(), "1".to_string());
+        host_config.insert(WASMCLOUD_RPC_TLS.to_string(), "true".to_string());
     }
 
     // NATS CTL connection configuration
@@ -162,7 +162,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         }
     }
     if wasmcloud_opts.ctl_tls {
-        host_config.insert(WASMCLOUD_CTL_TLS.to_string(), "1".to_string());
+        host_config.insert(WASMCLOUD_CTL_TLS.to_string(), "true".to_string());
     }
 
     host_config.insert(
@@ -172,7 +172,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
 
     // Extras configuration
     if wasmcloud_opts.config_service_enabled {
-        host_config.insert(WASMCLOUD_CONFIG_SERVICE.to_string(), "1".to_string());
+        host_config.insert(WASMCLOUD_CONFIG_SERVICE.to_string(), "true".to_string());
     }
     if wasmcloud_opts.allow_file_load.unwrap_or_default() {
         host_config.insert(WASMCLOUD_ALLOW_FILE_LOAD.to_string(), "true".to_string());
@@ -206,7 +206,7 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap
         wasmcloud_opts.structured_log_level,
     );
     if wasmcloud_opts.enable_ipv6 {
-        host_config.insert(WASMCLOUD_ENABLE_IPV6.to_string(), "1".to_string());
+        host_config.insert(WASMCLOUD_ENABLE_IPV6.to_string(), "true".to_string());
     }
     Ok(host_config)
 }
