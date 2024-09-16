@@ -38,14 +38,14 @@ const COMPONENT_ID: &str = "http_hello_world";
 #[instrument(skip_all, ret)]
 #[tokio::test]
 async fn link_deletes() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
+    _ = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
             }),
         )
-        .init();
+        .try_init();
 
     let (nats_server, nats_url, nats_client) =
         start_nats().await.context("failed to start NATS")?;
@@ -181,14 +181,14 @@ async fn link_deletes() -> anyhow::Result<()> {
 #[instrument(skip_all, ret)]
 #[tokio::test]
 async fn link_name_support() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
+    _ = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
             }),
         )
-        .init();
+        .try_init();
 
     let (nats_server, nats_url, nats_client) =
         start_nats().await.context("failed to start NATS")?;
@@ -348,14 +348,14 @@ async fn link_name_support() -> anyhow::Result<()> {
 #[instrument(skip_all, ret)]
 #[tokio::test]
 async fn valid_and_invalid() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
+    _ = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn,wasmcloud=trace")
             }),
         )
-        .init();
+        .try_init();
 
     let (nats_server, nats_url, nats_client) =
         start_nats().await.context("failed to start NATS")?;
