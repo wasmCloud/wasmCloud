@@ -183,7 +183,6 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     .is_ok());
     blobstore::run_test(0, &body, "container");
 
-    eprintln!("test link name check...");
     // Interface that's not linked
     assert!(bus::lattice::set_link_name(
         "s3",
