@@ -153,6 +153,7 @@ impl wrpc_transport::Invoke for Handler {
             ) => "wasi:blobstore/blobstore",
             Some(ReplacedInstanceTarget::KeyvalueAtomics) => "wasi:keyvalue/atomics",
             Some(ReplacedInstanceTarget::KeyvalueStore) => "wasi:keyvalue/store",
+            Some(ReplacedInstanceTarget::KeyvalueBatch) => "wasi:keyvalue/batch",
             Some(ReplacedInstanceTarget::HttpIncomingHandler) => "wasi:http/incoming-handler",
             Some(ReplacedInstanceTarget::HttpOutgoingHandler) => "wasi:http/outgoing-handler",
             None => instance.split_once('@').map_or(instance, |(l, _)| l),

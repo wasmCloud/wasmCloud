@@ -276,7 +276,20 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         keys: Vec<String>,
     ) -> anyhow::Result<Result<Vec<Option<(String, Bytes)>>>> {
         check_bucket_name(&bucket);
-        Ok(self.exec_cmd(ctx, &mut Cmd::mget(&keys)).await)
+        let data = match self
+            .exec_cmd::<Vec<Option<Bytes>>>(ctx, &mut Cmd::mget(&keys))
+            .await
+        {
+            Ok(v) => v
+                .into_iter()
+                .zip(keys.into_iter())
+                .map(|(val, key)| val.map(|b| (key, b)))
+                .collect::<Vec<_>>(),
+            Err(err) => {
+                return Ok(Err(err));
+            }
+        };
+        Ok(Ok(data))
     }
 
     async fn set_many(
@@ -300,7 +313,7 @@ impl keyvalue::batch::Handler<Option<Context>> for KvRedisProvider {
         keys: Vec<String>,
     ) -> anyhow::Result<Result<()>> {
         check_bucket_name(&bucket);
-        Ok(self.exec_cmd(ctx, &mut Cmd::del(&keys)).await)
+        Ok(self.exec_cmd(ctx, &mut Cmd::del(keys)).await)
     }
 }
 

@@ -9,6 +9,7 @@ world interfaces {
     import wasi:http/outgoing-handler@0.2.0;
     import wasi:keyvalue/atomics@0.2.0-draft;
     import wasi:keyvalue/store@0.2.0-draft;
+    import wasi:keyvalue/batch@0.2.0-draft;
     import wasi:logging/logging;
     import wasi:random/random@0.2.0;
 
