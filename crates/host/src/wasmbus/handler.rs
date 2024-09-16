@@ -103,8 +103,7 @@ impl Bus for Handler {
             }
         }) {
             return Ok(Err(format!(
-                "interface `{}` does not have an existing link with name `{}`",
-                interface_missing_link, link_name
+                "interface `{interface_missing_link}` does not have an existing link with name `{link_name}`"
             )));
         }
         // Explicitly drop the lock before calling `set_link_name` just to avoid holding the lock for longer than needed
