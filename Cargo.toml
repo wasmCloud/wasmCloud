@@ -373,5 +373,5 @@ wit-parser = { version = "0.215", default-features = false }
 wrpc-interface-blobstore = { version = "0.18", default-features = false }
 wrpc-interface-http = { version = "0.27", default-features = false }
 wrpc-runtime-wasmtime = { version = "0.21", default-features = false }
-wrpc-transport = { version = "0.26.7", default-features = false }
+wrpc-transport = { version = "0.26.8", default-features = false }
 wrpc-transport-nats = { version = "0.23.0", default-features = false }

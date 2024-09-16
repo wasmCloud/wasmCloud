@@ -6452,7 +6452,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -6904,7 +6904,7 @@ dependencies = [
  "wit-bindgen-wrpc 0.6.4",
  "wit-parser 0.215.0",
  "wrpc-interface-http",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.0",
 ]
 
@@ -7192,6 +7192,18 @@ dependencies = [
  "leb128-tokio",
  "tokio",
  "tokio-util",
+ "utf8-tokio",
+]
+
+[[package]]
+name = "wasm-tokio"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1db8d9df11ba3f83f9a9fb2c159579e6ef7b368fa6650b8f7f01febb75784cef"
+dependencies = [
+ "leb128-tokio",
+ "tokio",
+ "tokio-util",
  "tracing",
  "utf8-tokio",
 ]
@@ -7254,7 +7266,7 @@ dependencies = [
  "wasmcloud-test-util",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.0",
 ]
 
@@ -7416,7 +7428,7 @@ dependencies = [
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types 0.4.0",
  "wasmcloud-tracing",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.0",
 ]
 
@@ -7454,7 +7466,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc 0.6.4",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.0",
 ]
 
@@ -7473,7 +7485,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc 0.6.4",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -7499,7 +7511,7 @@ dependencies = [
  "tracing",
  "wasmcloud-provider-sdk",
  "wit-bindgen-wrpc 0.6.4",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -7522,7 +7534,7 @@ dependencies = [
  "wasmcloud-provider-sdk",
  "webpki-roots 0.26.5",
  "wrpc-interface-http",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -7685,7 +7697,7 @@ dependencies = [
  "wasmcloud-core 0.9.0",
  "wasmcloud-tracing",
  "wrpc-interface-http",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.0",
 ]
 
@@ -7754,7 +7766,7 @@ dependencies = [
  "wrpc-interface-blobstore",
  "wrpc-interface-http",
  "wrpc-runtime-wasmtime",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -8348,7 +8360,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8719,9 +8731,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "wasm-tokio",
+ "wasm-tokio 0.5.16",
  "wit-bindgen-wrpc-rust-macro 0.4.13",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -8737,9 +8749,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "wasm-tokio",
+ "wasm-tokio 0.5.16",
  "wit-bindgen-wrpc-rust-macro 0.6.4",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -8931,7 +8943,7 @@ dependencies = [
  "tracing",
  "wasmtime-wasi-http",
  "wit-bindgen-wrpc 0.6.4",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -8965,12 +8977,12 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid 1.10.0",
- "wasm-tokio",
+ "wasm-tokio 0.5.16",
  "wasmtime",
  "wasmtime-wasi",
  "wit-parser 0.215.0",
  "wrpc-introspect 0.3.0",
- "wrpc-transport 0.26.7",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
@@ -8993,9 +9005,9 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.26.7"
+version = "0.26.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e21c6cfe39b527477c0b30d7deb71fa6843972296a7516d2f8de15426376f0b"
+checksum = "fbb1d2e907adf75b8836aee1e5eb520150741829aac2636664bf78b531c3bb00"
 dependencies = [
  "anyhow",
  "bytes",
@@ -9005,7 +9017,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "wasm-tokio",
+ "wasm-tokio 0.6.0",
 ]
 
 [[package]]
@@ -9037,8 +9049,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "wasm-tokio",
- "wrpc-transport 0.26.7",
+ "wasm-tokio 0.5.16",
+ "wrpc-transport 0.26.8",
 ]
 
 [[package]]
