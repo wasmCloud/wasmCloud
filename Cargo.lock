@@ -6833,7 +6833,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.32.1"
+version = "0.33.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -6910,7 +6910,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.25.1"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -7660,7 +7660,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sdk"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7719,7 +7719,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7759,7 +7759,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-nats 0.36.0",
  "nkeys 0.4.3",
@@ -7823,7 +7823,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-tracing"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "heck 0.5.0",

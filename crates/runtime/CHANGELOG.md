@@ -5,35 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.2.0 (2024-09-06)
+## 0.3.0 (2024-09-16)
+
+<csr-id-955a6893792e86292883e76de57434616c28d380/>
+<csr-id-327975d6a83bac3199240645b0c6a4a17cf00f66/>
+<csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/>
+<csr-id-f2aed15288300989aca03f899b095d3a71f8e5cd/>
+<csr-id-5e4572379d370de74dad4b393746fee242e374f2/>
+<csr-id-0d9002340ca8776c92a7d1e8b2caa4f804bb1bfb/>
+<csr-id-d61303d1b08b568ae4925120b1f36ed690d4b038/>
+<csr-id-b83082ad1a065cd4c0ba08512471f9b3474df6dc/>
+<csr-id-4f55396a0340d65dbebdf6d4f0ca070d6f990fc4/>
+<csr-id-45445a6accd4d4322d192d201f315aa2ca2cb92b/>
+<csr-id-22e71e59be566136f6028393153827662ec9f68e/>
+<csr-id-6678fead03a5d4ea893b74863b0fe043ff81a3d1/>
+<csr-id-9dc14c54eb133c08dace6e6a6f96f915f0fcda6f/>
+<csr-id-eee6c73122b715d6991bb6c76f04d29fc9319fe0/>
+<csr-id-089b8955d309b1cab3eaa45f03d394656deada55/>
+<csr-id-08b8a3c72902e6d8ff4f9dcaa95b9649f3716e75/>
+<csr-id-a7e0e130343f5a3ca4874035016c9b5a181a917a/>
+<csr-id-8b7152a5a702d56f70930302b5fe6e7b76858979/>
+<csr-id-7a6e6a0dc69720ed4b52a476539970811f5bac72/>
+<csr-id-2389f27f0b570164a895a37abd462be2d68f20be/>
+<csr-id-dfad0be609868cbd0f0ce97d7d9238b41996b5fc/>
+<csr-id-831e90192f258dff1060c7ac8bd9425009ab8335/>
+<csr-id-93c0981a4d69bc8f8fe06e6139e78e7f700a3115/>
+<csr-id-0023f7e86d5a40a534f623b7220743f27871549e/>
+<csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/>
+<csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/>
+<csr-id-663b49e335d2645d0cfd679afd202ca461dd6932/>
+<csr-id-03c9d1c6ae662d3018ebc9d4d8c509076e291f12/>
+<csr-id-49f3883c586c098d4b0be44793057b97566ec2e1/>
+<csr-id-75c0739a4db4264996a7fa87ce3ae39f56780759/>
+<csr-id-a278764abaac2b745b833aaea8e041e357b97a15/>
+<csr-id-d16324054a454347044f7cc052da1bbd4324a284/>
+<csr-id-578c72d3333f1b9c343437946114c3cd6a0eead4/>
+<csr-id-22276ff61bcb4992b557f7af6624c9715f72c32b/>
+<csr-id-31799820202aa3556f6ad84ca5550402e6da0fef/>
+<csr-id-083f8e833889a49d09a4dafa1998a58f7380562a/>
+<csr-id-1f3448e6b38ffdad064d79145470ca1a7a476508/>
+<csr-id-2bb60f364ef573e5837c5299eb587ec4e1427d3f/>
+<csr-id-cb86378831e48368d31947b0a44ef39080fe6d70/>
+<csr-id-468268e015ccc5d5d8a607dcf3ede7c5e86de45e/>
+<csr-id-e1281733c73988686a499d43e808e4cd11fd5759/>
+<csr-id-770731ca949c5906ccbd102bcf13dc57a870f7b7/>
+<csr-id-017e6d40841f14b2158cf2ff70ca2ac8940e4b84/>
+<csr-id-6c42d5c50375cdc2d12c86513a98b45135f0d187/>
+<csr-id-b5aac8ea84af9cc37282b99826b2da0c0ec297bc/>
+<csr-id-2540b2a2776c8977e47232993b2af5086dc92e18/>
+<csr-id-5f922256e679091e6acbb3e0f39852abb840c8b0/>
+<csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/>
+<csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/>
+<csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/>
+<csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/>
+<csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/>
+<csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/>
+<csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/>
+<csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/>
+<csr-id-e7c30405302fcccc612209335179f0bc47d8e996/>
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
 
 ### Chore
 
- - <csr-id-72cb5e7db4d3323f7b09beb7f4fc7754379929d0/> allow complex types
- - <csr-id-51c8ceb895b0069af9671e895b9f1ecb841ea6c3/> update component/runtime/host crate READMEs
- - <csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/> increase max memory size to 10mb
-   This commit increases the max memory that can be addressed by a single
-   component to 10mb.
- - <csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/> update wRPC
- - <csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/> remove unused logging exports
- - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
- - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
- - <csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/> Replace actor reference by component in runtime crate
- - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
-   When known interfaces are accessed, we show a message that notes that
-   the target is unknown, but we can improve on that by alerting the user
-   to a possibly missing link.
- - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
-   Rename wash-cli wash-build tests name and references
-   
-   Fix nix flake path to Cargo.lock file
-   
-   Fix format
-   
-   Rename in wash-cli tests
- - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
- - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
- - <csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/> replace references to 'actor' with 'component'
  - <csr-id-955a6893792e86292883e76de57434616c28d380/> update `messaging` to `0.2.0`
  - <csr-id-327975d6a83bac3199240645b0c6a4a17cf00f66/> reenable `clippy::pedantic`
  - <csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/> remove unused dependencies
@@ -63,20 +99,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/> mark non-exhaustive Debug impls as such
  - <csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/> remove noisy fields from instruments
 
+### Refactor
+
+ - <csr-id-3fb79daf65f9f029ca0227cfdac7b504d7bd9c6c/> use upstream preview1 adapter crate
+
+### Other
+
+ - <csr-id-d8f73f56a3ebb67ddb34acb6598039c51c05e772/> wasmcloud-runtime v0.2.0
+ - <csr-id-94adef8c3cbf722025d2c8ca990b264b24030b72/> wasmcloud-runtime v0.1.0
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+
+### Chore
+
+ - <csr-id-72cb5e7db4d3323f7b09beb7f4fc7754379929d0/> allow complex types
+ - <csr-id-51c8ceb895b0069af9671e895b9f1ecb841ea6c3/> update component/runtime/host crate READMEs
+
+### Refactor
+
+ - <csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/> extract and document `InvocationStream` type
+
+### Other
+
+ - <csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/> improve documentation
+
+### Chore
+
+ - <csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/> increase max memory size to 10mb
+   This commit increases the max memory that can be addressed by a single
+   component to 10mb.
+ - <csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/> update wRPC
+ - <csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/> remove unused logging exports
+ - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
+ - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
+ - <csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/> Replace actor reference by component in runtime crate
+ - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
+   When known interfaces are accessed, we show a message that notes that
+   the target is unknown, but we can improve on that by alerting the user
+   to a possibly missing link.
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
+
+### Chore
+
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+
+### Chore
+
+ - <csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/> replace references to 'actor' with 'component'
+
 ### New Features
 
- - <csr-id-056b57e50cfc13ecd863f54d30032988bd23d94b/> enable wasmtime gc feature
- - <csr-id-26d7f64659dbf3263f36da92df89003c579077cc/> fallback to `wrpc:blobstore@0.1.0`
- - <csr-id-156d3f39e6775ec6aea3a1eb864bf7c893749e07/> update to Wasmtime 23
- - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
- - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
- - <csr-id-a5f9432845bcb7c8f423776fd56ef4a735fe43c7/> add `TargetEntity::lattice_id()`
- - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
- - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
- - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
- - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
- - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
- - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
+<csr-id-cfb66f81180a3b47d6e7df1a444a1ec945115b15/>
+<csr-id-2e8982c962f1cbb15a7a0e34c5a7756e02bb56a3/>
+<csr-id-123cb2f9b8981c37bc333fece71c009ce875e30f/>
+<csr-id-813ce52a9c11270814eec051dfaa8817bf9f567d/>
+<csr-id-bef159ab4d5ce6ba73e7c3465110c2990da64eac/>
+<csr-id-d434e148620d394856246ac34bb0a64c37181970/>
+<csr-id-50d0ed1086c5f417ed64dcce139cc3c2b50ca14c/>
+<csr-id-54f0afa7b7d67b658113eb2a7ea667b77ea4bd55/>
+<csr-id-2e3bd2bd7611e5de9fe123f53778f282613eb0de/>
+<csr-id-77d663d3e1fd5590177ac8003a313a3edf29ab1f/>
+<csr-id-02c1ddc0d62b40f63afe4d270643ebc3bf39c081/>
+<csr-id-9eda090fe6d790f239093738515570a7886eae8d/>
+<csr-id-4de853a1d3e28126faf9efa51aaa97714af7b493/>
+<csr-id-3ae7cce621b4be163feac7be903f3ff66f40ddc3/>
+<csr-id-e943eca7512a0d96a617451e2e2af78718d0f685/>
+<csr-id-7364dd8afae5c8884ca923b39c5680c60d8d0e3d/>
+
  - <csr-id-9cd2b4034f8d5688ce250429dc14120eaf61b483/> update `wrpc:keyvalue` in providers
    part of this process is adopting `wit-bindgen-wrpc` in the host
  - <csr-id-a1754195fca5a13c8cdde713dad3e1a9765adaf5/> update `wasi:keyvalue`
@@ -149,70 +248,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This feature was motivated by 2 major reasons:
    
    1. We have been needing something like this for a while, at the very least for
-      being able to configure link names in an actor at runtime
-   2. There aren't currently any active (yes there were some in the past) efforts
+   being able to configure link names in an actor at runtime
+2. There aren't currently any active (yes there were some in the past) efforts
       to add a generic `wasi:cloud/guest-config` interface that can allow any host
       to provide config values to a component. I want to use this as a springboard
       for the conversation in wasi-cloud as we will start to use it and can give
       active feedback as to how the interface should be shaped
-   
-   With that said, note that this is only going to be added for actors built against
-   the component model. Since this is net new functionality, I didn't think it was
-   worth it to try to backport.
-   
-   As for testing, I have tested that an actor can import the functions and get the values
-   via the various e2e tests and also manually validated that all of the new topics
-   work.
- - <csr-id-cfb66f81180a3b47d6e7df1a444a1ec945115b15/> implement wasifills for simple types
- - <csr-id-2e8982c962f1cbb15a7a0e34c5a7756e02bb56a3/> implement outgoing HTTP
- - <csr-id-123cb2f9b8981c37bc333fece71c009ce875e30f/> add support for call aliases
- - <csr-id-813ce52a9c11270814eec051dfaa8817bf9f567d/> support chunking and dechunking of requests
- - <csr-id-bef159ab4d5ce6ba73e7c3465110c2990da64eac/> implement `wasi:blobstore`
- - <csr-id-d434e148620d394856246ac34bb0a64c37181970/> partially implement `wasi:keyvalue/atomic`
- - <csr-id-50d0ed1086c5f417ed64dcce139cc3c2b50ca14c/> implement `wasmcloud:http/incoming-handler` support
- - <csr-id-54f0afa7b7d67b658113eb2a7ea667b77ea4bd55/> move builtin smithy structs to `compat`
- - <csr-id-2e3bd2bd7611e5de9fe123f53778f282613eb0de/> implement link names and a2a calls
- - <csr-id-77d663d3e1fd5590177ac8003a313a3edf29ab1f/> implement `wasmcloud:messaging/consumer` support
- - <csr-id-02c1ddc0d62b40f63afe4d270643ebc3bf39c081/> implement `wasi:keyvalue/readwrite` support
- - <csr-id-9eda090fe6d790f239093738515570a7886eae8d/> introduce Blobstore trait
- - <csr-id-4de853a1d3e28126faf9efa51aaa97714af7b493/> implement actor -> provider linking
- - <csr-id-3ae7cce621b4be163feac7be903f3ff66f40ddc3/> provide wasmCloud interface stubs
- - <csr-id-e943eca7512a0d96a617451e2e2af78718d0f685/> implement linkdef add/delete
- - <csr-id-7364dd8afae5c8884ca923b39c5680c60d8d0e3d/> implement data streaming
-   - make claims optional (at least for now)
-   - add streaming support to `wasmcloud:bus`
-   - rename `wasmcloud_host` -> `wasmcloud_runtime`
-   - remove all `wasmcloud-interface-*` usages
-   - add support for `command` executables (I/O actors)
-   - add local lattice proving the concept, which is used for testing of the feature
-   - implement an actor instance pool
+- make claims optional (at least for now)
+- add streaming support to `wasmcloud:bus`
+- rename `wasmcloud_host` -> `wasmcloud_runtime`
+- remove all `wasmcloud-interface-*` usages
+- add support for `command` executables (I/O actors)
+- add local lattice proving the concept, which is used for testing of the feature
+- implement an actor instance pool
+ - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
+ - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
+ - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
+ - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
+ - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
+ - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
+ - <csr-id-a5f9432845bcb7c8f423776fd56ef4a735fe43c7/> add `TargetEntity::lattice_id()`
+ - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
+ - <csr-id-056b57e50cfc13ecd863f54d30032988bd23d94b/> enable wasmtime gc feature
+ - <csr-id-26d7f64659dbf3263f36da92df89003c579077cc/> fallback to `wrpc:blobstore@0.1.0`
+ - <csr-id-156d3f39e6775ec6aea3a1eb864bf7c893749e07/> update to Wasmtime 23
 
 ### Bug Fixes
 
- - <csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/> setup debug traces
-   This commit contains experimental code used to debug/replicate the
-   o11y traces for making a call with http-client & http-provider.
-   
-   Running this requires the following hackery:
-   
-   - running the docker compose for o11y
-   - (re) building dog-fetcher
-   - modifying the WADM w/ dog fetcher (done by this commit)
-   - build & create PAR for http-client
-   - build & create PAR for http-server
-   - set WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before `wash up`
-   - replacing existing wasmcloud host (in `~/.wash/downloads/v1.0.2`)
- - <csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/> propagate traces through components
- - <csr-id-61308b7827789d442b2508ba5347add03bdbb069/> Fixes issue with running runtime on smaller hosts
-   We found that on hosts with less then 2GB of memory (give or take a
-   little) the host would fail to start when the pooling allocator started
-   allocating virtual memory. You could get around this by setting
-   `vm_overcommit` to 1 or 2, but this is not the best experience for those
-   running in production. This fixes the issue by falling back to the
-   dynamic memory allocator if setup fails.
-   
-   We already have a plan to add some more of these tunables as options
-   for the host, but those will be added in future PRs as a feature add
+<csr-id-d1c3a599377ccb46ba11f2d9484812dc2a67b22c/>
+<csr-id-923c650cc4b58e5316e53ae8141219de15862d34/>
+<csr-id-e9bea42ed6189d903ea7fc6b7d4dc54a6fe88a12/>
+<csr-id-542427e4a0bff82c25ffe35c9587f34783a207dd/>
+<csr-id-c6fa704f001a394c10f8769d670941aff62d6414/>
+<csr-id-7db1183dbe84aeeb1967eb28d71876f6f175c2c2/>
+<csr-id-1d3fd96f2fe23c71b2ef70bb5199db8009c56154/>
+<csr-id-c555bab75cdc6f2953ec394b4fe41133d83efb66/>
+<csr-id-1829b27213e836cb347a542e9cdc771c74427892/>
+<csr-id-b13a50ca8b882fe5142f9ad26501ffeba47af24c/>
+<csr-id-a82847f4e4a2637bc9d6f9c75be0a902f7944212/>
+<csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/>
+<csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/>
+<csr-id-61308b7827789d442b2508ba5347add03bdbb069/>
+
  - <csr-id-7abc17038655db16e71471edd2cc7dc0a760b6ac/> rustdoc spelling
  - <csr-id-4ed38913f19fcd4dd44dfdcc9007e80e80cdc960/> fix `link_name` functionality, reorganize tests
  - <csr-id-ccb3c73dc1351b11233896abc068a200374df079/> correct name and data streaming, update WIT
@@ -227,34 +306,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
-   - Uncomments implementation from the host for wasmcloud:messaging
-   - Adds an invoker component that reacts to messaging rather than HTTP
-   - Uses messaging & keyvalue providers plus the actor in a single test
-   
-   With this, we have an easy to understand way to test every provider
-   that we have in the repository.
- - <csr-id-d1c3a599377ccb46ba11f2d9484812dc2a67b22c/> do not polyfill logging
- - <csr-id-923c650cc4b58e5316e53ae8141219de15862d34/> tone down instrumentation level
- - <csr-id-e9bea42ed6189d903ea7fc6b7d4dc54a6fe88a12/> bindgen issues preventing builds
-   This commit fixes the provider bindgen issues for non http-server
-   builds (ex. kv-redis)
- - <csr-id-542427e4a0bff82c25ffe35c9587f34783a207dd/> parse package
- - <csr-id-c6fa704f001a394c10f8769d670941aff62d6414/> fix clippy warning, added ; for consistency, return directly the instance instead of wrapping the instance's components in a future
- - <csr-id-7db1183dbe84aeeb1967eb28d71876f6f175c2c2/> Add comments, remove useless future::ready
- - <csr-id-1d3fd96f2fe23c71b2ef70bb5199db8009c56154/> fmt
- - <csr-id-c555bab75cdc6f2953ec394b4fe41133d83efb66/> return `Ready` on trailers
- - <csr-id-1829b27213e836cb347a542e9cdc771c74427892/> allow namespaces with slashes
- - <csr-id-b13a50ca8b882fe5142f9ad26501ffeba47af24c/> properly handle `path_with_query`
- - <csr-id-a82847f4e4a2637bc9d6f9c75be0a902f7944212/> switch to wasmCloud messaging WIT
 
 ### Other
 
- - <csr-id-94adef8c3cbf722025d2c8ca990b264b24030b72/> wasmcloud-runtime v0.1.0
- - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
-   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
-   
-   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
- - <csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/> improve documentation
  - <csr-id-663b49e335d2645d0cfd679afd202ca461dd6932/> clarify the instance exclusions
  - <csr-id-03c9d1c6ae662d3018ebc9d4d8c509076e291f12/> update to Wasmtime 18
  - <csr-id-49f3883c586c098d4b0be44793057b97566ec2e1/> update to wasmtime 17
@@ -274,8 +328,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactor
 
- - <csr-id-3fb79daf65f9f029ca0227cfdac7b504d7bd9c6c/> use upstream preview1 adapter crate
- - <csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/> extract and document `InvocationStream` type
  - <csr-id-468268e015ccc5d5d8a607dcf3ede7c5e86de45e/> wascap::jwt::Actor -> wascap::jwt::Component
  - <csr-id-e1281733c73988686a499d43e808e4cd11fd5759/> link actors on creation
  - <csr-id-770731ca949c5906ccbd102bcf13dc57a870f7b7/> improve WASI linking error
@@ -290,10 +342,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features (BREAKING)
 
- - <csr-id-fc1bbf45e212b2d00b654a27a38a7322e8889be6/> increase wasm memory limit, 256MiB
- - <csr-id-2c0b5860390373720845cc2060705ad7d942a3c3/> implement streaming in wasi:blobstore
- - <csr-id-f4b4eeb64a6eab4f6dfb540eacd7e2256d80aa71/> allow tuning runtime parameters
- - <csr-id-acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5/> add secrets store/reveal imports
  - <csr-id-6b2e1b5915a0e894a567622ffc193230e5654c1f/> Removes old guest config and uses runtime config instead
    Most of the changes are related to wit updates, but this removes the
    guest config from `wasmcloud:bus` and pulls down `wasi:config` in its
@@ -309,13 +357,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    operations. While I was in different parts of the code I did some small
    "campfire rule" cleanups mostly of clippy lints and removal of
    clippy pedant mode.
+ - <csr-id-acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5/> add secrets store/reveal imports
+ - <csr-id-fc1bbf45e212b2d00b654a27a38a7322e8889be6/> increase wasm memory limit, 256MiB
+ - <csr-id-2c0b5860390373720845cc2060705ad7d942a3c3/> implement streaming in wasi:blobstore
+ - <csr-id-f4b4eeb64a6eab4f6dfb540eacd7e2256d80aa71/> allow tuning runtime parameters
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 154 commits contributed to the release over the course of 422 calendar days.
- - 150 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 155 commits contributed to the release over the course of 433 calendar days.
+ - 151 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -325,6 +377,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Wasmcloud-runtime v0.2.0 ([`d8f73f5`](https://github.com/wasmCloud/wasmCloud/commit/d8f73f56a3ebb67ddb34acb6598039c51c05e772))
     - Wasmcloud-runtime v0.1.0 ([`94adef8`](https://github.com/wasmCloud/wasmCloud/commit/94adef8c3cbf722025d2c8ca990b264b24030b72))
     - Increase wasm memory limit, 256MiB ([`fc1bbf4`](https://github.com/wasmCloud/wasmCloud/commit/fc1bbf45e212b2d00b654a27a38a7322e8889be6))
     - Enable wasmtime gc feature ([`056b57e`](https://github.com/wasmCloud/wasmCloud/commit/056b57e50cfc13ecd863f54d30032988bd23d94b))
@@ -481,8 +534,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Implement data streaming ([`7364dd8`](https://github.com/wasmCloud/wasmCloud/commit/7364dd8afae5c8884ca923b39c5680c60d8d0e3d))
 </details>
 
-## 0.3.0 (2024-07-31)
+<csr-unknown>
+<csr-unknown>
+running the docker compose for o11y(re) building dog-fetchermodifying the WADM w/ dog fetcher (done by this commit)build & create PAR for http-clientbuild & create PAR for http-serverset WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before wash upreplacing existing wasmcloud host (in ~/.wash/downloads/v1.0.2)<csr-unknown>
+ setup debug tracesThis commit contains experimental code used to debug/replicate theo11y traces for making a call with http-client & http-provider.Running this requires the following hackery: propagate traces through components Fixes issue with running runtime on smaller hostsWe found that on hosts with less then 2GB of memory (give or take alittle) the host would fail to start when the pooling allocator startedallocating virtual memory. You could get around this by settingvm_overcommit to 1 or 2, but this is not the best experience for thoserunning in production. This fixes the issue by falling back to thedynamic memory allocator if setup fails.We already have a plan to add some more of these tunables as optionsfor the host, but those will be added in future PRs as a feature add<csr-unknown/>
+<csr-unknown/>
+<csr-unknown/>
 
+## 0.2.0 (2024-09-06)
+
+<csr-id-72cb5e7db4d3323f7b09beb7f4fc7754379929d0/>
+<csr-id-51c8ceb895b0069af9671e895b9f1ecb841ea6c3/>
+<csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/>
+<csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/>
+<csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/>
+<csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/>
+<csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/>
+<csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/>
+<csr-id-e7c30405302fcccc612209335179f0bc47d8e996/>
+<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/>
 <csr-id-955a6893792e86292883e76de57434616c28d380/>
 <csr-id-327975d6a83bac3199240645b0c6a4a17cf00f66/>
 <csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/>
@@ -509,6 +582,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/>
 <csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/>
 <csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/>
+<csr-id-94adef8c3cbf722025d2c8ca990b264b24030b72/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/>
 <csr-id-663b49e335d2645d0cfd679afd202ca461dd6932/>
 <csr-id-03c9d1c6ae662d3018ebc9d4d8c509076e291f12/>
 <csr-id-49f3883c586c098d4b0be44793057b97566ec2e1/>
@@ -522,6 +598,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-1f3448e6b38ffdad064d79145470ca1a7a476508/>
 <csr-id-2bb60f364ef573e5837c5299eb587ec4e1427d3f/>
 <csr-id-cb86378831e48368d31947b0a44ef39080fe6d70/>
+<csr-id-3fb79daf65f9f029ca0227cfdac7b504d7bd9c6c/>
+<csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/>
 <csr-id-468268e015ccc5d5d8a607dcf3ede7c5e86de45e/>
 <csr-id-e1281733c73988686a499d43e808e4cd11fd5759/>
 <csr-id-770731ca949c5906ccbd102bcf13dc57a870f7b7/>
@@ -530,22 +608,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-b5aac8ea84af9cc37282b99826b2da0c0ec297bc/>
 <csr-id-2540b2a2776c8977e47232993b2af5086dc92e18/>
 <csr-id-5f922256e679091e6acbb3e0f39852abb840c8b0/>
-<csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/>
-<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
-<csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/>
-<csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/>
-<csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/>
-<csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/>
-<csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/>
-<csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/>
-<csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/>
-<csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/>
-<csr-id-e7c30405302fcccc612209335179f0bc47d8e996/>
-<csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/>
-<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
 
 ### Chore
 
+ - <csr-id-72cb5e7db4d3323f7b09beb7f4fc7754379929d0/> allow complex types
+ - <csr-id-51c8ceb895b0069af9671e895b9f1ecb841ea6c3/> update component/runtime/host crate READMEs
+ - <csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/> increase max memory size to 10mb
+   This commit increases the max memory that can be addressed by a single
+   component to 10mb.
+ - <csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/> update wRPC
+ - <csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/> remove unused logging exports
+ - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
+ - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
+ - <csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/> Replace actor reference by component in runtime crate
+ - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
+   When known interfaces are accessed, we show a message that notes that
+   the target is unknown, but we can improve on that by alerting the user
+   to a possibly missing link.
+ - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
+   Rename wash-cli wash-build tests name and references
+   
+   Fix nix flake path to Cargo.lock file
+   
+   Fix format
+   
+   Rename in wash-cli tests
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+ - <csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/> replace references to 'actor' with 'component'
  - <csr-id-955a6893792e86292883e76de57434616c28d380/> update `messaging` to `0.2.0`
  - <csr-id-327975d6a83bac3199240645b0c6a4a17cf00f66/> reenable `clippy::pedantic`
  - <csr-id-1bad246d9e174384c1a09bdff7e2dc88d911792e/> remove unused dependencies
@@ -575,46 +665,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-099ebcd9855b13b810f8fbb11ac57816e9dd4c06/> mark non-exhaustive Debug impls as such
  - <csr-id-4fb8206e1d5fb21892a01b9e4f009e48c8bea2df/> remove noisy fields from instruments
 
-### Refactor
-
- - <csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/> extract and document `InvocationStream` type
-
-### Other
-
- - <csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/> improve documentation
-
-### Chore
-
- - <csr-id-3c414c52d4dfd31094b4cd2cee7e2f159cad639f/> increase max memory size to 10mb
-   This commit increases the max memory that can be addressed by a single
-   component to 10mb.
- - <csr-id-8fa3faad9fbb4b42ff7b8ea726c8cd4493b24a58/> update wRPC
- - <csr-id-40874d427a24c65746e18de44aef87cc4c3c4c13/> remove unused logging exports
- - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
- - <csr-id-0f7093660a1ef09ff745daf5e1a96fd72c88984d/> update to stream-based serving
- - <csr-id-4bf428dbf693f1c91c276513e75b492e57d4d1a6/> Replace actor reference by component in runtime crate
- - <csr-id-e7c30405302fcccc612209335179f0bc47d8e996/> improve error messages for missing links
-   When known interfaces are accessed, we show a message that notes that
-   the target is unknown, but we can improve on that by alerting the user
-   to a possibly missing link.
- - <csr-id-20c72ce0ed423561ae6dbd5a91959bec24ff7cf3/> Replace actor references by component in crates
-   Rename wash-cli wash-build tests name and references
-   
-   Fix nix flake path to Cargo.lock file
-   
-   Fix format
-   
-   Rename in wash-cli tests
- - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
-
-### Chore
-
- - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
-
-### Chore
-
- - <csr-id-7702e695cd9ab9436aaeb337373c3c1cb31f324a/> replace references to 'actor' with 'component'
-
 ### New Features
 
 <csr-id-cfb66f81180a3b47d6e7df1a444a1ec945115b15/>
@@ -634,6 +684,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-e943eca7512a0d96a617451e2e2af78718d0f685/>
 <csr-id-7364dd8afae5c8884ca923b39c5680c60d8d0e3d/>
 
+ - <csr-id-056b57e50cfc13ecd863f54d30032988bd23d94b/> enable wasmtime gc feature
+ - <csr-id-26d7f64659dbf3263f36da92df89003c579077cc/> fallback to `wrpc:blobstore@0.1.0`
+ - <csr-id-156d3f39e6775ec6aea3a1eb864bf7c893749e07/> update to Wasmtime 23
+ - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
+ - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
+ - <csr-id-a5f9432845bcb7c8f423776fd56ef4a735fe43c7/> add `TargetEntity::lattice_id()`
+ - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
+ - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
+ - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
+ - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
  - <csr-id-9cd2b4034f8d5688ce250429dc14120eaf61b483/> update `wrpc:keyvalue` in providers
    part of this process is adopting `wit-bindgen-wrpc` in the host
  - <csr-id-a1754195fca5a13c8cdde713dad3e1a9765adaf5/> update `wasi:keyvalue`
@@ -719,19 +781,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add support for `command` executables (I/O actors)
 - add local lattice proving the concept, which is used for testing of the feature
 - implement an actor instance pool
- - <csr-id-cda9f724d2d2e4ea55006a43b166d18875148c48/> generate crate changelogs
- - <csr-id-e928020fd774abcc213fec560d89f128464da319/> limit max execution time to 10 minutes
- - <csr-id-33b50c2d258ca9744ed65b153a6580f893172e0c/> update to Wasmtime 20
- - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
- - <csr-id-3eb453405aa144599f43bbaf56197566c9f0cf0a/> count epoch in a separate OS thread
- - <csr-id-a66921edd9be3202d1296a165c34faf597b1dec1/> propagate `max_execution_time` to the runtime
- - <csr-id-070751231e5bb4891b995e992e5206b3050ecc30/> pass original component instance through the context
- - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
- - <csr-id-a5f9432845bcb7c8f423776fd56ef4a735fe43c7/> add `TargetEntity::lattice_id()`
- - <csr-id-077a28a6567a436c99368c7eb1bd5dd2a6bc6103/> gracefully shutdown epoch interrupt thread
 
 ### Bug Fixes
 
+<csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/>
+<csr-id-61308b7827789d442b2508ba5347add03bdbb069/>
+<csr-id-7abc17038655db16e71471edd2cc7dc0a760b6ac/>
+<csr-id-4ed38913f19fcd4dd44dfdcc9007e80e80cdc960/>
+<csr-id-ccb3c73dc1351b11233896abc068a200374df079/>
+<csr-id-bff9816db3193c57ccfe48852f21258a8430530e/>
+<csr-id-c8f26b84346600870f62df05238f64421c6e66c6/>
+<csr-id-149f98b60c1e70d0e68153add3e30b8fb4483e11/>
+<csr-id-0f6a1eb97cb46a43c9b24977a8e8dc11061af330/>
 <csr-id-d1c3a599377ccb46ba11f2d9484812dc2a67b22c/>
 <csr-id-923c650cc4b58e5316e53ae8141219de15862d34/>
 <csr-id-e9bea42ed6189d903ea7fc6b7d4dc54a6fe88a12/>
@@ -743,27 +804,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-1829b27213e836cb347a542e9cdc771c74427892/>
 <csr-id-b13a50ca8b882fe5142f9ad26501ffeba47af24c/>
 <csr-id-a82847f4e4a2637bc9d6f9c75be0a902f7944212/>
-<csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/>
-<csr-id-fa1fde185b47b055e511f6f2dee095e269db1651/>
-<csr-id-61308b7827789d442b2508ba5347add03bdbb069/>
 
- - <csr-id-7abc17038655db16e71471edd2cc7dc0a760b6ac/> rustdoc spelling
- - <csr-id-4ed38913f19fcd4dd44dfdcc9007e80e80cdc960/> fix `link_name` functionality, reorganize tests
- - <csr-id-ccb3c73dc1351b11233896abc068a200374df079/> correct name and data streaming, update WIT
- - <csr-id-bff9816db3193c57ccfe48852f21258a8430530e/> do not polyfill wasi:blobstore interfaces
- - <csr-id-c8f26b84346600870f62df05238f64421c6e66c6/> do not polyfill wasi cloud interfaces
- - <csr-id-149f98b60c1e70d0e68153add3e30b8fb4483e11/> improve target lookup error handling
- - <csr-id-0f6a1eb97cb46a43c9b24977a8e8dc11061af330/> add messaging triggered test actor
-   This commit is the culmination of a few things that were required for
-   getting our flavor of E2E tests (in the top level `tests/` dir)
-   working for a Provider & Actor.
+ - <csr-id-b014263cf3614995f597336bb40e51ab72bfa1c9/> setup debug traces
+   This commit contains experimental code used to debug/replicate the
+   o11y traces for making a call with http-client & http-provider.
    
-   This commit is quite large because it does many things:
+   Running this requires the following hackery:
    
-   - Adds missing implementation to bindgen for provider -> actor invocations
+   - running the docker compose for o11y
+- (re) building dog-fetcher
+- modifying the WADM w/ dog fetcher (done by this commit)
+- build & create PAR for http-client
+- build & create PAR for http-server
+- set WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before `wash up`
+- replacing existing wasmcloud host (in `~/.wash/downloads/v1.0.2`)
+- Adds missing implementation to bindgen for provider -> actor invocations
+- Uncomments implementation from the host for wasmcloud:messaging
+- Adds an invoker component that reacts to messaging rather than HTTP
+- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
+ - <csr-id-94adef8c3cbf722025d2c8ca990b264b24030b72/> wasmcloud-runtime v0.1.0
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+ - <csr-id-78b9bc7b9dbb7e1bb3ffc6896f01f8e030f3c5b1/> improve documentation
  - <csr-id-663b49e335d2645d0cfd679afd202ca461dd6932/> clarify the instance exclusions
  - <csr-id-03c9d1c6ae662d3018ebc9d4d8c509076e291f12/> update to Wasmtime 18
  - <csr-id-49f3883c586c098d4b0be44793057b97566ec2e1/> update to wasmtime 17
@@ -783,6 +850,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Refactor
 
+ - <csr-id-3fb79daf65f9f029ca0227cfdac7b504d7bd9c6c/> use upstream preview1 adapter crate
+ - <csr-id-9463be2cc3dcaf2e272e5372800e65378c16217f/> extract and document `InvocationStream` type
  - <csr-id-468268e015ccc5d5d8a607dcf3ede7c5e86de45e/> wascap::jwt::Actor -> wascap::jwt::Component
  - <csr-id-e1281733c73988686a499d43e808e4cd11fd5759/> link actors on creation
  - <csr-id-770731ca949c5906ccbd102bcf13dc57a870f7b7/> improve WASI linking error
@@ -797,6 +866,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features (BREAKING)
 
+ - <csr-id-fc1bbf45e212b2d00b654a27a38a7322e8889be6/> increase wasm memory limit, 256MiB
+ - <csr-id-2c0b5860390373720845cc2060705ad7d942a3c3/> implement streaming in wasi:blobstore
+ - <csr-id-f4b4eeb64a6eab4f6dfb540eacd7e2256d80aa71/> allow tuning runtime parameters
+ - <csr-id-acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5/> add secrets store/reveal imports
  - <csr-id-6b2e1b5915a0e894a567622ffc193230e5654c1f/> Removes old guest config and uses runtime config instead
    Most of the changes are related to wit updates, but this removes the
    guest config from `wasmcloud:bus` and pulls down `wasi:config` in its
@@ -812,12 +885,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    operations. While I was in different parts of the code I did some small
    "campfire rule" cleanups mostly of clippy lints and removal of
    clippy pedant mode.
- - <csr-id-acb6e9c3a4c0bf3f10d81dabbda347114bd62cf5/> add secrets store/reveal imports
 
 <csr-unknown>
-running the docker compose for o11y(re) building dog-fetchermodifying the WADM w/ dog fetcher (done by this commit)build & create PAR for http-clientbuild & create PAR for http-serverset WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before wash upreplacing existing wasmcloud host (in ~/.wash/downloads/v1.0.2)<csr-unknown>
- setup debug tracesThis commit contains experimental code used to debug/replicate theo11y traces for making a call with http-client & http-provider.Running this requires the following hackery: propagate traces through components Fixes issue with running runtime on smaller hostsWe found that on hosts with less then 2GB of memory (give or take alittle) the host would fail to start when the pooling allocator startedallocating virtual memory. You could get around this by settingvm_overcommit to 1 or 2, but this is not the best experience for thoserunning in production. This fixes the issue by falling back to thedynamic memory allocator if setup fails.We already have a plan to add some more of these tunables as optionsfor the host, but those will be added in future PRs as a feature add<csr-unknown/>
-<csr-unknown/>
+With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork. implement wasifills for simple types implement outgoing HTTP add support for call aliases support chunking and dechunking of requests implement wasi:blobstore partially implement wasi:keyvalue/atomic implement wasmcloud:http/incoming-handler support move builtin smithy structs to compat implement link names and a2a calls implement wasmcloud:messaging/consumer support implement wasi:keyvalue/readwrite support introduce Blobstore trait implement actor -> provider linking provide wasmCloud interface stubs implement linkdef add/delete implement data streaming propagate traces through components Fixes issue with running runtime on smaller hostsWe found that on hosts with less then 2GB of memory (give or take alittle) the host would fail to start when the pooling allocator startedallocating virtual memory. You could get around this by settingvm_overcommit to 1 or 2, but this is not the best experience for thoserunning in production. This fixes the issue by falling back to thedynamic memory allocator if setup fails.We already have a plan to add some more of these tunables as optionsfor the host, but those will be added in future PRs as a feature add rustdoc spelling fix link_name functionality, reorganize tests correct name and data streaming, update WIT do not polyfill wasi:blobstore interfaces do not polyfill wasi cloud interfaces improve target lookup error handling add messaging triggered test actorThis commit is the culmination of a few things that were required forgetting our flavor of E2E tests (in the top level tests/ dir)working for a Provider & Actor.This commit is quite large because it does many things:With this, we have an easy to understand way to test every providerthat we have in the repository. do not polyfill logging tone down instrumentation level bindgen issues preventing buildsThis commit fixes the provider bindgen issues for non http-serverbuilds (ex. kv-redis) parse package fix clippy warning, added ; for consistency, return directly the instance instead of wrapping the instance’s components in a future Add comments, remove useless future::ready fmt return Ready on trailers allow namespaces with slashes properly handle path_with_query switch to wasmCloud messaging WIT<csr-unknown/>
 
 ## 0.1.0 (2024-09-04)
 
@@ -1089,16 +1159,6 @@ running the docker compose for o11y(re) building dog-fetchermodifying the WADM w
    Running this requires the following hackery:
    
    - running the docker compose for o11y
-- (re) building dog-fetcher
-- modifying the WADM w/ dog fetcher (done by this commit)
-- build & create PAR for http-client
-- build & create PAR for http-server
-- set WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before `wash up`
-- replacing existing wasmcloud host (in `~/.wash/downloads/v1.0.2`)
-- Adds missing implementation to bindgen for provider -> actor invocations
-- Uncomments implementation from the host for wasmcloud:messaging
-- Adds an invoker component that reacts to messaging rather than HTTP
-- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
@@ -1163,5 +1223,7 @@ running the docker compose for o11y(re) building dog-fetchermodifying the WADM w
    clippy pedant mode.
 
 <csr-unknown>
+(re) building dog-fetchermodifying the WADM w/ dog fetcher (done by this commit)build & create PAR for http-clientbuild & create PAR for http-serverset WASMCLOUD_OVERRIDE_TRACES_ENDPOINT before wash upreplacing existing wasmcloud host (in ~/.wash/downloads/v1.0.2)Adds missing implementation to bindgen for provider -> actor invocationsUncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single test<csr-unknown>
 With that said, note that this is only going to be added for actors built againstthe component model. Since this is net new functionality, I didn’t think it wasworth it to try to backport.As for testing, I have tested that an actor can import the functions and get the valuesvia the various e2e tests and also manually validated that all of the new topicswork. implement wasifills for simple types implement outgoing HTTP add support for call aliases support chunking and dechunking of requests implement wasi:blobstore partially implement wasi:keyvalue/atomic implement wasmcloud:http/incoming-handler support move builtin smithy structs to compat implement link names and a2a calls implement wasmcloud:messaging/consumer support implement wasi:keyvalue/readwrite support introduce Blobstore trait implement actor -> provider linking provide wasmCloud interface stubs implement linkdef add/delete implement data streaming propagate traces through components Fixes issue with running runtime on smaller hostsWe found that on hosts with less then 2GB of memory (give or take alittle) the host would fail to start when the pooling allocator startedallocating virtual memory. You could get around this by settingvm_overcommit to 1 or 2, but this is not the best experience for thoserunning in production. This fixes the issue by falling back to thedynamic memory allocator if setup fails.We already have a plan to add some more of these tunables as optionsfor the host, but those will be added in future PRs as a feature add rustdoc spelling fix link_name functionality, reorganize tests correct name and data streaming, update WIT do not polyfill wasi:blobstore interfaces do not polyfill wasi cloud interfaces improve target lookup error handling add messaging triggered test actorThis commit is the culmination of a few things that were required forgetting our flavor of E2E tests (in the top level tests/ dir)working for a Provider & Actor.This commit is quite large because it does many things:With this, we have an easy to understand way to test every providerthat we have in the repository. do not polyfill logging tone down instrumentation level bindgen issues preventing buildsThis commit fixes the provider bindgen issues for non http-serverbuilds (ex. kv-redis) parse package fix clippy warning, added ; for consistency, return directly the instance instead of wrapping the instance’s components in a future Add comments, remove useless future::ready fmt return Ready on trailers allow namespaces with slashes properly handle path_with_query switch to wasmCloud messaging WIT<csr-unknown/>
+<csr-unknown/>
 
