@@ -1,10 +1,12 @@
 use anyhow::{bail, Result};
+use command_group::AsyncCommandGroup;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs::{metadata, write};
 use tokio::process::{Child, Command};
 use tracing::warn;
 
+use crate::common::CommandGroupUsage;
 use crate::start::wait_for_server;
 
 use super::download_binary_from_github;
@@ -260,7 +262,12 @@ jetstream {{
 /// * `bin_path` - Path to the nats-server binary to execute
 /// * `stderr` - Specify where NATS stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
 /// * `config` - Configuration for the NATS server, see [`NatsConfig`] for options. This config file is written alongside the nats-server binary as `nats.conf`
-pub async fn start_nats_server<P, T>(bin_path: P, stderr: T, config: NatsConfig) -> Result<Child>
+pub async fn start_nats_server<P, T>(
+    bin_path: P,
+    stderr: T,
+    config: NatsConfig,
+    command_group: CommandGroupUsage,
+) -> Result<Child>
 where
     P: AsRef<Path>,
     T: Into<Stdio>,
@@ -310,12 +317,15 @@ where
             cmd_args.push(config_path.to_string_lossy().to_string());
         }
 
-        let child = Command::new(bin_path_ref)
-            .stderr(stderr.into())
+        let mut cmd = Command::new(bin_path_ref);
+        cmd.stderr(stderr.into())
             .stdin(Stdio::null())
-            .args(&cmd_args)
-            .spawn()
-            .map_err(anyhow::Error::from)?;
+            .args(&cmd_args);
+        let child = if command_group == CommandGroupUsage::CreateNew {
+            cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()
+        } else {
+            cmd.spawn().map_err(anyhow::Error::from)?
+        };
 
         wait_for_server(&host_addr, "NATS server")
             .await
@@ -348,14 +358,16 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use crate::start::{
-        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
-    };
     use anyhow::Result;
     use std::env::temp_dir;
     use tokio::{
         fs::{create_dir_all, remove_dir_all},
         io::AsyncReadExt,
+    };
+
+    use crate::common::CommandGroupUsage;
+    use crate::start::{
+        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
     };
 
     const NATS_SERVER_VERSION: &str = "v2.10.7";
@@ -390,8 +402,13 @@ mod test {
         let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
 
         let config = NatsConfig::new_standalone("127.0.0.1", 10000, None);
-        let child_res =
-            start_nats_server(&install_dir.join(NATS_SERVER_BINARY), log_file, config).await;
+        let child_res = start_nats_server(
+            &install_dir.join(NATS_SERVER_BINARY),
+            log_file,
+            config,
+            CommandGroupUsage::UseParent,
+        )
+        .await;
         assert!(child_res.is_ok());
 
         // Give NATS max 5 seconds to start up
@@ -432,6 +449,7 @@ mod test {
             &install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),
             config.clone(),
+            CommandGroupUsage::UseParent,
         )
         .await;
         assert!(nats_one.is_ok());
@@ -440,7 +458,13 @@ mod test {
         tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
         let log_path = install_dir.join("nats.log");
         let log = std::fs::File::create(&log_path)?;
-        let nats_two = start_nats_server(&install_dir.join(NATS_SERVER_BINARY), log, config).await;
+        let nats_two = start_nats_server(
+            &install_dir.join(NATS_SERVER_BINARY),
+            log,
+            config,
+            CommandGroupUsage::UseParent,
+        )
+        .await;
         assert!(nats_two.is_err());
 
         nats_one.unwrap().kill().await?;

@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use command_group::AsyncCommandGroup;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs::metadata;
@@ -6,6 +7,7 @@ use tokio::process::{Child, Command};
 use tracing::warn;
 
 use super::download_binary_from_github;
+use crate::common::CommandGroupUsage;
 
 const WADM_GITHUB_RELEASE_URL: &str = "https://github.com/wasmcloud/wadm/releases/download";
 pub const WADM_PID: &str = "wadm.pid";
@@ -144,15 +146,22 @@ pub struct WadmConfig {
 ///
 /// # Arguments
 ///
+/// * `state_dir` - Path to the folder in which wadm process state (ex. pidfile) should be stored
 /// * `bin_path` - Path to the wadm binary to execute
 /// * `stderr` - Specify where wadm stderr logs should be written to. If logs aren't important, use `std::process::Stdio::null()`
 /// * `config` - Optional configuration for wadm
-pub async fn start_wadm<P, T>(bin_path: P, stderr: T, config: Option<WadmConfig>) -> Result<Child>
+pub async fn start_wadm<P, T>(
+    state_dir: P,
+    bin_path: P,
+    stderr: T,
+    config: Option<WadmConfig>,
+    command_group: CommandGroupUsage,
+) -> Result<Child>
 where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
-    let pid_file = bin_path.as_ref().parent().map(|p| p.join(WADM_PID));
+    let pid_file = state_dir.as_ref().parent().map(|p| p.join(WADM_PID));
 
     let mut cmd = Command::new(bin_path.as_ref());
     cmd.stderr(stderr).stdin(Stdio::null());
@@ -173,15 +182,22 @@ where
         }
     }
 
-    let child = cmd.spawn().map_err(anyhow::Error::from);
+    let child = if command_group == CommandGroupUsage::CreateNew {
+        cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()
+    } else {
+        cmd.spawn().map_err(anyhow::Error::from)?
+    };
 
-    let pid = child.as_ref().map(Child::id);
-    if let (Ok(Some(wadm_pid)), Some(pid_path)) = (pid, pid_file) {
-        if let Err(e) = tokio::fs::write(pid_path, wadm_pid.to_string()).await {
+    let pid = child
+        .id()
+        .context("unexpectedly missing pid for spawned process")?;
+    if let Some(pid_path) = pid_file {
+        if let Err(e) = tokio::fs::write(pid_path, pid.to_string()).await {
             warn!("Couldn't write wadm pidfile: {e}");
         }
     }
-    child
+
+    Ok(child)
 }
 
 /// Helper function to determine the wadm release path given an os/arch and version
@@ -196,6 +212,7 @@ fn wadm_url(os: &str, arch: &str, version: &str) -> String {
 
 #[cfg(test)]
 mod test {
+    use crate::common::CommandGroupUsage;
     use crate::start::is_bin_installed;
 
     use super::*;
@@ -245,7 +262,14 @@ mod test {
             nats_credsfile: None,
         };
 
-        let child_res = start_wadm(&install_dir.join(WADM_BINARY), log_file, Some(config)).await;
+        let child_res = start_wadm(
+            &install_dir,
+            &install_dir.join(WADM_BINARY),
+            log_file,
+            Some(config),
+            CommandGroupUsage::UseParent,
+        )
+        .await;
         assert!(child_res.is_ok());
 
         // Wait for process to exit since NATS couldn't connect
