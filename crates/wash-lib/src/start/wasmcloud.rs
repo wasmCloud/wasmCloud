@@ -289,6 +289,7 @@ fn check_version(version: &str) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::{check_version, ensure_wasmcloud, wasmcloud_url, MINIMUM_WASMCLOUD_VERSION};
+    use crate::common::CommandGroupUsage;
     use crate::start::{
         ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
@@ -409,6 +410,7 @@ mod test {
             install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),
             config,
+            CommandGroupUsage::UseParent,
         )
         .await
         .expect("Unable to start nats process");

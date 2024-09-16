@@ -54,6 +54,17 @@ impl Debug for Match {
     }
 }
 
+/// Whether or not to use a command group to manage unix/windows signal delivery
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum CommandGroupUsage {
+    /// Use the parent command group
+    #[default]
+    UseParent,
+    /// Create a new command group (using this option prevents signals from being delivered)
+    /// automatically to subprocesses
+    CreateNew,
+}
+
 /// Given a string, attempts to resolve a component ID. Returning the component ID and an optional friendly
 /// name
 ///
