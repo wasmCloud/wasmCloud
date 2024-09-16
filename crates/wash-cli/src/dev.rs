@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -16,8 +16,10 @@ use rand::{distributions::Alphanumeric, Rng};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
+use tokio::process::Child;
 use tokio::{select, sync::mpsc};
 use wash_lib::app::AppManifest;
+use wash_lib::common::CommandGroupUsage;
 use wash_lib::component::{scale_component, ScaleComponentArgs};
 use wasmcloud_control_interface::Client as CtlClient;
 use wit_parser::{Resolve, WorldId};
@@ -28,18 +30,25 @@ use wadm_types::{
     TargetConfig, TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::cfg_dir;
+use wash_lib::cli::CommandOutput;
+use wash_lib::config::{cfg_dir, downloads_dir};
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{get_config, ProjectConfig};
+use wash_lib::start::{
+    ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
+    NatsConfig, WadmConfig, NATS_SERVER_BINARY,
+};
 use wasmcloud_core::{
     parse_wit_meta_from_operation, LinkName, WitInterface, WitNamespace, WitPackage,
 };
 
 use crate::app::deploy_model_from_manifest;
-use crate::down::{handle_down, DownCommand};
-use crate::up::{handle_up, NatsOpts, UpCommand, WadmOpts, WasmcloudOpts};
+use crate::down::stop_nats;
+use crate::up::{
+    configure_host_env, nats_client_from_wasmcloud_opts, remove_wadm_pidfile, start_nats, NatsOpts,
+    WadmOpts, WasmcloudOpts, DEFAULT_NATS_HOST,
+};
 
 const DEFAULT_KEYVALUE_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/keyvalue-nats:0.1.0";
 const DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/http-client:0.11.0";
@@ -1090,6 +1099,20 @@ impl Default for SessionMetadata {
 }
 
 impl WashDevSession {
+    /// Get the directory into which all related log files/ancillary data should be stored
+    async fn base_dir(&self) -> Result<PathBuf> {
+        let base_dir = dev_dir().await.map(|p| p.join(&self.id))?;
+        if !tokio::fs::try_exists(&base_dir)
+            .await
+            .context("failed to check if dev dir exists")?
+        {
+            tokio::fs::create_dir_all(&base_dir)
+                .await
+                .with_context(|| format!("failed to create dir [{}]", base_dir.display()))?
+        }
+        Ok(base_dir)
+    }
+
     /// Retrieve or create a `wash dev` session from a file on disk containing [`SessionMetadata`]
     async fn from_sessions_file(project_path: impl AsRef<Path>) -> Result<Self> {
         let mut session_metadata = SessionMetadata::from_sessions_file()
@@ -1131,9 +1154,9 @@ impl WashDevSession {
         mut wasmcloud_opts: WasmcloudOpts,
         nats_opts: NatsOpts,
         wadm_opts: WadmOpts,
-    ) -> Result<()> {
+    ) -> Result<(Option<Child>, Option<Child>, Option<Child>)> {
         if self.host_data.is_some() {
-            return Ok(());
+            return Ok((None, None, None));
         }
 
         eprintln!(
@@ -1145,20 +1168,117 @@ impl WashDevSession {
         wasmcloud_opts.allow_file_load = Some(true);
         wasmcloud_opts.multi_local = true;
 
-        // Run a detached process via running the equivalent of `wash up`
+        let session_dir = self.base_dir().await?;
 
-        // Run wash up to start the host if not already running
-        let resp = handle_up(
-            UpCommand {
-                detached: true,
-                nats_opts,
-                wasmcloud_opts,
-                wadm_opts,
-            },
-            OutputKind::Json,
+        // Start NATS
+        let install_dir = downloads_dir()?;
+        let nats_log_path = session_dir.join("nats.log");
+        let nats_binary = ensure_nats_server(&nats_opts.nats_version, &install_dir).await?;
+        let nats_host = nats_opts.nats_host.clone().unwrap_or_else(|| {
+            wasmcloud_opts
+                .ctl_host
+                .clone()
+                .unwrap_or_else(|| DEFAULT_NATS_HOST.into())
+        });
+        let nats_port = nats_opts
+            .nats_port
+            .unwrap_or(wasmcloud_opts.ctl_port.unwrap_or(4222));
+        let nats_listen_address = format!("{}:{}", nats_host, nats_port);
+        let nats_config = NatsConfig {
+            host: nats_host,
+            port: nats_port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{nats_port}")),
+            js_domain: nats_opts.nats_js_domain,
+            remote_url: nats_opts.nats_remote_url,
+            credentials: nats_opts.nats_credsfile.clone(),
+            websocket_port: nats_opts.nats_websocket_port,
+            config_path: nats_opts.nats_configfile,
+        };
+        let nats_child = match start_nats(
+            &install_dir,
+            &nats_binary,
+            nats_config,
+            &nats_log_path,
+            CommandGroupUsage::CreateNew,
         )
         .await
-        .with_context(|| format!("failed to start host for wash dev session [{}]", self.id))?;
+        {
+            Ok(c) => Some(c),
+            Err(e) if e.to_string().contains("already listening") => None,
+            Err(e) => bail!("failed to start NATS server for wash dev: {e}"),
+        };
+
+        // Start WADM
+        let wadm_log_path = session_dir.join("wadm.log");
+        let config = WadmConfig {
+            structured_logging: wasmcloud_opts.enable_structured_logging,
+            js_domain: wadm_opts.wadm_js_domain.clone(),
+            nats_server_url: nats_listen_address,
+            nats_credsfile: nats_opts.nats_credsfile,
+        };
+        let wadm_log_file = tokio::fs::File::create(&wadm_log_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create wadm log file @ [{}]",
+                    wadm_log_path.display()
+                )
+            })?;
+        let wadm_binary = ensure_wadm(&wadm_opts.wadm_version, &install_dir).await?;
+        let wadm_child = match start_wadm(
+            &session_dir,
+            &wadm_binary,
+            wadm_log_file.into_std().await,
+            Some(config),
+            CommandGroupUsage::CreateNew,
+        )
+        .await
+        {
+            Ok(c) => Some(c),
+            Err(e) if e.to_string().contains("already listening") => None,
+            Err(e) => bail!("failed to start wadm for wash dev: {e}"),
+        };
+
+        // Start the host in detached mode, w/ custom log file
+        let wasmcloud_log_path = session_dir.join("wasmcloud.log");
+        let wasmcloud_binary =
+            ensure_wasmcloud(&wasmcloud_opts.wasmcloud_version, &install_dir).await?;
+        let log_output: Stdio = tokio::fs::File::create(&wasmcloud_log_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create log file @ [{}]",
+                    wasmcloud_log_path.display()
+                )
+            })?
+            .into_std()
+            .await
+            .into();
+        let host_env = configure_host_env(wasmcloud_opts.clone()).await?;
+        let wasmcloud_child = match start_wasmcloud_host(
+            &wasmcloud_binary,
+            std::process::Stdio::null(),
+            log_output,
+            host_env,
+        )
+        .await
+        {
+            Ok(child) => Some(child),
+            Err(e) => {
+                eprintln!("{} Failed to start wasmCloud instance", emoji::ERROR);
+                if let Some(mut wadm) = wadm_child {
+                    wadm.kill()
+                        .await
+                        .context("failed to stop wadm child process")?;
+                    remove_wadm_pidfile(session_dir)
+                        .await
+                        .context("failed to remove wadm pidfile")?;
+                }
+                let nats_bin = install_dir.join(NATS_SERVER_BINARY);
+                let _ = stop_nats(install_dir, nats_bin).await?;
+                bail!("failed to start wasmCloud instance: {e}");
+            }
+        };
 
         eprintln!(
             "{} {}",
@@ -1167,18 +1287,15 @@ impl WashDevSession {
         );
 
         // Read the log until we get output that
-        let log_file_path = PathBuf::from(
-            resp.map["wasmcloud_log"]
-                .as_str()
-                .context("failed to find wasmcloud log in wash up output")?,
-        );
-
-        let _log_file_path = log_file_path.clone();
+        let _wasmcloud_log_path = wasmcloud_log_path.clone();
         let host_id = tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
-            let log_file = tokio::fs::File::open(&_log_file_path)
+            let log_file = tokio::fs::File::open(&_wasmcloud_log_path)
                 .await
                 .with_context(|| {
-                    format!("failed to open log file @ [{}]", _log_file_path.display())
+                    format!(
+                        "failed to open log file @ [{}]",
+                        _wasmcloud_log_path.display()
+                    )
                 })?;
             let mut lines = tokio::io::BufReader::new(log_file).lines();
             loop {
@@ -1205,14 +1322,14 @@ impl WashDevSession {
             emoji::GREEN_CHECK,
             style(format!(
                 "Successfully started host, logs @ [{}]",
-                log_file_path.display()
+                wasmcloud_log_path.display()
             ))
             .bold()
         );
 
-        self.host_data = Some((host_id, log_file_path));
+        self.host_data = Some((host_id, wasmcloud_log_path));
 
-        Ok(())
+        Ok((nats_child, wadm_child, wasmcloud_child))
     }
 }
 
@@ -1542,7 +1659,7 @@ async fn scale_down_component(
 /// Handle `wash dev`
 pub async fn handle_command(
     cmd: DevCommand,
-    output_kind: wash_lib::cli::OutputKind,
+    _output_kind: wash_lib::cli::OutputKind,
 ) -> Result<CommandOutput> {
     let current_dir = std::env::current_dir()?;
     let project_path = cmd.code_dir.unwrap_or(current_dir);
@@ -1554,9 +1671,11 @@ pub async fn handle_command(
     let session_id = wash_dev_session.id.clone();
     eprintln!("{} Resolved wash session ID [{session_id}]", emoji::INFO);
 
+    let (mut nats_child, mut wadm_child, mut wasmcloud_child) = (None, None, None);
+
     // If there is not a running host for this session, then we can start one
     if wash_dev_session.host_data.is_none() {
-        wash_dev_session
+        (nats_child, wadm_child, wasmcloud_child) = wash_dev_session
             .start_host(
                 cmd.wasmcloud_opts.clone(),
                 cmd.nats_opts.clone(),
@@ -1565,36 +1684,14 @@ pub async fn handle_command(
             .await
             .with_context(|| format!("failed to start host for session [{session_id}]"))?;
     }
-    let mut host_id = wash_dev_session
+    let host_id = wash_dev_session
         .host_data
         .clone()
         .context("missing host_id, after ensuring host has started")?
         .0;
 
-    // Create NATS and control interface clients to use to connect
-    let nats_client = match cmd.wasmcloud_opts.create_nats_client().await {
-        Ok(nc) => nc,
-        Err(_) => {
-            eprintln!(
-                "{} Failed to connect connect NATS client, host is likely not present, starting host...",
-                emoji::WARN
-            );
-            wash_dev_session.host_data = None;
-            wash_dev_session
-                .start_host(
-                    cmd.wasmcloud_opts.clone(),
-                    cmd.nats_opts.clone(),
-                    cmd.wadm_opts.clone(),
-                )
-                .await
-                .with_context(|| format!("failed to start host for session [{session_id}]"))?;
-            cmd.wasmcloud_opts
-                .create_nats_client()
-                .await
-                .context("failed to create nats client after starting new host")?
-        }
-    };
-
+    // Create NATS and control interface client to use to connect
+    let nats_client = nats_client_from_wasmcloud_opts(&cmd.wasmcloud_opts).await?;
     let ctl_client = Arc::new(
         cmd.wasmcloud_opts
             .clone()
@@ -1618,7 +1715,7 @@ pub async fn handle_command(
             ))
             .bold(),
         );
-        wash_dev_session
+        (nats_child, wadm_child, wasmcloud_child) = wash_dev_session
             .start_host(
                 cmd.wasmcloud_opts.clone(),
                 cmd.nats_opts.clone(),
@@ -1626,11 +1723,6 @@ pub async fn handle_command(
             )
             .await
             .context("failed to start host for session")?;
-        host_id = wash_dev_session
-            .host_data
-            .clone()
-            .context("missing host after start")?
-            .0;
     }
 
     // Set up a oneshot channel to perform graceful shutdown, handle Ctrl + c w/ tokio
@@ -1734,14 +1826,33 @@ pub async fn handle_command(
                     dependencies.delete_manifests(&nats_client, lattice).await?;
                 }
 
+                // Stop the host, unless explicitly instructed to leave host running
                 if !cmd.leave_host_running {
                     eprintln!("⏳ stopping wasmCloud instance...");
-                    handle_down(
-                        DownCommand { host_id: Some(ServerId::from_str(&host_id)?), ..Default::default() },
-                        output_kind,
-                    )
-                        .await
-                        .with_context(|| format!("failed to stop host [{host_id}]"))?;
+
+                    // Stop host
+                    if let Some(mut host) = wasmcloud_child {
+                        host
+                            .kill()
+                            .await
+                            .context("failed to stop wasmcloud process")?;
+                    }
+
+                    // Stop WADM
+                    if let Some(mut wadm) = wadm_child {
+                        wadm
+                            .kill()
+                            .await
+                            .context("failed to stop wadm child process")?;
+                        remove_wadm_pidfile(wash_dev_session.base_dir().await?)
+                            .await
+                            .context("failed to remove wadm pidfile")?;
+                    }
+
+                    // Stop NATS
+                    if let Some(mut nats) = nats_child {
+                        nats.kill().await?;
+                    }
                 }
 
                 break Ok(CommandOutput::default());

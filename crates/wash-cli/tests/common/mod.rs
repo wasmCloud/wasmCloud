@@ -23,6 +23,7 @@ use wash_lib::cli::output::{
     CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
     StopCommandOutput, UpCommandOutput,
 };
+use wash_lib::common::CommandGroupUsage;
 use wash_lib::config::host_pid_file;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
 use wasmcloud_control_interface::Host;
@@ -153,7 +154,13 @@ pub async fn set_test_file_content(path: &PathBuf, content: &str) -> Result<()> 
 pub async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
     let nats_binary = ensure_nats_server("v2.10.7", nats_install_dir).await?;
     let config = NatsConfig::new_standalone("127.0.0.1", port, None);
-    start_nats_server(nats_binary, std::process::Stdio::null(), config).await
+    start_nats_server(
+        nats_binary,
+        std::process::Stdio::null(),
+        config,
+        CommandGroupUsage::UseParent,
+    )
+    .await
 }
 
 /// Returns an open port on the interface, searching within the range endpoints, inclusive
