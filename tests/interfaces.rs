@@ -344,7 +344,11 @@ async fn interfaces() -> anyhow::Result<()> {
         "default",
         "wasi",
         "keyvalue",
-        vec!["atomics".to_string(), "store".to_string()],
+        vec![
+            "atomics".to_string(),
+            "store".to_string(),
+            "batch".to_string(),
+        ],
         vec![],
         vec![keyvalue_redis_config_name],
     )
@@ -431,7 +435,7 @@ async fn interfaces() -> anyhow::Result<()> {
         r#"{{"min":42,"max":4242,"config_key":"test-config-data","authority":"localhost:{http_port}"}}"#,
     );
     redis::Cmd::set("foo", "bar")
-        .query_async(&mut redis_conn)
+        .query_async::<_, ()>(&mut redis_conn)
         .await
         .context("failed to set `foo` key in Redis")?;
     vaultrs::kv2::set(

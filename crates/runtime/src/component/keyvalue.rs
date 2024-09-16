@@ -1,6 +1,6 @@
 use super::{Ctx, Handler, ReplacedInstanceTarget};
 
-use crate::capability::keyvalue::{atomics, store};
+use crate::capability::keyvalue::{atomics, batch, store};
 use crate::capability::wrpc;
 
 use std::sync::Arc;
@@ -63,6 +63,88 @@ where
             .push(Arc::from(name))
             .context("failed to open bucket")?;
         Ok(Ok(bucket))
+    }
+}
+
+#[async_trait]
+impl<H> batch::Host for Ctx<H>
+where
+    H: Handler,
+{
+    #[instrument(skip_all, fields(num_keys = keys.len()))]
+    async fn get_many(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        keys: Vec<String>,
+    ) -> anyhow::Result<Result<Vec<Option<(String, Vec<u8>)>>>> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        // NOTE(thomastaylor312): I don't like allocating a new vec, but I need borrowed strings to
+        // have the right type
+        let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+
+        match wrpc::wrpc::keyvalue::batch::get_many(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueBatch),
+            bucket,
+            &keys,
+        )
+        .await?
+        {
+            Ok(res) => Ok(Ok(res
+                .into_iter()
+                .map(|opt| opt.map(|(k, v)| (k, Vec::from(v))))
+                .collect())),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    #[instrument(skip_all, fields(num_entries = entries.len()))]
+    async fn set_many(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        entries: Vec<(String, Vec<u8>)>,
+    ) -> anyhow::Result<Result<()>> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        let entries = entries
+            .into_iter()
+            .map(|(k, v)| (k, Bytes::from(v)))
+            .collect::<Vec<_>>();
+        let massaged = entries
+            .iter()
+            .map(|(k, v)| (k.as_str(), v))
+            .collect::<Vec<_>>();
+        match wrpc::wrpc::keyvalue::batch::set_many(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueBatch),
+            bucket,
+            &massaged,
+        )
+        .await?
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    #[instrument(skip_all, fields(num_keys = keys.len()))]
+    async fn delete_many(
+        &mut self,
+        bucket: Resource<store::Bucket>,
+        keys: Vec<String>,
+    ) -> anyhow::Result<Result<()>> {
+        let bucket = self.table.get(&bucket).context("failed to get bucket")?;
+        let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+        match wrpc::wrpc::keyvalue::batch::delete_many(
+            &self.handler,
+            Some(ReplacedInstanceTarget::KeyvalueBatch),
+            bucket,
+            &keys,
+        )
+        .await?
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

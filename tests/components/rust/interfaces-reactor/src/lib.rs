@@ -155,6 +155,9 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     eprintln!("test default keyvalue/atomics...");
     keyvalue::run_atomics_test();
 
+    eprintln!("test default keyvalue/batch...");
+    keyvalue::run_batch_test();
+
     eprintln!("test default blobstore...");
     blobstore::run_test(1, &body, "container");
 

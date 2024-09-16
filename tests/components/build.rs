@@ -12,9 +12,7 @@ use serde::Deserialize;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::task::JoinSet;
-use wasi_preview1_component_adapter_provider::{
-    WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
-};
+use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
 
 /// List of (manifest path, output artifact name) for all the packages used during test
 ///
@@ -218,7 +216,10 @@ fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> Result<Vec<u8>>
         .validate(true)
         .module(module.as_ref())
         .context("failed to set core component module")?
-        .adapter(WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, adapter)
+        .adapter(
+            wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME,
+            adapter,
+        )
         .context("failed to add WASI adapter")?
         .encode()
         .context("failed to encode a component")

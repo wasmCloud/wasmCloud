@@ -18,9 +18,8 @@ pub fn run_store_test(body: &Vec<u8>) {
     let foo_key = String::from("foo");
 
     eprintln!("call `wasi:keyvalue/store.list-keys`...");
-    let keyvalue::store::KeyResponse { keys, cursor } = bucket
-        .list_keys(None)
-        .expect("failed to list keys");
+    let keyvalue::store::KeyResponse { keys, cursor } =
+        bucket.list_keys(None).expect("failed to list keys");
     assert_eq!(keys, ["foo"]);
     assert_eq!(cursor, None);
 
@@ -52,9 +51,8 @@ pub fn run_store_test(body: &Vec<u8>) {
     assert_eq!(foo_value, None);
 
     eprintln!("call `wasi:keyvalue/store.list-keys`...");
-    let keyvalue::store::KeyResponse { keys, cursor } = bucket
-        .list_keys(None)
-        .expect("failed to list keys");
+    let keyvalue::store::KeyResponse { keys, cursor } =
+        bucket.list_keys(None).expect("failed to list keys");
     assert_eq!(keys, [""; 0]);
     assert_eq!(cursor, None);
 
@@ -76,4 +74,45 @@ pub fn run_store_test(body: &Vec<u8>) {
     bucket
         .set(&result_key, &result_value)
         .expect("failed to set `result`");
+}
+
+pub fn run_batch_test() {
+    let bucket = keyvalue::store::open("test").expect("failed to open empty bucket");
+    let foo_key = String::from("foo");
+    let bar_key = String::from("bar");
+    let baz_key = String::from("baz");
+    let foo_value = b"bar";
+    let bar_value = b"baz";
+    let baz_value = b"quux";
+
+    let all_vals = vec![
+        (foo_key.clone(), foo_value.to_vec()),
+        (bar_key.clone(), bar_value.to_vec()),
+        (baz_key.clone(), baz_value.to_vec()),
+    ];
+
+    keyvalue::batch::set_many(&bucket, &all_vals).expect("Should be able to set multiple keys");
+    let result = keyvalue::batch::get_many(
+        &bucket,
+        &[foo_key.clone(), bar_key.clone(), baz_key.clone()],
+    )
+    .expect("Should be able to get multiple keys");
+    let result: Vec<_> = result.into_iter().flatten().collect();
+    assert_eq!(result, all_vals);
+
+    keyvalue::batch::delete_many(
+        &bucket,
+        &[foo_key.clone(), bar_key.clone(), baz_key.clone()],
+    )
+    .expect("Should be able to delete multiple keys");
+    let result = keyvalue::batch::get_many(
+        &bucket,
+        &[foo_key.clone(), bar_key.clone(), baz_key.clone()],
+    )
+    .expect("Should be able to get multiple keys");
+    let result: Vec<_> = result.into_iter().flatten().collect();
+    assert!(
+        result.is_empty(),
+        "shouldn't be able to get any keys after deletion"
+    );
 }

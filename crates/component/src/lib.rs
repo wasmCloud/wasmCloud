@@ -14,6 +14,7 @@ mod bindings {
             "wasi:io/streams@0.2.0": ::wasi::io::streams,
             "wasi:keyvalue/atomics@0.2.0-draft": generate,
             "wasi:keyvalue/store@0.2.0-draft": generate,
+            "wasi:keyvalue/batch@0.2.0-draft": generate,
             "wasi:logging/logging": generate,
             "wasi:random/random@0.2.0": ::wasi::random::random,
             "wasmcloud:bus/lattice@1.0.0": generate,
