@@ -224,7 +224,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     let nats_bin = install_dir.join(NATS_SERVER_BINARY);
     if nats_bin.is_file() {
         sp.update_spinner_message(" Stopping NATS server ...".to_string());
-        if let Err(e) = stop_nats(&install_dir).await {
+        if let Err(e) = stop_nats(&install_dir, &nats_bin).await {
             out_json.insert("nats_stopped".to_string(), json!(false));
             out_text.push_str(&format!(
                 "❌ NATS server did not stop successfully: {e:?}\n"
@@ -243,12 +243,12 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
 }
 
 /// Helper function to send the nats-server the stop command
-pub async fn stop_nats<P>(install_dir: P) -> Result<Output>
+pub async fn stop_nats<P>(work_dir: P, bin_path: P) -> Result<Output>
 where
     P: AsRef<Path>,
 {
-    let bin_path = install_dir.as_ref().join(NATS_SERVER_BINARY);
-    let pid_file = nats_pid_path(install_dir);
+    let bin_path = bin_path.as_ref();
+    let pid_file = nats_pid_path(work_dir.as_ref());
     let signal = if pid_file.is_file() {
         format!("stop={}", &pid_file.display())
     } else {

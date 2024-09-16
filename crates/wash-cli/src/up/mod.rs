@@ -20,6 +20,7 @@ use tokio::{
 use tracing::warn;
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::common::CommandGroupUsage;
 use wash_lib::config::{
     create_nats_client_from_opts, downloads_dir, host_pid_file, DEFAULT_NATS_TIMEOUT_MS,
 };
@@ -27,7 +28,8 @@ use wash_lib::context::fs::ContextDir;
 use wash_lib::context::ContextManager;
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
-    start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig, WADM_PID,
+    start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig,
+    NATS_SERVER_BINARY, WADM_PID,
 };
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -285,26 +287,6 @@ pub struct WasmcloudOpts {
 }
 
 impl WasmcloudOpts {
-    /// Create a NATS client from the current WasmcloudOpts
-    pub(crate) async fn create_nats_client(&self) -> Result<async_nats_0_33::Client> {
-        let ctl_host = self.ctl_host.as_deref().unwrap_or(DEFAULT_NATS_HOST);
-        let ctl_port = self
-            .ctl_port
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
-            .to_string();
-        create_nats_client_from_opts(
-            ctl_host,
-            &ctl_port,
-            self.ctl_jwt.clone(),
-            self.ctl_seed.clone(),
-            self.ctl_credsfile.clone(),
-            self.ctl_tls_ca_file.clone(),
-        )
-        .await
-        .context("failed to create NATS client")
-    }
-
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
         let lattice = self.lattice.unwrap_or_else(|| DEFAULT_LATTICE.to_string());
         let ctl_host = self
@@ -438,7 +420,15 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             websocket_port: cmd.nats_opts.nats_websocket_port,
             config_path: cmd.nats_opts.nats_configfile,
         };
-        start_nats(&install_dir, &nats_binary, nats_config).await?;
+        let nats_log_path = install_dir.join("nats.log");
+        start_nats(
+            &install_dir,
+            &nats_binary,
+            nats_config,
+            &nats_log_path,
+            CommandGroupUsage::UseParent,
+        )
+        .await?;
         Some(nats_binary)
     } else {
         // The user is running their own NATS server, so we don't need to download or start one
@@ -541,8 +531,15 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
         let wadm_path = ensure_wadm(&cmd.wadm_opts.wadm_version, &install_dir).await;
         match wadm_path {
-            Ok(path) => {
-                let wadm_child = start_wadm(&path, wadm_log_file, Some(config)).await;
+            Ok(wadm_bin_path) => {
+                let wadm_child = start_wadm(
+                    &install_dir,
+                    &wadm_bin_path,
+                    wadm_log_file,
+                    Some(config),
+                    CommandGroupUsage::UseParent,
+                )
+                .await;
                 if let Err(e) = &wadm_child {
                     eprintln!("🟨 Couldn't start wadm: {e}");
                     None
@@ -577,7 +574,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             stop_wadm(child, &install_dir).await?;
         }
         if nats_bin.is_some() {
-            stop_nats(install_dir).await?;
+            let nats_bin = install_dir.join(NATS_SERVER_BINARY);
+            stop_nats(install_dir, nats_bin).await?;
         }
         bail!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set");
     };
@@ -610,7 +608,8 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
                 stop_wadm(child, &install_dir).await?;
             }
             if nats_bin.is_some() {
-                stop_nats(install_dir).await?;
+                let nats_bin = install_dir.join(NATS_SERVER_BINARY);
+                stop_nats(install_dir, nats_bin).await?;
             }
             return Err(e);
         }
@@ -808,10 +807,12 @@ async fn deploy_wadm_application(
 }
 
 /// Helper function to start the NATS binary, redirecting output to nats.log
-async fn start_nats(
+pub(crate) async fn start_nats(
     install_dir: &Path,
     nats_binary: &Path,
     nats_config: NatsConfig,
+    nats_log_path: &Path,
+    command_group: CommandGroupUsage,
 ) -> Result<Child> {
     // Ensure that leaf node remote connection can be established before launching NATS
     if let (Some(url), Some(creds)) = (
@@ -833,12 +834,12 @@ async fn start_nats(
     }
 
     // Start NATS server, redirecting output to a log file
-    let nats_log_path = install_dir.join("nats.log");
     let nats_log_file = tokio::fs::File::create(&nats_log_path)
         .await?
         .into_std()
         .await;
-    let nats_process = start_nats_server(nats_binary, nats_log_file, nats_config).await?;
+    let nats_process =
+        start_nats_server(nats_binary, nats_log_file, nats_config, command_group).await?;
 
     // save the PID so we can kill it later
     if let Some(pid) = nats_process.id() {
@@ -966,7 +967,7 @@ where
     remove_wadm_pidfile(install_dir).await
 }
 
-async fn remove_wadm_pidfile<P>(install_dir: P) -> Result<()>
+pub(crate) async fn remove_wadm_pidfile<P>(install_dir: P) -> Result<()>
 where
     P: AsRef<Path>,
 {
@@ -979,7 +980,9 @@ where
 }
 
 /// Helper function to create a NATS client from the same arguments wasmCloud will use
-async fn nats_client_from_wasmcloud_opts(wasmcloud_opts: &WasmcloudOpts) -> Result<Client> {
+pub(crate) async fn nats_client_from_wasmcloud_opts(
+    wasmcloud_opts: &WasmcloudOpts,
+) -> Result<Client> {
     create_nats_client_from_opts(
         &wasmcloud_opts
             .ctl_host
