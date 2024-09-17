@@ -11,9 +11,8 @@ class IncomingHandler(exports.IncomingHandler):
         outgoingResponse = OutgoingResponse(Fields.from_list([]))
         # Set the status code to OK
         outgoingResponse.set_status_code(200)
-        # Set the HTTP response
-        ResponseOutparam.set(response_out, Ok(outgoingResponse))
         # Write our Hello World message to the response body
         outgoingBody = outgoingResponse.body()
+        ResponseOutparam.set(response_out, Ok(outgoingResponse))
         outgoingBody.write().blocking_write_and_flush(bytes("Hello from Python!\n", "utf-8"))
         OutgoingBody.finish(outgoingBody, None)
