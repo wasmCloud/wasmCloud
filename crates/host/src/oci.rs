@@ -24,30 +24,3 @@ pub struct Config {
     /// Password for the OCI registry specified by `oci_registry`.
     pub oci_password: Option<String>,
 }
-
-#[allow(unused)]
-async fn cache_oci_image(
-    image: ImageData,
-    cache_filepath: impl AsRef<Path>,
-    digest_filepath: impl AsRef<Path>,
-) -> std::io::Result<()> {
-    let mut cache_file = fs::File::create(cache_filepath).await?;
-    let content = image
-        .layers
-        .into_iter()
-        .flat_map(|l| l.data)
-        .collect::<Vec<_>>();
-    cache_file.write_all(&content).await?;
-    cache_file.flush().await?;
-    if let Some(digest) = image.digest {
-        let mut digest_file = fs::File::create(digest_filepath).await?;
-        digest_file.write_all(digest.as_bytes()).await?;
-        digest_file.flush().await?;
-    }
-    Ok(())
-}
-
-// TODO: add this after uses of fetch_component/fetch_provider
-// cache_oci_image(imgdata, &cache_file, digest_file)
-//     .await
-//     .context("failed to cache OCI bytes")?;
