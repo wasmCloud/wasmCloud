@@ -17,7 +17,7 @@ use wadm_types::api::{ModelSummary, Status, VersionInfo};
 use wadm_types::validation::{validate_manifest, ValidationFailure, ValidationFailureLevel};
 use wadm_types::{Manifest, Properties};
 use wasmcloud_core::tls;
-use wasmcloud_host::oci::Fetcher;
+use wasmcloud_core::OciFetcher;
 
 use crate::config::DEFAULT_LATTICE;
 
@@ -455,7 +455,7 @@ pub async fn validate_manifest_file(
 }
 
 pub async fn validate_oci_references(refs: Vec<String>, failures: &mut Vec<ValidationFailure>) {
-    let fetcher = Fetcher::default();
+    let fetcher = OciFetcher::default();
 
     for image in refs {
         if let Err(err) = fetcher.fetch_component(&image).await {
