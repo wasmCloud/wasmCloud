@@ -69,6 +69,9 @@ use crate::{
 use self::config::{BundleGenerator, ConfigBundle};
 use self::handler::Handler;
 
+const MAX_INVOCATION_CHANNEL_SIZE: usize = 5000;
+const MIN_INVOCATION_CHANNEL_SIZE: usize = 256;
+
 #[derive(Debug)]
 struct Queue {
     all_streams: SelectAll<async_nats::Subscriber>,
@@ -1194,7 +1197,11 @@ impl Host {
         let max_execution_time = self.max_execution_time;
         component.set_max_execution_time(max_execution_time);
 
-        let (events_tx, mut events_rx) = mpsc::channel(256);
+        let (events_tx, mut events_rx) = mpsc::channel(
+            max_instances
+                .get()
+                .clamp(MIN_INVOCATION_CHANNEL_SIZE, MAX_INVOCATION_CHANNEL_SIZE),
+        );
         let prefix = Arc::from(format!("{}.{id}", &self.host_config.lattice));
         let exports = component
             .serve_wrpc(
