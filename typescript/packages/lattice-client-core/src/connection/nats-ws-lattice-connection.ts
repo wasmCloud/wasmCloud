@@ -1,33 +1,47 @@
-import {connect, type KvEntry, type NatsConnection} from 'nats.ws';
+import {
+  connect,
+  type KvEntry,
+  type NatsConnection,
+  type ConnectionOptions as NatsOptions,
+} from 'nats.ws';
 import {type JsonValue} from 'type-fest';
-import {type LatticeConnection} from '@/connection/lattice-connection';
+import {LatticeConnectionStatus, type LatticeConnection} from '@/connection/lattice-connection';
 import {toPromise} from '@/helpers';
 
-type NatsWsLatticeConnectionOptions = {
-  retryCount: number;
+type Options = {
   latticeUrl: string;
+  natsOptions?: Omit<NatsOptions, 'servers'>;
 };
 
-class NatsWsLatticeConnection implements LatticeConnection {
-  readonly #options: NatsWsLatticeConnectionOptions;
+class NatsWsLatticeConnection implements LatticeConnection<Options> {
+  #options: Options;
   #connection?: NatsConnection;
-  #status: typeof LatticeConnection.prototype.status = 'initial';
+  #status: LatticeConnectionStatus = 'initial';
+
+  get options() {
+    return this.#options;
+  }
 
   get status() {
     return this.#status;
   }
 
-  constructor(options: NatsWsLatticeConnectionOptions) {
+  constructor(options: Options) {
     this.#options = options;
   }
 
-  setLatticeUrl(url: string): void {
-    this.#options.latticeUrl = url;
-    this.#reconnectIfConnected();
-  }
-
-  setRetryCount(count: number): void {
-    this.#options.retryCount = count;
+  setOptions(options: Partial<Options>): void;
+  setOptions<Key extends keyof Options = keyof Options>(key: Key, value?: Options[Key]): void;
+  setOptions<Key extends keyof Options = keyof Options>(
+    key: Key | Partial<Options>,
+    value?: Options[Key],
+  ): void {
+    if (value === undefined) {
+      const options = key;
+      this.#options = Object.assign(this.#options, options);
+    } else if (typeof key === 'string') {
+      this.#options[key] = value;
+    }
     this.#reconnectIfConnected();
   }
 
@@ -39,6 +53,7 @@ class NatsWsLatticeConnection implements LatticeConnection {
 
       const connection = await connect({
         servers: this.#options.latticeUrl,
+        ...this.#options.natsOptions,
       });
 
       void connection.closed().then((error) => {
@@ -210,35 +225,24 @@ class NatsWsLatticeConnection implements LatticeConnection {
     }
   };
 
-  readonly #waitForConnection = async (count = 0): Promise<NatsConnection> =>
-    new Promise((resolve, reject) => {
-      if (count >= this.#options.retryCount) {
-        reject(new Error('Could not connect to lattice'));
-        return;
-      }
+  async #waitForConnection(): Promise<NatsConnection> {
+    if (this.#status === 'initial')
+      throw new Error('Failed to establish connection. Did you call connect()?');
 
-      const tryAgainAfterWaitingForALittleBit = () =>
-        new Promise<void>((resolve) => {
-          const aLittleBit = 500; // ms
-          setTimeout(() => resolve(), aLittleBit);
-        }).finally(() => resolve(this.#waitForConnection(count + 1)));
+    if (this.#status === 'pending') {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(this.#waitForConnection());
+        }, 100);
+      });
+    }
 
-      try {
-        if (this.#connection && this.#status === 'connected') {
-          resolve(this.#connection);
-          return;
-        }
+    if (!this.#connection) {
+      throw new Error('Connection not established. Did you call connect()?');
+    }
 
-        if (this.#status !== 'initial') {
-          tryAgainAfterWaitingForALittleBit();
-          return;
-        }
-
-        this.connect().catch(() => tryAgainAfterWaitingForALittleBit());
-      } catch (error) {
-        reject(error as Error);
-      }
-    });
+    return this.#connection;
+  }
 }
 
 export {NatsWsLatticeConnection};
