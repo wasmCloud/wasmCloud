@@ -15,9 +15,12 @@
     ".": {
       "types": "./build/index.d.ts",
       "import": "./build/lattice-client-core.js",
-      "require": "./build/lattice-client-core.cjs"
+      "require": "./build/lattice-client-core.cjs",
+      "default": "./src/index.ts"
     }
   },
+  "main": "./build/lattice-client-core.cjs",
+  "types": "./build/index.d.ts",
   "files": [
     "build",
     "README.md"

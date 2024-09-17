@@ -10,14 +10,16 @@
     "directory": "typescript/packages/lattice-client-react"
   },
   "type": "module",
-  "types": "./build/index.d.ts",
   "exports": {
     ".": {
       "types": "./build/index.d.ts",
       "import": "./build/lattice-client-react.js",
-      "require": "./build/lattice-client-react.cjs"
+      "require": "./build/lattice-client-react.cjs",
+      "default": "./src/index.ts"
     }
   },
+  "main": "./build/lattice-client-react.cjs",
+  "types": "./build/index.d.ts",
   "files": [
     "build",
     "README.md"
