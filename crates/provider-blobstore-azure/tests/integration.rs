@@ -2,77 +2,19 @@ use anyhow::{Context as _, Result};
 use bytes::Bytes;
 use futures::{stream, StreamExt as _};
 use std::{collections::HashMap, time::Duration};
-use testcontainers::{core::WaitFor, runners::AsyncRunner as _, ContainerAsync, Image, ImageExt};
 use tokio::try_join;
 use wasmcloud_provider_blobstore_azure::BlobstoreAzblobProvider;
 use wasmcloud_provider_sdk::{
     get_connection, provider::initialize_host_data, run_provider, serve_provider_exports, HostData,
     InterfaceLinkDefinition,
 };
+use wasmcloud_test_util::testcontainers::{
+    AsyncRunner as _, Azurite, ContainerAsync, ImageExt, NatsServer,
+};
 use wrpc_interface_blobstore::bindings::{
     serve,
     wrpc::blobstore::{blobstore, types::ObjectId},
 };
-
-#[derive(Default, Debug, Clone)]
-pub struct Azurite {
-    _priv: (),
-}
-
-impl Image for Azurite {
-    fn name(&self) -> &str {
-        "mcr.microsoft.com/azure-storage/azurite"
-    }
-
-    fn tag(&self) -> &str {
-        "3.32.0"
-    }
-
-    fn ready_conditions(&self) -> Vec<WaitFor> {
-        vec![WaitFor::message_on_stdout(
-            "Azurite Blob service is successfully listening",
-        )]
-    }
-
-    // We need to override the command used for running Azurite so that loose mode can be enabled
-    fn cmd(&self) -> impl IntoIterator<Item = impl Into<std::borrow::Cow<'_, str>>> {
-        vec![
-            // Defaults from the Dockerfile:
-            // https://github.com/Azure/Azurite/blob/76f626284e4b4b58b95065bb3c92351f30af7f3d/Dockerfile#L47
-            "azurite",
-            "-l",
-            "/data",
-            "--blobHost",
-            "0.0.0.0",
-            "--queueHost",
-            "0.0.0.0",
-            "--tableHost",
-            "0.0.0.0",
-            // Loose mode is required for testing the `get-container-data` endpoint, for more info on what the flag does see:
-            // https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=docker-hub%2Cblob-storage#loose-mode
-            "--loose",
-        ]
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct NatsServer {
-    _priv: (),
-}
-
-impl Image for NatsServer {
-    fn name(&self) -> &str {
-        "library/nats"
-    }
-
-    fn tag(&self) -> &str {
-        "2.10.18-linux"
-    }
-
-    fn ready_conditions(&self) -> Vec<WaitFor> {
-        vec![WaitFor::message_on_stderr("Server is ready")]
-    }
-}
 
 struct TestEnv {
     _azurite: ContainerAsync<Azurite>,

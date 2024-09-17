@@ -128,11 +128,9 @@ pub(crate) fn get_download_client() -> Result<reqwest::Client> {
 mod test {
     use std::{collections::HashMap, env::temp_dir};
 
-    use testcontainers::core::{ContainerPort, Mount, WaitFor};
-    use testcontainers::runners::AsyncRunner as _;
-    use testcontainers::{GenericImage, ImageExt};
     use tokio::fs::{create_dir_all, remove_dir_all};
     use tokio::io::AsyncBufReadExt;
+    use wasmcloud_test_util::testcontainers::{AsyncRunner as _, ImageExt, Mount, SquidProxy};
 
     use crate::start::{get_download_client, github::DOWNLOAD_CLIENT_USER_AGENT};
 
@@ -193,10 +191,7 @@ shutdown_lifetime 1 seconds
             .await
             .unwrap();
 
-        let container = GenericImage::new("cgr.dev/chainguard/squid-proxy", "latest")
-            .with_exposed_port(ContainerPort::Tcp(3128))
-            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
-            .with_wait_for(WaitFor::seconds(3))
+        let container = SquidProxy::default()
             .with_mount(Mount::bind_mount(
                 squid_config_path.to_string_lossy().to_string(),
                 "/etc/squid.conf",
@@ -217,7 +212,7 @@ shutdown_lifetime 1 seconds
                 format!(
                     "http://localhost:{}",
                     container
-                        .get_host_port_ipv4(ContainerPort::Tcp(3128))
+                        .get_host_port_ipv4(3128)
                         .await
                         .expect("failed to get squid-proxy host port")
                 ),
@@ -277,10 +272,7 @@ shutdown_lifetime 1 seconds
             .await
             .unwrap();
 
-        let container = GenericImage::new("chainguard/squid-proxy", "latest")
-            .with_exposed_port(ContainerPort::Tcp(3128))
-            .with_wait_for(WaitFor::message_on_stdout("listening port: 3128"))
-            .with_wait_for(WaitFor::seconds(3))
+        let container = SquidProxy::default()
             .with_mount(Mount::bind_mount(
                 squid_config_path.to_string_lossy().to_string(),
                 "/etc/squid.conf",

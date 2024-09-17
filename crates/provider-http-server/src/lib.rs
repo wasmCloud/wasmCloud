@@ -367,14 +367,10 @@ mod test {
 
     use anyhow::Result;
     use futures::StreamExt;
-    use testcontainers::{
-        core::{ContainerPort, WaitFor},
-        runners::AsyncRunner,
-        GenericImage,
-    };
     use wasmcloud_provider_sdk::{
         provider::initialize_host_data, run_provider, HostData, InterfaceLinkDefinition,
     };
+    use wasmcloud_test_util::testcontainers::{AsyncRunner, NatsServer};
 
     use crate::{address, path};
 
@@ -383,14 +379,10 @@ mod test {
     #[ignore]
     #[tokio::test]
     async fn can_listen_and_invoke_with_timeout() -> Result<()> {
-        let nats_container = GenericImage::new("nats", "2.10.18-alpine")
-            .with_exposed_port(ContainerPort::Tcp(4222))
-            .with_wait_for(WaitFor::message_on_stderr(
-                "Listening for client connections on 0.0.0.0:4222",
-            ))
+        let nats_container = NatsServer::default()
             .start()
             .await
-            .expect("failed to start squid-proxy container");
+            .expect("failed to start nats-server container");
         let nats_port = nats_container
             .get_host_port_ipv4(4222)
             .await
@@ -469,11 +461,7 @@ mod test {
     #[ignore]
     #[tokio::test]
     async fn can_support_path_based_routing() -> Result<()> {
-        let nats_container = GenericImage::new("nats", "2.10.18-alpine")
-            .with_exposed_port(ContainerPort::Tcp(4222))
-            .with_wait_for(WaitFor::message_on_stderr(
-                "Listening for client connections on 0.0.0.0:4222",
-            ))
+        let nats_container = NatsServer::default()
             .start()
             .await
             .expect("failed to start nats-server container");

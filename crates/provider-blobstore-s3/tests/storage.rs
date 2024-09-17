@@ -32,27 +32,8 @@ use std::collections::HashMap;
 use std::env;
 
 use anyhow::{Context as _, Result};
-use testcontainers::{core::WaitFor, runners::AsyncRunner as _, ContainerAsync, Image, ImageExt};
 use wasmcloud_provider_blobstore_s3::{StorageClient, StorageConfig};
-
-#[derive(Default, Debug, Clone)]
-pub struct LocalStack {
-    _priv: (),
-}
-
-impl Image for LocalStack {
-    fn name(&self) -> &str {
-        "localstack/localstack"
-    }
-
-    fn tag(&self) -> &str {
-        "3.7.0"
-    }
-
-    fn ready_conditions(&self) -> Vec<WaitFor> {
-        vec![WaitFor::message_on_stdout("Ready."), WaitFor::millis(3000)]
-    }
-}
+use wasmcloud_test_util::testcontainers::{AsyncRunner as _, ContainerAsync, ImageExt, LocalStack};
 
 struct TestEnv {
     _container: Option<ContainerAsync<LocalStack>>,
