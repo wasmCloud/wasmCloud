@@ -61,6 +61,8 @@ pub mod component;
 pub mod host;
 pub mod lattice;
 pub mod provider;
+#[cfg(feature = "testcontainers")]
+pub mod testcontainers;
 
 /// Re-export of control interface fo ruse
 pub use wasmcloud_control_interface as control_interface;
