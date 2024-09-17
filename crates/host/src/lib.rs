@@ -18,20 +18,17 @@ pub mod registry;
 /// Secret management
 pub mod secrets;
 
-/// Provider archive functionality
-mod par;
-
 /// wasmCloud host metrics
 pub(crate) mod metrics;
 
 pub use metrics::HostMetrics;
-pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
+pub use oci::Config as OciConfig;
 pub use policy::{
     HostInfo as PolicyHostInfo, Manager as PolicyManager, Response as PolicyResponse,
 };
-pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
 pub use secrets::Manager as SecretsManager;
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
+pub use wasmcloud_core::{OciFetcher, RegistryAuth, RegistryConfig, RegistryType};
 
 pub use url;
 
@@ -126,7 +123,7 @@ pub async fn fetch_component(
         ref oci_ref @ ResourceRef::Oci(component_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
-            .map(oci::Fetcher::from)
+            .map(OciFetcher::from)
             .unwrap_or_default()
             .with_additional_ca_paths(additional_ca_paths)
             .fetch_component(component_ref)
@@ -151,11 +148,11 @@ pub async fn fetch_provider(
                 allow_file_load,
                 "unable to start provider from file, file loading is disabled"
             );
-            par::read(
+            wasmcloud_core::par::read(
                 provider_path,
                 host_id,
                 provider_ref,
-                par::UseParFileCache::Ignore,
+                wasmcloud_core::par::UseParFileCache::Ignore,
             )
             .await
             .context("failed to read provider")
@@ -163,7 +160,7 @@ pub async fn fetch_provider(
         ref oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
             .authority()
             .and_then(|authority| registry_config.get(authority))
-            .map(oci::Fetcher::from)
+            .map(OciFetcher::from)
             .unwrap_or_default()
             .fetch_provider(&provider_ref, host_id)
             .await

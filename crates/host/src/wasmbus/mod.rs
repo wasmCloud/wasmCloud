@@ -61,6 +61,7 @@ use wasmcloud_secrets_types::SECRET_PREFIX;
 use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::{global, KeyValue};
 
+use crate::registry::RegistryCredentialExt;
 use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
@@ -571,14 +572,15 @@ async fn load_supplemental_config(
         Ok(resp) => {
             match serde_json::from_slice::<SerializedSupplementalConfig>(resp.payload.as_ref()) {
                 Ok(ser_cfg) => Ok(SupplementalConfig {
-                    registry_config: ser_cfg.registry_credentials.map(|creds| {
+                    registry_config: ser_cfg.registry_credentials.and_then(|creds| {
                         creds
                             .into_iter()
                             .map(|(k, v)| {
                                 debug!(registry_url = %k, "set registry config");
-                                (k, v.into())
+                                v.into_registry_config().map(|v| (k, v))
                             })
-                            .collect()
+                            .collect::<anyhow::Result<_>>()
+                            .ok()
                     }),
                 }),
                 Err(e) => {
@@ -618,11 +620,16 @@ async fn merge_registry_config(
             }
             Entry::Vacant(entry) => {
                 debug!(oci_registry_url = %reg, "set registry config");
-                entry.insert(RegistryConfig {
-                    reg_type: RegistryType::Oci,
-                    auth: RegistryAuth::from((oci_opts.oci_user, oci_opts.oci_password)),
-                    ..Default::default()
-                });
+                entry.insert(
+                    RegistryConfig::builder()
+                        .reg_type(RegistryType::Oci)
+                        .auth(RegistryAuth::from((
+                            oci_opts.oci_user,
+                            oci_opts.oci_password,
+                        )))
+                        .build()
+                        .expect("failed to build registry config"),
+                );
             }
         }
     }
@@ -632,15 +639,17 @@ async fn merge_registry_config(
         match registry_config.entry(reg.clone()) {
             Entry::Occupied(mut entry) => {
                 debug!(oci_registry_url = %reg, "set allowed_insecure");
-                entry.get_mut().allow_insecure = true;
+                entry.get_mut().set_allow_insecure(true);
             }
             Entry::Vacant(entry) => {
                 debug!(oci_registry_url = %reg, "set allowed_insecure");
-                entry.insert(RegistryConfig {
-                    reg_type: RegistryType::Oci,
-                    allow_insecure: true,
-                    ..Default::default()
-                });
+                entry.insert(
+                    RegistryConfig::builder()
+                        .reg_type(RegistryType::Oci)
+                        .allow_insecure(true)
+                        .build()
+                        .expect("failed to build registry config"),
+                );
             }
         }
     });
@@ -648,12 +657,12 @@ async fn merge_registry_config(
     // update allow_latest for all registries
     registry_config.iter_mut().for_each(|(url, config)| {
         if !additional_ca_paths.is_empty() {
-            config.additional_ca_paths.clone_from(&additional_ca_paths);
+            config.set_additional_ca_paths(additional_ca_paths.clone());
         }
         if allow_latest {
             debug!(oci_registry_url = %url, "set allow_latest");
         }
-        config.allow_latest = allow_latest;
+        config.set_allow_latest(allow_latest);
     });
 }
 
@@ -2827,13 +2836,13 @@ impl Host {
 
         let mut registry_config = self.registry_config.write().await;
         for (reg, new_creds) in registry_creds {
-            let mut new_config = RegistryConfig::from(new_creds);
+            let mut new_config = new_creds.into_registry_config()?;
             match registry_config.entry(reg) {
                 hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().auth = new_config.auth;
+                    entry.get_mut().set_auth(new_config.auth().clone());
                 }
                 hash_map::Entry::Vacant(entry) => {
-                    new_config.allow_latest = self.host_config.oci_opts.allow_latest;
+                    new_config.set_allow_latest(self.host_config.oci_opts.allow_latest);
                     entry.insert(new_config);
                 }
             }
