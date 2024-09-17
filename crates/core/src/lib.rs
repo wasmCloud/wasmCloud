@@ -13,7 +13,9 @@ pub use link::*;
 pub mod otel;
 pub use otel::*;
 
+#[cfg(feature = "oci")]
 pub mod oci;
+#[cfg(feature = "oci")]
 pub use oci::*;
 
 pub mod par;

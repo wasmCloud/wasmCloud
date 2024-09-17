@@ -33,6 +33,7 @@ impl From<(Option<String>, Option<String>)> for RegistryAuth {
     }
 }
 
+#[cfg(feature = "oci")]
 impl From<&RegistryAuth> for oci_distribution::secrets::RegistryAuth {
     fn from(auth: &crate::RegistryAuth) -> Self {
         match auth {
@@ -44,6 +45,7 @@ impl From<&RegistryAuth> for oci_distribution::secrets::RegistryAuth {
     }
 }
 
+#[cfg(feature = "oci")]
 impl From<RegistryAuth> for oci_distribution::secrets::RegistryAuth {
     fn from(auth: crate::RegistryAuth) -> Self {
         match auth {

@@ -35,7 +35,7 @@ pub static NATIVE_ROOTS: Lazy<Arc<[rustls::pki_types::CertificateDer<'static>]>>
         }
     });
 
-#[cfg(all(feature = "rustls-native-certs", feature = "oci-distribution"))]
+#[cfg(all(feature = "rustls-native-certs", feature = "oci"))]
 pub static NATIVE_ROOTS_OCI: Lazy<Arc<[oci_distribution::client::Certificate]>> = Lazy::new(|| {
     NATIVE_ROOTS
         .iter()

@@ -33,14 +33,14 @@ wasmcloud-core = "0.7.0"
 
 `wasmcloud-core` comes with the following features:
 
-| Feature             | Default? | Description                                                            |
-|---------------------|----------|------------------------------------------------------------------------|
-| hyper-rustls        | yes      | Enable [`hyper-rustls`][hyper-rustls] usage (see `tls` module)         |
-| oci-distribution    | yes      | Enable [`oci-distribution`][oci-distribution] usage (see `tls` module) |
-| reqwest             | yes      | Enable [`reqwest`][request] extensions (see `tls` module)              |
-| rustls-native-certs | yes      | Enable [`rustls-native-certs`][rustls-native-certs] (see `tls` module) |
-| webpki-roots        | yes      | Enable [`webpki-roots`][webpki-roots] (see `tls` module)               |
-| otel                | no       | Enable [OpenTelemetry][otel] module support                            |
+| Feature             | Default? | Description                                                                             |
+|---------------------|----------|-----------------------------------------------------------------------------------------|
+| hyper-rustls        | yes      | Enable [`hyper-rustls`][hyper-rustls] usage (see `tls` module)                          |
+| oci                 | yes      | Enable [`oci-distribution`][oci-distribution] and [`oci-wasm`] usage (see `tls` module) |
+| reqwest             | yes      | Enable [`reqwest`][request] extensions (see `tls` module)                               |
+| rustls-native-certs | yes      | Enable [`rustls-native-certs`][rustls-native-certs] (see `tls` module)                  |
+| webpki-roots        | yes      | Enable [`webpki-roots`][webpki-roots] (see `tls` module)                                |
+| otel                | no       | Enable [OpenTelemetry][otel] module support                                             |
 
 [hyper-rustls]: https://crates.io/crates/hyper-rustls
 [oci-distribution]: https://crates.io/crates/oci-distribution

@@ -12,13 +12,14 @@ repository.workspace = true
 [features]
 default = [
     "hyper-rustls",
-    "oci-distribution",
+    "oci",
     "reqwest",
     "rustls-native-certs",
     "webpki-roots",
 ]
 hyper-rustls = ["dep:hyper-rustls", "dep:hyper-util"]
 otel = []
+oci = ["dep:oci-distribution", "dep:oci-wasm"]
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
@@ -34,7 +35,7 @@ hyper-rustls = { workspace = true, features = [
 hyper-util = { workspace = true, optional = true }
 nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"], optional = true }
-oci-wasm = { workspace = true, features = ["rustls-tls"] }
+oci-wasm = { workspace = true, features = ["rustls-tls"], optional = true }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
