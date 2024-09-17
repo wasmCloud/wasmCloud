@@ -1,6 +1,3 @@
-// Adapted from
-// https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/par.rs
-
 use std::env::consts::{ARCH, OS};
 use std::env::temp_dir;
 use std::path::{Path, PathBuf};
@@ -20,12 +17,34 @@ fn normalize_for_filename(input: &str) -> String {
 
 /// Whether to use the par file cache
 #[derive(Default, Clone, PartialEq, Eq)]
-pub(super) enum UseParFileCache {
+pub enum UseParFileCache {
     /// Use the par file cache
     Ignore,
     /// Use the par file cache
     #[default]
     Use,
+}
+
+fn native_target() -> String {
+    format!("{ARCH}-{OS}")
+}
+
+/// Returns the path to the cache file for a provider
+///
+/// # Arguments
+/// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
+///            for different hosts
+/// * `provider_ref` - The provider reference, e.g. file or OCI
+pub fn cache_path(host_id: impl AsRef<str>, provider_ref: impl AsRef<str>) -> PathBuf {
+    let provider_ref = normalize_for_filename(provider_ref.as_ref());
+
+    let mut cache = temp_dir();
+    cache.push("wasmcloudcache");
+    cache.push(host_id.as_ref());
+    cache.push(&provider_ref);
+    #[cfg(windows)]
+    cache.set_extension("exe");
+    cache
 }
 
 pub(super) async fn create(path: impl AsRef<Path>) -> Result<Option<File>> {
@@ -53,28 +72,6 @@ async fn open_file(path: impl AsRef<Path>) -> Result<Option<File>> {
         .await
         .map(Some)
         .with_context(|| format!("failed to open path [{}]", path.display()))
-}
-
-fn native_target() -> String {
-    format!("{ARCH}-{OS}")
-}
-
-/// Returns the path to the cache file for a provider
-///
-/// # Arguments
-/// * `host_id` - The host ID this provider is starting on. Required in order to isolate provider caches
-///            for different hosts
-/// * `provider_ref` - The provider reference, e.g. file or OCI
-pub fn cache_path(host_id: impl AsRef<str>, provider_ref: impl AsRef<str>) -> PathBuf {
-    let provider_ref = normalize_for_filename(provider_ref.as_ref());
-
-    let mut cache = temp_dir();
-    cache.push("wasmcloudcache");
-    cache.push(host_id.as_ref());
-    cache.push(&provider_ref);
-    #[cfg(windows)]
-    cache.set_extension("exe");
-    cache
 }
 
 /// Reads a provider archive from the given path and writes it to the cache

@@ -34,7 +34,9 @@ hyper-rustls = { workspace = true, features = [
 hyper-util = { workspace = true, optional = true }
 nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"], optional = true }
+oci-wasm = { workspace = true }
 once_cell = { workspace = true }
+provider-archive = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 rustls = { workspace = true, features = ["std"] }
 rustls-native-certs = { workspace = true, optional = true }

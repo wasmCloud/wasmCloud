@@ -13,6 +13,15 @@ pub use link::*;
 pub mod otel;
 pub use otel::*;
 
+pub mod oci;
+pub use oci::*;
+
+pub mod par;
+pub use par::*;
+
+pub mod registry;
+pub use registry::*;
+
 pub mod rpc;
 pub use rpc::*;
 
