@@ -1,6 +1,5 @@
 import {type LatticeEvent} from '@/cloud-events';
 import {type LatticeConnection} from '@/connection/lattice-connection';
-import {NatsWsLatticeConnection} from '@/connection/nats-ws-lattice-connection';
 import {ApplicationsController} from '@/controllers/applications';
 import {ComponentController} from '@/controllers/components';
 import {ConfigsController} from '@/controllers/configs';
@@ -16,10 +15,12 @@ type LatticeClientConfig = {
   wadmTopicPrefix?: string;
 };
 
+type LatticeConnectionFunction = (config: LatticeClientOptions['config']) => LatticeConnection;
+
 export type LatticeClientOptions = {
   config: LatticeClientConfig;
-  connection?: LatticeConnection;
   autoConnect?: boolean;
+  getNewConnection: LatticeConnectionFunction;
 };
 
 export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'connection'>> = {
@@ -30,7 +31,8 @@ export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'c
 };
 
 export class LatticeClient {
-  readonly #connection: LatticeConnection;
+  #connection: LatticeConnection;
+  #getNewConnection: LatticeConnectionFunction;
   #config: Omit<Required<LatticeClientConfig>, 'connection'>;
 
   get #latticeId(): string {
@@ -128,13 +130,15 @@ export class LatticeClient {
    * @param options.connection (optional) the connection to use for the client. If not provided, a
    * new connection will be created with the latticeUrl from the config
    */
-  constructor({config, connection, autoConnect = true}: LatticeClientOptions) {
+  constructor(options: LatticeClientOptions) {
+    const {config, getNewConnection, autoConnect = true} = options;
     this.#config = {
       ...defaultConfig,
       ...config,
     };
 
-    this.#connection = connection ?? new NatsWsLatticeConnection(this.#config);
+    this.#getNewConnection = getNewConnection;
+    this.#connection = getNewConnection(config);
 
     if (autoConnect !== false) {
       // try and connect, but don't throw an error if it fails. The connection will be in an error state accessible
@@ -154,14 +158,6 @@ export class LatticeClient {
       ...this.#config,
       ...newConfig,
     };
-
-    if (newConfig.latticeUrl) {
-      this.#connection.setLatticeUrl(newConfig.latticeUrl);
-    }
-
-    if (newConfig.retryCount) {
-      this.#connection.setRetryCount(newConfig.retryCount);
-    }
 
     // try and reconnect with the new configuration
     if (this.#connection.status === 'connected') {
@@ -199,9 +195,36 @@ export class LatticeClient {
   /**
    * Connect to the lattice
    */
-  readonly #connect = async (): Promise<void> => {
-    await this.#connection?.connect();
-  };
+  async #connect(count = 0): Promise<void> {
+    new Promise((resolve, reject) => {
+      if (count >= this.#config.retryCount) {
+        reject(new Error(`Could not connect to lattice after ${this.#config.retryCount} attempts`));
+        return;
+      }
+
+      const tryAgainAfterWaitingForALittleBit = () =>
+        new Promise<void>((resolve) => {
+          const aLittleBit = 500; // ms
+          setTimeout(() => resolve(), aLittleBit);
+        }).finally(() => resolve(this.#connect(count + 1)));
+
+      try {
+        if (this.#connection.status === 'connected') {
+          resolve(this.#connection);
+          return;
+        }
+
+        if (this.#connection.status !== 'initial') {
+          tryAgainAfterWaitingForALittleBit();
+          return;
+        }
+
+        this.#connection.connect().catch(() => tryAgainAfterWaitingForALittleBit());
+      } catch (error) {
+        reject(error as Error);
+      }
+    });
+  }
 
   /**
    * Disconnect from the lattice
@@ -215,6 +238,7 @@ export class LatticeClient {
    */
   readonly #reconnect = async (): Promise<void> => {
     await this.#disconnect();
+    this.#connection = this.#getNewConnection(this.#config);
     await this.#connect();
   };
 }
