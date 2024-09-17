@@ -346,11 +346,13 @@ fn create_tls_pool(
     cfg: deadpool_postgres::Config,
     runtime: Option<deadpool_postgres::Runtime>,
 ) -> Result<Pool> {
+    let mut store = rustls::RootCertStore::empty();
+    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     cfg.create_pool(
         runtime,
         tokio_postgres_rustls::MakeRustlsConnect::new(
             rustls::ClientConfig::builder()
-                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_root_certificates(store)
                 .with_no_client_auth(),
         ),
     )
