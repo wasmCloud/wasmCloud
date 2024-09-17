@@ -7750,7 +7750,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bigdecimal 0.4.5",
@@ -7773,6 +7773,7 @@ dependencies = [
  "ulid",
  "uuid 1.10.0",
  "wasmcloud-provider-sdk",
+ "webpki-roots 0.26.5",
  "wit-bindgen-wrpc 0.6.5",
 ]
 
