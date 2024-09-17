@@ -69,6 +69,10 @@ pub struct RegistryConfig {
     pub(crate) additional_ca_paths: Vec<PathBuf>,
 }
 
+/// Builder for constructing a [`RegistryConfig`]
+///
+/// While `reg_type` and `auth` are not explicitly required, they must be provided, otherwise
+/// building will fail.
 #[derive(Debug, Clone, Default)]
 #[allow(unused)]
 pub struct RegistryConfigBuilder {
