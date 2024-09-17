@@ -53,7 +53,7 @@ uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = [
-    "oci-distribution",
+    "oci",
     "otel",
     "rustls-native-certs",
 ] }
