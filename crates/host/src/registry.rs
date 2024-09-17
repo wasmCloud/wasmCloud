@@ -1,71 +1,36 @@
+use anyhow::Result;
 use tracing::warn;
+use wasmcloud_control_interface::RegistryCredential;
+use wasmcloud_core::{RegistryAuth, RegistryConfig, RegistryType};
 
-/// Credentials for a registry containing wasmCloud artifacts
-#[derive(Debug, Default)]
-pub struct Config {
-    /// The type of the registry (only OCI is supported at this time)
-    pub reg_type: Type,
-    /// The auth settings for the registry
-    pub auth: Auth,
-    /// Whether or not to allow downloading artifacts with the tag `latest`. Only valid for OCI registries
-    pub allow_latest: bool,
-    /// Whether or not to allow downloading artifacts over HTTP
-    pub allow_insecure: bool,
-    /// Additional CAs to include in the OCI client configuration
-    pub additional_ca_paths: Vec<std::path::PathBuf>,
+/// Extension trait to enable converting between registry credentials
+pub trait RegistryCredentialExt {
+    /// Convert a [`RegistryCredential`] to a [`RegistryConfig`]
+    fn into_registry_config(self) -> Result<RegistryConfig>;
 }
 
-/// The type of a registry
-#[derive(Debug, Default)]
-pub enum Type {
-    /// OCI registry
-    #[default]
-    Oci,
-}
-
-/// The authentication settings for a registry
-#[derive(Debug, Default)]
-pub enum Auth {
-    /// HTTP Basic authentication (username and password)
-    Basic(String, String),
-    /// token authentication
-    Token(String),
-    /// No authentication
-    #[default]
-    Anonymous,
-}
-
-impl From<wasmcloud_control_interface::RegistryCredential> for Config {
-    fn from(creds: wasmcloud_control_interface::RegistryCredential) -> Self {
-        Self {
-            reg_type: match creds.registry_type.as_str() {
-                "oci" => Type::Oci,
+impl RegistryCredentialExt for RegistryCredential {
+    fn into_registry_config(self) -> Result<RegistryConfig> {
+        RegistryConfig::builder()
+            .reg_type(match self.registry_type.as_str() {
+                "oci" => RegistryType::Oci,
                 registry_type => {
                     warn!(%registry_type, "unknown registry type, defaulting to OCI");
-                    Type::Oci
+                    RegistryType::Oci
                 }
-            },
-            auth: match (creds.username, creds.password, creds.token) {
-                (Some(username), Some(password), _) => Auth::Basic(username, password),
-                (None, None, Some(token)) => Auth::Token(token),
-                (None, None, None) => Auth::Anonymous,
+            })
+            .auth(match (self.username, self.password, self.token) {
+                (Some(username), Some(password), _) => RegistryAuth::Basic(username, password),
+                (None, None, Some(token)) => RegistryAuth::Token(token),
+                (None, None, None) => RegistryAuth::Anonymous,
                 (_, _, _) => {
                     warn!("invalid combination of registry credentials, defaulting to no authentication");
-                    Auth::Anonymous
+                    RegistryAuth::Anonymous
                 }
-            },
-            allow_latest: false,
-            allow_insecure: false,
-            additional_ca_paths: Vec::default(),
-        }
-    }
-}
-
-impl From<(Option<String>, Option<String>)> for Auth {
-    fn from((maybe_username, maybe_password): (Option<String>, Option<String>)) -> Self {
-        match (maybe_username, maybe_password) {
-            (Some(username), Some(password)) => Self::Basic(username, password),
-            _ => Self::Anonymous,
-        }
+            })
+            .allow_latest(false)
+            .allow_insecure(false)
+            .additional_ca_paths(Vec::new())
+            .build()
     }
 }
