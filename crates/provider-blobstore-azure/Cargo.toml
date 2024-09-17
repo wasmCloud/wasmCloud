@@ -40,5 +40,5 @@ wrpc-interface-blobstore = { workspace = true }
 wrpc-transport = { workspace = true }
 
 [dev-dependencies]
-testcontainers = { workspace = true }
+wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 wrpc-transport-nats = { workspace = true }

@@ -2099,7 +2099,7 @@ version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f51c5d4ddabd36886dd3e1438cb358cdcb0d7c499cb99cb4ac2e38e18b5cb210"
 dependencies = [
- "dirs-sys 0.3.7",
+ "dirs-sys",
 ]
 
 [[package]]
@@ -2113,15 +2113,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirs"
-version = "5.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
-dependencies = [
- "dirs-sys 0.4.1",
-]
-
-[[package]]
 name = "dirs-sys"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2130,18 +2121,6 @@ dependencies = [
  "libc",
  "redox_users",
  "winapi",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users",
- "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2277,6 +2256,17 @@ name = "escape_string"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59e867569975c88fdf73833a30bd6e0978aa6ab6bd784b648fcece07450951ba"
+
+[[package]]
+name = "etcetera"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "136d1b5283a1ab77bd9257427ffd09d8667ced0570b6f938942bc7568ed5b943"
+dependencies = [
+ "cfg-if",
+ "home",
+ "windows-sys 0.48.0",
+]
 
 [[package]]
 name = "event-listener"
@@ -4021,12 +4011,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
 ]
-
-[[package]]
-name = "option-ext"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ordered-float"
@@ -5925,18 +5909,18 @@ dependencies = [
 
 [[package]]
 name = "testcontainers"
-version = "0.21.1"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f7d80fe0008971413157e67062150cbf508b92f0eb525b9f49de1aec4267f24"
+checksum = "5b52850ed7c71aa299608b4d891473e1e2698e47287426b81c4938408f058aac"
 dependencies = [
  "async-trait",
  "bollard",
  "bollard-stubs",
  "bytes",
  "conquer-once",
- "dirs",
  "docker_credential",
  "either",
+ "etcetera",
  "futures",
  "log",
  "memchr",
@@ -5949,6 +5933,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-tar",
  "tokio-util",
  "url",
 ]
@@ -6196,6 +6181,7 @@ dependencies = [
  "redox_syscall 0.3.5",
  "tokio",
  "tokio-stream",
+ "xattr",
 ]
 
 [[package]]
@@ -7022,7 +7008,6 @@ dependencies = [
  "tempfile",
  "term-table",
  "test-case",
- "testcontainers",
  "thiserror",
  "time",
  "tokio",
@@ -7040,6 +7025,7 @@ dependencies = [
  "wasm-encoder 0.217.0",
  "wasmcloud-control-interface 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-core 0.10.0",
+ "wasmcloud-test-util",
  "wasmparser 0.217.0",
  "wasmtime",
  "wasmtime-wasi",
@@ -7519,13 +7505,13 @@ dependencies = [
  "path-clean",
  "serde",
  "serde_json",
- "testcontainers",
  "time",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
+ "wasmcloud-test-util",
  "wrpc-interface-blobstore",
  "wrpc-transport 0.26.8",
  "wrpc-transport-nats 0.23.1",
@@ -7565,12 +7551,12 @@ dependencies = [
  "rustls 0.22.4",
  "serde",
  "serde_json",
- "testcontainers",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
  "wasmcloud-provider-sdk",
+ "wasmcloud-test-util",
  "wrpc-interface-blobstore",
  "wrpc-transport 0.26.8",
 ]
@@ -7615,7 +7601,6 @@ dependencies = [
  "reqwest 0.12.7",
  "serde",
  "serde_json",
- "testcontainers",
  "thiserror",
  "tokio",
  "toml 0.8.19",
@@ -7884,6 +7869,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "testcontainers",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -9179,6 +9165,17 @@ dependencies = [
  "der",
  "spki",
  "tls_codec",
+]
+
+[[package]]
+name = "xattr"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8da84f1a25939b27f6820d92aed108f83ff920fdf11a7b19366c27c4cda81d4f"
+dependencies = [
+ "libc",
+ "linux-raw-sys",
+ "rustix",
 ]
 
 [[package]]

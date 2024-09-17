@@ -299,7 +299,7 @@ termcolor = { version = "1", default-features = false }
 termsize = { version = "0.1", default-features = false }
 test-case = { version = "3", default-features = false }
 test-components = { version = "0", path = "./tests/components", default-features = false }
-testcontainers = { version = "0.21", default-features = false }
+testcontainers = { version = "0.23" }
 thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
