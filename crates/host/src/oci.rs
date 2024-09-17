@@ -1,12 +1,9 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use oci_distribution::client::ImageData;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
 
 /// Configuration options for OCI operations.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
