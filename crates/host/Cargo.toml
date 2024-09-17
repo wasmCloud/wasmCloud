@@ -28,7 +28,6 @@ humantime = { workspace = true }
 names = { workspace = true }
 nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
-oci-wasm = { workspace = true, features = ["rustls-tls"] }
 opentelemetry-nats = { workspace = true }
 provider-archive = { workspace = true }
 rmp-serde = { workspace = true }

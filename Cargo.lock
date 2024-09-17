@@ -7462,7 +7462,6 @@ dependencies = [
  "names",
  "nkeys 0.4.3",
  "oci-distribution 0.11.0",
- "oci-wasm",
  "opentelemetry-nats",
  "provider-archive",
  "rmp-serde",
