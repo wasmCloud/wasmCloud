@@ -19,6 +19,7 @@ use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
 use tokio::{select, sync::mpsc};
 use wash_lib::app::AppManifest;
+use wash_lib::cli::stop::stop_provider;
 use wash_lib::common::CommandGroupUsage;
 use wash_lib::component::{scale_component, ScaleComponentArgs};
 use wasmcloud_control_interface::Client as CtlClient;
@@ -66,6 +67,8 @@ const WASH_SESSIONS_FILE_NAME: &str = "wash-dev-sessions.json";
 
 const SESSIONS_FILE_VERSION: Version = Version::new(0, 1, 0);
 const SESSION_ID_LEN: usize = 6;
+
+const DEFAULT_PROVIDER_STOP_TIMEOUT_MS: u64 = 3000;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DevCommand {
@@ -434,7 +437,7 @@ impl DependencySpec {
 
     /// Convert to a component that can be used in a [`Manifest`] with a given suffix for uniqueness
     fn generate_component(&self, suffix: &str) -> Result<Component> {
-        let name = format!("{}-{}", suffix, self.name());
+        let name = format!("{}-dep-{}", suffix, self.name());
         let properties = self
             .generate_properties(suffix)
             .context("failed to generate properties for component")?;
@@ -623,7 +626,7 @@ impl ProjectDeps {
             .component
             .clone()
             .context("missing/invalid component under test")?;
-        let app_name = format!("dev-{}", component.name);
+        let app_name = format!("dev-{}", component.name.to_lowercase().replace(" ", "-"));
 
         // Generate components for all the dependencies
         let mut components = Vec::new();
@@ -1499,8 +1502,12 @@ async fn run_dev_loop(
     // After we've merged, we can update the session ID to belong to this session
     current_project_deps.session_id = Some(session_id.into());
 
-    // Generate component that represents the app
-    let component_id = format!("{}-{}", session_id, project_cfg.common.name.clone());
+    // Generate component that represents the main Webassembly component/provider being developed
+    let component_id = format!(
+        "{}-{}",
+        session_id,
+        project_cfg.common.name.to_lowercase().replace(" ", "-"),
+    );
     let component = generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
         .context("failed to generate app component")?;
 
@@ -1520,6 +1527,7 @@ async fn run_dev_loop(
         // Scale the component to zero, trusting that wadm will re-create it
         scale_down_component(
             ctl_client,
+            project_cfg,
             &dev_session
                 .host_data
                 .as_ref()
@@ -1547,7 +1555,7 @@ async fn run_dev_loop(
         // Generate all help text for this manifest
         let help_text_lines = generate_help_text_for_manifest(&manifest);
 
-        let model_yaml =
+        let model_json =
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
         // Write out manifests to local file if provided
@@ -1574,10 +1582,12 @@ async fn run_dev_loop(
         }
 
         // Put the manifest
-        match wash_lib::app::put_model(nats_client, Some(lattice.into()), &model_yaml).await {
+        match wash_lib::app::put_model(nats_client, Some(lattice.into()), &model_json).await {
             Ok(_) => {}
             Err(e) if e.to_string().contains("already exists") => {}
-            Err(e) => bail!("failed to put model [{}]: {e}", manifest.metadata.name),
+            Err(e) => {
+                bail!("failed to put model [{}]: {e}", manifest.metadata.name);
+            }
         }
 
         // Deploy the manifest
@@ -1612,6 +1622,7 @@ async fn run_dev_loop(
     // Scale the component to zero, trusting that wadm will re-create it
     scale_down_component(
         ctl_client,
+        project_cfg,
         &dev_session
             .host_data
             .as_ref()
@@ -1632,6 +1643,7 @@ async fn run_dev_loop(
 /// Scale a component to zero
 async fn scale_down_component(
     client: &CtlClient,
+    project_cfg: &ProjectConfig,
     host_id: &str,
     component_id: &str,
     component_ref: &str,
@@ -1639,20 +1651,44 @@ async fn scale_down_component(
     // Now that backing infrastructure has changed, we should scale the component
     // as the component (if it was running before) has *not* changed.
     //
-    // Scale the component down, knowing that WADM should restore it (and trigger a reload)
-    scale_component(ScaleComponentArgs {
-        client,
-        host_id,
-        component_id,
-        component_ref,
-        max_instances: 0,
-        annotations: None,
-        config: vec![],
-        skip_wait: false,
-        timeout_ms: None,
-    })
-    .await
-    .with_context(|| format!("failed to scale down component [{component_id}] for reload"))?;
+    // Scale the WADM component (which can be either a component or provider) down,
+    // expecting that WADM should restore it (and trigger a reload)
+    match project_cfg.project_type {
+        wash_lib::parser::TypeConfig::Component(_) => {
+            scale_component(ScaleComponentArgs {
+                client,
+                host_id,
+                component_id,
+                component_ref,
+                max_instances: 0,
+                annotations: None,
+                config: vec![],
+                skip_wait: false,
+                timeout_ms: None,
+            })
+            .await
+            .with_context(|| {
+                format!("failed to scale down component [{component_id}] for reload")
+            })?;
+        }
+        wash_lib::parser::TypeConfig::Provider(_) => {
+            if let Err(e) = stop_provider(
+                client,
+                Some(host_id),
+                component_id,
+                false,
+                DEFAULT_PROVIDER_STOP_TIMEOUT_MS,
+            )
+            .await
+            {
+                eprintln!(
+                    "{} Failed to stop provider component [{component_id}] during wash dev: {e}",
+                    emoji::WARN,
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
