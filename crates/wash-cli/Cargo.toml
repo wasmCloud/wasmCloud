@@ -28,9 +28,9 @@ clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 crossterm ={ workspace = true, features = ["events","windows"] }
-dirs = { workspace = true }
 file-guard = { workspace = true }
 futures = { workspace = true }
+home = { workspace = true }
 http = { workspace = true }
 humantime.workspace = true
 indicatif = { workspace = true }

@@ -53,9 +53,9 @@ command-group = { workspace = true, features = ["with-tokio"] }
 config = { workspace = true, features = ["toml"], optional = true }
 console = { workspace = true, optional = true }
 dialoguer = { workspace = true, optional = true }
-dirs = { workspace = true }
 futures = { workspace = true }
 heck = { workspace = true, optional = true }
+home = { workspace = true }
 ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
 nkeys = { workspace = true }
@@ -121,7 +121,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "time", "macros", "ne
 
 [dev-dependencies]
 claims = { workspace = true }
-dirs = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
 test-case = { workspace = true }
