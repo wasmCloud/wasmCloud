@@ -101,11 +101,42 @@ pub struct StopHostCommand {
     pub host_shutdown_timeout: u64,
 }
 
-pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
+pub async fn handle_stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     let timeout_ms = cmd.opts.timeout_ms;
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
+    let ctl_client = wco.into_ctl_client(None).await?;
+    stop_provider(
+        &ctl_client,
+        cmd.host_id.as_deref(),
+        &cmd.provider_id,
+        cmd.skip_wait,
+        timeout_ms,
+    )
+    .await?;
 
+    let text = if cmd.skip_wait {
+        format!("Provider {} stop request received", &cmd.provider_id)
+    } else {
+        format!("Provider [{}] stopped successfully", &cmd.provider_id)
+    };
+
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("result".into(), text.into()),
+            ("provider_id".into(), cmd.provider_id.into()),
+            ("host_id".into(), cmd.host_id.into()),
+        ]),
+    ))
+}
+
+pub async fn stop_provider(
+    client: &wasmcloud_control_interface::Client,
+    host_id: Option<&str>,
+    provider_id: &str,
+    skip_wait: bool,
+    timeout_ms: u64,
+) -> Result<()> {
     let mut receiver = client
         .events_receiver(vec![
             "provider_stopped".to_string(),
@@ -114,55 +145,34 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    let host_id = if let Some(host_id) = cmd.host_id {
-        find_host_id(&host_id, &client).await?.0
+    let host_id = if let Some(host_id) = host_id {
+        find_host_id(host_id, client).await?.0
     } else {
-        find_host_with_provider(&cmd.provider_id, &client).await?
+        find_host_with_provider(provider_id, client).await?
     };
 
     let ack = client
-        .stop_provider(&host_id, &cmd.provider_id)
+        .stop_provider(&host_id, provider_id)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
     if !ack.success {
         bail!("Operation failed: {}", ack.message);
     }
-    if cmd.skip_wait {
-        let text = format!("Provider {} stop request received", cmd.provider_id);
-        return Ok(CommandOutput::new(
-            text.clone(),
-            HashMap::from([
-                ("result".into(), text.into()),
-                ("provider_id".into(), cmd.provider_id.to_string().into()),
-                ("host_id".into(), host_id.to_string().into()),
-            ]),
-        ));
+    if skip_wait {
+        return Ok(());
     }
 
     let event = wait_for_provider_stop_event(
         &mut receiver,
         Duration::from_millis(timeout_ms),
         host_id.to_string(),
-        cmd.provider_id.to_string(),
+        provider_id.to_string(),
     )
     .await?;
 
     match event {
-        FindEventOutcome::Success(ProviderStoppedInfo {
-            host_id,
-            provider_id,
-        }) => {
-            let text = format!("Provider [{}] stopped successfully", &cmd.provider_id);
-            Ok(CommandOutput::new(
-                text.clone(),
-                HashMap::from([
-                    ("result".into(), text.into()),
-                    ("provider_id".into(), provider_id.into()),
-                    ("host_id".into(), host_id.into()),
-                ]),
-            ))
-        }
+        FindEventOutcome::Success(ProviderStoppedInfo { .. }) => Ok(()),
         FindEventOutcome::Failure(err) => bail!("{}", err),
     }
 }
