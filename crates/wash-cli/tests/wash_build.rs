@@ -70,7 +70,7 @@ async fn integration_build_rust_component_signed_with_signing_keys_directory_con
     env::set_var("RUST_LOG", "debug");
 
     // base case: no keys directory configured
-    let mut expected_default_key_dir = dirs::home_dir()
+    let mut expected_default_key_dir = home::home_dir()
         .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
     expected_default_key_dir.push(".wash/keys");
 

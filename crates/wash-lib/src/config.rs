@@ -24,7 +24,7 @@ pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 
 /// Get the path to the `.wash` configuration directory. Creates the directory if it does not exist.
 pub fn cfg_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("no home directory found. Please set $HOME")?;
+    let home = home::home_dir().context("no home directory found. Please set $HOME")?;
 
     let wash = home.join(WASH_DIR);
 

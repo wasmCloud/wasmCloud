@@ -130,7 +130,7 @@ impl TryFrom<RawComponentConfig> for ComponentConfig {
         let key_directory = if let Some(key_directory) = raw_config.key_directory {
             key_directory
         } else {
-            let home_dir = dirs::home_dir()
+            let home_dir = home::home_dir()
                 .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
             home_dir.join(".wash/keys")
         };
@@ -196,7 +196,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
         let key_directory = if let Some(key_directory) = raw_config.key_directory {
             key_directory
         } else {
-            let home_dir = dirs::home_dir()
+            let home_dir = home::home_dir()
                 .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
             home_dir.join(".wash/keys")
         };
