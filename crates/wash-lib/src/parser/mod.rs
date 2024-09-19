@@ -88,9 +88,7 @@ impl RustConfig {
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            // NOTE: eventually "wasm32-wasi" will be renamed to "wasm32-wasi-preview1"
-            // https://github.com/rust-lang/compiler-team/issues/607
-            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasm32-wasi",
+            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasm32-wasip1",
         }
     }
 }
@@ -329,7 +327,7 @@ impl Display for WasmTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match &self {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            WasmTarget::WasiPreview1 => "wasm32-wasi",
+            WasmTarget::WasiPreview1 => "wasm32-wasip1",
             WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
         })
     }
