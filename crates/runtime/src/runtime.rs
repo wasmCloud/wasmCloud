@@ -135,6 +135,9 @@ impl RuntimeBuilder {
         #[allow(clippy::cast_possible_truncation)]
         pooling_config
             .total_component_instances(self.max_components)
+            .total_core_instances(self.max_components)
+            .total_gc_heaps(self.max_components)
+            .total_stacks(self.max_components)
             .max_component_instance_size(self.max_component_size as usize)
             .max_core_instances_per_component(max_core_instances_per_component)
             .max_tables_per_component(20)
