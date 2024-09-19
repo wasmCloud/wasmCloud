@@ -72,3 +72,11 @@ Create the name of the service account to use
 {{- end }}
 {{- join "," $list }}
 {{- end }}
+
+{{- define "wasmcloud-host.nats.address" -}}
+{{- if .Values.config.natsAddress }}
+url: {{ .Values.config.natsAddress | quote }}
+{{- else }}
+url: "nats://nats-headless.{{ .Release.Namespace }}.svc.cluster.local"
+{{- end }}
+{{- end }}
