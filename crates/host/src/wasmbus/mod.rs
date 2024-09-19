@@ -311,7 +311,7 @@ impl wrpc_transport::Serve for WrpcServer {
                                 KeyValue::new("component.ref", image_reference),
                                 KeyValue::new("lattice", metrics.lattice_id.clone()),
                                 KeyValue::new("host", metrics.host_id.clone()),
-                                KeyValue::new("operation", format!("{instance}/name")),
+                                KeyValue::new("operation", format!("{instance}/{func}")),
                             ],
                         ),
                         tx,
@@ -1264,8 +1264,14 @@ impl Host {
                                         }
                                     }
                                     Some(res) = tasks.join_next() => {
-                                        if let Err(err) = res {
-                                            error!(?err, "export serving task failed");
+                                        match res {
+                                            Ok(Ok(res)) => res,
+                                            Ok(Err(err)) => {
+                                                warn!(?err, "failed to serve invocation");
+                                            },
+                                            Err(err) => {
+                                                error!(?err, "export serving task failed");
+                                            }
                                         }
                                     }
                                 }
@@ -1285,14 +1291,12 @@ impl Host {
                                     | WrpcServeEvent::DynamicExportReturned {
                                         context: (start_at, ref attributes),
                                         success,
-                                    } => {
-                                        metrics.record_component_invocation(
-                                            u64::try_from(start_at.elapsed().as_nanos())
-                                                .unwrap_or_default(),
-                                            attributes,
-                                            !success,
-                                        );
-                                    }
+                                    } => metrics.record_component_invocation(
+                                        u64::try_from(start_at.elapsed().as_nanos())
+                                            .unwrap_or_default(),
+                                        attributes,
+                                        !success,
+                                    ),
                                 }
                             }
                             debug!("serving event stream is done");
