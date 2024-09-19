@@ -300,9 +300,13 @@ pub enum WasmTarget {
     #[default]
     #[serde(alias = "wasm32-unknown-unknown")]
     CoreModule,
-    #[serde(alias = "wasm32-wasi", alias = "wasm32-wasi-preview1")]
+    #[serde(
+        alias = "wasm32-wasi",
+        alias = "wasm32-wasi-preview1",
+        alias = "wasm32-wasip1"
+    )]
     WasiPreview1,
-    #[serde(alias = "wasm32-wasi-preview2")]
+    #[serde(alias = "wasm32-wasi-preview2", alias = "wasm32-wasip2")]
     WasiPreview2,
 }
 
@@ -310,8 +314,10 @@ impl From<&str> for WasmTarget {
     fn from(value: &str) -> Self {
         match value {
             "wasm32-wasi-preview1" => WasmTarget::WasiPreview1,
+            "wasm32-wasip1" => WasmTarget::WasiPreview1,
             "wasm32-wasi" => WasmTarget::WasiPreview1,
             "wasm32-wasi-preview2" => WasmTarget::WasiPreview2,
+            "wasm32-wasip2" => WasmTarget::WasiPreview2,
             _ => WasmTarget::CoreModule,
         }
     }

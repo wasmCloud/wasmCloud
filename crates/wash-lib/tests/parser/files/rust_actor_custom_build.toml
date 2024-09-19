@@ -4,6 +4,6 @@ name = "custombuildcomponent"
 
 [component]
 claims = ["wasmcloud:httpserver"]
-build_artifact = "target/wasm32-wasi/release/custombuildcomponent.wasm"
-build_command = "cargo component build --release --target wasm32-wasi"
+build_artifact = "target/wasm32-wasip1/release/custombuildcomponent.wasm"
+build_command = "cargo component build --release --target wasm32-wasip1"
 destination = "./build/custombuildcomponent_s.wasm"
