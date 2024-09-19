@@ -67,11 +67,15 @@ pub struct ListCommand {
 #[derive(Args, Debug, Clone)]
 pub struct UndeployCommand {
     /// Name of the application to undeploy
-    #[clap(name = "name")]
-    app_name: String,
+    #[clap(name = "name", required_unless_present("all"))]
+    app_name: Option<String>,
 
     #[clap(flatten)]
     opts: CliConnectionOpts,
+
+    /// Whether to undeploy all the available apps
+    #[clap(long = "all", default_value = "false")]
+    all: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -95,8 +99,8 @@ pub struct DeployCommand {
 #[derive(Args, Debug, Clone)]
 pub struct DeleteCommand {
     /// Name of the application to delete, or a path to a Wadm Application Manifest
-    #[clap(name = "name")]
-    app_name: String,
+    #[clap(name = "name", required_unless_present("all_undeployed"))]
+    app_name: Option<String>,
 
     /// Version of the application to delete. If not supplied, all versions are deleted
     #[clap(name = "version")]
@@ -104,6 +108,10 @@ pub struct DeleteCommand {
 
     #[clap(flatten)]
     opts: CliConnectionOpts,
+
+    /// Whether to delete all undeployed apps
+    #[clap(long = "all-undeployed", default_value = "false")]
+    all_undeployed: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -231,32 +239,63 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<CommandOutput> {
     let connection_opts =
         <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
     let lattice = Some(connection_opts.get_lattice());
-
     let client = connection_opts.into_nats_client().await?;
 
-    // If we have received a valid path to a model file, then read and extract the model name,
-    // otherwise use the supplied name as a model name
-    let model_name = if tokio::fs::try_exists(&cmd.app_name)
-        .await
-        .is_ok_and(|exists| exists)
-    {
-        let manifest = load_app_manifest(cmd.app_name.parse()?)
-            .await
-            .with_context(|| format!("failed to load app manifest at [{}]", cmd.app_name))?;
-        manifest
-            .name()
-            .map(ToString::to_string)
-            .context("failed to find name of manifest")?
-    } else {
-        cmd.app_name
+    // Determine which models to remove, if a single model is not specified,
+    // then attempt to filter the list of existing models
+    let models = match cmd.app_name {
+        // If an explicit app name was specified, resolve the right app name and version
+        Some(app_name) => {
+            // If we have received a valid path to a model file, then read and extract the model name,
+            // otherwise use the supplied name as a model name
+            let model_name = if tokio::fs::try_exists(&app_name)
+                .await
+                .is_ok_and(|exists| exists)
+            {
+                let manifest = load_app_manifest(app_name.parse()?)
+                    .await
+                    .with_context(|| format!("failed to load app manifest at [{app_name}]"))?;
+                manifest
+                    .name()
+                    .map(ToString::to_string)
+                    .context("failed to find name of manifest")?
+            } else {
+                app_name
+            };
+
+            vec![model_name]
+        }
+        // If no model name was specified, use command-specified filters to determine which models to act on
+        None if cmd.all => wash_lib::app::get_models(&client, lattice.clone())
+            .await?
+            .into_iter()
+            .map(|m| m.name)
+            .collect(),
+        _ => Vec::new(),
     };
 
-    wash_lib::app::undeploy_model(&client, lattice, &model_name).await?;
+    let mut undeployed = Vec::new();
+    let mut output_map = HashMap::new();
 
-    let message = format!("Undeployed application: {}", model_name);
-    let mut map = HashMap::new();
-    map.insert("results".to_string(), json!(message));
-    Ok(CommandOutput::new(message, map))
+    // Undeploy models
+    for model_name in models.iter() {
+        match wash_lib::app::undeploy_model(&client, lattice.clone(), model_name).await {
+            Ok(_) => undeployed.push(model_name),
+            Err(e) => eprintln!("failed to undeploy model [{model_name}]: {e}"),
+        }
+    }
+
+    let output_msg = match &models[..] {
+        [] => "No applications undeployed".into(),
+        [m] => format!("Undeployed application: {}", m),
+        _ => format!("Undeployed [{}] applications", undeployed.len()),
+    };
+    output_map.insert("results".to_string(), json!(output_msg));
+    output_map.insert(
+        "undeployed_application_names".to_string(),
+        json!(undeployed),
+    );
+    Ok(CommandOutput::new(output_msg, output_map))
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
@@ -413,37 +452,94 @@ async fn delete_application_version(cmd: DeleteCommand) -> Result<CommandOutput>
 
     let client = connection_opts.into_nats_client().await?;
 
-    // If we have received a valid path to a model file, then read and extract the model name,
-    // otherwise use the supplied name as a model name
-    let (model_name, version): (String, Option<String>) = if tokio::fs::try_exists(&cmd.app_name)
-        .await
-        .is_ok_and(|exists| exists)
-    {
-        let manifest = load_app_manifest(cmd.app_name.parse()?)
-            .await
-            .with_context(|| format!("failed to load app manifest at [{}]", cmd.app_name))?;
-        (
-            manifest
-                .name()
-                .map(ToString::to_string)
-                .context("failed to find name of manifest")?,
-            manifest.version().map(ToString::to_string),
+    // Determine which models to remove, if a single model is not specified,
+    // then attempt to filter the list of existing models
+    let models = match cmd.app_name {
+        // If an explicit app name was specified, resolve the right app name and version
+        Some(app_name) => {
+            // If we have received a valid path to a model file, then read and extract the model name,
+            // otherwise use the supplied name as a model name
+            let (model_name, version): (String, Option<String>) =
+                if tokio::fs::try_exists(&app_name)
+                    .await
+                    .is_ok_and(|exists| exists)
+                {
+                    let manifest = load_app_manifest(app_name.parse()?)
+                        .await
+                        .with_context(|| format!("failed to load app manifest at [{app_name}]"))?;
+                    (
+                        manifest
+                            .name()
+                            .map(ToString::to_string)
+                            .context("failed to find name of manifest")?,
+                        manifest.version().map(ToString::to_string),
+                    )
+                } else {
+                    (app_name, cmd.version)
+                };
+
+            vec![(model_name, version)]
+        }
+        // If no model name was specified, use command-specified filters to determine which models to act on
+        None if cmd.all_undeployed => wash_lib::app::get_models(&client, lattice.clone())
+            .await?
+            .into_iter()
+            .filter_map(|m| match m.detailed_status.info.status_type {
+                wadm_types::api::StatusType::Undeployed => Some((m.name, Some(m.version))),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    let mut deleted_models = Vec::new();
+
+    #[derive(serde::Serialize)]
+    struct ModelNameAndVersion<'a> {
+        model_name: &'a String,
+        version: &'a Option<String>,
+    }
+
+    // Delete all specified models
+    for (model_name, version) in models.iter() {
+        match wash_lib::app::delete_model_version(
+            &client,
+            lattice.clone(),
+            model_name,
+            version.clone(),
         )
-    } else {
-        (cmd.app_name, cmd.version)
+        .await
+        {
+            Ok(true) => deleted_models.push(ModelNameAndVersion {
+                model_name,
+                version,
+            }),
+            // Deletion failure normally implies that the model has already been deleted
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("failed to delete model [{model_name}]: {e}");
+            }
+        }
+    }
+
+    let mut output_map = HashMap::new();
+    let output_msg = match models[..] {
+        [] => "No applications deleted".into(),
+        [(ref model_name, _)] => {
+            output_map.insert("deleted".to_string(), json!(true));
+            if deleted_models.len() == 1 {
+                format!("Deleted application: {model_name}")
+            } else {
+                format!("Already deleted application: {model_name}")
+            }
+        }
+        _ => {
+            output_map.insert("deleted_applications".into(), json!(deleted_models));
+            format!("Deleted [{}] applications", deleted_models.len())
+        }
     };
 
-    let deleted =
-        wash_lib::app::delete_model_version(&client, lattice, &model_name, version).await?;
-
-    let mut map = HashMap::new();
-    map.insert("deleted".to_string(), json!(deleted));
-    let message = if deleted {
-        format!("Deleted application: {model_name}")
-    } else {
-        format!("Already deleted application: {model_name}")
-    };
-    Ok(CommandOutput::new(message, map))
+    Ok(CommandOutput::new(output_msg, output_map))
 }
 
 async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutput> {
