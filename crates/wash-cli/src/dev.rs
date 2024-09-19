@@ -536,7 +536,7 @@ struct ProjectDeps {
     pub(crate) session_id: Option<String>,
 
     /// Lookup of dependencies by project key, with lookups into the pool
-    dependencies: HashMap<ProjectDependencyKey, DependencySpec>,
+    dependencies: HashMap<ProjectDependencyKey, Vec<DependencySpec>>,
 
     /// The component to which dependencies belong
     ///
@@ -581,7 +581,7 @@ impl ProjectDeps {
         deps: impl IntoIterator<Item = (ProjectDependencyKey, DependencySpec)>,
     ) -> Result<()> {
         for (pkey, dep) in deps.into_iter() {
-            self.dependencies.insert(pkey, dep);
+            self.dependencies.entry(pkey).or_default().push(dep);
         }
         Ok(())
     }
@@ -632,7 +632,7 @@ impl ProjectDeps {
         let mut components = Vec::new();
 
         // For each dependency, go through and generate the component along with necessary links
-        for dep in self.dependencies.values() {
+        for dep in self.dependencies.values().flatten() {
             let dep = dep.clone();
             let mut dep_component = dep
                 .generate_component(session_id)
