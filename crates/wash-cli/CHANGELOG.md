@@ -5,11 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.34.0 (2024-09-19)
+
+### Bug Fixes
+
+ - <csr-id-4680de9d2f1e3a2e672833ccac9c2356ef208145/> multiple generated dependencies collision in project
+   This commit fixes a bug in the workspace-aware project dependency
+   gathering that caused dependencies to override each other under  the
+   same project.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 1 commit contributed to the release.
+ - 1 day passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Multiple generated dependencies collision in project ([`4680de9`](https://github.com/wasmCloud/wasmCloud/commit/4680de9d2f1e3a2e672833ccac9c2356ef208145))
+</details>
+
 ## v0.33.0 (2024-09-18)
+
+<csr-id-e18efc72cc56ae5ce5f929eb17660a0d211c0e06/>
+<csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/>
+<csr-id-9ac2e29babcaa3e9789c42d05d9d3ad4ccd5fcc7/>
+<csr-id-c65d9cab4cc8917eedcad1672812bafad0311ee0/>
+<csr-id-2ee92718a7d4dcef9a31cca42761672b2b69c5dd/>
 
 ### Chore
 
  - <csr-id-e18efc72cc56ae5ce5f929eb17660a0d211c0e06/> note wash-cli move to wash
+
+### Other
+
+ - <csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/> tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0
+
+### Chore
+
+ - <csr-id-69039793fe275c35ebf647d52f117c0bbf3bf675/> Replace dirs dependency with home
 
 ### New Features
 
@@ -72,9 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 15 commits contributed to the release over the course of 11 calendar days.
+ - 17 commits contributed to the release over the course of 12 calendar days.
  - 13 days passed between releases.
- - 15 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 17 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -84,6 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0 ([`1ff476d`](https://github.com/wasmCloud/wasmCloud/commit/1ff476dcd61675a81d747091a1a94f1a4cd5fedb))
+    - Replace dirs dependency with home ([`6903979`](https://github.com/wasmCloud/wasmCloud/commit/69039793fe275c35ebf647d52f117c0bbf3bf675))
     - Bump wasmcloud-core v0.10.0, safety bump 5 crates ([`1af6e05`](https://github.com/wasmCloud/wasmCloud/commit/1af6e05f1a47be4e62a4c21d1704aff2e09bef89))
     - Enable wash dev for providers ([`029e2b8`](https://github.com/wasmCloud/wasmCloud/commit/029e2b859ed864707a6780acb3bb08f6b166d288))
     - Boolean flag set incorrectly ([`5df02de`](https://github.com/wasmCloud/wasmCloud/commit/5df02de7b1051d4966e3e94e1ec679d6e5faa637))
@@ -102,6 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## v0.32.1 (2024-09-05)
+
+<csr-id-2ab6c9a1aa42e79e6ee20d6598a6f97b856af57e/>
 
 ### New Features
 
@@ -152,6 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v0.32.0 (2024-08-29)
 
 <csr-id-e0d4c09ba7c1176f76a994f32f4c1e3147a3e59b/>
+<csr-id-7448729a1927e4ea48738bbf153533dd60ba2ad1/>
 
 ### Chore
 
@@ -492,9 +539,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Include proxy auth information in wash cli ([`56ef16b`](https://github.com/wasmCloud/wasmCloud/commit/56ef16b2a6d1e5f853e9e6dbe246d37535c2c61e))
     - Replace actor by component ([`a886882`](https://github.com/wasmCloud/wasmCloud/commit/a886882ae688dc4955c0d74188388f178f3b13dd))
 </details>
-
-<csr-unknown>
-Add the --max-execution-time flag (alias: –max-time) to wasmcloud binary and wash up command, allowing for configuration of the max execution time for the Host runtime.Set Default to 10min and Time format to Milliseconds.Updated NATS server startup command to handle a configuration file (any file ending with .conf).Modified NATS startup function to dynamically build the command.Added requirements for the nats-config-file flag to specify the nats host and nats port.Signed-off-by: Aditya Salunkhe aditya.salunkh919@gmail.comaditya.salunkh919@gmail.com<csr-unknown/>
 
 ## v0.29.2 (2024-06-17)
 
