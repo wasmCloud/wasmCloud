@@ -2975,7 +2975,7 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.25.0",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
 ]
 
 [[package]]
@@ -2994,7 +2994,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.0",
  "tower-service",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
 ]
 
 [[package]]
@@ -4675,7 +4675,7 @@ dependencies = [
  "tokio-rustls 0.25.0",
  "tokio-util",
  "url",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
 ]
 
 [[package]]
@@ -4859,7 +4859,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
  "windows-registry",
 ]
 
@@ -6880,7 +6880,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.33.0"
+version = "0.34.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -7432,7 +7432,7 @@ dependencies = [
  "url",
  "uuid 1.10.0",
  "wascap 0.15.0",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
 ]
 
 [[package]]
@@ -7579,7 +7579,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wasmcloud-provider-sdk",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
  "wrpc-interface-http",
  "wrpc-transport 0.26.8",
 ]
@@ -7773,7 +7773,7 @@ dependencies = [
  "ulid",
  "uuid 1.10.0",
  "wasmcloud-provider-sdk",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
  "wit-bindgen-wrpc 0.6.5",
 ]
 
@@ -8234,7 +8234,7 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
- "webpki-roots 0.26.5",
+ "webpki-roots 0.26.6",
 ]
 
 [[package]]
@@ -8326,9 +8326,9 @@ checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
 
 [[package]]
 name = "webpki-roots"
-version = "0.26.5"
+version = "0.26.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd24728e5af82c6c4ec1b66ac4844bdf8156257fccda846ec58b42cd0cdbe6a"
+checksum = "841c67bff177718f1d4dfefde8d8f0e78f9b6589319ba88312f567fc5841a958"
 dependencies = [
  "rustls-pki-types",
 ]
