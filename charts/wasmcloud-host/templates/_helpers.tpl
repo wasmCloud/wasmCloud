@@ -24,7 +24,7 @@ If release name contains chart name it will be used as a full name.
 {{- end }}
 
 {{- define "wasmcloud-host.nats-config-name" -}}
-{{- .Release.Name | trunc 51 | trimSuffix "-" }}-nats-config
+{{- .Release.Name | trunc 51 | trimSuffix "-" }}-nats-leaf-config
 {{- end }}
 
 {{/*
