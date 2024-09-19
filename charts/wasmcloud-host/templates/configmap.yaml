@@ -15,8 +15,8 @@ data:
     leafnodes {
         remotes = [
             {
-              url: {{ .Values.config.natsAddress | quote }}
-              {{- if .Values.config.natsCredentialsSecret }}
+              {{- include "wasmcloud-host.nats.address" . | nindent 14 }}
+              {{- if .Values.config.natsCredentialsSecret -}}
               credentials: "/nats/nats.creds"
               {{- end }}
             },

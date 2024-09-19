@@ -36,8 +36,8 @@ config:
   configServiceEnabled: false
   # Optional: The log level to use for the host. Defaults to "INFO".
   logLevel: "INFO"
-  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats.default.svc.cluster.local".
-  natsAddress: "nats://nats.default.svc.cluster.local"
+  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats-headless.<namespace>.svc.cluster.local".
+  natsAddress: ""
   # Optional: Allow the host to deploy using the latest tag on OCI components or providers. Defaults to "false".
   allowLatest: false
   # Optional: Allow the host to pull artifacts from OCI registries insecurely.
