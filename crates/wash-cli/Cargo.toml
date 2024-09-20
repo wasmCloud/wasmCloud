@@ -27,7 +27,8 @@ clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
-crossterm ={ workspace = true, features = ["events","windows"] }
+crossterm = { workspace = true, features = ["events", "windows"] }
+docker_credential = { workspace = true }
 file-guard = { workspace = true }
 futures = { workspace = true }
 home = { workspace = true }

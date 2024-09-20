@@ -6896,6 +6896,7 @@ dependencies = [
  "cloudevents-sdk",
  "console",
  "crossterm",
+ "docker_credential",
  "file-guard",
  "futures",
  "home",
