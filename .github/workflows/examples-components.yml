@@ -180,7 +180,7 @@ jobs:
         if: ${{ matrix.project.lang == 'python' }}
         run: |
           pip install componentize-py
-      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
+      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
         if: ${{ matrix.project.lang == 'typescript' }}
         with:
           node-version: ${{ matrix.project.lang_version }}
