@@ -99,6 +99,7 @@ impl KvNatsProvider {
     async fn connect(
         &self,
         cfg: NatsConnectionConfig,
+        link_cfg: &LinkConfig<'_>,
     ) -> anyhow::Result<async_nats::jetstream::kv::Store> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
@@ -135,6 +136,25 @@ impl KvNatsProvider {
             async_nats::jetstream::with_domain(client.clone(), domain.clone())
         } else {
             async_nats::jetstream::new(client.clone())
+        };
+
+        // If bucket auto-creation was specified in the link configuration,
+        // create a bucket
+        if link_cfg
+            .config
+            .get("enable_bucket_auto_create")
+            .is_some_and(|v| v.to_lowercase() == "true")
+        {
+            // Get the JetStream context based on js_domain
+            if let Err(e) = js_context
+                .create_key_value(async_nats::jetstream::kv::Config {
+                    bucket: cfg.bucket.clone(),
+                    ..Default::default()
+                })
+                .await
+            {
+                warn!("failed to auto create bucket [{}]: {e}", cfg.bucket);
+            }
         };
 
         // Open the key-value store
@@ -245,7 +265,7 @@ impl Provider for KvNatsProvider {
             ..
         }: LinkConfig<'_> = link_config;
 
-        let kv_store = match self.connect(nats_config).await {
+        let kv_store = match self.connect(nats_config, &link_config).await {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to connect to NATS: {e:?}");
