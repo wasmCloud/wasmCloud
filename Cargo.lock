@@ -297,7 +297,7 @@ dependencies = [
  "bytes",
  "futures",
  "memchr",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "nuid 0.5.0",
  "once_cell",
  "portable-atomic",
@@ -3574,9 +3574,9 @@ dependencies = [
 
 [[package]]
 name = "nkeys"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2de02c883c178998da8d0c9816a88ef7ef5c58314dd1585c97a4a5679f3ab337"
+checksum = "9f49e787f4c61cbd0f9320b31cc26e58719f6aa5068e34697dd3aea361412fe3"
 dependencies = [
  "crypto_box",
  "data-encoding",
@@ -5225,7 +5225,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -5906,7 +5906,7 @@ dependencies = [
  "anyhow",
  "futures",
  "heck 0.5.0",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "rustversion",
  "semver",
  "serde",
@@ -6499,7 +6499,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 
@@ -6726,7 +6726,7 @@ dependencies = [
  "async-nats 0.33.0",
  "bytes",
  "futures",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6753,7 +6753,7 @@ dependencies = [
  "indexmap 2.5.0",
  "jsonschema",
  "lazy_static",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "rand 0.8.5",
  "regex",
  "schemars",
@@ -6850,7 +6850,7 @@ version = "0.15.0"
 dependencies = [
  "data-encoding",
  "humantime",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -6868,7 +6868,7 @@ checksum = "6d394c2c59661bff13bea8bd7c8bf30618bafa671ef9f408ae9c3aa71ede5bb0"
 dependencies = [
  "data-encoding",
  "humantime",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -6904,7 +6904,7 @@ dependencies = [
  "humantime",
  "indicatif",
  "nix",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "notify",
  "oci-distribution 0.11.0",
  "oci-wasm",
@@ -6979,7 +6979,7 @@ dependencies = [
  "home",
  "ignore",
  "indicatif",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "normpath",
  "oci-distribution 0.11.0",
  "oci-wasm",
@@ -7270,7 +7270,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.4.1",
  "hyper-util",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "once_cell",
  "provider-archive",
  "rand 0.8.5",
@@ -7413,7 +7413,7 @@ dependencies = [
  "hex",
  "hyper-rustls 0.27.3",
  "hyper-util",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "oci-distribution 0.11.0",
  "oci-wasm",
  "once_cell",
@@ -7452,7 +7452,7 @@ dependencies = [
  "http-body 1.0.1",
  "humantime",
  "names",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "oci-distribution 0.11.0",
  "opentelemetry-nats",
  "provider-archive",
@@ -7727,7 +7727,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "once_cell",
  "opentelemetry 0.23.0",
  "rmp-serde",
@@ -7789,7 +7789,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.1",
  "http-body-util",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "once_cell",
  "rand 0.8.5",
  "secrecy",
@@ -7823,7 +7823,7 @@ name = "wasmcloud-secrets-client"
 version = "0.4.0"
 dependencies = [
  "async-nats 0.36.0",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "serde_json",
  "thiserror",
  "wasmcloud-secrets-types 0.4.0",
@@ -7838,7 +7838,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "serde",
  "serde_json",
  "thiserror",
@@ -7852,7 +7852,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "serde",
  "serde_json",
  "thiserror",
@@ -7866,7 +7866,7 @@ dependencies = [
  "anyhow",
  "async-nats 0.36.0",
  "cloudevents-sdk",
- "nkeys 0.4.3",
+ "nkeys 0.4.4",
  "rmp-serde",
  "serde",
  "serde_json",
