@@ -639,35 +639,43 @@ impl RawProjectConfig {
 }
 
 impl ProjectConfig {
-    pub async fn resolve_registry_credentials(
+    pub fn resolve_registry_credentials(
         &self,
         registry: impl AsRef<str>,
     ) -> Result<RegistryCredential> {
         let credentials_file = &self.common.registry.credentials.clone();
 
         let Some(credentials_file) = credentials_file else {
-            return Ok(RegistryCredential::default());
+            bail!("No registry credentials path configured")
         };
 
         if !credentials_file.exists() {
-            return Ok(RegistryCredential::default());
+            bail!(
+                "Provided registry credentials file ({}) does not exist",
+                credentials_file.display()
+            )
         }
 
-        let credentials = tokio::fs::read_to_string(&credentials_file)
-            .await
-            .context(format!(
+        let credentials = std::fs::read_to_string(credentials_file).with_context(|| {
+            format!(
                 "Failed to read registry credentials file {}",
                 credentials_file.display()
-            ))?;
+            )
+        })?;
 
         let credentials = serde_json::from_str::<HashMap<String, RegistryCredential>>(&credentials)
-            .context(format!(
-                "Failed to parse registry credentials from file {}",
-                credentials_file.display()
-            ))?;
+            .with_context(|| {
+                format!(
+                    "Failed to parse registry credentials from file {}",
+                    credentials_file.display()
+                )
+            })?;
 
         let Some(credentials) = credentials.get(registry.as_ref()) else {
-            return Ok(RegistryCredential::default());
+            bail!(
+                "Unable to find credentials for {} in the configured registry credentials file",
+                registry.as_ref()
+            )
         };
 
         Ok(credentials.clone())
