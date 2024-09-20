@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
+use docker_credential::{get_credential, DockerCredential};
 use oci_distribution::Reference;
 use serde_json::json;
 use tokio::fs::File;
@@ -202,11 +203,22 @@ fn resolve_artifact_ref(
 }
 
 async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
-    let Ok(project_config) = get_config(None, Some(true)) else {
-        return Ok(RegistryCredential::default());
+    let credentials = if let Ok(credentials) = get_config(None, Some(true))
+        .and_then(|config| config.resolve_registry_credentials(registry))
+    {
+        credentials
+    } else {
+        match get_credential(registry) {
+            Ok(DockerCredential::UsernamePassword(username, password)) => RegistryCredential {
+                username: Some(username),
+                password: Some(password),
+                ..Default::default()
+            },
+            // IdentityTokens are not supported method.
+            Ok(DockerCredential::IdentityToken(_)) | Err(_) => RegistryCredential::default(),
+        }
     };
-
-    project_config.resolve_registry_credentials(registry).await
+    Ok(credentials)
 }
 
 #[cfg(test)]
