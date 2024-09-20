@@ -36,6 +36,8 @@ spec:
               - name: wasmcloud
                 properties:
                   bucket: "WASMCLOUD"
+                  enable_bucket_auto_create: "true"
+
         # # NOTE: The following is an example of how to configure additional named links to the same capability provider
         # - type: link
         #   properties:
@@ -48,6 +50,7 @@ spec:
         #       - name: wasmland
         #         properties:
         #           bucket: "WASMLAND"
+
         - type: link
           properties:
             target: nats-msg
