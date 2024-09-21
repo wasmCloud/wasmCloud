@@ -27,12 +27,12 @@ use once_cell::sync::Lazy;
 
 #[cfg(feature = "rustls-native-certs")]
 pub static NATIVE_ROOTS: Lazy<Arc<[rustls::pki_types::CertificateDer<'static>]>> =
-    Lazy::new(|| match rustls_native_certs::load_native_certs() {
-        Ok(certs) => certs.into(),
-        Err(err) => {
-            tracing::warn!(?err, "failed to load native root certificate store");
-            Arc::new([])
+    Lazy::new(|| {
+        let res = rustls_native_certs::load_native_certs();
+        if !res.errors.is_empty() {
+            tracing::warn!(errors = ?res.errors, "failed to load native root certificate store");
         }
+        Arc::from(res.certs)
     });
 
 #[cfg(all(feature = "rustls-native-certs", feature = "oci"))]
