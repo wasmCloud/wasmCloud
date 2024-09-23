@@ -46,7 +46,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "lucide-react": "^0.441.0",
+    "lucide-react": "^0.445.0",
     "nats.ws": "^1.29.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
