@@ -111,3 +111,7 @@ wasmCloud provides the following SDKs for creating capability providers; native 
 ---
 
 _We are a Cloud Native Computing Foundation [sandbox project](https://www.cncf.io/sandbox-projects/)._
+
+### Contributors
+
+<img src="https://markupgo.com/github/wasmCloud/wasmCloud/contributors?count=0&circleSize=40&circleRadius=40&center=true" width="100%" /> 
