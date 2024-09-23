@@ -17,7 +17,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use wash_lib::app::{load_app_manifest, AppManifest, AppManifestSource};
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::common::CommandGroupUsage;
@@ -42,12 +42,12 @@ use crate::config::{
     NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_ALLOW_FILE_LOAD, WASMCLOUD_CLUSTER_ISSUERS,
     WASMCLOUD_CLUSTER_SEED, WASMCLOUD_CONFIG_SERVICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
     WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS,
-    WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_ENABLE_IPV6, WASMCLOUD_HOST_LOG_PATH, WASMCLOUD_HOST_SEED,
-    WASMCLOUD_HOST_VERSION, WASMCLOUD_JS_DOMAIN, WASMCLOUD_LATTICE, WASMCLOUD_LOG_LEVEL,
-    WASMCLOUD_MAX_EXECUTION_TIME_MS, WASMCLOUD_OCI_ALLOWED_INSECURE, WASMCLOUD_OCI_ALLOW_LATEST,
-    WASMCLOUD_POLICY_TOPIC, WASMCLOUD_PROV_SHUTDOWN_DELAY_MS, WASMCLOUD_RPC_CREDSFILE,
-    WASMCLOUD_RPC_HOST, WASMCLOUD_RPC_JWT, WASMCLOUD_RPC_PORT, WASMCLOUD_RPC_SEED,
-    WASMCLOUD_RPC_TIMEOUT_MS, WASMCLOUD_RPC_TLS, WASMCLOUD_RPC_TLS_CA_FILE,
+    WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_ENABLE_IPV6, WASMCLOUD_HOST_LOG_PATH, WASMCLOUD_HOST_PATH,
+    WASMCLOUD_HOST_SEED, WASMCLOUD_HOST_VERSION, WASMCLOUD_JS_DOMAIN, WASMCLOUD_LATTICE,
+    WASMCLOUD_LOG_LEVEL, WASMCLOUD_MAX_EXECUTION_TIME_MS, WASMCLOUD_OCI_ALLOWED_INSECURE,
+    WASMCLOUD_OCI_ALLOW_LATEST, WASMCLOUD_POLICY_TOPIC, WASMCLOUD_PROV_SHUTDOWN_DELAY_MS,
+    WASMCLOUD_RPC_CREDSFILE, WASMCLOUD_RPC_HOST, WASMCLOUD_RPC_JWT, WASMCLOUD_RPC_PORT,
+    WASMCLOUD_RPC_SEED, WASMCLOUD_RPC_TIMEOUT_MS, WASMCLOUD_RPC_TLS, WASMCLOUD_RPC_TLS_CA_FILE,
     WASMCLOUD_SECRETS_TOPIC, WASMCLOUD_STRUCTURED_LOGGING_ENABLED,
 };
 
@@ -300,6 +300,10 @@ pub struct WasmcloudOpts {
     /// Path to which to log information from the wasmCloud host
     #[clap(long = "host-log-path", env = WASMCLOUD_HOST_LOG_PATH)]
     pub host_log_path: Option<PathBuf>,
+
+    /// Path to a binary that should be used to start the wasmCloud host
+    #[clap(long = "host-path", env = WASMCLOUD_HOST_PATH)]
+    pub host_path: Option<PathBuf>,
 }
 
 impl WasmcloudOpts {
@@ -580,23 +584,38 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
 
     // Download wasmCloud if not already installed
-    let wasmcloud_executable = if !wasmcloud_opts.start_only {
-        spinner.update_spinner_message(" Downloading wasmCloud ...".to_string());
-        ensure_wasmcloud(&wasmcloud_opts.wasmcloud_version, &install_dir).await?
-    } else if let Some(wasmcloud_bin) =
-        find_wasmcloud_binary(&install_dir, &wasmcloud_opts.wasmcloud_version).await
-    {
-        wasmcloud_bin
-    } else {
-        // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
-        if let Some(child) = wadm_process {
-            stop_wadm(child, &install_dir).await?;
+    let wasmcloud_bin_path = match wasmcloud_opts.host_path {
+        // If an override was provided we can use it
+        Some(path) => {
+            debug!(
+                wasmcloud_bin_path = %path.display(),
+                "using custom wasmcloud binary path"
+            );
+            path
         }
-        if nats_bin.is_some() {
-            let nats_bin = install_dir.join(NATS_SERVER_BINARY);
-            stop_nats(install_dir, nats_bin).await?;
+        // If start only was not specified, we can download the binary
+        None if !wasmcloud_opts.start_only => {
+            spinner.update_spinner_message(" Downloading wasmCloud ...".to_string());
+            ensure_wasmcloud(&wasmcloud_opts.wasmcloud_version, &install_dir).await?
         }
-        bail!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set");
+        // If no override was provided, we must attempt to find the binary
+        None => {
+            if let Some(path) =
+                find_wasmcloud_binary(&install_dir, &wasmcloud_opts.wasmcloud_version).await
+            {
+                path
+            } else {
+                // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
+                if let Some(child) = wadm_process {
+                    stop_wadm(child, &install_dir).await?;
+                }
+                if nats_bin.is_some() {
+                    let nats_bin = install_dir.join(NATS_SERVER_BINARY);
+                    stop_nats(install_dir, nats_bin).await?;
+                }
+                bail!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set");
+            }
+        }
     };
 
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
@@ -613,7 +632,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     let version = wasmcloud_opts.wasmcloud_version;
 
     let mut wasmcloud_child = match start_wasmcloud_host(
-        &wasmcloud_executable,
+        &wasmcloud_bin_path,
         std::process::Stdio::null(),
         stderr,
         host_env,
