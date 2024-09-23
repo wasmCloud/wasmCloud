@@ -778,7 +778,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions-rust-lang/setup-rust-toolchain@1fbea72663f6d4c03efaab13560c8a24cfd2a7cc
+      - uses: actions-rust-lang/setup-rust-toolchain@4d1965c9142484e48d40c19de54b5cba84953a06
         with:
           cache: false
       - name: Install cmake for smart-release
