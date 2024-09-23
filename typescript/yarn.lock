@@ -3120,7 +3120,7 @@ __metadata:
     eslint-plugin-unicorn: "npm:^55.0.0"
     execa: "npm:^9.4.0"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.441.0"
+    lucide-react: "npm:^0.445.0"
     nats.ws: "npm:^1.29.2"
     pino: "npm:^9.4.0"
     postcss: "npm:^8.4.47"
@@ -6738,12 +6738,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.441.0":
-  version: 0.441.0
-  resolution: "lucide-react@npm:0.441.0"
+"lucide-react@npm:^0.445.0":
+  version: 0.445.0
+  resolution: "lucide-react@npm:0.445.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
-  checksum: 10/c423ed98e1e7b28408991dc52675e98b11547e12c3d4e4b0c25cc5eb611b1535cad9136434ef54677c43ce34c6211981cb76fe92415a6aa7c66c4f5d9b0380b8
+  checksum: 10/83da75d937f62ef00d84838d4a3ce59d42590d15879463e57e96786e61091019bff98c473f2ca00708e0eec7d20e556fa174bcc51b83d091acf935745e0e4faf
   languageName: node
   linkType: hard
 
