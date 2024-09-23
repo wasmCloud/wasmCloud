@@ -53,13 +53,33 @@ macro_rules! initialize_observability {
                 ..
             } = $crate::provider::load_host_data().context("failed to load host data")?;
 
+            // Update OTEL configuration with overrides if provided via config to the provider
+            let mut otel_config = otel_config.clone();
+            for (k, v) in config.iter() {
+                match k.to_uppercase().as_str() {
+                    "OTEL_EXPORTER_OTLP_ENDPOINT" => {
+                        otel_config.observability_endpoint = Some(v.clone())
+                    }
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" => {
+                        otel_config.traces_endpoint = Some(v.clone())
+                    }
+                    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" => {
+                        otel_config.metrics_endpoint = Some(v.clone())
+                    }
+                    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" => {
+                        otel_config.logs_endpoint = Some(v.clone())
+                    }
+                    _ => {}
+                }
+            }
+
             // Init logging
             //
             // NOTE: this *must* be done on the provider binary side, to avoid
             // colliding with the in-process observability setup that happens in the host.
             let (dispatch, _guard) = $crate::wasmcloud_tracing::configure_observability(
                 $provider_name,
-                otel_config,
+                &otel_config,
                 *structured_logging,
                 $maybe_flamegraphs_path,
                 log_level.as_ref(),
