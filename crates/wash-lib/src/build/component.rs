@@ -46,16 +46,20 @@ pub fn build_component(
         // Build component based on language toolchain
         let component_wasm_path = match language_config {
             LanguageConfig::Rust(rust_config) => {
-                build_rust_component(common_config, rust_config, component_config)?
+                let component_wasm_path =
+                    build_rust_component(common_config, rust_config, component_config)?;
+                if component_config.wasm_target == WasmTarget::WasiPreview2 {
+                    adapt_component_to_wasi_preview2(&component_wasm_path, component_config)?
+                } else {
+                    component_wasm_path
+                }
             }
             LanguageConfig::TinyGo(tinygo_config) => {
-                let component_wasm_path =
+                let mut component_wasm_path =
                     build_tinygo_component(common_config, tinygo_config, component_config)?;
 
                 // Perform embedding, if necessary
-                if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 =
-                    &component_config.wasm_target
-                {
+                if let WasmTarget::WasiPreview1 = &component_config.wasm_target {
                     embed_wasm_component_metadata(
                         &common_config.path,
                         component_config
@@ -65,6 +69,8 @@ pub fn build_component(
                         &component_wasm_path,
                         &component_wasm_path,
                 )?;
+                    component_wasm_path =
+                        adapt_component_to_wasi_preview2(&component_wasm_path, component_config)?;
                 };
                 component_wasm_path
             }
@@ -86,27 +92,6 @@ pub fn build_component(
             }
         };
 
-        // If the component has been configured as WASI Preview2, adapt it from preview1
-        if component_config.wasm_target == WasmTarget::WasiPreview2 {
-            let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
-            // Adapt the component, using the adapter that is available locally
-            let wasm_bytes =
-                adapt_wasi_preview1_component(&component_wasm_path, adapter_wasm_bytes)
-                    .with_context(|| {
-                        format!(
-                            "failed to adapt component at [{}] to WASI preview2",
-                            component_wasm_path.display(),
-                        )
-                    })?;
-
-            // Write the adapted file out to disk
-            fs::write(&component_wasm_path, wasm_bytes).with_context(|| {
-                format!(
-                    "failed to write WASI preview2 adapted bytes to path [{}]",
-                    component_wasm_path.display(),
-                )
-            })?;
-        }
         component_wasm_path
     };
 
@@ -116,6 +101,28 @@ pub fn build_component(
     } else {
         Ok(component_wasm_path)
     }
+}
+
+pub fn adapt_component_to_wasi_preview2(
+    component_wasm_path: &PathBuf,
+    component_config: &ComponentConfig,
+) -> Result<PathBuf> {
+    let adapted_wasm_path = component_wasm_path.clone();
+    let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
+    let wasm_bytes = adapt_wasi_preview1_component(&adapted_wasm_path, adapter_wasm_bytes)
+        .with_context(|| {
+            format!(
+                "failed to adapt component at [{}] to WASI preview2",
+                component_wasm_path.display(),
+            )
+        })?;
+    fs::write(&component_wasm_path, wasm_bytes).with_context(|| {
+        format!(
+            "failed to write WASI preview2 adapted bytes to path [{}]",
+            component_wasm_path.display(),
+        )
+    })?;
+    Ok(adapted_wasm_path)
 }
 
 /// Sign the component at `component_wasm_path` using the provided configuration
@@ -281,10 +288,12 @@ fn build_tinygo_component(
     // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
     // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
     // we check for the `wit` directory which would be passed through to bindgen.
+
+    let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
         generate_tinygo_bindgen(
             &output_dir,
-            common_config.path.join("wit"),
+            &wit_directory,
             component_config.wit_world.as_ref().context(
                 "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
             )?,
@@ -292,8 +301,8 @@ fn build_tinygo_component(
                 .context("generating golang bindgen code failed")?;
     }
 
-    let result = command
-        .args([
+    let build_args = match &component_config.wasm_target {
+        WasmTarget::WasiPreview1 | WasmTarget::CoreModule=> vec![
             "build",
             "-o",
             filename.as_str(),
@@ -303,15 +312,30 @@ fn build_tinygo_component(
             "none",
             "-no-debug",
             ".",
-        ])
-        .status()
-        .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                anyhow!("{:?} command is not found", command.get_program())
-            } else {
-                anyhow!(e)
-            }
-        })?;
+        ],
+        WasmTarget::WasiPreview2 => vec![
+            "build",
+            "-o",
+            filename.as_str(),
+            "-target",
+            tinygo_config.build_target(&component_config.wasm_target),
+            "-wit-package",
+            wit_directory.to_str().context("missing wit directory")?,
+            "-wit-world",
+            component_config.wit_world.as_ref().context(
+                "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
+            )?,
+            ".",
+        ],
+    };
+
+    let result = command.args(build_args).status().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            anyhow!("{:?} command is not found", command.get_program())
+        } else {
+            anyhow!(e)
+        }
+    })?;
 
     if !result.success() {
         bail!("Compiling component failed: {}", result.to_string())
