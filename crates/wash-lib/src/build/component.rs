@@ -734,8 +734,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&output_dir, &wit_dir, "test-world")
-            .context("failed to run tinygo bindgen")?;
+        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
@@ -775,8 +774,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&output_dir, &wit_dir, "downstream")
-            .context("failed to run tinygo bindgen")?;
+        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
