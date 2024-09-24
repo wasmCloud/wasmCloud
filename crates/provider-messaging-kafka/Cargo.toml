@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-messaging-kafka"
-version = "0.5.0"
+version = "0.5.1"
 description = """
 A capability provider that satisfies the 'wasmcloud:messaging' contract using Kafka as a backend.
 """
