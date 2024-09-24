@@ -410,7 +410,8 @@ impl TinyGoConfig {
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm",
-            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasi",
+            WasmTarget::WasiPreview1 => "wasi",
+            WasmTarget::WasiPreview2 => "wasip2",
         }
     }
 }
