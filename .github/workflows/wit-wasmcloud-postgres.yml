@@ -28,7 +28,7 @@ jobs:
           echo "version is ${version}"
     - name: Build
       run: |
-        tar cvzf ${{ steps.ctx.outputs.tarball }} -C wit postgres/wit
+        tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit postgres/wit
     - name: Release
       uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
       with:

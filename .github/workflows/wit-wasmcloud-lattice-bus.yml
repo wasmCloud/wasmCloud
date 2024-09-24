@@ -1,9 +1,9 @@
-name: wit-wasmcloud-secrets-publish
+name: wit-wasmcloud-bus-publish
 
 on:
   push:
     tags:
-      - 'wit-wasmcloud-secrets-v*'
+      - 'wit-wasmcloud-bus-v*'
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
           echo "version is ${version}"
     - name: Build
       run: |
-        tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit secrets/wit
+        tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit bus/wit
     - name: Release
       uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
       with:
