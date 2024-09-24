@@ -116,7 +116,7 @@ pub fn adapt_component_to_wasi_preview2(
                 component_wasm_path.display(),
             )
         })?;
-    fs::write(&component_wasm_path, wasm_bytes).with_context(|| {
+    fs::write(component_wasm_path, wasm_bytes).with_context(|| {
         format!(
             "failed to write WASI preview2 adapted bytes to path [{}]",
             component_wasm_path.display(),
@@ -302,7 +302,7 @@ fn build_tinygo_component(
     }
 
     let build_args = match &component_config.wasm_target {
-        WasmTarget::WasiPreview1 | WasmTarget::CoreModule=> vec![
+        WasmTarget::WasiPreview1 | WasmTarget::CoreModule => vec![
             "build",
             "-o",
             filename.as_str(),
