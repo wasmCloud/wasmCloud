@@ -1,92 +1,492 @@
 //! Data types used in RPC calls (usually control-related) on a wasmCloud lattice
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, LinkName, WitNamespace, WitPackage};
+use crate::{ComponentId, LinkName, Result, WitNamespace, WitPackage};
 
-/// A host response to a request to start an component, confirming the host
-/// has enough capacity to start the component
+/// A host response to a request to start a component.
+///
+/// This acknowledgement confirms that the host has enough capacity to start the component
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct ComponentAuctionAck {
     /// The original component reference used for the auction
     #[serde(default)]
-    pub component_ref: String,
+    pub(crate) component_ref: String,
     /// The unique component identifier that the auctioner can use for this component
     #[serde(default)]
-    pub component_id: String,
+    pub(crate) component_id: String,
     /// The host ID of the "bidder" for this auction.
     #[serde(default)]
-    pub host_id: String,
+    pub(crate) host_id: String,
     /// Constraints that were used in the auction
     #[serde(default)]
-    pub constraints: HashMap<String, String>,
+    pub(crate) constraints: BTreeMap<String, String>,
+}
+
+impl ComponentAuctionAck {
+    #[must_use]
+    pub fn from_component_host_and_constraints(
+        component_ref: &str,
+        component_id: &str,
+        host_id: &str,
+        constraints: impl Into<BTreeMap<String, String>>,
+    ) -> Self {
+        Self {
+            component_ref: component_ref.into(),
+            component_id: component_id.into(),
+            host_id: host_id.into(),
+            constraints: constraints.into(),
+        }
+    }
+
+    /// Get the component ref for the auction acknowledgement
+    #[must_use]
+    pub fn component_ref(&self) -> &str {
+        self.component_ref.as_ref()
+    }
+
+    /// Get the component ID for the auction acknowledgement
+    #[must_use]
+    pub fn component_id(&self) -> &str {
+        self.component_ref.as_ref()
+    }
+
+    /// Get the host ID for the auction acknowledgement
+    #[must_use]
+    pub fn host_id(&self) -> &str {
+        self.host_id.as_ref()
+    }
+
+    /// Get the constraints acknowledged by the auction acknowledgement
+    #[must_use]
+    pub fn constraints(&self) -> &BTreeMap<String, String> {
+        &self.constraints
+    }
+
+    pub fn builder() -> ComponentAuctionAckBuilder {
+        ComponentAuctionAckBuilder::default()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct ComponentAuctionAckBuilder {
+    component_ref: Option<String>,
+    component_id: Option<String>,
+    host_id: Option<String>,
+    constraints: Option<BTreeMap<String, String>>,
+}
+
+impl ComponentAuctionAckBuilder {
+    #[must_use]
+    pub fn component_ref(mut self, v: String) -> Self {
+        self.component_ref = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn component_id(mut self, v: String) -> Self {
+        self.component_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn host_id(mut self, v: String) -> Self {
+        self.host_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn constraints(mut self, v: BTreeMap<String, String>) -> Self {
+        self.constraints = Some(v);
+        self
+    }
+
+    pub fn build(self) -> Result<ComponentAuctionAck> {
+        Ok(ComponentAuctionAck {
+            component_ref: self
+                .component_ref
+                .ok_or_else(|| "component_ref is required".to_string())?,
+            component_id: self
+                .component_id
+                .ok_or_else(|| "component_id is required".to_string())?,
+            host_id: self
+                .host_id
+                .ok_or_else(|| "host_id is required".to_string())?,
+            constraints: self.constraints.unwrap_or_default(),
+        })
+    }
 }
 
 /// A request to locate suitable hosts for a given component
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct ComponentAuctionRequest {
     /// The image reference, file or OCI, for this component.
     #[serde(default)]
-    pub component_ref: String,
-    /// The unique identifier to be used for this component. The host will ensure
-    /// that no other component with the same ID is running on the host
-    pub component_id: ComponentId,
+    pub(crate) component_ref: String,
+    /// The unique identifier to be used for this component.
+    ///
+    /// The host will ensure that no other component with the same ID is running on the host
+    pub(crate) component_id: ComponentId,
     /// The set of constraints that must match the labels of a suitable target host
-    pub constraints: HashMap<String, String>,
+    pub(crate) constraints: BTreeMap<String, String>,
 }
 
-/// A host response to a request to start a provider, confirming the host
-/// has enough capacity to start the provider and that the provider is
-/// not already running on the host
+impl ComponentAuctionRequest {
+    /// Get the component ref for the auction request
+    #[must_use]
+    pub fn component_ref(&self) -> &str {
+        self.component_ref.as_ref()
+    }
+
+    /// Get the component ID for the auction request
+    #[must_use]
+    pub fn component_id(&self) -> &str {
+        self.component_ref.as_ref()
+    }
+
+    /// Get the constraints for the auction request
+    #[must_use]
+    pub fn constraints(&self) -> &BTreeMap<String, String> {
+        &self.constraints
+    }
+
+    pub fn builder() -> ComponentAuctionRequestBuilder {
+        ComponentAuctionRequestBuilder::default()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct ComponentAuctionRequestBuilder {
+    component_ref: Option<String>,
+    component_id: Option<ComponentId>,
+    constraints: Option<BTreeMap<String, String>>,
+}
+
+impl ComponentAuctionRequestBuilder {
+    #[must_use]
+    pub fn component_ref(mut self, v: String) -> Self {
+        self.component_ref = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn component_id(mut self, v: String) -> Self {
+        self.component_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn constraints(mut self, v: BTreeMap<String, String>) -> Self {
+        self.constraints = Some(v);
+        self
+    }
+
+    pub fn build(self) -> Result<ComponentAuctionRequest> {
+        Ok(ComponentAuctionRequest {
+            component_ref: self
+                .component_ref
+                .ok_or_else(|| "component_ref is required".to_string())?,
+            component_id: self
+                .component_id
+                .ok_or_else(|| "component_id is required".to_string())?,
+            constraints: self.constraints.unwrap_or_default(),
+        })
+    }
+}
+
+/// A host response to a request to start a provider.
+///
+/// This acknowledgement confirms the host has enough capacity to
+/// start the provider and that the provider is not already running on the host
+///
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct ProviderAuctionAck {
     /// The host ID of the "bidder" for this auction
     #[serde(default)]
-    pub host_id: String,
+    pub(crate) host_id: String,
     /// The original provider reference provided for the auction
     #[serde(default)]
-    pub provider_ref: String,
+    pub(crate) provider_ref: String,
     /// The unique component identifier that the auctioner can use for this provider
     #[serde(default)]
-    pub provider_id: String,
+    pub(crate) provider_id: String,
     /// The constraints provided for the auction
     #[serde(default)]
-    pub constraints: HashMap<String, String>,
+    pub(crate) constraints: BTreeMap<String, String>,
 }
 
-/// A request to locate a suitable host for a capability provider. The
-/// provider's unique identity is used to rule out hosts on which the
+impl ProviderAuctionAck {
+    /// Get the Host ID for the provider auction acknowledgement
+    #[must_use]
+    pub fn host_id(&self) -> &str {
+        self.provider_ref.as_ref()
+    }
+
+    /// Get the provider ref for the provider auction acknowledgement
+    #[must_use]
+    pub fn provider_ref(&self) -> &str {
+        self.provider_ref.as_ref()
+    }
+
+    /// Get the provider ID for the provider auction acknowledgement
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        self.provider_ref.as_ref()
+    }
+
+    /// Get the constraints for the provider auction acknowledgement
+    #[must_use]
+    pub fn constraints(&self) -> &BTreeMap<String, String> {
+        &self.constraints
+    }
+
+    #[must_use]
+    pub fn builder() -> ProviderAuctionAckBuilder {
+        ProviderAuctionAckBuilder::default()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct ProviderAuctionAckBuilder {
+    host_id: Option<String>,
+    provider_ref: Option<String>,
+    provider_id: Option<String>,
+    constraints: Option<BTreeMap<String, String>>,
+}
+
+impl ProviderAuctionAckBuilder {
+    #[must_use]
+    pub fn provider_ref(mut self, v: String) -> Self {
+        self.provider_ref = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn provider_id(mut self, v: String) -> Self {
+        self.provider_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn host_id(mut self, v: String) -> Self {
+        self.host_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn constraints(mut self, v: BTreeMap<String, String>) -> Self {
+        self.constraints = Some(v);
+        self
+    }
+
+    pub fn build(self) -> Result<ProviderAuctionAck> {
+        Ok(ProviderAuctionAck {
+            provider_ref: self
+                .provider_ref
+                .ok_or_else(|| "provider_ref is required".to_string())?,
+            provider_id: self
+                .provider_id
+                .ok_or_else(|| "provider_id is required".to_string())?,
+            host_id: self
+                .host_id
+                .ok_or_else(|| "host_id is required".to_string())?,
+            constraints: self.constraints.unwrap_or_default(),
+        })
+    }
+}
+
+/// A request to locate a suitable host for a capability provider.
+///
+/// The provider's unique identity is used to rule out hosts on which the
 /// provider is already running.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionRequest {
-    /// The set of constraints that must match the labels of a suitable target host
-    pub constraints: HashMap<String, String>,
     /// The image reference, file or OCI, for this provider.
     #[serde(default)]
-    pub provider_ref: String,
+    pub(crate) provider_ref: String,
+
     /// The unique identifier to be used for this provider. The host will ensure
     /// that no other provider with the same ID is running on the host
-    pub provider_id: ComponentId,
+    pub(crate) provider_id: ComponentId,
+
+    /// The set of constraints that must match the labels of a suitable target host
+    pub(crate) constraints: BTreeMap<String, String>,
+}
+
+impl ProviderAuctionRequest {
+    /// Get the provider ref for the auction request
+    #[must_use]
+    pub fn provider_ref(&self) -> &str {
+        self.provider_ref.as_ref()
+    }
+
+    /// Get the provider ID for the auction request
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        self.provider_ref.as_ref()
+    }
+
+    /// Get the constraints acknowledged by the auction request
+    #[must_use]
+    pub fn constraints(&self) -> &BTreeMap<String, String> {
+        &self.constraints
+    }
+
+    /// Build a new [`ProviderAuctionRequest`]
+    #[must_use]
+    pub fn builder() -> ProviderAuctionRequestBuilder {
+        ProviderAuctionRequestBuilder::default()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct ProviderAuctionRequestBuilder {
+    provider_ref: Option<String>,
+    provider_id: Option<ComponentId>,
+    constraints: Option<BTreeMap<String, String>>,
+}
+
+impl ProviderAuctionRequestBuilder {
+    #[must_use]
+    pub fn provider_ref(mut self, v: String) -> Self {
+        self.provider_ref = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn provider_id(mut self, v: String) -> Self {
+        self.provider_id = Some(v);
+        self
+    }
+
+    #[must_use]
+    pub fn constraints(mut self, v: BTreeMap<String, String>) -> Self {
+        self.constraints = Some(v);
+        self
+    }
+
+    pub fn build(self) -> Result<ProviderAuctionRequest> {
+        Ok(ProviderAuctionRequest {
+            provider_ref: self
+                .provider_ref
+                .ok_or_else(|| "provider_ref is required".to_string())?,
+            provider_id: self
+                .provider_id
+                .ok_or_else(|| "provider_id is required".to_string())?,
+            constraints: self.constraints.unwrap_or_default(),
+        })
+    }
 }
 
 /// A request to remove a link definition and detach the relevant component
 /// from the given provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct DeleteInterfaceLinkDefinitionRequest {
     /// The source component's identifier.
-    pub source_id: ComponentId,
+    pub(crate) source_id: ComponentId,
+
     /// Name of the link. Not providing this is equivalent to specifying Some("default")
     #[serde(default = "default_link_name")]
-    pub name: LinkName,
+    pub(crate) name: LinkName,
+
     /// WIT namespace of the link, e.g. `wasi` in `wasi:keyvalue/readwrite.get`
-    pub wit_namespace: WitNamespace,
+    pub(crate) wit_namespace: WitNamespace,
+
     /// WIT package of the link, e.g. `keyvalue` in `wasi:keyvalue/readwrite.get`
-    pub wit_package: WitPackage,
+    pub(crate) wit_package: WitPackage,
+}
+
+impl DeleteInterfaceLinkDefinitionRequest {
+    pub fn from_source_and_link_metadata(
+        source_id: &str,
+        name: &str,
+        wit_ns: &str,
+        wit_pkg: &str,
+    ) -> Self {
+        Self {
+            source_id: source_id.into(),
+            name: name.into(),
+            wit_namespace: wit_ns.into(),
+            wit_package: wit_pkg.into(),
+        }
+    }
+    /// Get the source (component/provider) ID for delete request
+    #[must_use]
+    pub fn source_id(&self) -> &str {
+        self.source_id.as_ref()
+    }
+
+    /// Get the link name for the link deletion request(or "default")
+    #[must_use]
+    pub fn link_name(&self) -> &str {
+        self.name.as_ref()
+    }
+
+    /// Get the WIT namespace relevant to the link deletion request
+    #[must_use]
+    pub fn wit_namespace(&self) -> &str {
+        self.wit_namespace.as_ref()
+    }
+
+    /// Get the WIT package relevant to the link deletion request
+    #[must_use]
+    pub fn wit_package(&self) -> &str {
+        self.wit_package.as_ref()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct DeleteInterfaceLinkDefinitionRequestBuilder {
+    source_id: Option<ComponentId>,
+    name: Option<LinkName>,
+    wit_namespace: Option<WitNamespace>,
+    wit_package: Option<WitPackage>,
+}
+
+impl DeleteInterfaceLinkDefinitionRequestBuilder {
+    pub fn source_id(mut self, v: String) -> Self {
+        self.source_id = Some(v);
+        self
+    }
+
+    pub fn name(mut self, v: String) -> Self {
+        self.name = Some(v);
+        self
+    }
+
+    pub fn wit_namespace(mut self, v: String) -> Self {
+        self.wit_namespace = Some(v);
+        self
+    }
+
+    pub fn wit_package(mut self, v: String) -> Self {
+        self.wit_package = Some(v);
+        self
+    }
+
+    pub fn build(self) -> Result<DeleteInterfaceLinkDefinitionRequest> {
+        Ok(DeleteInterfaceLinkDefinitionRequest {
+            source_id: self
+                .source_id
+                .ok_or_else(|| "source_id is required".to_string())?,
+            name: self.name.ok_or_else(|| "name is required".to_string())?,
+            wit_namespace: self
+                .wit_namespace
+                .ok_or_else(|| "wit_namespace is required".to_string())?,
+            wit_package: self
+                .wit_package
+                .ok_or_else(|| "wit_package is required".to_string())?,
+        })
+    }
 }
 
 /// Helper function to provide a default link name
-pub(crate) fn default_link_name() -> LinkName {
+fn default_link_name() -> LinkName {
     "default".to_string()
 }

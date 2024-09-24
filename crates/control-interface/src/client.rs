@@ -2,7 +2,8 @@
 
 use core::fmt::{self, Debug};
 use core::time::Duration;
-use std::collections::HashMap;
+
+use std::collections::{BTreeMap, HashMap};
 
 use async_nats::Subscriber;
 use cloudevents::event::Event;
@@ -11,55 +12,23 @@ use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
 
-use crate::types::link::InterfaceLinkDefinition;
-
 use crate::types::ctl::{
     CtlResponse, ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
     UpdateComponentCommand,
 };
 use crate::types::host::{Host, HostInventory, HostLabel};
+use crate::types::link::Link;
 use crate::types::registry::RegistryCredential;
 use crate::types::rpc::{
     ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
     ProviderAuctionAck, ProviderAuctionRequest,
 };
-use crate::{
-    broker, json_deserialize, json_serialize, otel, parse_identifier, IdentifierKind, Result,
-};
-
-/// Lattice control interface client
-#[derive(Clone)]
-pub struct Client {
-    nc: async_nats::Client,
-    topic_prefix: Option<String>,
-    /// Lattice prefix
-    pub lattice: String,
-    timeout: Duration,
-    auction_timeout: Duration,
-}
-
-impl Debug for Client {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Client")
-            .field("topic_prefix", &self.topic_prefix)
-            .field("lattice", &self.lattice)
-            .field("timeout", &self.timeout)
-            .field("auction_timeout", &self.auction_timeout)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Client {
-    /// Get a copy of the NATS client in use by this control client
-    #[allow(unused)]
-    #[must_use]
-    pub fn nats_client(&self) -> async_nats::Client {
-        self.nc.clone()
-    }
-}
+use crate::{broker, json_deserialize, json_serialize, otel, IdentifierKind, Result};
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
 /// the control interface client
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ClientBuilder {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
@@ -132,6 +101,33 @@ impl ClientBuilder {
     }
 }
 
+/// Lattice control interface client
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct Client {
+    /// Internal `async-nats` client
+    nc: async_nats::Client,
+    /// Topic prefix that should be used with this lattice control client
+    topic_prefix: Option<String>,
+    /// Lattice prefix
+    lattice: String,
+    /// Timeout
+    timeout: Duration,
+    /// Timeout to use when limiting auctions
+    auction_timeout: Duration,
+}
+
+impl Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("topic_prefix", &self.topic_prefix)
+            .field("lattice", &self.lattice)
+            .field("timeout", &self.timeout)
+            .field("auction_timeout", &self.auction_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Client {
     /// Convenience method for creating a new client with all default settings. This is the same as
     /// calling `ClientBuilder::new(nc).build()`
@@ -140,6 +136,19 @@ impl Client {
         ClientBuilder::new(nc).build()
     }
 
+    /// Get a copy of the NATS client in use by this control client
+    #[allow(unused)]
+    #[must_use]
+    pub fn nats_client(&self) -> async_nats::Client {
+        self.nc.clone()
+    }
+
+    /// Retrieve the lattice in use by the [`Client`]
+    pub fn lattice(&self) -> &str {
+        self.lattice.as_ref()
+    }
+
+    /// Perform a request with a timeout
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn request_timeout(
         &self,
@@ -178,7 +187,7 @@ impl Client {
         let subject = broker::v1::queries::host_inventory(
             &self.topic_prefix,
             &self.lattice,
-            parse_identifier(&IdentifierKind::HostId, host_id)?.as_str(),
+            IdentifierKind::is_host_id(host_id)?.as_str(),
         );
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
@@ -208,55 +217,75 @@ impl Client {
         &self,
         component_ref: &str,
         component_id: &str,
-        constraints: HashMap<String, String>,
+        constraints: impl Into<BTreeMap<String, String>>,
     ) -> Result<Vec<CtlResponse<ComponentAuctionAck>>> {
         let subject = broker::v1::component_auction_subject(&self.topic_prefix, &self.lattice);
-        let bytes = json_serialize(ComponentAuctionRequest {
-            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
-            component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
-            constraints,
-        })?;
+        let bytes = json_serialize(
+            ComponentAuctionRequest::builder()
+                .component_ref(IdentifierKind::is_component_ref(component_ref)?)
+                .component_id(IdentifierKind::is_component_id(component_id)?)
+                .constraints(constraints.into())
+                .build()?,
+        )?;
         debug!("component_auction:publish {}", &subject);
         self.publish_and_wait(subject, bytes).await
     }
 
     /// Performs a provider auction within the lattice, publishing a set of constraints and the
-    /// metadata for the provider in question. This will always wait for the full period specified
-    /// by _duration_, and then return the set of gathered results. It is then up to the client to
-    /// choose from among the "auction winners" and issue the appropriate command to start a
-    /// provider. Clients cannot assume that auctions will always return at least one result.
+    /// metadata for the provider in question.
+    ///
+    /// This will always wait for the full period specified by _duration_, and then return the set of gathered results.
+    /// It is then up to the client to choose from among the "auction winners" and issue the appropriate command to start a
+    /// provider.
+    ///
+    /// Clients should not assume that auctions will always return at least one result.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_ref` - The ID of the provider to auction
+    /// * `provider_id` - The ID of the provider auction
+    /// * `constraints` - Constraints that govern where the provider can be placed
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn perform_provider_auction(
         &self,
         provider_ref: &str,
         provider_id: &str,
-        constraints: HashMap<String, String>,
+        constraints: impl Into<BTreeMap<String, String>>,
     ) -> Result<Vec<CtlResponse<ProviderAuctionAck>>> {
         let subject = broker::v1::provider_auction_subject(&self.topic_prefix, &self.lattice);
-        let bytes = json_serialize(ProviderAuctionRequest {
-            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
-            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
-            constraints,
-        })?;
+        let bytes = json_serialize(
+            ProviderAuctionRequest::builder()
+                .provider_ref(IdentifierKind::is_provider_ref(provider_ref)?)
+                .provider_id(IdentifierKind::is_provider_id(provider_id)?)
+                .constraints(constraints.into())
+                .build()?,
+        )?;
         debug!("provider_auction:publish {}", &subject);
         self.publish_and_wait(subject, bytes).await
     }
 
-    /// Sends a request to the given host to scale a given component. This returns an acknowledgement of
-    /// _receipt_ of the command, not a confirmation that the component scaled. An acknowledgement will
-    /// either indicate some form of validation failure, or, if no failure occurs, the receipt of
-    /// the command. To avoid blocking consumers, wasmCloud hosts will acknowledge the scale component
-    /// command prior to fetching the component's OCI bytes. If a client needs deterministic results as
-    /// to whether the component completed its startup process, the client will have to monitor the
-    /// appropriate event in the control event stream
+    /// Sends a request to the given host to scale a given component.
+    ///
+    /// This returns an acknowledgement of _receipt_ of the command, not a confirmation that the component scaled.
+    /// An acknowledgement will either indicate some form of validation failure, or, if no failure occurs, the receipt of
+    /// the command.
+    ///
+    /// To avoid blocking consumers, wasmCloud hosts will acknowledge the scale component
+    /// command prior to fetching the component's OCI bytes.
+    ///
+    /// Client that need deterministic results as to whether the component completed its startup process
+    /// must monitor the appropriate event in the control event stream.
     ///
     /// # Arguments
-    /// `host_id`: The ID of the host to scale the component on
-    /// `component_ref`: The OCI reference of the component to scale
-    /// `max_instances`: The maximum number of instances this component can run concurrently. Specifying `0` will stop the component.
-    /// `annotations`: Optional annotations to apply to the component
-    /// `config`: List of named configuration to use for the component
-    /// `allow_update`: Whether to perform allow updates to the component (triggering a separate update)
+    ///
+    /// * `host_id` - The ID of the host to scale the component on
+    /// * `component_ref` - The OCI reference of the component to scale
+    /// * `max_instances` - The maximum number of instances this component can run concurrently. Specifying `0` will stop the component.
+    /// * `annotations` - Optional annotations to apply to the component
+    /// * `config` - List of named configuration to use for the component
+    /// * `allow_update` - Whether to perform allow updates to the component (triggering a separate update)
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_component(
         &self,
@@ -264,10 +293,10 @@ impl Client {
         component_ref: &str,
         component_id: &str,
         max_instances: u32,
-        annotations: Option<HashMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
         config: Vec<String>,
     ) -> Result<CtlResponse<()>> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let host_id = IdentifierKind::is_host_id(host_id)?;
         let subject = broker::v1::commands::scale_component(
             &self.topic_prefix,
             &self.lattice,
@@ -276,8 +305,8 @@ impl Client {
         debug!("scale_component:request {}", &subject);
         let bytes = json_serialize(ScaleComponentCommand {
             max_instances,
-            component_ref: parse_identifier(&IdentifierKind::ActorRef, component_ref)?,
-            component_id: parse_identifier(&IdentifierKind::ComponentId, component_id)?,
+            component_ref: IdentifierKind::is_component_ref(component_ref)?,
+            component_id: IdentifierKind::is_component_id(component_id)?,
             host_id,
             annotations,
             config,
@@ -289,13 +318,17 @@ impl Client {
         }
     }
 
-    /// Publishes a registry credential map to the control interface of the lattice. All hosts will
-    /// be listening and all will overwrite their registry credential map with the new information.
+    /// Publishes a registry credential map to the control interface of the lattice.
+    ///
+    /// All hosts will be listening and overwrite their registry credential maps with the new information.
+    ///
     /// It is highly recommended you use TLS connections with NATS and isolate the control interface
     /// credentials when using this function in production as the data contains secrets
     ///
     /// # Arguments
-    /// - `registries`: A map of registry names to their credentials to be used for fetching from specific registries
+    ///
+    /// * `registries` - A map of registry names to their credentials to be used for fetching from specific registries
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(
         &self,
@@ -315,30 +348,41 @@ impl Client {
         if let Err(e) = resp {
             Err(format!("Failed to push registry credential map: {e}").into())
         } else {
-            Ok(CtlResponse::success())
+            Ok(CtlResponse::<()>::success(
+                "successfully added registries".into(),
+            ))
         }
     }
 
-    /// Puts a link into the lattice. Returns an error if it was unable to put the link
+    /// Puts a link into the lattice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if it was unable to put the link
     #[instrument(level = "debug", skip_all)]
-    pub async fn put_link(&self, link: InterfaceLinkDefinition) -> Result<CtlResponse<()>> {
+    pub async fn put_link(&self, link: Link) -> Result<CtlResponse<()>> {
         // Validate link parameters
-        parse_identifier(&IdentifierKind::ComponentId, &link.source_id)?;
-        parse_identifier(&IdentifierKind::ComponentId, &link.target)?;
-        parse_identifier(&IdentifierKind::LinkName, &link.name)?;
+        IdentifierKind::is_component_id(&link.source_id)?;
+        IdentifierKind::is_component_id(&link.target)?;
+        IdentifierKind::is_link_name(&link.name)?;
 
         let subject = broker::v1::put_link(&self.topic_prefix, &self.lattice);
         debug!("put_link:request {}", &subject);
 
-        let bytes = crate::json_serialize(&link)?;
+        let bytes = crate::json_serialize(link)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive put link acknowledgement: {e}").into()),
         }
     }
 
-    /// Deletes a link from the lattice metadata keyvalue bucket. Returns an error if it was unable
-    /// to delete. This is an idempotent operation.
+    /// Deletes a link from the lattice metadata keyvalue bucket.
+    ///
+    /// This is an idempotent operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if it was unable to delete.
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_link(
         &self,
@@ -348,12 +392,12 @@ impl Client {
         wit_package: &str,
     ) -> Result<CtlResponse<()>> {
         let subject = broker::v1::delete_link(&self.topic_prefix, &self.lattice);
-        let ld = DeleteInterfaceLinkDefinitionRequest {
-            source_id: parse_identifier(&IdentifierKind::ComponentId, source_id)?,
-            name: parse_identifier(&IdentifierKind::LinkName, link_name)?,
-            wit_namespace: wit_namespace.to_string(),
-            wit_package: wit_package.to_string(),
-        };
+        let ld = DeleteInterfaceLinkDefinitionRequest::from_source_and_link_metadata(
+            &IdentifierKind::is_component_id(source_id)?,
+            &IdentifierKind::is_link_name(link_name)?,
+            wit_namespace,
+            wit_package,
+        );
         let bytes = crate::json_serialize(&ld)?;
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),
@@ -361,11 +405,13 @@ impl Client {
         }
     }
 
-    /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket. If
-    /// the client was created with caching, this will return the cached list of links. Otherwise,
+    /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket.
+    ///
+    /// If the client was created with caching, this will return the cached list of links. Otherwise,
     /// it will query the bucket for the list of links.
+    ///
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_links(&self) -> Result<CtlResponse<Vec<InterfaceLinkDefinition>>> {
+    pub async fn get_links(&self) -> Result<CtlResponse<Vec<Link>>> {
         let subject = broker::v1::queries::link_definitions(&self.topic_prefix, &self.lattice);
         debug!("get_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
@@ -377,6 +423,12 @@ impl Client {
     /// Puts a named config, replacing any data that is already present.
     ///
     /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_name` - Name of the configuration that should be saved
+    /// * `config` - contents of the configuration to be saved
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn put_config(
         &self,
@@ -395,6 +447,11 @@ impl Client {
     /// Delete the named config item.
     ///
     /// Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_name` - Name of the configuration that should be deleted
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_config(&self, config_name: &str) -> Result<CtlResponse<()>> {
         let subject = broker::v1::delete_config(&self.topic_prefix, &self.lattice, config_name);
@@ -413,29 +470,44 @@ impl Client {
     /// Get the named config item.
     ///
     /// # Arguments
-    /// - `config_name`: The name of the config to fetch. Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
+    ///
+    /// * `config_name` -  The name of the config to fetch. Config names must be valid NATS subject strings and not contain any `.` or `>` characters.
     ///
     /// # Returns
+    ///
     /// A map of key-value pairs representing the contents of the config item. This response is wrapped in the [CtlResponse] type. If
     /// the config item does not exist, the host will return a [CtlResponse] with a `success` field set to `true` and a `response` field
     /// set to [Option::None]. If the config item exists, the host will return a [CtlResponse] with a `success` field set to `true` and a
     /// `response` field set to [Option::Some] containing the key-value pairs of the config item.
     ///
-    /// # Example Usage
-    /// ```no_run
-    /// let client = wasmcloud_control_interface::Client::new(async_nats::connect("127.0.0.1:4222")).await.unwrap("should connect to NATS");
-    /// client.put_config("foo", HashMap::from_iter(vec![("key".to_string(), "value".to_string())])).await.expect("should be able to put config");
+    /// # Example
     ///
-    /// let config = client.get_config("foo").await.expect("should be able to get config");
-    /// assert!(config.success);
-    /// assert_eq!(config.response, Some(HashMap::from_iter(vec![("key".to_string(), "value".to_string())]))
+    /// ```no_run
+    /// # use std::collections::HashMap;
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let nc_client = async_nats::connect("127.0.0.1:4222").await.expect("failed to build NATS client");
+    /// let ctl_client = wasmcloud_control_interface::Client::new(nc_client);
+    /// ctl_client.put_config(
+    ///     "foo",
+    ///     HashMap::from_iter(vec![("key".to_string(), "value".to_string())]),
+    /// )
+    /// .await
+    /// .expect("should be able to put config");
+    ///
+    /// let config_resp = ctl_client.get_config("foo").await.expect("should be able to get config");
+    /// assert!(config_resp.succeeded());
+    /// assert_eq!(config_resp.data(), Some(&HashMap::from_iter(vec![("key".to_string(), "value".to_string())])));
     ///
     /// // Note that the host will return a success response even if the config item does not exist.
     /// // Errors are reserved for communication problems with the host or with the config store.
-    /// let absent_config = client.get_config("bar").await.expect("should be able to get config");
-    /// assert!(absent_config.success);
-    /// assert_eq!(absent_config.response, None);
+    /// let absent_config_resp = ctl_client.get_config("bar").await.expect("should be able to get config");
+    /// assert!(absent_config_resp.succeeded());
+    /// assert_eq!(absent_config_resp.data(), None);
+    ///
+    /// # }
     /// ```
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn get_config(
         &self,
@@ -454,9 +526,16 @@ impl Client {
 
     /// Put a new (or update an existing) label on the given host.
     ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host on which the label should be placed
+    /// * `key` - The key of the label
+    /// * `value` - The value of the label
+    ///
     /// # Errors
     ///
     /// Will return an error if there is a communication problem with the host
+    ///
     pub async fn put_label(
         &self,
         host_id: &str,
@@ -477,9 +556,15 @@ impl Client {
 
     /// Removes a label from the given host.
     ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host on which the label should be deleted
+    /// * `key` - The key of the label that should be deleted
+    ///
     /// # Errors
     ///
     /// Will return an error if there is a communication problem with the host
+    ///
     pub async fn delete_label(&self, host_id: &str, key: &str) -> Result<CtlResponse<()>> {
         let subject = broker::v1::delete_label(&self.topic_prefix, &self.lattice, host_id);
         debug!(%subject, "removing label");
@@ -493,23 +578,32 @@ impl Client {
         }
     }
 
-    /// Issue a command to a host instructing that it replace an existing component (indicated by its
-    /// public key) with a new component indicated by an OCI image reference. The host will acknowledge
-    /// this request as soon as it verifies that the target component is running. This acknowledgement
-    /// occurs **before** the new bytes are downloaded. Live-updating an component can take a long time
+    /// Command a host to replace an existing component with a new component indicated by an OCI image reference.
+    ///
+    /// The host will acknowledge this request as soon as it verifies that the target component is running.
+    ///
+    /// Note that acknowledgement occurs **before** the new bytes are downloaded. Live-updating an component can take a long time
     /// and control clients cannot block waiting for a reply that could come several seconds later.
-    /// If you need to verify that the component has been updated, you will want to set up a listener
-    /// for the appropriate **PublishedEvent** which will be published on the control events channel
-    /// in JSON
+    ///
+    /// To properly verify that a component has been updated, create  listener for the appropriate [`PublishedEvent`] on the
+    /// control events channel
+    ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host on which the component should be updated
+    /// * `existing_component_id` - ID of the existing component
+    /// * `new_component_ref` - New component reference that should be used
+    /// * `annotations` - Annotations to place on the newly updated component
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn update_component(
         &self,
         host_id: &str,
         existing_component_id: &str,
         new_component_ref: &str,
-        annotations: Option<HashMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
     ) -> Result<CtlResponse<()>> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let host_id = IdentifierKind::is_host_id(host_id)?;
         let subject = broker::v1::commands::update_component(
             &self.topic_prefix,
             &self.lattice,
@@ -518,8 +612,8 @@ impl Client {
         debug!("update_component:request {}", &subject);
         let bytes = json_serialize(UpdateComponentCommand {
             host_id,
-            component_id: parse_identifier(&IdentifierKind::ComponentId, existing_component_id)?,
-            new_component_ref: parse_identifier(&IdentifierKind::ActorRef, new_component_ref)?,
+            component_id: IdentifierKind::is_component_id(existing_component_id)?,
+            new_component_ref: IdentifierKind::is_component_ref(new_component_ref)?,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -528,24 +622,36 @@ impl Client {
         }
     }
 
-    /// Issues a command to a host to start a provider with a given OCI reference using the
-    /// specified link name (or "default" if none is specified). The target wasmCloud host will
-    /// acknowledge the receipt of this command _before_ downloading the provider's bytes from the
-    /// OCI registry, indicating either a validation failure or success. If a client needs
-    /// deterministic guarantees that the provider has completed its startup process, such a client
-    /// needs to monitor the control event stream for the appropriate event.
+    /// Command a host to start a provider with a given OCI reference.
     ///
-    /// The `provider_configuration` parameter is a list of named configs to use for this provider. It is not required to specify a config.
+    /// The specified link name will be used (or "default" if none is specified).
+    ///
+    /// The target wasmCloud host will acknowledge the receipt of this command _before_ downloading the provider's bytes from the
+    /// OCI registry, indicating either a validation failure or success.
+    ///
+    /// Clients that need deterministic guarantees that the provider has completed its startup process, should
+    /// monitor the control event stream for the appropriate event.
+    ///
+    /// The `provider_configuration` parameter is a list of named configs to use for this provider, and configurations are not required.
+    ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host on which to start the provider
+    /// * `provider_ref` - Image reference of the provider to start
+    /// * `provider_id` - ID of the provider to start
+    /// * `annotations` - Annotations to place on the started provider
+    /// * `provider_configuration` - Configuration relevant to the provider (if any)
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn start_provider(
         &self,
         host_id: &str,
         provider_ref: &str,
         provider_id: &str,
-        annotations: Option<HashMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
         provider_configuration: Vec<String>,
     ) -> Result<CtlResponse<()>> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let host_id = IdentifierKind::is_host_id(host_id)?;
         let subject = broker::v1::commands::start_provider(
             &self.topic_prefix,
             &self.lattice,
@@ -554,8 +660,8 @@ impl Client {
         debug!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
             host_id,
-            provider_ref: parse_identifier(&IdentifierKind::ProviderRef, provider_ref)?,
-            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
+            provider_ref: IdentifierKind::is_provider_ref(provider_ref)?,
+            provider_id: IdentifierKind::is_component_id(provider_id)?,
             annotations,
             config: provider_configuration,
         })?;
@@ -567,12 +673,20 @@ impl Client {
     }
 
     /// Issues a command to a host to stop a provider for the given OCI reference, link name, and
-    /// contract ID. The target wasmCloud host will acknowledge the receipt of this command, and
+    /// contract ID.
+    ///
+    /// The target wasmCloud host will acknowledge the receipt of this command, and
     /// _will not_ supply a discrete confirmation that a provider has terminated. For that kind of
     /// information, the client must also monitor the control event stream
+    ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host on which to stop the provider
+    /// * `provider_id` - ID of the provider to stop
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn stop_provider(&self, host_id: &str, provider_id: &str) -> Result<CtlResponse<()>> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let host_id = IdentifierKind::is_host_id(host_id)?;
 
         let subject = broker::v1::commands::stop_provider(
             &self.topic_prefix,
@@ -582,7 +696,7 @@ impl Client {
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id,
-            provider_id: parse_identifier(&IdentifierKind::ComponentId, provider_id)?,
+            provider_id: IdentifierKind::is_component_id(provider_id)?,
         })?;
 
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -591,17 +705,25 @@ impl Client {
         }
     }
 
-    /// Issues a command to a specific host to perform a graceful termination. The target host will
-    /// acknowledge receipt of the command before it attempts a shutdown. To deterministically
-    /// verify that the host is down, a client should monitor for the "host stopped" event or
+    /// Issues a command to a specific host to perform a graceful termination.
+    ///
+    /// The target host will acknowledge receipt of the command before it attempts a shutdown.
+    ///
+    /// To deterministically verify that the host is down, a client should monitor for the "host stopped" event or
     /// passively detect the host down by way of a lack of heartbeat receipts
+    ///
+    /// # Arguments
+    ///
+    /// * `host_id` - ID of the host to stop
+    /// * `timeout_ms` - (optional) amount of time to allow the host to complete stopping
+    ///
     #[instrument(level = "debug", skip_all)]
     pub async fn stop_host(
         &self,
         host_id: &str,
         timeout_ms: Option<u64>,
     ) -> Result<CtlResponse<()>> {
-        let host_id = parse_identifier(&IdentifierKind::HostId, host_id)?;
+        let host_id = IdentifierKind::is_host_id(host_id)?;
         let subject =
             broker::v1::commands::stop_host(&self.topic_prefix, &self.lattice, host_id.as_str());
         debug!("stop_host:request {}", &subject);
@@ -616,6 +738,7 @@ impl Client {
         }
     }
 
+    /// Publish a message and wait for a response
     async fn publish_and_wait<D: DeserializeOwned>(
         &self,
         subject: String,
@@ -641,11 +764,14 @@ impl Client {
     }
 
     /// Returns the receiver end of a channel that subscribes to the lattice event stream.
-    /// Any [`Event`](struct@Event)s that are published after this channel is created
+    ///
+    /// Any [`Event`]s that are published after this channel is created
     /// will be added to the receiver channel's buffer, which can be observed or handled if needed.
+    ///
     /// See the example for how you could use this receiver to handle events.
     ///
     /// # Example
+    ///
     /// ```rust
     /// use wasmcloud_control_interface::{Client, ClientBuilder};
     /// async {
@@ -660,6 +786,11 @@ impl Client {
     ///   }
     /// };
     /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `event_types` - List of types of events to listen for
+    ///
     #[allow(clippy::missing_errors_doc)] // TODO: Document errors
     pub async fn events_receiver(&self, event_types: Vec<String>) -> Result<Receiver<Event>> {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
@@ -689,8 +820,8 @@ impl Client {
     }
 }
 
-/// Collect results until timeout has elapsed
-pub async fn collect_sub_timeout<T: DeserializeOwned>(
+/// Collect `T` values until timeout has elapsed
+pub(crate) async fn collect_sub_timeout<T: DeserializeOwned>(
     mut sub: async_nats::Subscriber,
     timeout: Duration,
     reason: &str,
@@ -752,16 +883,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_identifier() -> Result<()> {
-        assert!(parse_identifier(&IdentifierKind::HostId, "").is_err());
-        assert!(parse_identifier(&IdentifierKind::HostId, " ").is_err());
-        let host_id = parse_identifier(&IdentifierKind::HostId, "             ");
+    fn test_check_identifier() -> Result<()> {
+        assert!(IdentifierKind::is_host_id("").is_err());
+        assert!(IdentifierKind::is_host_id(" ").is_err());
+        let host_id = IdentifierKind::is_host_id("             ");
         assert!(host_id.is_err(), "parsing host id should have failed");
         assert!(host_id
             .unwrap_err()
             .to_string()
             .contains("Host ID cannot be empty"));
-        let provider_ref = parse_identifier(&IdentifierKind::ProviderRef, "");
+        let provider_ref = IdentifierKind::is_provider_ref("");
         assert!(
             provider_ref.is_err(),
             "parsing provider ref should have failed"
@@ -770,9 +901,8 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Provider OCI reference cannot be empty"));
-        assert!(parse_identifier(&IdentifierKind::HostId, "host_id").is_ok());
-        let component_id =
-            parse_identifier(&IdentifierKind::ComponentId, "            iambatman  ")?;
+        assert!(IdentifierKind::is_host_id("host_id").is_ok());
+        let component_id = IdentifierKind::is_component_id("            iambatman  ")?;
         assert_eq!(component_id, "iambatman");
 
         Ok(())
@@ -809,7 +939,7 @@ mod tests {
             .perform_component_auction(
                 "ghcr.io/brooksmtownsend/http-hello-world-rust:0.1.0",
                 "echo",
-                HashMap::new(),
+                BTreeMap::new(),
             )
             .await
             .expect("should be able to auction an component");
@@ -857,7 +987,7 @@ mod tests {
             .perform_provider_auction(
                 "wasmcloud.azurecr.io/httpserver:0.19.1",
                 "httpserver",
-                HashMap::new(),
+                BTreeMap::new(),
             )
             .await
             .expect("should be able to hold provider auction");
@@ -893,15 +1023,14 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(5)).await;
         // Link Put
         let link_put = client
-            .put_link(InterfaceLinkDefinition {
+            .put_link(Link {
                 source_id: "echo".to_string(),
                 target: "httpserver".to_string(),
                 name: "default".to_string(),
                 wit_namespace: "wasi".to_string(),
                 wit_package: "http".to_string(),
                 interfaces: vec!["incoming-handler".to_string()],
-                source_config: vec![],
-                target_config: vec![],
+                ..Default::default()
             })
             .await
             .expect("should be able to put link");

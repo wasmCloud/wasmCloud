@@ -1,14 +1,21 @@
 //! # Control Interface Client
 //!
-//! This library provides a client API for consuming the wasmCloud control interface over a
-//! NATS connection. This library can be used by multiple types of tools, and is also used
-//! by the control interface capability provider and the wash CLI
+//! This library provides a client API for consuming the [wasmCloud control interface][docs-control-interface]
+//! over a NATS connection.
+//!
+//! This library can be used by multiple types of tools, and is also used
+//! by the control interface capability provider and the [`wash` CLI][wash-cli].
 //!
 //! ## Usage
-//! All of the [Client] functions are handled by a wasmCloud host running in the specified lattice.
+//!
+//! All of the [`Client`] functions are handled by a wasmCloud host running in the specified lattice.
+//!
 //! Each function returns a `Result<CtlResponse<T>>` wrapper around the actual response type. The outer
 //! result should be handled for protocol (timeouts, no hosts available) and deserialization errors (invalid response payload).
 //! The inner result is the actual response from the host(s) and should be handled for application-level errors.
+//!
+//! [docs-control-interface]: <https://wasmcloud.com/docs/hosts/lattice-protocols/control-interface>
+//! [wash-cli]: <https://wasmcloud.com/docs/ecosystem/wash>
 
 use serde::{Deserialize, Serialize};
 
@@ -16,44 +23,70 @@ mod broker;
 mod otel;
 
 pub mod client;
-pub use client::{collect_sub_timeout, Client, ClientBuilder};
+pub use client::{Client, ClientBuilder};
 
 mod types;
 pub use types::component::*;
 pub use types::ctl::*;
 pub use types::host::*;
-pub use types::link::InterfaceLinkDefinition;
+pub use types::link::*;
 pub use types::provider::*;
 pub use types::registry::*;
 pub use types::rpc::*;
 
-/// Identifier of one or more entities on the lattice used for addressing. May take many forms, such as:
-/// - component public key
-/// - provider public key
-/// - opaque string
-pub type LatticeTarget = String;
-
-/// Identifier of a component which sends invocations on the lattice
-pub type ComponentId = String;
-
-/// Name of a link on the wasmCloud lattice
-pub type LinkName = String;
-
-/// WIT package for a given operation (ex. `keyvalue` in `wasi:keyvalue/readwrite.get`)
-pub type WitPackage = String;
-
-/// WIT namespace for a given operation (ex. `wasi` in `wasi:keyvalue/readwrite.get`)
-pub type WitNamespace = String;
-
-/// WIT interface for a given operation (ex. `readwrite` in `wasi:keyvalue/readwrite.get`)
-pub type WitInterface = String;
-
-/// The name of a known (possibly pre-created) configuration, normally used when creating
-/// new interface links in order to configure one or both source/target
-pub type KnownConfigName = String;
+pub use wasmcloud_core::{
+    ComponentId, KnownConfigName, LatticeTarget, LinkName, WitInterface, WitNamespace, WitPackage,
+};
 
 /// Generic result
 type Result<T> = ::core::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Enumeration of all kinds of identifiers in a wasmCloud lattice
+#[allow(unused)]
+pub(crate) enum IdentifierKind {
+    /// Identifiers that are host IDs
+    HostId,
+    /// Identifiers that are component IDs
+    ComponentId,
+    /// Identifiers that are component references
+    ComponentRefs,
+    /// Identifiers that are provider reverences
+    ProviderRef,
+    /// Identifiers that are link names
+    LinkName,
+}
+
+impl IdentifierKind {
+    /// Ensure an identifier is a valid as a host ID
+    fn is_host_id(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Host ID cannot be empty")
+    }
+
+    /// Ensure an identifier is a valid as a component ID
+    fn is_component_id(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Component ID cannot be empty")
+    }
+
+    /// Ensure an identifier is a valid as a component reference
+    fn is_component_ref(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Component OCI reference cannot be empty")
+    }
+
+    /// Ensure an identifier is a valid as a provider reference
+    fn is_provider_ref(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Provider OCI reference cannot be empty")
+    }
+
+    /// Ensure an identifier is a valid as a provider reference
+    fn is_provider_id(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Provider ID cannot be empty")
+    }
+
+    /// Ensure an identifier is a valid as a link name
+    fn is_link_name(value: impl AsRef<str>) -> Result<String> {
+        assert_non_empty_string(value, "Link Name cannot be empty")
+    }
+}
 
 /// Helper function that serializes the data and maps the error
 pub(crate) fn json_serialize<T>(item: T) -> Result<Vec<u8>>
@@ -76,33 +109,5 @@ fn assert_non_empty_string(input: impl AsRef<str>, message: impl AsRef<str>) -> 
         Err(message.into())
     } else {
         Ok(input.trim().to_string())
-    }
-}
-
-/// Enumeration of all kinds of identifiers in a wasmCloud lattice
-enum IdentifierKind {
-    HostId,
-    ComponentId,
-    ActorRef,
-    ProviderRef,
-    LinkName,
-}
-
-//NOTE(ahmedtadde): For an initial implementation, we just want to make sure that the identifier is, at very least, not an empty string.
-//This parser should be refined over time as needed.
-fn parse_identifier<T: AsRef<str>>(kind: &IdentifierKind, value: T) -> Result<String> {
-    let value = value.as_ref();
-    match kind {
-        IdentifierKind::HostId => assert_non_empty_string(value, "Host ID cannot be empty"),
-        IdentifierKind::ComponentId => {
-            assert_non_empty_string(value, "Component ID cannot be empty")
-        }
-        IdentifierKind::ActorRef => {
-            assert_non_empty_string(value, "Actor OCI reference cannot be empty")
-        }
-        IdentifierKind::ProviderRef => {
-            assert_non_empty_string(value, "Provider OCI reference cannot be empty")
-        }
-        IdentifierKind::LinkName => assert_non_empty_string(value, "Link Name cannot be empty"),
     }
 }
