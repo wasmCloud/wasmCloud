@@ -14,31 +14,31 @@ kubeVersion: ">=1.24.0"
 
 dependencies:
   - name: nats
+    version: 1.2.3
     repository: https://nats-io.github.io/k8s/helm/charts/
     condition: nats.enabled
     tags:
       - nats-cluster
-    version: 1.2.3
   - name: wadm
+    version: 0.2.7
     repository: oci://ghcr.io/wasmcloud/charts
     condition: wadm.enabled
     tags:
       - wadm
-    version: 0.2.4
   - name: wasmcloud-operator
     alias: operator
+    version: 0.1.5
     repository: oci://ghcr.io/wasmcloud/charts
     condition: operator.enabled
     tags:
       - wasmcloud-operator
-    version: 0.1.5
   - name: wasmcloud-host
     alias: host
+    version: 0.8.3
     repository: oci://ghcr.io/wasmcloud/charts
     condition: host.enabled
     tags:
       - wasmcloud-host
-    version: 0.8.1
 
 home: https://github.com/wasmCloud/wasmcloud
 icon: https://github.com/wasmCloud/wasmCloud/blob/main/brand/icon/green/wasmCloud.icon-green.svg
