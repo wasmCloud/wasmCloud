@@ -13,8 +13,6 @@ use wasi_preview1_component_adapter_provider::{
     WASI_SNAPSHOT_PREVIEW1_ADAPTER_NAME, WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
 };
 use wasm_encoder::{Encode, Section};
-use wit_bindgen_core::Files;
-use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
@@ -276,7 +274,7 @@ fn build_tinygo_component(
 
     let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
-        generate_tinygo_bindgen(&parent_dir).context("generating golang bindgen code failed")?;
+        generate_tinygo_bindgen(parent_dir).context("generating golang bindgen code failed")?;
     }
 
     let build_args = match &component_config.wasm_target {
@@ -734,7 +732,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
+        generate_tinygo_bindgen(project_dir).context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
@@ -774,7 +772,7 @@ world downstream {
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
+        generate_tinygo_bindgen(project_dir).context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
