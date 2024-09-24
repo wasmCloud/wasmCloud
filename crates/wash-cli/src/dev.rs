@@ -45,11 +45,12 @@ use wasmcloud_core::{
 };
 
 use crate::app::deploy_model_from_manifest;
-use crate::down::stop_nats;
-use crate::up::{
-    configure_host_env, nats_client_from_wasmcloud_opts, remove_wadm_pidfile, start_nats, NatsOpts,
-    WadmOpts, WasmcloudOpts, DEFAULT_NATS_HOST,
+use crate::cmd::up::{
+    nats_client_from_wasmcloud_opts, remove_wadm_pidfile, start_nats, NatsOpts, WadmOpts,
+    WasmcloudOpts,
 };
+use crate::config::{configure_host_env, DEFAULT_NATS_HOST};
+use crate::down::stop_nats;
 
 const DEFAULT_KEYVALUE_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/keyvalue-nats:0.3.0";
 const DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE: &str = "ghcr.io/wasmcloud/http-client:0.11.0";

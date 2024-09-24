@@ -1,10 +1,12 @@
-use clap::Subcommand;
 use std::collections::HashMap;
+
+use anyhow::bail;
+use clap::Subcommand;
 use tracing::trace;
 use wash_lib::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, OutputKind};
 use wasmcloud_secrets_types::{SecretConfig, SECRET_PREFIX};
 
-use crate::config::{delete_config, get_config, is_secret, put_config};
+use crate::cmd;
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum SecretsCliCommand {
@@ -81,19 +83,32 @@ pub async fn handle_command(
             trace!(?secret_config, "Putting secret config");
             let values: HashMap<String, String> = secret_config.try_into()?;
 
-            put_config(opts, &secret_configdata_key(&name), values, output_kind).await
+            cmd::config::put::invoke(opts, &secret_configdata_key(&name), values, output_kind).await
         }
         SecretsCliCommand::GetCommand { opts, name } => {
-            get_config(opts, &secret_configdata_key(&name), output_kind).await
+            cmd::config::get::invoke(opts, &secret_configdata_key(&name), output_kind).await
         }
         SecretsCliCommand::DelCommand { opts, name } => {
-            delete_config(opts, &secret_configdata_key(&name), output_kind).await
+            cmd::config::delete::invoke(opts, &secret_configdata_key(&name), output_kind).await
         }
     }
 }
 
+/// Ensure that a given config KV name is *not* a secret
+pub(crate) fn ensure_not_secret(name: &str) -> anyhow::Result<()> {
+    if name.starts_with(SECRET_PREFIX) {
+        bail!("Configuration names cannot start with '{SECRET_PREFIX}'. Did you mean to use the 'secrets' command?");
+    }
+    Ok(())
+}
+
+/// Check if a given configuration KV name name represents a secret
+pub(crate) fn is_secret(name: &str) -> bool {
+    name.starts_with(SECRET_PREFIX)
+}
+
 /// Ensures the secret name is prefixed by `SECRET_`
-fn secret_configdata_key(name: &str) -> String {
+pub(crate) fn secret_configdata_key(name: &str) -> String {
     if is_secret(name) {
         name.to_string()
     } else {
