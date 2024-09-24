@@ -53,8 +53,8 @@ spec:
   configServiceEnabled: {{ default false .configServiceEnabled }}
   # Optional: The log level to use for the host. Defaults to "INFO".
   logLevel: {{ default "INFO" .logLevel }}
-  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats.default.svc.cluster.local".
-  natsAddress: {{ default "nats://nats.default.svc.cluster.local" .natsAddress }}
+  # Optional: The address of the NATS server to connect to. Defaults to "nats://nats-headless.default.svc.cluster.local".
+  natsAddress: {{ default "nats://nats-headless.default.svc.cluster.local" .natsAddress }}
   # Optional: Allow the host to deploy using the latest tag on OCI components or providers. Defaults to "false".
   allowLatest: {{ default false .allowLatest }}
   # Optional: Allow the host to pull artifacts from OCI registries insecurely.
