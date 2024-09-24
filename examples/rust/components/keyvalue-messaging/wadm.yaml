@@ -63,17 +63,33 @@ spec:
       properties:
         # image: file://../../../../src/bin/keyvalue-nats-provider/build/keyvalue-nats-provider.par.gz
         image: ghcr.io/wasmcloud/keyvalue-nats:0.1.0
-        # # NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
+        ## NOTE: The following is an example of how to provide default/shared configuration, to all components, which do not provide their own NATS connection configuration.
         # config:
         #   - name: nats-connection
         #     properties:
         #       cluster_uri: "nats://0.0.0.0:4222"
         #       bucket: "WASMCLOUD"
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+
     # Add a capability provider that implements `wasmcloud:messaging` using NATS
     - name: nats-msg
       type: capability
       properties:
         image: ghcr.io/wasmcloud/messaging-nats:canary
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
       traits:
         - type: link
           properties:

@@ -40,6 +40,14 @@ spec:
       type: capability
       properties:
         image: ghcr.io/wasmcloud/http-server:0.22.0
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
       traits:
         # Establish a unidirectional link from this http server provider (the "source")
         # to the `http-component` component (the "target") so the component can handle incoming HTTP requests,
@@ -63,3 +71,10 @@ spec:
         image: ghcr.io/wasmcloud/sqldb-postgres:0.5.2
         config:
           - name: 'default-postgres'
+          ## To configure OTEL integration for this provider specifically, uncomment the lines below
+          # - name: otel
+          #   properties:
+          #     otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+          #     otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+          #     otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+          #     otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"

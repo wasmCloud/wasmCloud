@@ -43,3 +43,10 @@ spec:
         image: ghcr.io/wasmcloud/sqldb-postgres:0.2.0
         config:
           - name: 'default-postgres'
+          ## To configure OTEL integration for this provider specifically, uncomment the lines below
+          # - name: otel
+          #   properties:
+          #     otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+          #     otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+          #     otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+          #     otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"

@@ -11,6 +11,14 @@ spec:
       type: component
       properties:
         image: file://./component/build/custom_template_test_component.wasm
+        ## To configure OTEL integration for this provider specifically, uncomment the lines below
+        # config:
+        #   - name: otel
+        #     properties:
+        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
+        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
+        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
+        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
       traits:
         - type: spreadscaler
           properties:
