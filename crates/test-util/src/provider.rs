@@ -50,7 +50,7 @@ pub async fn assert_start_provider(
         client,
         lattice,
         host_key,
-        provider_key,
+        provider_key: _,
         provider_id,
         url,
         config,
@@ -74,10 +74,7 @@ pub async fn assert_start_provider(
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)
-        .then(|_| rpc_client.request(
-            health_subject(lattice, &provider_key.public_key()),
-            "".into(),
-        ))
+        .then(|_| rpc_client.request(health_subject(lattice, provider_id), "".into(),))
         .filter_map(|res| {
             match res {
                 Err(error) => {

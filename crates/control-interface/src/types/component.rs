@@ -31,6 +31,7 @@ pub struct ComponentDescription {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct ComponentInstance {
     /// The annotations that were used in the start request that produced
     /// this component instance

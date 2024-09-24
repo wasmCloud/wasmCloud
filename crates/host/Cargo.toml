@@ -35,6 +35,7 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
+sysinfo = { workspace = true, features = ["system"] }
 sha2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = [

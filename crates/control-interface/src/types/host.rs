@@ -47,7 +47,6 @@ pub struct Host {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostInventory {
     /// Components running on this host.
-    #[serde(alias = "actors")]
     pub components: Vec<ComponentDescription>,
     /// Providers running on this host
     pub providers: Vec<ProviderDescription>,
