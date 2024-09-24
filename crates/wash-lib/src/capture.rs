@@ -174,10 +174,14 @@ mod test {
         let tempdir = tempfile::tempdir().unwrap();
         let tarball = tempdir.path().join("capture.tar.gz");
         let mut capture = WriteCapture::start(
-            vec![HostInventory {
-                host_id: "test".to_string(),
-                ..Default::default()
-            }],
+            vec![HostInventory::builder()
+                .host_id("test".into())
+                .friendly_name("test".into())
+                .version("1.0.0".into())
+                .uptime_human("t".into())
+                .uptime_seconds(100)
+                .build()
+                .expect("failed to build host inventory")],
             &tarball,
         )
         .await
@@ -222,7 +226,8 @@ mod test {
             "Should have the correct inventory"
         );
         assert_eq!(
-            capture.inventory[0].host_id, "test",
+            capture.inventory[0].host_id(),
+            "test",
             "Should have the correct inventory"
         );
         assert_eq!(

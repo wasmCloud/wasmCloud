@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use wasmcloud_control_interface::{CtlResponse, InterfaceLinkDefinition};
+use wasmcloud_control_interface::{CtlResponse, Link};
 
 use crate::{cli::CliConnectionOpts, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
@@ -101,12 +101,12 @@ pub enum LinkCommand {
 /// let ack = query_links(WashConnectionOptions::default()).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
-pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<InterfaceLinkDefinition>> {
+pub async fn get_links(wco: WashConnectionOptions) -> Result<Vec<Link>> {
     wco.into_ctl_client(None)
         .await?
         .get_links()
         .await
-        .map(|ctl| ctl.response.unwrap_or_default())
+        .map(|ctl| ctl.into_data().unwrap_or_default())
         .map_err(boxed_err_to_anyhow)
 }
 
@@ -176,10 +176,7 @@ pub async fn delete_link(
 /// ).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
-pub async fn put_link(
-    wco: WashConnectionOptions,
-    link: InterfaceLinkDefinition,
-) -> Result<CtlResponse<()>> {
+pub async fn put_link(wco: WashConnectionOptions, link: Link) -> Result<CtlResponse<()>> {
     let ctl_client = wco.into_ctl_client(None).await?;
     ctl_client
         .put_link(link.clone())

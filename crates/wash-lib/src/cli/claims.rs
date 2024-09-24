@@ -697,7 +697,7 @@ pub async fn get_claims(
         .get_claims()
         .await
         .map_err(boxed_err_to_anyhow)
-        .map(|c| c.response.unwrap_or_default())
+        .map(|c| c.into_data().unwrap_or_default())
         .with_context(|| {
             format!("Was able to connect to NATS, but failed to get claims: {client:?}")
         })

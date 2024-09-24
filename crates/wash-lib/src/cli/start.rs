@@ -1,20 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::time::Duration;
 
-use crate::{
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput},
-    common::{boxed_err_to_anyhow, find_host_id},
-    component::{scale_component, ComponentScaledInfo, ScaleComponentArgs},
-    config::{
-        WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_COMPONENT_TIMEOUT_MS,
-        DEFAULT_START_PROVIDER_TIMEOUT_MS,
-    },
-    context::default_timeout_ms,
-    wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
+use crate::cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput};
+use crate::common::{boxed_err_to_anyhow, find_host_id};
+use crate::component::{scale_component, ComponentScaledInfo, ScaleComponentArgs};
+use crate::config::{
+    WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_COMPONENT_TIMEOUT_MS,
+    DEFAULT_START_PROVIDER_TIMEOUT_MS,
 };
+use crate::context::default_timeout_ms;
+use crate::wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo};
 
 use super::validate_component_id;
 
@@ -133,7 +131,7 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
                 .perform_component_auction(
                     &component_ref,
                     &cmd.component_id,
-                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
@@ -148,12 +146,12 @@ pub async fn handle_start_component(cmd: StartComponentCommand) -> Result<Comman
             } else {
                 let acks = suitable_hosts
                     .into_iter()
-                    .filter_map(|h| h.response)
+                    .filter_map(|h| h.into_data())
                     .collect::<Vec<_>>();
                 let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id
+                ack.host_id()
                     .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
         }
     };
@@ -257,7 +255,7 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
                 .perform_provider_auction(
                     &provider_ref,
                     &cmd.link_name,
-                    input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
+                    BTreeMap::from_iter(input_vec_to_hashmap(cmd.constraints.unwrap_or_default())?),
                 )
                 .await
                 .map_err(boxed_err_to_anyhow)
@@ -272,12 +270,12 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             } else {
                 let acks = suitable_hosts
                     .into_iter()
-                    .filter_map(|h| h.response)
+                    .filter_map(|h| h.into_data())
                     .collect::<Vec<_>>();
                 let ack = acks.first().context("No suitable hosts found")?;
-                ack.host_id
+                ack.host_id()
                     .parse()
-                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id))?
+                    .with_context(|| format!("Failed to parse host id: {}", ack.host_id()))?
             }
         }
     };
@@ -302,8 +300,8 @@ pub async fn handle_start_provider(cmd: StartProviderCommand) -> Result<CommandO
             )
         })?;
 
-    if !ack.success {
-        bail!("Start provider ack not accepted: {}", ack.message);
+    if !ack.succeeded() {
+        bail!("Start provider ack not accepted: {}", ack.message());
     }
 
     if cmd.skip_wait {

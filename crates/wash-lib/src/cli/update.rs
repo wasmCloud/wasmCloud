@@ -47,7 +47,7 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
             .context(format!(
                 "Supplied host [{}] did not respond to inventory query",
@@ -58,9 +58,9 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
             .await?
             .into_iter()
             .filter(|inv| {
-                inv.components
+                inv.components()
                     .iter()
-                    .any(|component| component.id == cmd.component_id)
+                    .any(|component| component.id() == cmd.component_id)
             })
             .collect::<Vec<HostInventory>>();
 
@@ -78,7 +78,7 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
                     cmd.component_id,
                     inventories
                         .iter()
-                        .map(|h| h.host_id.to_string())
+                        .map(|h| h.host_id().to_string())
                         .collect::<Vec<String>>()
                         .join(","),
                 );
@@ -87,15 +87,20 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
     };
 
     let Some((host_id, component_ref)) = inventory
-        .components
+        .components()
         .iter()
-        .find(|component| component.id == cmd.component_id)
-        .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
+        .find(|component| component.id() == cmd.component_id)
+        .map(|component| {
+            (
+                inventory.host_id().to_string(),
+                component.image_ref().to_string(),
+            )
+        })
     else {
         bail!(
             "Component {} not found on host [{}]",
             cmd.component_id,
-            inventory.host_id,
+            inventory.host_id(),
         );
     };
 
@@ -103,19 +108,19 @@ pub async fn handle_update_component(cmd: UpdateComponentCommand) -> Result<Comm
         return Ok(CommandOutput::from_key_and_text(
             "result",
             format!(
-                "Component {} already updated to {} on host [{}]",
-                cmd.component_id, cmd.new_component_ref, host_id
+                "Component {} already updated to {} on host [{host_id}]",
+                cmd.component_id, cmd.new_component_ref,
             ),
         ));
     }
 
     let ack =
         update_component(&client, &host_id, &cmd.component_id, &cmd.new_component_ref).await?;
-    if !ack.success {
-        bail!("Operation failed on host [{}]: {}", host_id, ack.message);
+    if !ack.succeeded() {
+        bail!("Operation failed on host [{host_id}]: {}", ack.message());
     }
 
-    let message = match ack.message {
+    let message = match ack.message().to_string() {
         message if message.is_empty() => format!(
             "component {} updating from {} to {}",
             cmd.component_id, component_ref, cmd.new_component_ref

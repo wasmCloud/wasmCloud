@@ -71,8 +71,8 @@ pub async fn handle_label_host(cmd: LabelHostCommand) -> Result<CommandOutput> {
 
         match op {
             Ok(ack) => {
-                if !ack.success {
-                    warn!(message = ack.message, "operation failed");
+                if !ack.succeeded() {
+                    warn!(message = ack.message(), "operation failed");
                     succeeded = false;
                     break;
                 }

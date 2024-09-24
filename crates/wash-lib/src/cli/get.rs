@@ -71,7 +71,7 @@ pub async fn get_host_inventories(cmd: GetHostInventoriesCommand) -> Result<Vec<
         if let Some(inventory) = client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
         {
             Ok(vec![inventory])
@@ -102,7 +102,7 @@ pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
         .map(|hosts| {
             hosts
                 .into_iter()
-                .filter_map(|h| h.response)
+                .filter_map(|h| h.into_data())
                 .collect::<Vec<_>>()
         })
         .context("Was able to connect to NATS, but failed to get hosts.")
