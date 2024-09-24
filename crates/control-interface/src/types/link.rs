@@ -7,11 +7,16 @@ use crate::{
 };
 
 /// A link definition between a source and target component (component or provider) on a given
-/// interface. An [`InterfaceLinkDefinition`] connects one component's import to another
+/// interface.
+///
+/// An [`Link`] connects one component's import to another
 /// component's export, specifying the configuration each component needs in order to execute
 /// the request, and represents an operator's intent to allow the source to invoke the target.
+///
+/// This link definition is *distinct* from the one in `wasmcloud_core`, in that it is
+/// represents a link at the point in time *before* it's configuration is fully resolved
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, Hash)]
-pub struct InterfaceLinkDefinition {
+pub struct Link {
     /// Source identifier for the link
     pub source_id: ComponentId,
     /// Target for the link, which can be a unique identifier or (future) a routing group
