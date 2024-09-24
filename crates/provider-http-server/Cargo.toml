@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-http-server"
-version = "0.23.0"
+version = "0.23.1"
 description = "Http server for wasmcloud, using Axum. This package provides a library, and a capability provider"
 
 authors.workspace = true
