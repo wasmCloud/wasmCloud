@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.10.0"
+version = "0.10.1"
 description = """
 Blobstore for wasmCloud, leveraging the filesystem. This package provides a capability provider that satisfies the 'wasmcloud:blobstore' contract.
 """
