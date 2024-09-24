@@ -28,6 +28,7 @@ pub mod wasi {
     pub use super::bindings::wasi::*;
     pub use ::wasi::*;
 }
+
 pub use bindings::wasmcloud;
 
 mod wrappers;
