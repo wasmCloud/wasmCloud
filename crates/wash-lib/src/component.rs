@@ -1,14 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{bail, Context, Result};
 use tokio::time::Duration;
 use wasmcloud_control_interface::{Client as CtlClient, CtlResponse};
 
-use crate::{
-    common::boxed_err_to_anyhow,
-    config::DEFAULT_START_COMPONENT_TIMEOUT_MS,
-    wait::{wait_for_component_scaled_event, FindEventOutcome},
-};
+use crate::common::boxed_err_to_anyhow;
+use crate::config::DEFAULT_START_COMPONENT_TIMEOUT_MS;
+use crate::wait::{wait_for_component_scaled_event, FindEventOutcome};
 
 /// Information related to a component scale
 pub struct ComponentScaledInfo {
@@ -80,14 +78,14 @@ pub async fn scale_component(
             component_ref,
             component_id,
             max_instances,
-            annotations,
+            annotations.map(BTreeMap::from_iter),
             config,
         )
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.success {
-        bail!("Operation failed: {}", ack.message);
+    if !ack.succeeded() {
+        bail!("Operation failed: {}", ack.message());
     }
 
     // If skip_wait is specified, return incomplete information immediately

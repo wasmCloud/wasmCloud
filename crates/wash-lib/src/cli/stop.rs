@@ -156,8 +156,8 @@ pub async fn stop_provider(
         .await
         .map_err(boxed_err_to_anyhow)?;
 
-    if !ack.success {
-        bail!("Operation failed: {}", ack.message);
+    if !ack.succeeded() {
+        bail!("Operation failed: {}", ack.message());
     }
     if skip_wait {
         return Ok(());
@@ -188,7 +188,7 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         client
             .get_host_inventory(&host_id)
             .await
-            .map(|inventory| inventory.response)
+            .map(|inventory| inventory.into_data())
             .map_err(boxed_err_to_anyhow)?
             .context("Supplied host did not respond to inventory query")?
     } else {
@@ -196,22 +196,27 @@ pub async fn handle_stop_component(cmd: StopComponentCommand) -> Result<CommandO
         inventories
             .into_iter()
             .find(|inv| {
-                inv.components
+                inv.components()
                     .iter()
-                    .any(|component| component.id == component_id)
+                    .any(|component| component.id() == component_id)
             })
             .ok_or_else(|| anyhow::anyhow!("No host found running component [{}]", component_id))?
     };
 
     let Some((host_id, component_ref)) = inventory
-        .components
+        .components()
         .iter()
-        .find(|component| component.id == component_id)
-        .map(|component| (inventory.host_id.clone(), component.image_ref.clone()))
+        .find(|component| component.id() == component_id)
+        .map(|component| {
+            (
+                inventory.host_id().to_string(),
+                component.image_ref().to_string(),
+            )
+        })
     else {
         bail!(
             "No component with id [{component_id}] found on host [{}]",
-            inventory.host_id
+            inventory.host_id()
         );
     };
 
@@ -269,10 +274,10 @@ async fn find_host_with_provider(
     ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<ServerId, FindIdError> {
     find_host_with_filter(ctl_client, |inv| {
-        inv.providers
-            .into_iter()
-            .any(|prov| prov.id == provider_id)
-            .then_some((inv.host_id, inv.friendly_name))
+        inv.providers()
+            .iter()
+            .any(|prov| prov.id() == provider_id)
+            .then_some((inv.host_id().to_string(), inv.friendly_name().to_string()))
             .and_then(|(id, friendly_name)| id.parse().ok().map(|i| (i, friendly_name)))
     })
     .await
@@ -321,7 +326,7 @@ pub async fn stop_hosts(
         .await
         .map_err(|e| anyhow!(e))?
         .into_iter()
-        .filter_map(|r| r.response)
+        .filter_map(|r| r.into_data())
         .collect::<Vec<_>>();
 
     // If a host ID was supplied, stop only that host
@@ -338,7 +343,7 @@ pub async fn stop_hosts(
     } else if hosts.is_empty() {
         Ok((vec![], false))
     } else if hosts.len() == 1 {
-        let host_id = &hosts[0].id;
+        let host_id = hosts[0].id();
         client
             .stop_host(host_id, None)
             .await
@@ -348,7 +353,7 @@ pub async fn stop_hosts(
         let host_stops = hosts
             .iter()
             .map(|host| async {
-                let host_id = &host.id;
+                let host_id = host.id();
                 match client.stop_host(host_id, None).await {
                     Ok(_) => Some(host_id.to_owned()),
                     Err(e) => {
@@ -368,8 +373,12 @@ pub async fn stop_hosts(
 
         Ok((host_ids, hosts_remaining))
     } else {
+        let runing_hosts = hosts
+            .into_iter()
+            .map(|h| h.id().to_string())
+            .collect::<Vec<_>>();
         bail!(
-                "More than one host is running, please specify a host ID or use --all\nRunning hosts: {:?}", hosts.into_iter().map(|h| h.id).collect::<Vec<_>>()
-            )
+            "More than one host is running, please specify a host ID or use --all\nRunning hosts: {runing_hosts:?}", 
+        )
     }
 }
