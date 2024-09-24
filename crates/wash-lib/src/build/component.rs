@@ -44,21 +44,20 @@ pub fn build_component(
         build_custom_component(common_config, component_config, raw_command)?
     } else {
         // Build component based on language toolchain
-        let component_wasm_path = match language_config {
+        match language_config {
             LanguageConfig::Rust(rust_config) => {
-                let component_wasm_path =
+                let rust_wasm_path =
                     build_rust_component(common_config, rust_config, component_config)?;
                 if component_config.wasm_target == WasmTarget::WasiPreview2 {
-                    adapt_component_to_wasi_preview2(&component_wasm_path, component_config)?
+                    adapt_component_to_wasi_preview2(&rust_wasm_path, component_config)?
                 } else {
-                    component_wasm_path
+                    rust_wasm_path
                 }
             }
             LanguageConfig::TinyGo(tinygo_config) => {
-                let mut component_wasm_path =
+                let go_wasm_path =
                     build_tinygo_component(common_config, tinygo_config, component_config)?;
 
-                // Perform embedding, if necessary
                 if let WasmTarget::WasiPreview1 = &component_config.wasm_target {
                     embed_wasm_component_metadata(
                         &common_config.path,
@@ -66,13 +65,16 @@ pub fn build_component(
                         .wit_world
                         .as_ref()
                         .context("missing `wit_world` in wasmcloud.toml ([component] section) for creating preview1 or preview2 components")?,
-                        &component_wasm_path,
-                        &component_wasm_path,
+                        &go_wasm_path,
+                        &go_wasm_path,
                 )?;
-                    component_wasm_path =
-                        adapt_component_to_wasi_preview2(&component_wasm_path, component_config)?;
-                };
-                component_wasm_path
+                    // NOTE(lxf): historically, wasip1 was being adapted to p2.
+                    // We continue to do so here.
+                    adapt_component_to_wasi_preview2(&go_wasm_path, component_config)?
+                } else {
+                    // NOTE(lxf): tinygo takes over wit world embedding for preview2 target
+                    go_wasm_path
+                }
             }
             LanguageConfig::Go(_) | LanguageConfig::Other(_)
                 if component_config.build_command.is_some() =>
@@ -90,9 +92,7 @@ pub fn build_component(
             LanguageConfig::Other(other) => {
                 bail!("build command is required for unsupported language {other}");
             }
-        };
-
-        component_wasm_path
+        }
     };
 
     // Sign the wasm file (if configured)
@@ -274,31 +274,9 @@ fn build_tinygo_component(
         fs::create_dir_all(parent_dir)?;
     }
 
-    // Ensure the output directory exists
-    let output_dir = common_config.path.join(GOLANG_BINDGEN_FOLDER_NAME);
-    if !output_dir.exists() {
-        fs::create_dir_all(&output_dir)?;
-    }
-
-    // Generate wit-bindgen code for Golang components which are components-first
-    //
-    // Running wit-bindgen via go generate is only for WIT-enabled projects, so we must limit
-    // to only projects that have their WIT defined in the expected top level wit directory
-    //
-    // While wasmcloud and its tooling is WIT-first, it is possible to build preview1/preview2
-    // components that are *not* WIT enabled. To determine whether the project is WIT-enabled
-    // we check for the `wit` directory which would be passed through to bindgen.
-
     let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
-        generate_tinygo_bindgen(
-            &output_dir,
-            &wit_directory,
-            component_config.wit_world.as_ref().context(
-                "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
-            )?,
-        )
-                .context("generating golang bindgen code failed")?;
+        generate_tinygo_bindgen(&parent_dir).context("generating golang bindgen code failed")?;
     }
 
     let build_args = match &component_config.wasm_target {
@@ -408,68 +386,30 @@ fn build_custom_component(
     Ok(component_path)
 }
 
-/// The folder that golang bindgen code will be placed in, normally
-/// from the top level golang project directory
-const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
-
 /// Generate the bindgen code that `TinyGo` components need
-fn generate_tinygo_bindgen(
-    bindgen_dir: impl AsRef<Path>,
-    wit_dir: impl AsRef<Path>,
-    wit_world: impl AsRef<str>,
-) -> Result<()> {
-    if !bindgen_dir.as_ref().exists() {
+fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
+    if !user_dir.as_ref().exists() {
         bail!(
-            "bindgen directory @ [{}] does not exist",
-            bindgen_dir.as_ref().display(),
+            "directory @ [{}] does not exist",
+            user_dir.as_ref().display(),
         );
     }
 
-    if !wit_dir.as_ref().exists() {
-        bail!(
-            "top level WIT directory @ [{}] does not exist",
-            wit_dir.as_ref().display(),
-        );
-    }
-
-    // Resolve the wit world
-    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, wit_world)?;
-
-    // Build the golang wit-bindgen generator
-    let mut generator = WitBindgenGoOpts::default().build();
-
-    // Run the generator
-    let mut files = Files::default();
-    generator
-        .generate(&resolver, world_id, &mut files)
-        .context("failed to run golang wit-bindgen generator")?;
-    info!("successfully ran golang wit-bindgen generator");
-
-    // Write all generated files to disk
-    for (file_name, content) in files.iter() {
-        let full_path = bindgen_dir.as_ref().join(file_name);
-
-        // Ensure the parent directory path is created
-        if let Some(parent_path) = PathBuf::from(&full_path).parent() {
-            if !parent_path.exists() {
-                fs::create_dir_all(parent_path).with_context(|| {
-                    format!("failed to create dir for path [{}]", parent_path.display())
-                })?;
+    let mut command = process::Command::new("go");
+    let result = command
+        .args(vec!["generate", "./..."])
+        .status()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.get_program())
+            } else {
+                anyhow!(e)
             }
-        }
-
-        // Write out the file's contents to disk
-        fs::write(&full_path, content).with_context(|| {
-            format!(
-                "failed to write content for file @ path [{}]",
-                full_path.display()
-            )
         })?;
+
+    if !result.success() {
+        bail!("go generate failed: {}", result.to_string())
     }
-    info!(
-        "successfully wrote wit-bindgen generated golang files to [{}]",
-        bindgen_dir.as_ref().display()
-    );
 
     Ok(())
 }
