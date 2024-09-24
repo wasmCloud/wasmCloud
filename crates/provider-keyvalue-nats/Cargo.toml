@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-keyvalue-nats"
-version = "0.3.0"
+version = "0.3.1"
 description = """
 A capability provider that satisfies the 'wasi:keyvalue' contract using NATS as a backend.
 """
