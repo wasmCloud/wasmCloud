@@ -6514,7 +6514,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -6733,9 +6733,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a1dab42d9eb3412b2fcab8189d79de99a9db2f48cf9e48aedf7c3c163b10f07"
+checksum = "fd4b2369601b93c3d6ef72282511b2378ecb7d185386559c18100bb4d4b43caf"
 dependencies = [
  "anyhow",
  "async-nats 0.33.0",
@@ -6754,9 +6754,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "253b4a5c06d99f8d6768d69a1ba264652731cd298c87fd880077ad0e554840f2"
+checksum = "7e85e19a6a2fe5bd868884a77c54c9089085083daa91a98514f50fb6c88da84d"
 dependencies = [
  "anyhow",
  "async-nats 0.33.0",
@@ -8425,7 +8425,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
