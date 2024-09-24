@@ -1,226 +1,221 @@
-use std::{collections::HashMap, error::Error};
+use std::collections::HashMap;
 
-use clap::Subcommand;
-use serde_json::json;
-use tracing::error;
-use wash_lib::{
-    cli::{input_vec_to_hashmap, CliConnectionOpts, CommandOutput, OutputKind},
-    config::WashConnectionOptions,
-};
-use wasmcloud_secrets_types::SECRET_PREFIX;
+use anyhow::{anyhow, Result};
 
-use crate::appearance::spinner::Spinner;
+use crate::cmd::up::WasmcloudOpts;
+use crate::creds::parse_credsfile;
 
-#[derive(Debug, Clone, Subcommand)]
-#[allow(clippy::enum_variant_names)]
-pub enum ConfigCliCommand {
-    /// Put a named configuration
-    #[clap(name = "put", alias = "create", about = "Put named configuration")]
-    PutCommand {
-        #[clap(flatten)]
-        opts: CliConnectionOpts,
-        /// The name of the configuration to put
-        #[clap(name = "name")]
-        name: String,
-        /// The configuration values to put, in the form of `key=value`. Can be specified multiple times, but must be specified at least once.
-        #[clap(name = "config_value", required = true)]
-        config_values: Vec<String>,
-    },
-    /// Get a named configuration
-    #[clap(name = "get")]
-    GetCommand {
-        #[clap(flatten)]
-        opts: CliConnectionOpts,
-        /// The name of the configuration to get
-        #[clap(name = "name")]
-        name: String,
-    },
-    /// Delete a named configuration
-    #[clap(name = "del", alias = "delete")]
-    DelCommand {
-        #[clap(flatten)]
-        opts: CliConnectionOpts,
-        /// The name of the configuration to delete
-        #[clap(name = "name")]
-        name: String,
-    },
-}
+// NATS configuration values
+pub const NATS_SERVER_VERSION: &str = "v2.10.18";
+pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
+pub const DEFAULT_NATS_PORT: &str = "4222";
+pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 
-pub async fn handle_command(
-    command: ConfigCliCommand,
-    output_kind: OutputKind,
-) -> anyhow::Result<CommandOutput> {
-    match command {
-        ConfigCliCommand::PutCommand {
-            opts,
-            name,
-            config_values,
-        } => {
-            ensure_not_secret(&name)?;
+// wadm configuration values
+pub const WADM_VERSION: &str = "v0.14.0";
 
-            put_config(
-                opts,
-                &name,
-                input_vec_to_hashmap(config_values)?,
-                output_kind,
-            )
-            .await
-        }
-        ConfigCliCommand::GetCommand { opts, name } => {
-            ensure_not_secret(&name)?;
-            get_config(opts, &name, output_kind).await
-        }
-        ConfigCliCommand::DelCommand { opts, name } => {
-            ensure_not_secret(&name)?;
-            delete_config(opts, &name, output_kind).await
-        }
+// wasmCloud configuration values, https://wasmcloud.com/docs/reference/host-config
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.2.1";
+
+// NATS isolation configuration variables
+pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
+pub const DEFAULT_LATTICE: &str = "default";
+pub const WASMCLOUD_JS_DOMAIN: &str = "WASMCLOUD_JS_DOMAIN";
+pub const WASMCLOUD_POLICY_TOPIC: &str = "WASMCLOUD_POLICY_TOPIC";
+pub const WASMCLOUD_SECRETS_TOPIC: &str = "WASMCLOUD_SECRETS_TOPIC";
+
+// Host / Cluster configuration
+pub const WASMCLOUD_CLUSTER_ISSUERS: &str = "WASMCLOUD_CLUSTER_ISSUERS";
+pub const WASMCLOUD_CLUSTER_SEED: &str = "WASMCLOUD_CLUSTER_SEED";
+pub const WASMCLOUD_HOST_SEED: &str = "WASMCLOUD_HOST_SEED";
+pub const WASMCLOUD_MAX_EXECUTION_TIME_MS: &str = "WASMCLOUD_MAX_EXECUTION_TIME_MS";
+pub const DEFAULT_MAX_EXECUTION_TIME_MS: &str = "600000";
+
+// NATS RPC connection configuration
+pub const WASMCLOUD_RPC_HOST: &str = "WASMCLOUD_RPC_HOST";
+pub const WASMCLOUD_RPC_PORT: &str = "WASMCLOUD_RPC_PORT";
+pub const WASMCLOUD_RPC_TIMEOUT_MS: &str = "WASMCLOUD_RPC_TIMEOUT_MS";
+pub const DEFAULT_RPC_TIMEOUT_MS: &str = "2000";
+pub const WASMCLOUD_RPC_JWT: &str = "WASMCLOUD_RPC_JWT";
+pub const WASMCLOUD_RPC_SEED: &str = "WASMCLOUD_RPC_SEED";
+pub const WASMCLOUD_RPC_CREDSFILE: &str = "WASMCLOUD_RPC_CREDSFILE";
+pub const WASMCLOUD_RPC_TLS: &str = "WASMCLOUD_RPC_TLS";
+pub const WASMCLOUD_RPC_TLS_CA_FILE: &str = "WASMCLOUD_RPC_TLS_CA_FILE";
+
+// NATS CTL connection configuration
+pub const WASMCLOUD_CTL_HOST: &str = "WASMCLOUD_CTL_HOST";
+pub const WASMCLOUD_CTL_PORT: &str = "WASMCLOUD_CTL_PORT";
+pub const WASMCLOUD_CTL_SEED: &str = "WASMCLOUD_CTL_SEED";
+pub const WASMCLOUD_CTL_JWT: &str = "WASMCLOUD_CTL_JWT";
+pub const WASMCLOUD_CTL_CREDSFILE: &str = "WASMCLOUD_CTL_CREDSFILE";
+pub const WASMCLOUD_CTL_TLS: &str = "WASMCLOUD_CTL_TLS";
+pub const WASMCLOUD_CTL_TLS_CA_FILE: &str = "WASMCLOUD_CTL_TLS_CA_FILE";
+
+// NATS Provider RPC connection configuration
+pub const WASMCLOUD_PROV_SHUTDOWN_DELAY_MS: &str = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS";
+pub const DEFAULT_PROV_SHUTDOWN_DELAY_MS: &str = "300";
+pub const WASMCLOUD_OCI_ALLOWED_INSECURE: &str = "WASMCLOUD_OCI_ALLOWED_INSECURE";
+pub const WASMCLOUD_OCI_ALLOW_LATEST: &str = "WASMCLOUD_OCI_ALLOW_LATEST";
+
+// Extra configuration (logs, IPV6, config service)
+pub const WASMCLOUD_LOG_LEVEL: &str = "WASMCLOUD_LOG_LEVEL";
+pub const WASMCLOUD_HOST_LOG_PATH: &str = "WASMCLOUD_HOST_LOG_PATH";
+pub const DEFAULT_STRUCTURED_LOG_LEVEL: &str = "info";
+pub const WASMCLOUD_ENABLE_IPV6: &str = "WASMCLOUD_ENABLE_IPV6";
+pub const WASMCLOUD_STRUCTURED_LOGGING_ENABLED: &str = "WASMCLOUD_STRUCTURED_LOGGING_ENABLED";
+pub const WASMCLOUD_CONFIG_SERVICE: &str = "WASMCLOUD_CONFIG_SERVICE";
+pub const WASMCLOUD_ALLOW_FILE_LOAD: &str = "WASMCLOUD_ALLOW_FILE_LOAD";
+pub const DEFAULT_ALLOW_FILE_LOAD: &str = "true";
+
+/// Helper function to convert WasmcloudOpts to the host environment map.
+/// Takes NatsOpts as well to provide reasonable defaults
+pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> Result<HashMap<String, String>> {
+    let mut host_config = HashMap::new();
+    // NATS isolation configuration variables
+    host_config.insert(
+        WASMCLOUD_LATTICE.to_string(),
+        wasmcloud_opts
+            .lattice
+            .unwrap_or(DEFAULT_LATTICE.to_string()),
+    );
+    if let Some(js_domain) = wasmcloud_opts.wasmcloud_js_domain {
+        host_config.insert(WASMCLOUD_JS_DOMAIN.to_string(), js_domain);
     }
-}
 
-pub(crate) async fn put_config(
-    opts: CliConnectionOpts,
-    name: &str,
-    values: HashMap<String, String>,
-    output_kind: OutputKind,
-) -> anyhow::Result<CommandOutput> {
-    let sp: Spinner = Spinner::new(&output_kind)?;
-    let is_secret = name.starts_with(SECRET_PREFIX);
-    let msg = if is_secret {
-        "Putting secret configuration ..."
-    } else {
-        "Putting configuration ..."
-    };
-    sp.update_spinner_message(msg.to_string());
+    // Host / Cluster configuration
+    if let Some(seed) = wasmcloud_opts.host_seed {
+        host_config.insert(WASMCLOUD_HOST_SEED.to_string(), seed);
+    }
+    if let Some(seed) = wasmcloud_opts.cluster_seed {
+        host_config.insert(WASMCLOUD_CLUSTER_SEED.to_string(), seed);
+    }
+    if let Some(cluster_issuers) = wasmcloud_opts.cluster_issuers {
+        host_config.insert(
+            WASMCLOUD_CLUSTER_ISSUERS.to_string(),
+            cluster_issuers.join(","),
+        );
+    }
+    host_config.insert(
+        WASMCLOUD_MAX_EXECUTION_TIME_MS.to_string(),
+        wasmcloud_opts.max_execution_time.to_string(),
+    );
+    if let Some(policy_topic) = wasmcloud_opts.policy_topic {
+        host_config.insert(WASMCLOUD_POLICY_TOPIC.to_string(), policy_topic.to_string());
+    }
 
-    let wco: WashConnectionOptions = opts.try_into()?;
-    let ctl_client = wco.into_ctl_client(None).await?;
-    // Handle no responders by suggesting a host needs to be running
-    let config_response = ctl_client
-        .put_config(name, values)
-        .await
-        .map_err(suggest_run_host_error)?;
+    if let Some(secrets_topic) = wasmcloud_opts.secrets_topic {
+        host_config.insert(
+            WASMCLOUD_SECRETS_TOPIC.to_string(),
+            secrets_topic.to_string(),
+        );
+    }
 
-    sp.finish_and_clear();
+    if wasmcloud_opts.allow_latest {
+        host_config.insert(WASMCLOUD_OCI_ALLOW_LATEST.to_string(), "true".to_string());
+    }
+    if let Some(allowed_insecure) = wasmcloud_opts.allowed_insecure {
+        host_config.insert(
+            WASMCLOUD_OCI_ALLOWED_INSECURE.to_string(),
+            allowed_insecure.join(","),
+        );
+    }
 
-    let message = if config_response.message.is_empty() && config_response.success {
-        let mut out_name = name;
-        let mut config_type = "Configuration";
-        if is_secret {
-            out_name = out_name
-                .strip_prefix(format!("{SECRET_PREFIX}_").as_str())
-                .unwrap_or(name);
-            config_type = "Secret";
+    // NATS RPC connection configuration
+    if let Some(host) = wasmcloud_opts.rpc_host {
+        host_config.insert(WASMCLOUD_RPC_HOST.to_string(), host.clone());
+    }
+    if let Some(port) = wasmcloud_opts.rpc_port {
+        host_config.insert(WASMCLOUD_RPC_PORT.to_string(), port.to_string());
+    }
+    if let Some(rpc_timeout_ms) = wasmcloud_opts.rpc_timeout_ms {
+        host_config.insert(
+            WASMCLOUD_RPC_TIMEOUT_MS.to_string(),
+            rpc_timeout_ms.to_string(),
+        );
+    }
+    if let Some(path) = wasmcloud_opts.rpc_credsfile {
+        if let Ok((jwt, seed)) = parse_credsfile(path).await {
+            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt.clone());
+            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed.clone());
         };
-        format!("{config_type} '{out_name}' put successfully.")
     } else {
-        config_response
-            .message
-            .replace(format!("{SECRET_PREFIX}_").as_str(), "")
-    };
-    let json_out = HashMap::from_iter([
-        ("success".to_string(), json!(config_response.success)),
-        ("message".to_string(), json!(message)),
-    ]);
-    let output = CommandOutput::new(message, json_out);
-
-    Ok(output)
-}
-
-pub(crate) async fn get_config(
-    opts: CliConnectionOpts,
-    name: &str,
-    output_kind: OutputKind,
-) -> anyhow::Result<CommandOutput> {
-    let sp: Spinner = Spinner::new(&output_kind)?;
-    let is_secret = is_secret(name);
-    let config_type = if is_secret { "secret" } else { "configuration" };
-    sp.update_spinner_message(format!("Getting {config_type}..."));
-
-    let wco: WashConnectionOptions = opts.try_into()?;
-    let ctl_client = wco.into_ctl_client(None).await?;
-
-    let config_response = ctl_client
-        .get_config(name)
-        .await
-        .map_err(suggest_run_host_error)?;
-
-    sp.finish_and_clear();
-
-    if !config_response.message.is_empty() && !config_response.success {
-        error!("Error getting {config_type}: {}", config_response.message);
-    };
-
-    if let Some(config) = config_response.response {
-        Ok(CommandOutput::new(
-            format!("{:?}", config),
-            config.into_iter().map(|(k, v)| (k, json!(v))).collect(),
-        ))
-    } else {
-        Err(anyhow::anyhow!(
-            "No {config_type} found for name: {}",
-            name.replace(format!("{SECRET_PREFIX}_").as_str(), "")
-        ))
+        if let Some(jwt) = wasmcloud_opts.rpc_jwt {
+            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt);
+        }
+        if let Some(seed) = wasmcloud_opts.rpc_seed {
+            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed);
+        }
     }
-}
+    if wasmcloud_opts.rpc_tls {
+        host_config.insert(WASMCLOUD_RPC_TLS.to_string(), "true".to_string());
+    }
 
-pub(crate) async fn delete_config(
-    opts: CliConnectionOpts,
-    name: &str,
-    output_kind: OutputKind,
-) -> anyhow::Result<CommandOutput> {
-    let sp: Spinner = Spinner::new(&output_kind)?;
-    let is_secret = is_secret(name);
-    let config_type = if is_secret { "secret" } else { "configuration" };
-    sp.update_spinner_message("Deleting {config_type}...".to_string());
-    let wco: WashConnectionOptions = opts.try_into()?;
-    let ctl_client = wco.into_ctl_client(None).await?;
-
-    let config_response = ctl_client
-        .delete_config(name)
-        .await
-        .map_err(suggest_run_host_error)?;
-
-    sp.finish_and_clear();
-
-    let message = if config_response.message.is_empty() && config_response.success {
-        let mut out_name = name;
-        if is_secret {
-            out_name = out_name
-                .strip_prefix(format!("{SECRET_PREFIX}_").as_str())
-                .unwrap_or(name);
+    // NATS CTL connection configuration
+    if let Some(host) = wasmcloud_opts.ctl_host {
+        host_config.insert(WASMCLOUD_CTL_HOST.to_string(), host);
+    }
+    if let Some(port) = wasmcloud_opts.ctl_port {
+        host_config.insert(WASMCLOUD_CTL_PORT.to_string(), port.to_string());
+    }
+    if let Some(path) = wasmcloud_opts.ctl_credsfile {
+        if let Ok((jwt, seed)) = parse_credsfile(path).await {
+            host_config.insert(WASMCLOUD_CTL_JWT.to_string(), jwt);
+            host_config.insert(WASMCLOUD_CTL_SEED.to_string(), seed);
         };
-        format!("{config_type} '{out_name}' deleted successfully.")
     } else {
-        config_response
-            .message
-            .replace(format!("{SECRET_PREFIX}_").as_str(), "")
-    };
-    let json_out = HashMap::from_iter([
-        ("success".to_string(), json!(config_response.success)),
-        ("message".to_string(), json!(message)),
-    ]);
-    let output = CommandOutput::new(message, json_out);
-
-    Ok(output)
-}
-
-/// Simple helper function to suggest running a host if no responders are found
-fn suggest_run_host_error(e: Box<dyn Error + std::marker::Send + Sync>) -> anyhow::Error {
-    let err_str = e.to_string();
-    if err_str.contains("no responders") {
-        anyhow::anyhow!("No responders found for config put request. Is a host running?")
-    } else {
-        anyhow::anyhow!(e)
+        if let Some(seed) = wasmcloud_opts.ctl_seed {
+            host_config.insert(WASMCLOUD_CTL_SEED.to_string(), seed);
+        }
+        if let Some(jwt) = wasmcloud_opts.ctl_jwt {
+            host_config.insert(WASMCLOUD_CTL_JWT.to_string(), jwt);
+        }
     }
-}
-
-fn ensure_not_secret(name: &str) -> anyhow::Result<()> {
-    if name.starts_with(SECRET_PREFIX) {
-        anyhow::bail!("Configuration names cannot start with '{SECRET_PREFIX}'. Did you mean to use the 'secrets' command?");
+    if wasmcloud_opts.ctl_tls {
+        host_config.insert(WASMCLOUD_CTL_TLS.to_string(), "true".to_string());
     }
-    Ok(())
-}
 
-pub(crate) fn is_secret(name: &str) -> bool {
-    name.starts_with(SECRET_PREFIX)
+    host_config.insert(
+        WASMCLOUD_PROV_SHUTDOWN_DELAY_MS.to_string(),
+        wasmcloud_opts.provider_delay.to_string(),
+    );
+
+    // Extras configuration
+    if wasmcloud_opts.config_service_enabled {
+        host_config.insert(WASMCLOUD_CONFIG_SERVICE.to_string(), "true".to_string());
+    }
+    if wasmcloud_opts.allow_file_load.unwrap_or_default() {
+        host_config.insert(WASMCLOUD_ALLOW_FILE_LOAD.to_string(), "true".to_string());
+    }
+    if wasmcloud_opts.enable_structured_logging {
+        host_config.insert(
+            WASMCLOUD_STRUCTURED_LOGGING_ENABLED.to_string(),
+            "true".to_string(),
+        );
+    }
+
+    let labels: Vec<(String, String)> = wasmcloud_opts
+        .label
+        .unwrap_or_default()
+        .iter()
+        .map(
+            |labelpair| match labelpair.split('=').collect::<Vec<&str>>()[..] {
+                [k, v] => Ok((k.to_string(), v.to_string())),
+                _ => Err(anyhow!(
+                    "invalid label format `{labelpair}`. Expected `key=value`"
+                )),
+            },
+        )
+        .collect::<Result<Vec<(String, String)>>>()?;
+    for (key, value) in labels {
+        host_config.insert(format!("WASMCLOUD_LABEL_{key}"), value.to_string());
+    }
+
+    host_config.insert(
+        WASMCLOUD_LOG_LEVEL.to_string(),
+        wasmcloud_opts.structured_log_level,
+    );
+    if wasmcloud_opts.enable_ipv6 {
+        host_config.insert(WASMCLOUD_ENABLE_IPV6.to_string(), "true".to_string());
+    }
+    Ok(host_config)
 }

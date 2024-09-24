@@ -1,16 +1,21 @@
 //! A temporary module to parse NATS credsfiles and translate
 //! their contents into a JWT and Seed value
+//!
+//! The code in this module is largely copied from `https://github.com/nats-io/nats.rs/blob/main/async-nats/src/auth_utils.rs`
+//!
+//! This module represents a temporary solution to the fact that a host does not support credsfile authentication
+
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use tokio::fs::read_to_string;
 
+/// Type alias to represent strings that are JWTs
 type Jwt = String;
-type Seed = String;
 
-// The code below is largely copied from https://github.com/nats-io/nats.rs/blob/main/async-nats/src/auth_utils.rs
-// This is a temporary solution to the fact that a host does not support credsfile authentication
+/// Type alias that represents strings which are NATS nkeys
+type Seed = String;
 
 /// Helper function to parse a credsfile from a path and return a tuple
 /// with the JWT and Seed values that were in the credsfile
@@ -25,6 +30,7 @@ where
     Ok((jwt, seed))
 }
 
+/// Regex that represents user configuration that decorates an nkey
 fn user_config_re() -> Result<Regex> {
     Ok(Regex::new(
         r"\s*(?:(?:[-]{3,}.*[-]{3,}\r?\n)([\w\-.=]+)(?:\r?\n[-]{3,}.*[-]{3,}\r?\n))",

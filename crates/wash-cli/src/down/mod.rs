@@ -17,7 +17,7 @@ use wash_lib::id::ServerId;
 use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
-use crate::up::{
+use crate::config::{
     DEFAULT_LATTICE, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST, WASMCLOUD_CTL_JWT,
     WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_CTL_TLS_CA_FILE, WASMCLOUD_LATTICE,
 };

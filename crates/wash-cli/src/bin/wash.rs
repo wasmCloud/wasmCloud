@@ -24,9 +24,11 @@ use wash_lib::plugin::subcommand::{DirMapping, SubcommandRunner};
 use wash_cli::app::{self, AppCliCommand};
 use wash_cli::build::{self, BuildCommand};
 use wash_cli::call::{self, CallCli};
+use wash_cli::cmd::config::{self, ConfigCliCommand};
+use wash_cli::cmd::up::{self, UpCommand};
 use wash_cli::common;
 use wash_cli::completions::{self, CompletionOpts};
-use wash_cli::config::{self, ConfigCliCommand};
+use wash_cli::config::{NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash_cli::ctx::{self, CtxCommand};
 use wash_cli::dev::{self, DevCommand};
 use wash_cli::down::{self, DownCommand};
@@ -38,7 +40,6 @@ use wash_cli::plugin::{self, PluginCommand};
 use wash_cli::secrets::{self, SecretsCliCommand};
 use wash_cli::style::WASH_CLI_STYLE;
 use wash_cli::ui::{self, UiCommand};
-use wash_cli::up::{self, UpCommand, NATS_SERVER_VERSION, WADM_VERSION, WASMCLOUD_HOST_VERSION};
 use wash_cli::util::ensure_plugin_dir;
 
 const HELP: &str = r"
