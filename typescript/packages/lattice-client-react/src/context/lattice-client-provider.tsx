@@ -14,6 +14,7 @@ export function LatticeClientProvider({
   React.useEffect(() => {
     if (!client) return;
 
+    // if the connection is already in the process of being established, don't do anything
     if (client.connection.status !== 'initial') return;
 
     client.instance.connect();
