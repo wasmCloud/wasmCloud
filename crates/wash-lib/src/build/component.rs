@@ -46,18 +46,22 @@ pub fn build_component(
             LanguageConfig::Rust(rust_config) => {
                 let rust_wasm_path =
                     build_rust_component(common_config, rust_config, component_config)?;
-                if component_config.wasm_target == WasmTarget::WasiPreview2 {
-                    adapt_component_to_wasi_preview2(&rust_wasm_path, component_config)?
-                } else {
-                    rust_wasm_path
+                match component_config.wasm_target {
+                    WasmTarget::CoreModule | WasmTarget::WasiPreview1 => rust_wasm_path,
+                    WasmTarget::WasiPreview2 => {
+                        adapt_component_to_wasi_preview2(&rust_wasm_path, component_config)?
+                    }
                 }
             }
             LanguageConfig::TinyGo(tinygo_config) => {
                 let go_wasm_path =
                     build_tinygo_component(common_config, tinygo_config, component_config)?;
 
-                if let WasmTarget::WasiPreview1 = &component_config.wasm_target {
-                    embed_wasm_component_metadata(
+                match component_config.wasm_target {
+                    // NOTE(lxf): historically, wasip1 was being adapted to p2 which is different from rust target.
+                    // We continue to do so here.
+                    WasmTarget::CoreModule | WasmTarget::WasiPreview1 => {
+                        embed_wasm_component_metadata(
                         &common_config.path,
                         component_config
                         .wit_world
@@ -66,12 +70,12 @@ pub fn build_component(
                         &go_wasm_path,
                         &go_wasm_path,
                 )?;
-                    // NOTE(lxf): historically, wasip1 was being adapted to p2.
-                    // We continue to do so here.
-                    adapt_component_to_wasi_preview2(&go_wasm_path, component_config)?
-                } else {
-                    // NOTE(lxf): tinygo takes over wit world embedding for preview2 target
-                    go_wasm_path
+                        adapt_component_to_wasi_preview2(&go_wasm_path, component_config)?
+                    }
+                    WasmTarget::WasiPreview2 => {
+                        // NOTE(lxf): tinygo takes over wit world embedding for preview2 target
+                        go_wasm_path
+                    }
                 }
             }
             LanguageConfig::Go(_) | LanguageConfig::Other(_)
@@ -101,26 +105,26 @@ pub fn build_component(
     }
 }
 
-pub fn adapt_component_to_wasi_preview2(
-    component_wasm_path: &PathBuf,
+pub(crate) fn adapt_component_to_wasi_preview2(
+    component_wasm_path: impl AsRef<Path>,
     component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
-    let adapted_wasm_path = component_wasm_path.clone();
+    let adapted_wasm_path = component_wasm_path.as_ref();
     let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
     let wasm_bytes = adapt_wasi_preview1_component(&adapted_wasm_path, adapter_wasm_bytes)
         .with_context(|| {
             format!(
                 "failed to adapt component at [{}] to WASI preview2",
-                component_wasm_path.display(),
+                adapted_wasm_path.display(),
             )
         })?;
-    fs::write(component_wasm_path, wasm_bytes).with_context(|| {
+    fs::write(adapted_wasm_path, wasm_bytes).with_context(|| {
         format!(
             "failed to write WASI preview2 adapted bytes to path [{}]",
-            component_wasm_path.display(),
+            adapted_wasm_path.display(),
         )
     })?;
-    Ok(adapted_wasm_path)
+    Ok(adapted_wasm_path.to_path_buf())
 }
 
 /// Sign the component at `component_wasm_path` using the provided configuration

@@ -24,4 +24,4 @@ claims = [
   "wasmcloud:builtin:logging",
 ]
 wit_world = "echo"
-wasm_target = "wasm32-wasi"
+wasm_target = "wasm32-wasi-preview2"
