@@ -21,7 +21,7 @@ export type LatticeConnection<Options = unknown> = {
 
   status: LatticeConnectionStatus;
 
-  connect(): Promise<void>;
+  connect(): Promise<LatticeConnection<Options>>;
 
   disconnect(): Promise<void>;
 
