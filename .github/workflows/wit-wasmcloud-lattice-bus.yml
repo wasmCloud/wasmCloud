@@ -22,9 +22,9 @@ jobs:
     - name: Extract tag context
       id: ctx
       run: |
-          version=${GITHUB_REF_NAME#wit-wasmcloud-secrets-v}
+          version=${GITHUB_REF_NAME#wit-wasmcloud-bus-v}
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tarball=wit-wasmcloud-secrets-${version}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "tarball=wit-wasmcloud-bus-${version}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "version is ${version}"
     - name: Build
       run: |
