@@ -1,5 +1,5 @@
 [blobstore]
-url = "https://github.com/WebAssembly/wasi-blobstore/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-blobstore/archive/d9f62e679fd0e7a090f68449751d7532f11eca78.tar.gz"
 sha256 = "9a2c47932e2be8804c01ba2c43bbb55bce10ebe4a6735b53ecd0021810492001"
 sha512 = "e68bdc404e33271e850fa451a00f8ca3cf3ed5b3ea693cea7293122ddc66bc21868a8b43fdb9bcdf52ba769a2f621074039972618d322a4804e6d4dbd4f8e4d7"
 deps = ["io"]
@@ -19,7 +19,7 @@ sha256 = "468b4d12892fe926b8eb5d398dbf579d566c93231fa44f415440572c695b7613"
 sha512 = "e6b53a07221f1413953c9797c68f08b815fdaebf66419bbc1ea3e8b7dece73731062693634731f311a03957b268cf9cc509c518bd15e513c318aa04a8459b93a"
 
 [config]
-url = "https://github.com/WebAssembly/wasi-runtime-config/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-runtime-config/archive/c667fe67ffa158925511810775155af582d22928.tar.gz"
 sha256 = "9148c06861712b69170af7b8ec37896b4104297d920fdec9f3bcc0b1eee4a5c8"
 sha512 = "25a54101620f279c835b39f56f6dbf8a92b374b6faaf6cf6aaa1ea06d8b97b9b79788cf8abd9c2ad0c11e3629dba6a2513b71f2c54b9f95027054ae54a4615b8"
 
@@ -38,7 +38,7 @@ sha256 = "7210e5653539a15478f894d4da24cc69d61924cbcba21d2804d69314a88e5a4c"
 sha512 = "49184a1b0945a889abd52d25271172ed3dc2db6968fcdddb1bab7ee0081f4a3eeee0977ad2291126a37631c0d86eeea75d822fa8af224c422134500bf9f0f2bb"
 
 [keyvalue]
-url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-keyvalue/archive/219ea3612a53f1bf5b2d137551b22d0268fd3c58.tar.gz"
 sha256 = "d2de617fe31ec0abc6072f75f97dd22bf95b3231d5b3111471d73871df9081cd"
 sha512 = "6f0b4e44c684d760c54552e2bde9bc976e0a4f6525fc1d47acb98625e030847276436242f42a41f4da1bb9169fb2968c53d659d61af9b2f709f4eb6f9880e2c7"
 
@@ -71,6 +71,6 @@ sha256 = "622bd28bbeb43736375dc02bd003fd3a016ff8ee91e14bab488325c6b38bf966"
 sha512 = "5a63c1f36de0c4548e1d2297bdbededb28721cbad94ef7825c469eae29d7451c97e00b4c1d6730ee1ec0c4a5aac922961a2795762d4a0c3bb54e30a391a84bae"
 
 [wasmcloud]
-path = "../../../wit"
+path = "../../../wit/bus/wit"
 sha256 = "b4946a8bfa48b2f4ac404de03617d25712879596be5417bde3de09ca9c369462"
 sha512 = "09918bb2fa8f7af022f71453348be38ec7fd1a35df6809b8d0c5f246856712f969557ff65d9e5d4619e905191e27fba2fbbcc9f38c777a7b09eb73c30909d33f"

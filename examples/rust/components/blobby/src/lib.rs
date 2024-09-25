@@ -6,12 +6,12 @@ mod bindings {
             "wasi:blobstore/blobstore@0.2.0-draft": generate,
             "wasi:blobstore/container@0.2.0-draft": generate,
             "wasi:blobstore/types@0.2.0-draft": generate,
-            "wasi:clocks/monotonic-clock@0.2.0": ::wasi::clocks::monotonic_clock,
-            "wasi:http/incoming-handler@0.2.0": generate,
-            "wasi:http/types@0.2.0": ::wasi::http::types,
-            "wasi:io/error@0.2.0": ::wasi::io::error,
-            "wasi:io/poll@0.2.0": ::wasi::io::poll,
-            "wasi:io/streams@0.2.0": ::wasi::io::streams,
+            "wasi:clocks/monotonic-clock@0.2.1": ::wasi::clocks::monotonic_clock,
+            "wasi:http/incoming-handler@0.2.1": generate,
+            "wasi:http/types@0.2.1": ::wasi::http::types,
+            "wasi:io/error@0.2.1": ::wasi::io::error,
+            "wasi:io/poll@0.2.1": ::wasi::io::poll,
+            "wasi:io/streams@0.2.1": ::wasi::io::streams,
             "wasi:logging/logging": generate,
         }
     });

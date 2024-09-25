@@ -11,8 +11,8 @@ This crate is a collection of `wasi` and `wasmcloud` interfaces that can be used
 ```rust
 wit_bindgen::generate!({
     with: {
-        "wasi:http/types@0.2.0": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.0": wasmcloud_component::wasi::io::streams,
+        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
+        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
     }
 });
 
