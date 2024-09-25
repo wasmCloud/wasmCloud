@@ -45,12 +45,12 @@ class NatsWsLatticeConnection implements LatticeConnection<Options> {
     this.#reconnectIfConnected();
   }
 
-  async connect(): Promise<void> {
+  async connect() {
+    if (this.#connection) return this;
+
+    this.#status = 'pending';
+
     try {
-      if (this.#connection) return;
-
-      this.#status = 'pending';
-
       const connection = await connect({
         servers: this.#options.latticeUrl,
         ...this.#options.natsOptions,
@@ -69,12 +69,11 @@ class NatsWsLatticeConnection implements LatticeConnection<Options> {
 
       this.#connection = connection;
       this.#status = 'connected';
+      return this;
     } catch (error) {
-      this.#connection = undefined;
       this.#status = 'error';
-      throw new Error(
-        `Failed to connect to lattice: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      );
+      const message = error instanceof Error && error.message ? error.message : 'Unknown error';
+      throw new Error(`Failed to connect to lattice: ${message}`);
     }
   }
 

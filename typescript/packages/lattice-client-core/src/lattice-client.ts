@@ -15,12 +15,28 @@ type LatticeClientConfig = {
   wadmTopicPrefix?: string;
 };
 
-type LatticeConnectionFunction = (config: LatticeClientOptions['config']) => LatticeConnection;
+/**
+ * Receives the config from the LatticeClient. Called by the LatticeClient on instantiation and
+ * when config is changed.
+ *
+ * @returns an instance of a `LatticeConnection`
+ */
+type LatticeConnectionCreator = (config: LatticeClientOptions['config']) => LatticeConnection;
 
 export type LatticeClientOptions = {
+  /** config object for the lattice client */
   config: LatticeClientConfig;
+  /**
+   * should the lattice client try to automatically connect to the lattice
+   * @default true
+   */
   autoConnect?: boolean;
-  getNewConnection: LatticeConnectionFunction;
+  /**
+   * Function to get a new LatticeConnection instance. The value of `config` will be passed as the
+   * first argument to this function. This function is called again if the config is changed in
+   * the instance of the LatticeClient.
+   */
+  getNewConnection: LatticeConnectionCreator;
 };
 
 export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'connection'>> = {
@@ -32,7 +48,7 @@ export const defaultConfig: Required<Omit<LatticeClientConfig, 'latticeUrl' | 'c
 
 export class LatticeClient {
   #connection: LatticeConnection;
-  #getNewConnection: LatticeConnectionFunction;
+  #getNewConnection: LatticeConnectionCreator;
   #config: Omit<Required<LatticeClientConfig>, 'connection'>;
 
   get #latticeId(): string {
@@ -144,7 +160,7 @@ export class LatticeClient {
       // try and connect, but don't throw an error if it fails. The connection will be in an error state accessible
       // through the `client.connection.status` property
       this.#connect().catch((error) => {
-        console.info('Failed to connect to lattice on creation:', error.message ?? 'unknown error');
+        console.warn('Failed to connect to lattice on creation:', error.message ?? 'unknown error');
       });
     }
   }
@@ -195,35 +211,31 @@ export class LatticeClient {
   /**
    * Connect to the lattice
    */
-  async #connect(count = 0): Promise<void> {
-    new Promise((resolve, reject) => {
-      if (count >= this.#config.retryCount) {
-        reject(new Error(`Could not connect to lattice after ${this.#config.retryCount} attempts`));
-        return;
-      }
+  async #connect(retryCount = 0): Promise<void> {
+    const aLittleBit = 500; // ms
 
-      const tryAgainAfterWaitingForALittleBit = () =>
-        new Promise<void>((resolve) => {
-          const aLittleBit = 500; // ms
-          setTimeout(() => resolve(), aLittleBit);
-        }).finally(() => resolve(this.#connect(count + 1)));
+    const tryAgainAfterWaitingForALittleBit = async () => {
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), aLittleBit));
+      await this.#connect(retryCount + 1);
+    };
 
-      try {
-        if (this.#connection.status === 'connected') {
-          resolve(this.#connection);
-          return;
-        }
+    if (retryCount >= this.#config.retryCount) {
+      throw new Error(`Could not connect to lattice after ${this.#config.retryCount} attempts`);
+    }
 
-        if (this.#connection.status !== 'initial') {
-          tryAgainAfterWaitingForALittleBit();
-          return;
-        }
+    if (this.#connection.status === 'connected') {
+      return;
+    }
 
-        this.#connection.connect().catch(() => tryAgainAfterWaitingForALittleBit());
-      } catch (error) {
-        reject(error as Error);
-      }
-    });
+    if (this.#connection.status !== 'initial') {
+      await tryAgainAfterWaitingForALittleBit();
+    }
+
+    try {
+      await this.#connection.connect();
+    } catch {
+      await tryAgainAfterWaitingForALittleBit();
+    }
   }
 
   /**
