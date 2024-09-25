@@ -8,6 +8,7 @@ use tracing::instrument;
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
+use wasmcloud_control_interface::Link;
 
 fn format_component_claims(claims: &jwt::Claims<jwt::Component>) -> serde_json::Value {
     let issuer = &claims.issuer;
@@ -93,9 +94,7 @@ pub fn component_scale_failed(
     }
 }
 
-pub fn linkdef_set(
-    link: &wasmcloud_control_interface::InterfaceLinkDefinition,
-) -> serde_json::Value {
+pub fn linkdef_set(link: &Link) -> serde_json::Value {
     json!({
         "source_id": link.source_id,
         "target": link.target,
@@ -108,10 +107,7 @@ pub fn linkdef_set(
     })
 }
 
-pub fn linkdef_set_failed(
-    link: &wasmcloud_control_interface::InterfaceLinkDefinition,
-    error: &anyhow::Error,
-) -> serde_json::Value {
+pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Value {
     json!({
         "source_id": link.source_id,
         "target": link.target,

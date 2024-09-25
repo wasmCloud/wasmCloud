@@ -1,12 +1,4 @@
-mod event;
-mod handler;
-
-pub mod config;
-/// wasmCloud host configuration
-pub mod host_config;
-
-pub use self::host_config::Host as HostConfig;
-
+use std::collections::btree_map::Entry as BTreeMapEntry;
 use std::collections::hash_map::{self, Entry};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
@@ -45,10 +37,9 @@ use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ComponentAuctionAck, ComponentAuctionRequest, ComponentDescription, CtlResponse,
-    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, InterfaceLinkDefinition,
-    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
-    ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
-    UpdateComponentCommand,
+    DeleteInterfaceLinkDefinitionRequest, HostInventory, HostLabel, Link, ProviderAuctionAck,
+    ProviderAuctionRequest, ProviderDescription, RegistryCredential, ScaleComponentCommand,
+    StartProviderCommand, StopHostCommand, StopProviderCommand, UpdateComponentCommand,
 };
 use wasmcloud_core::{
     provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
@@ -66,6 +57,15 @@ use crate::{
     fetch_component, HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse,
     RegistryAuth, RegistryConfig, RegistryType, SecretsManager,
 };
+
+mod event;
+mod handler;
+
+pub mod config;
+/// wasmCloud host configuration
+pub mod host_config;
+
+pub use self::host_config::Host as HostConfig;
 
 use self::config::{BundleGenerator, ConfigBundle};
 use self::handler::Handler;
@@ -358,7 +358,7 @@ pub struct Host {
     host_token: Arc<jwt::Token<jwt::Host>>,
     /// The Xkey used to encrypt secrets when sending them over NATS
     secrets_xkey: Arc<XKey>,
-    labels: RwLock<HashMap<String, String>>,
+    labels: RwLock<BTreeMap<String, String>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
@@ -380,7 +380,7 @@ pub struct Host {
     stop_rx: watch::Receiver<Option<Instant>>,
     queue: AbortHandle,
     // Component ID -> All Links
-    links: RwLock<HashMap<String, Vec<InterfaceLinkDefinition>>>,
+    links: RwLock<HashMap<String, Vec<Link>>>,
     component_claims: Arc<RwLock<HashMap<ComponentId, jwt::Claims<jwt::Component>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
     metrics: Arc<HostMetrics>,
@@ -396,7 +396,7 @@ pub struct ComponentSpecification {
     /// The URL of the component, file, OCI, or otherwise
     url: String,
     /// All outbound links from this component to other components, used for routing when calling a component `import`
-    links: Vec<InterfaceLinkDefinition>,
+    links: Vec<Link>,
     ////
     // Possible additions in the future, left in as comments to facilitate discussion
     ////
@@ -556,7 +556,7 @@ struct SupplementalConfig {
 async fn load_supplemental_config(
     ctl_nats: &async_nats::Client,
     lattice: &str,
-    labels: &HashMap<String, String>,
+    labels: &BTreeMap<String, String>,
 ) -> anyhow::Result<SupplementalConfig> {
     #[derive(Deserialize, Default)]
     struct SerializedSupplementalConfig {
@@ -716,7 +716,7 @@ impl Host {
             Arc::new(KeyPair::new(KeyPairType::Server))
         };
 
-        let mut labels = HashMap::from([
+        let mut labels = BTreeMap::from([
             ("hostcore.arch".into(), ARCH.into()),
             ("hostcore.os".into(), OS.into()),
             ("hostcore.osfamily".into(), FAMILY.into()),
@@ -840,7 +840,7 @@ impl Host {
             PolicyHostInfo {
                 public_key: host_key.public_key(),
                 lattice: config.lattice.to_string(),
-                labels: labels.clone(),
+                labels: HashMap::from_iter(labels.clone()),
             },
             config.policy_service_config.policy_topic.clone(),
             config.policy_service_config.policy_timeout_ms,
@@ -1099,26 +1099,37 @@ impl Host {
         let components = self.components.read().await;
         let components: Vec<_> = stream::iter(components.iter())
             .filter_map(|(id, component)| async move {
-                let name = component
+                let mut description = ComponentDescription::builder()
+                    .id(id.into())
+                    .image_ref(component.image_reference.to_string())
+                    .annotations(component.annotations.clone().into_iter().collect())
+                    .max_instances(component.max_instances.get().try_into().unwrap_or(u32::MAX))
+                    .revision(
+                        component
+                            .claims()
+                            .and_then(|claims| claims.metadata.as_ref())
+                            .and_then(|jwt::Component { rev, .. }| *rev)
+                            .unwrap_or_default(),
+                    );
+                // Add name if present
+                if let Some(name) = component
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
                     .and_then(|metadata| metadata.name.as_ref())
-                    .cloned();
-                Some(ComponentDescription {
-                    id: id.into(),
-                    image_ref: component.image_reference.to_string(),
-                    annotations: Some(component.annotations.clone().into_iter().collect()),
-                    max_instances: component.max_instances.get().try_into().unwrap_or(u32::MAX),
-                    revision: component
-                        .claims()
-                        .and_then(|claims| claims.metadata.as_ref())
-                        .and_then(|jwt::Component { rev, .. }| *rev)
-                        .unwrap_or_default(),
-                    name,
-                })
+                    .cloned()
+                {
+                    description = description.name(name);
+                };
+
+                Some(
+                    description
+                        .build()
+                        .expect("failed to build component description: {e}"),
+                )
             })
             .collect()
             .await;
+
         let providers: Vec<_> = self
             .providers
             .read()
@@ -1154,17 +1165,19 @@ impl Host {
                 },
             )
             .collect();
+
         let uptime = self.start_at.elapsed();
-        HostInventory {
-            components,
-            providers,
-            friendly_name: self.friendly_name.clone(),
-            labels: self.labels.read().await.clone(),
-            uptime_human: human_friendly_uptime(uptime),
-            uptime_seconds: uptime.as_secs(),
-            version: self.host_config.version.clone(),
-            host_id: self.host_key.public_key(),
-        }
+        HostInventory::builder()
+            .components(components)
+            .providers(providers)
+            .friendly_name(self.friendly_name.clone())
+            .labels(self.labels.read().await.clone())
+            .uptime_human(human_friendly_uptime(uptime))
+            .uptime_seconds(uptime.as_secs())
+            .version(self.host_config.version.clone())
+            .host_id(self.host_key.public_key())
+            .build()
+            .expect("failed to build host inventory")
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1402,12 +1415,11 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<Option<CtlResponse<ComponentAuctionAck>>> {
-        let ComponentAuctionRequest {
-            component_ref,
-            component_id,
-            constraints,
-        } = serde_json::from_slice(payload.as_ref())
+        let req = serde_json::from_slice::<ComponentAuctionRequest>(payload.as_ref())
             .context("failed to deserialize component auction command")?;
+        let component_ref = req.component_ref();
+        let component_id = req.component_id();
+        let constraints = req.constraints();
 
         info!(
             component_ref,
@@ -1420,16 +1432,18 @@ impl Host {
         let constraints_satisfied = constraints
             .iter()
             .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
-        let component_id_running = self.components.read().await.contains_key(&component_id);
+        let component_id_running = self.components.read().await.contains_key(component_id);
 
         // This host can run the component if all constraints are satisfied and the component is not already running
         if constraints_satisfied && !component_id_running {
-            Ok(Some(CtlResponse::ok(ComponentAuctionAck {
-                component_ref,
-                component_id,
-                constraints,
-                host_id: self.host_key.public_key(),
-            })))
+            Ok(Some(CtlResponse::ok(
+                ComponentAuctionAck::from_component_host_and_constraints(
+                    component_ref,
+                    component_id,
+                    &self.host_key.public_key(),
+                    constraints.clone(),
+                ),
+            )))
         } else {
             Ok(None)
         }
@@ -1440,12 +1454,11 @@ impl Host {
         &self,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<Option<CtlResponse<ProviderAuctionAck>>> {
-        let ProviderAuctionRequest {
-            provider_ref,
-            provider_id,
-            constraints,
-        } = serde_json::from_slice(payload.as_ref())
+        let req = serde_json::from_slice::<ProviderAuctionRequest>(payload.as_ref())
             .context("failed to deserialize provider auction command")?;
+        let provider_ref = req.provider_ref();
+        let provider_id = req.provider_id();
+        let constraints = req.constraints();
 
         info!(
             provider_ref,
@@ -1459,14 +1472,17 @@ impl Host {
             .iter()
             .all(|(k, v)| host_labels.get(k).is_some_and(|hv| hv == v));
         let providers = self.providers.read().await;
-        let provider_running = providers.contains_key(&provider_id);
+        let provider_running = providers.contains_key(provider_id);
         if constraints_satisfied && !provider_running {
-            Ok(Some(CtlResponse::ok(ProviderAuctionAck {
-                provider_ref,
-                provider_id,
-                constraints,
-                host_id: self.host_key.public_key(),
-            })))
+            Ok(Some(CtlResponse::ok(
+                ProviderAuctionAck::builder()
+                    .provider_ref(provider_ref.into())
+                    .provider_id(provider_id.into())
+                    .constraints(constraints.clone())
+                    .host_id(self.host_key.public_key())
+                    .build()
+                    .map_err(|e| anyhow!("failed to build provider auction ack: {e}"))?,
+            )))
         } else {
             Ok(None)
         }
@@ -1505,9 +1521,10 @@ impl Host {
         let timeout = if payload.as_ref().is_empty() {
             None
         } else {
-            let StopHostCommand { timeout, host_id } =
-                serde_json::from_slice::<StopHostCommand>(payload.as_ref())
-                    .context("failed to deserialize stop command")?;
+            let cmd = serde_json::from_slice::<StopHostCommand>(payload.as_ref())
+                .context("failed to deserialize stop command")?;
+            let timeout = cmd.timeout();
+            let host_id = cmd.host_id();
 
             // If the Host ID was provided (i..e not the empty string, due to #[serde(default)]), then
             // we should check it against the known transport-provided host_id, and this actual host's ID
@@ -1535,7 +1552,9 @@ impl Host {
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully handled stop host".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1544,16 +1563,14 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let ScaleComponentCommand {
-            component_ref,
-            component_id,
-            annotations,
-            max_instances,
-            config,
-            allow_update,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
+        let cmd = serde_json::from_slice::<ScaleComponentCommand>(payload.as_ref())
             .context("failed to deserialize component scale command")?;
+        let component_ref = cmd.component_ref();
+        let component_id = cmd.component_id();
+        let annotations = cmd.annotations();
+        let max_instances = cmd.max_instances();
+        let config = cmd.config().clone();
+        let allow_update = cmd.allow_update();
 
         debug!(
             component_ref,
@@ -1561,7 +1578,11 @@ impl Host {
         );
 
         let host_id = host_id.to_string();
-        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
+        let annotations: Annotations = annotations
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
 
         // Basic validation to ensure that the component is running and that the image reference matches
         // If it doesn't match, we can still successfully scale, but we won't be updating the image reference
@@ -1569,11 +1590,11 @@ impl Host {
             self.components
                 .read()
                 .await
-                .get(&component_id)
+                .get(component_id)
                 .map(|v| {
                     (
                         Some(Arc::clone(&v.image_reference)),
-                        &*v.image_reference != component_ref.as_str(),
+                        &*v.image_reference != component_ref,
                     )
                 })
                 .unwrap_or_else(|| (None, false))
@@ -1687,11 +1708,7 @@ impl Host {
             }
         });
 
-        Ok(CtlResponse {
-            success: true,
-            message,
-            response: None,
-        })
+        Ok(CtlResponse::<()>::success(message))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1872,13 +1889,11 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let UpdateComponentCommand {
-            component_id,
-            annotations,
-            new_component_ref,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
+        let cmd = serde_json::from_slice::<UpdateComponentCommand>(payload.as_ref())
             .context("failed to deserialize component update command")?;
+        let component_id = cmd.component_id();
+        let annotations = cmd.annotations().cloned();
+        let new_component_ref = cmd.new_component_ref();
 
         debug!(
             component_id,
@@ -1895,7 +1910,7 @@ impl Host {
             .components
             .read()
             .await
-            .get(&component_id)
+            .get(component_id)
             .map(|component| Arc::clone(&component.image_reference))
         else {
             return Ok(CtlResponse::error(&format!(
@@ -1904,12 +1919,10 @@ impl Host {
         };
 
         // If the component image reference is the same, respond with an appropriate message
-        if &*component_ref == new_component_ref.as_str() {
-            return Ok(CtlResponse {
-                success: true,
-                message: format!("component {component_id} already updated to {new_component_ref}"),
-                response: None,
-            });
+        if &*component_ref == new_component_ref {
+            return Ok(CtlResponse::<()>::success(format!(
+                "component {component_id} already updated to {new_component_ref}"
+            )));
         }
 
         let host_id = host_id.to_string();
@@ -1932,11 +1945,7 @@ impl Host {
             }
         });
 
-        Ok(CtlResponse {
-            success: true,
-            message,
-            response: None,
-        })
+        Ok(CtlResponse::<()>::success(message))
     }
 
     async fn handle_update_component_task(
@@ -1944,7 +1953,7 @@ impl Host {
         component_id: Arc<str>,
         new_component_ref: Arc<str>,
         host_id: &str,
-        annotations: Option<HashMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<()> {
         // NOTE: This block is specifically scoped to ensure we drop the read lock on `self.components` before
         // we attempt to grab a write lock.
@@ -2074,7 +2083,9 @@ impl Host {
                 }
             }
         });
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully started provider".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2083,7 +2094,7 @@ impl Host {
         config: &[String],
         provider_id: &str,
         provider_ref: &str,
-        annotations: HashMap<String, String>,
+        annotations: BTreeMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
         trace!(provider_ref, provider_id, "start provider task");
@@ -2504,13 +2515,14 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let StopProviderCommand { provider_id, .. } = serde_json::from_slice(payload.as_ref())
+        let cmd = serde_json::from_slice::<StopProviderCommand>(payload.as_ref())
             .context("failed to deserialize provider stop command")?;
+        let provider_id = cmd.provider_id();
 
         debug!(provider_id, "handling stop provider");
 
         let mut providers = self.providers.write().await;
-        let hash_map::Entry::Occupied(entry) = providers.entry(provider_id.clone()) else {
+        let hash_map::Entry::Occupied(entry) = providers.entry(provider_id.into()) else {
             warn!(
                 provider_id,
                 "received request to stop provider that is not running"
@@ -2553,7 +2565,9 @@ impl Host {
             event::provider_stopped(annotations, host_id, provider_id, "stop"),
         )
         .await?;
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully stopped provider".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2586,7 +2600,7 @@ impl Host {
         trace!("handling links");
 
         let links = self.links.read().await;
-        let links: Vec<&InterfaceLinkDefinition> = links.values().flatten().collect();
+        let links: Vec<&Link> = links.values().flatten().collect();
         let res =
             serde_json::to_vec(&CtlResponse::ok(links)).context("failed to serialize response")?;
         Ok(res)
@@ -2600,11 +2614,9 @@ impl Host {
                 .context("config data should be a map of string -> string")?;
             serde_json::to_vec(&CtlResponse::ok(config_map)).map_err(anyhow::Error::from)
         } else {
-            serde_json::to_vec(&CtlResponse::<()> {
-                success: true,
-                response: None,
-                message: "Configuration not found".to_string(),
-            })
+            serde_json::to_vec(&CtlResponse::<()>::success(
+                "Configuration not found".into(),
+            ))
             .map_err(anyhow::Error::from)
         }
     }
@@ -2615,28 +2627,30 @@ impl Host {
         host_id: &str,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let HostLabel { key, value } = serde_json::from_slice(payload.as_ref())
+        let host_label = serde_json::from_slice::<HostLabel>(payload.as_ref())
             .context("failed to deserialize put label request")?;
+        let key = host_label.key();
+        let value = host_label.value();
         let mut labels = self.labels.write().await;
-        match labels.entry(key) {
-            Entry::Occupied(mut entry) => {
+        match labels.entry(key.into()) {
+            BTreeMapEntry::Occupied(mut entry) => {
                 info!(key = entry.key(), value, "updated label");
-                entry.insert(value);
+                entry.insert(value.into());
             }
-            Entry::Vacant(entry) => {
+            BTreeMapEntry::Vacant(entry) => {
                 info!(key = entry.key(), value, "set label");
-                entry.insert(value);
+                entry.insert(value.into());
             }
         }
 
         self.publish_event(
             "labels_changed",
-            event::labels_changed(host_id, labels.clone()),
+            event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
         )
         .await
         .context("failed to publish labels_changed event")?;
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success("successfully put label".into()))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2645,25 +2659,30 @@ impl Host {
         host_id: &str,
         payload: impl AsRef<[u8]>,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let HostLabel { key, .. } = serde_json::from_slice(payload.as_ref())
+        let label = serde_json::from_slice::<HostLabel>(payload.as_ref())
             .context("failed to deserialize delete label request")?;
+        let key = label.key();
         let mut labels = self.labels.write().await;
-        let value = labels.remove(&key);
+        let value = labels.remove(key);
 
         if value.is_none() {
             warn!(key, "could not remove unset label");
-            return Ok(CtlResponse::success());
+            return Ok(CtlResponse::<()>::success(
+                "successfully deleted label (no such label)".into(),
+            ));
         };
 
         info!(key, "removed label");
         self.publish_event(
             "labels_changed",
-            event::labels_changed(host_id, labels.clone()),
+            event::labels_changed(host_id, HashMap::from_iter(labels.clone())),
         )
         .await
         .context("failed to publish labels_changed event")?;
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully deleted label".into(),
+        ))
     }
 
     /// Handle a new link by modifying the relevant source [ComponentSpeficication]. Once
@@ -2672,11 +2691,11 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
-        let interface_link_definition: InterfaceLinkDefinition = serde_json::from_slice(payload)
+        let interface_link_definition: Link = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
 
         let link_set_result: anyhow::Result<()> = async {
-            let InterfaceLinkDefinition {
+            let Link {
                 source_id,
                 target,
                 wit_namespace,
@@ -2685,6 +2704,7 @@ impl Host {
                 name,
                 source_config: _,
                 target_config: _,
+                ..
             } = interface_link_definition.clone();
 
             let ns_and_package = format!("{wit_namespace}:{wit_package}");
@@ -2697,13 +2717,13 @@ impl Host {
                 "handling put wrpc link definition"
             );
 
+            // Validate all configurations
             self.validate_config(
                 interface_link_definition
                     .source_config
                     .iter()
-                    .chain(&interface_link_definition.target_config),
-            )
-            .await?;
+                    .chain(&interface_link_definition.target_config)
+            ).await?;
 
             let mut component_spec = self
                 .get_component_spec(&source_id)
@@ -2763,7 +2783,7 @@ impl Host {
                 event::linkdef_set(&interface_link_definition),
             )
             .await?;
-            Ok(CtlResponse::success())
+            Ok(CtlResponse::<()>::success("successfully set link".into()))
         }
     }
 
@@ -2771,24 +2791,25 @@ impl Host {
     /// Remove an interface link on a source component for a specific package
     async fn handle_link_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
-        let DeleteInterfaceLinkDefinitionRequest {
-            source_id,
-            wit_namespace,
-            wit_package,
-            name,
-        } = serde_json::from_slice(payload)
+        let req = serde_json::from_slice::<DeleteInterfaceLinkDefinitionRequest>(payload)
             .context("failed to deserialize wrpc link definition")?;
+        let source_id = req.source_id();
+        let wit_namespace = req.wit_namespace();
+        let wit_package = req.wit_package();
+        let link_name = req.link_name();
 
         let ns_and_package = format!("{wit_namespace}:{wit_package}");
 
         debug!(
             source_id,
-            ns_and_package, name, "handling del wrpc link definition"
+            ns_and_package, link_name, "handling del wrpc link definition"
         );
 
-        let Some(mut component_spec) = self.get_component_spec(&source_id).await? else {
+        let Some(mut component_spec) = self.get_component_spec(source_id).await? else {
             // If the component spec doesn't exist, the link is deleted
-            return Ok(CtlResponse::success());
+            return Ok(CtlResponse::<()>::success(
+                "successfully deleted link (spec doesn't exist)".into(),
+            ));
         };
 
         // If we can find an existing link with the same source, namespace, package, and name, remove it
@@ -2798,7 +2819,7 @@ impl Host {
                 link.source_id == source_id
                     && link.wit_namespace == wit_namespace
                     && link.wit_package == wit_package
-                    && link.name == name
+                    && link.name == link_name
             }) {
             // Sanity safety check since `swap_remove` will panic if the index is out of bounds
             if existing_link_index < component_spec.links.len() {
@@ -2823,9 +2844,9 @@ impl Host {
         self.publish_event(
             "linkdef_deleted",
             event::linkdef_deleted(
-                &source_id,
+                source_id,
                 deleted_link.as_ref().map(|link| &link.target),
-                name,
+                link_name,
                 wit_namespace,
                 wit_package,
                 deleted_link.as_ref().map(|link| &link.interfaces),
@@ -2833,7 +2854,9 @@ impl Host {
         )
         .await?;
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully deleted link".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2864,7 +2887,9 @@ impl Host {
             }
         }
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully put registries".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all, fields(%config_name))]
@@ -2886,7 +2911,7 @@ impl Host {
         self.publish_event("config_set", event::config_set(config_name))
             .await?;
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success("successfully put config".into()))
     }
 
     #[instrument(level = "debug", skip_all, fields(%config_name))]
@@ -2901,7 +2926,9 @@ impl Host {
         self.publish_event("config_deleted", event::config_deleted(config_name))
             .await?;
 
-        Ok(CtlResponse::success())
+        Ok(CtlResponse::<()>::success(
+            "successfully deleted config".into(),
+        ))
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2912,18 +2939,26 @@ impl Host {
         trace!("replying to ping");
         let uptime = self.start_at.elapsed();
 
-        Ok(CtlResponse::ok(wasmcloud_control_interface::Host {
-            id: self.host_key.public_key(),
-            labels: self.labels.read().await.clone(),
-            friendly_name: self.friendly_name.clone(),
-            uptime_seconds: uptime.as_secs(),
-            uptime_human: Some(human_friendly_uptime(uptime)),
-            version: Some(self.host_config.version.clone()),
-            js_domain: self.host_config.js_domain.clone(),
-            ctl_host: Some(self.host_config.ctl_nats_url.to_string()),
-            rpc_host: Some(self.host_config.rpc_nats_url.to_string()),
-            lattice: self.host_config.lattice.to_string(),
-        }))
+        let mut host = wasmcloud_control_interface::Host::builder()
+            .id(self.host_key.public_key())
+            .labels(self.labels.read().await.clone())
+            .friendly_name(self.friendly_name.clone())
+            .uptime_seconds(uptime.as_secs())
+            .uptime_human(human_friendly_uptime(uptime))
+            .version(self.host_config.version.clone())
+            .ctl_host(self.host_config.ctl_nats_url.to_string())
+            .rpc_host(self.host_config.rpc_nats_url.to_string())
+            .lattice(self.host_config.lattice.to_string());
+
+        if let Some(ref js_domain) = self.host_config.js_domain {
+            host = host.js_domain(js_domain.clone());
+        }
+
+        let host = host
+            .build()
+            .map_err(|e| anyhow!("failed to build host message: {e}"))?;
+
+        Ok(CtlResponse::ok(host))
     }
 
     #[instrument(level = "trace", skip_all, fields(subject = %message.subject))]
@@ -3111,10 +3146,7 @@ impl Host {
     //
     // Thankfully, in a lattice where there are no "older" providers running, these publishes
     // will return immediately as there will be no subscribers on those topics.
-    async fn put_backwards_compat_provider_link(
-        &self,
-        link: &InterfaceLinkDefinition,
-    ) -> anyhow::Result<()> {
+    async fn put_backwards_compat_provider_link(&self, link: &Link) -> anyhow::Result<()> {
         // Only attempt to publish the backwards-compatible provider link definition if the link
         // does not contain any secret values.
         let source_config_contains_secret = link
@@ -3173,11 +3205,7 @@ impl Host {
 
     /// Publishes a link to a provider running on this host to handle.
     #[instrument(level = "debug", skip_all)]
-    async fn put_provider_link(
-        &self,
-        provider: &Provider,
-        link: &InterfaceLinkDefinition,
-    ) -> anyhow::Result<()> {
+    async fn put_provider_link(&self, provider: &Provider, link: &Link) -> anyhow::Result<()> {
         let provider_link = self
             .resolve_link_config(
                 link.clone(),
@@ -3210,7 +3238,7 @@ impl Host {
     /// ensure that the provider is aware of the link delete. This would cause problems if a provider
     /// is linked to a provider (which it should never be.)
     #[instrument(level = "debug", skip(self))]
-    async fn del_provider_link(&self, link: &InterfaceLinkDefinition) -> anyhow::Result<()> {
+    async fn del_provider_link(&self, link: &Link) -> anyhow::Result<()> {
         let lattice = &self.host_config.lattice;
         // The provider expects the [`wasmcloud_core::InterfaceLinkDefinition`]
         let link = wasmcloud_core::InterfaceLinkDefinition {
@@ -3347,7 +3375,7 @@ impl Host {
                             }
                         })
                         .flatten()
-                        .any(|host_link| spec_link == &host_link)
+                        .any(|host_link| *spec_link == host_link)
                 })
                 .collect::<Vec<_>>()
         };
@@ -3574,20 +3602,20 @@ impl Host {
         Ok(())
     }
 
-    /// Transform a [`wasmcloud_control_interface::InterfaceLinkDefinition`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
+    /// Transform a [`wasmcloud_control_interface::Link`] into a [`wasmcloud_core::InterfaceLinkDefinition`]
     /// by fetching the source and target configurations and secrets, and encrypting the secrets.
     async fn resolve_link_config(
         &self,
-        link: wasmcloud_control_interface::InterfaceLinkDefinition,
+        link: Link,
         provider_jwt: Option<&String>,
         application: Option<&String>,
         provider_xkey: &XKey,
     ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
         let (source_bundle, raw_source_secrets) = self
-            .fetch_config_and_secrets(&link.source_config, provider_jwt, application)
+            .fetch_config_and_secrets(link.source_config.as_slice(), provider_jwt, application)
             .await?;
         let (target_bundle, raw_target_secrets) = self
-            .fetch_config_and_secrets(&link.target_config, provider_jwt, application)
+            .fetch_config_and_secrets(link.target_config.as_slice(), provider_jwt, application)
             .await?;
 
         let source_config = source_bundle.get_config().await;
@@ -3660,19 +3688,17 @@ impl Host {
     }
 }
 
-/// Helper function to transform a Vec of [`InterfaceLinkDefinition`]s into the structure components expect to be able
+/// Helper function to transform a Vec of [`Link`]s into the structure components expect to be able
 /// to quickly look up the desired target for a given interface
 ///
 /// # Arguments
-/// - links: A Vec of [`InterfaceLinkDefinition`]s
+/// - links: A Vec of [`Link`]s
 ///
 /// # Returns
 /// - A `HashMap` in the form of `link_name` -> `instance` -> target
-fn component_import_links(
-    links: &[InterfaceLinkDefinition],
-) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
+fn component_import_links(links: &[Link]) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
     let mut m = HashMap::new();
-    for InterfaceLinkDefinition {
+    for Link {
         name,
         target,
         wit_namespace,
@@ -3960,10 +3986,10 @@ mod test {
     #[test]
     fn can_compute_component_links() {
         use std::collections::HashMap;
-        use wasmcloud_control_interface::InterfaceLinkDefinition;
+        use wasmcloud_control_interface::Link;
 
         let links = vec![
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "source_component".to_string(),
                 target: "kv-redis".to_string(),
                 wit_namespace: "wasi".to_string(),
@@ -3973,7 +3999,7 @@ mod test {
                 source_config: vec![],
                 target_config: vec![],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "source_component".to_string(),
                 target: "kv-vault".to_string(),
                 wit_namespace: "wasi".to_string(),
@@ -3983,7 +4009,7 @@ mod test {
                 source_config: vec![],
                 target_config: vec!["my-secret".to_string()],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "source_component".to_string(),
                 target: "kv-vault-offsite".to_string(),
                 wit_namespace: "wasi".to_string(),
@@ -3993,7 +4019,7 @@ mod test {
                 source_config: vec![],
                 target_config: vec!["my-secret".to_string()],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "http".to_string(),
                 target: "source_component".to_string(),
                 wit_namespace: "wasi".to_string(),
@@ -4003,7 +4029,7 @@ mod test {
                 source_config: vec!["some-port".to_string()],
                 target_config: vec![],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "source_component".to_string(),
                 target: "httpclient".to_string(),
                 wit_namespace: "wasi".to_string(),
@@ -4013,7 +4039,7 @@ mod test {
                 source_config: vec![],
                 target_config: vec!["some-port".to_string()],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "source_component".to_string(),
                 target: "other_component".to_string(),
                 wit_namespace: "custom".to_string(),
@@ -4023,7 +4049,7 @@ mod test {
                 source_config: vec![],
                 target_config: vec![],
             },
-            InterfaceLinkDefinition {
+            Link {
                 source_id: "other_component".to_string(),
                 target: "target".to_string(),
                 wit_namespace: "wit".to_string(),
