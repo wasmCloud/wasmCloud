@@ -778,9 +778,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-      - uses: actions-rust-lang/setup-rust-toolchain@1fbea72663f6d4c03efaab13560c8a24cfd2a7cc
-        with:
-          cache: false
+      - run: rustup show
       - name: Install cmake for smart-release
         run: sudo apt update && sudo apt install cmake -y
 
