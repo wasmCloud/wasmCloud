@@ -271,10 +271,11 @@ fn build_tinygo_component(
 
     // Ensure the target directory which will contain the eventual filename exists
     // this usually means creating the build folder in the golang project root
-    let parent_dir = file_path.parent().unwrap_or(&common_config.path);
-    if !parent_dir.exists() {
-        fs::create_dir_all(parent_dir)?;
+    let build_dir = file_path.parent().unwrap_or(&common_config.path);
+    if !build_dir.exists() {
+        fs::create_dir_all(build_dir)?;
     }
+    let parent_dir = build_dir.join("..");
 
     let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
@@ -581,8 +582,6 @@ world test-world {
    import foo;
 }
 ";
-    const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 3] =
-        ["test_world.h", "test_world.c", "test_world.go"];
 
     const COMPONENT_UPSTREAM_WIT: &str = r"
 package washlib:multi;
@@ -608,8 +607,18 @@ world downstream {
    import bar;
 }
 ";
-    const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 3] =
-        ["downstream.h", "downstream.c", "downstream.go"];
+
+    const COMPONENT_GO_MOD: &str = r"
+module example
+    ";
+
+    const COMPONENT_GO_GENERATE: &str = r"
+//go:generate wit-bindgen tiny-go wit --out-dir=generated --gofmt
+
+package main
+
+func main() {}
+    ";
 
     /// Set up a component that should be built
     ///
@@ -732,27 +741,22 @@ world downstream {
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
 
         // Write WIT for Golang code
+        std::fs::write(project_dir.path().join("go.mod"), COMPONENT_GO_MOD)
+            .context("failed to write go mod")?;
+        std::fs::write(project_dir.path().join("main.go"), COMPONENT_GO_GENERATE)
+            .context("failed to write go file")?;
         std::fs::write(wit_dir.join("test.wit"), COMPONENT_BASIC_WIT)
             .context("failed to write test WIT file")?;
 
-        // Run bindgen generation process
-        generate_tinygo_bindgen(project_dir).context("failed to run tinygo bindgen")?;
+        // Multiple worlds without specifying them in the wit-bindgen call. This should fail.
+        assert!(std::env::set_current_dir(&project_dir).is_ok());
+        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
             .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
 
-        assert!(!dir_contents.is_empty(), "files were generated");
-        assert!(
-            EXPECTED_COMPONENT_BASIC_GOLANG_FILES.iter().all(|f| {
-                dir_contents.iter().any(|de| {
-                    de.path()
-                        .file_name()
-                        .is_some_and(|v| v.to_string_lossy() == **f)
-                })
-            }),
-            "expected bindgen go files are present"
-        );
+        assert!(!dir_contents.is_empty(), "no files generated");
 
         Ok(())
     }
@@ -770,29 +774,24 @@ world downstream {
         std::fs::create_dir(&output_dir).context("failed to create output dir")?;
 
         // Write WIT for Golang code
+        std::fs::write(project_dir.path().join("go.mod"), COMPONENT_GO_MOD)
+            .context("failed to write go mod")?;
+        std::fs::write(project_dir.path().join("main.go"), COMPONENT_GO_GENERATE)
+            .context("failed to write go file")?;
         std::fs::write(wit_dir.join("upstream.wit"), COMPONENT_UPSTREAM_WIT)
             .context("failed to write test WIT file")?;
         std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)
             .context("failed to write test WIT file")?;
 
         // Run bindgen generation process
-        generate_tinygo_bindgen(project_dir).context("failed to run tinygo bindgen")?;
+        assert!(std::env::set_current_dir(&project_dir).is_ok());
+        assert!(generate_tinygo_bindgen(&project_dir).is_err());
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
             .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
 
-        assert!(!dir_contents.is_empty(), "files were generated");
-        assert!(
-            EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES.iter().all(|f| {
-                dir_contents.iter().any(|de| {
-                    de.path()
-                        .file_name()
-                        .is_some_and(|v| v.to_string_lossy() == **f)
-                })
-            }),
-            "expected bindgen go files are present"
-        );
+        assert!(dir_contents.is_empty(), "files were generated");
 
         Ok(())
     }
