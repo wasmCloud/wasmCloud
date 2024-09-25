@@ -5,5 +5,5 @@ type = "component"
 
 [component]
 wit_world = "component"
-wasm_target = "wasm32-wasi-preview2"
+wasm_target = "wasm32-wasi"
 destination = "build/sqldb_postgres_query_s.wasm"
