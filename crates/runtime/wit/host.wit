@@ -1,4 +1,4 @@
-package wasmcloud:host@1.0.0;
+package wasmcloud:host@1.0.1;
 
 world interfaces {
     import wasi:blobstore/blobstore@0.2.0-draft;

@@ -1,7 +1,7 @@
 wit_bindgen::generate!({
     with: {
-        "wasi:http/types@0.2.0": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.0": wasmcloud_component::wasi::io::streams,
+        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
+        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
         "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
     },
     generate_all,

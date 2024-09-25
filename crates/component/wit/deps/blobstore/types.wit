@@ -1,6 +1,6 @@
 // Types used by blobstore
 interface types {
-  use wasi:io/streams@0.2.0.{input-stream, output-stream};
+  use wasi:io/streams@0.2.1.{input-stream, output-stream};
 
   // name of a container, a collection of objects.
   // The container name may be any valid UTF-8 string.

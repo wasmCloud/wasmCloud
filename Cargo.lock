@@ -7049,11 +7049,11 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wasi"
-version = "0.13.1+wasi-0.2.0"
+version = "0.13.2+wasi-0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f43d1c36145feb89a3e61aa0ba3e582d976a8ab77f1474aa0adb80800fe0cf8"
+checksum = "d9860ef2271bc7a6e1f985ac4438862a165137fe585ac10bdfad0a8aeb37ba25"
 dependencies = [
- "wit-bindgen-rt 0.24.0",
+ "wit-bindgen-rt 0.29.0",
 ]
 
 [[package]]
@@ -7316,13 +7316,13 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-component"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "rand 0.8.5",
  "tokio",
  "uuid 1.10.0",
- "wasi 0.13.1+wasi-0.2.0",
+ "wasi 0.13.2+wasi-0.2.1",
  "wit-bindgen",
 ]
 
@@ -8741,9 +8741,9 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rt"
-version = "0.24.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b0780cf7046630ed70f689a098cd8d56c5c3b22f2a7379bbdb088879963ff96"
+checksum = "4b18e27825442721d23ed98591a80f55220cfe0bf883d92b1ead6c9be237bb34"
 dependencies = [
  "bitflags 2.6.0",
 ]
