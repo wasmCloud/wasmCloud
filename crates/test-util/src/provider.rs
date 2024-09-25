@@ -11,7 +11,6 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
 use url::Url;
-use wasmcloud_control_interface::CtlResponse;
 use wasmcloud_core::health_subject;
 
 /// Helper method for deserializing content, so that we can easily switch out implementations
@@ -57,9 +56,7 @@ pub async fn assert_start_provider(
     }: StartProviderArgs<'_>,
 ) -> Result<()> {
     let rpc_client = client.nats_client();
-    let CtlResponse {
-        success, message, ..
-    } = client
+    let resp = client
         .start_provider(
             &host_key.public_key(),
             url.as_ref(),
@@ -69,8 +66,7 @@ pub async fn assert_start_provider(
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
-    ensure!(message == "");
-    ensure!(success);
+    ensure!(resp.succeeded());
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
         .take(30)

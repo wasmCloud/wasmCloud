@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, ensure, Result};
-use wasmcloud_control_interface::{Client as WasmCloudCtlClient, CtlResponse};
+use wasmcloud_control_interface::Client as WasmCloudCtlClient;
 
 /// Put a configuration value, ensuring that the put succeeded
 pub async fn assert_config_put(
@@ -12,12 +12,12 @@ pub async fn assert_config_put(
 ) -> Result<()> {
     let client = client.into();
     let name = name.as_ref();
-    let CtlResponse { success, .. } = client
+    let resp = client
         .put_config(name, config)
         .await
         .map_err(|e| anyhow!(e).context("failed to put config"))?;
 
-    ensure!(success);
+    ensure!(resp.succeeded());
 
     Ok(())
 }
