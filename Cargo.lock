@@ -7424,7 +7424,6 @@ dependencies = [
  "serde_bytes",
  "sha2",
  "tokio",
- "tower 0.4.13",
  "tracing",
  "ulid",
  "url",
