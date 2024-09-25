@@ -313,7 +313,6 @@ tokio-stream = { version = "0.1", default-features = false }
 tokio-tar = { version = "0.3", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.8", default-features = false }
-tower = { version = "0.4", default-features = false }
 tower-http = { version = "0.5", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-appender = { version = "0.2", default-features = false }
