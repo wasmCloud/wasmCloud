@@ -1252,10 +1252,21 @@ impl Host {
                                     Some(fut) = exports.next() => {
                                         match fut {
                                             Ok(fut) => {
+                                                debug!("accepted invocation, acquiring permit");
                                                 let permit = permits.acquire_owned().await;
                                                 tasks.spawn(async move {
                                                     let _permit = permit;
-                                                    fut.await
+                                                    debug!("handling invocation");
+                                                    match fut.await {
+                                                        Ok(()) => {
+                                                            debug!("successfully handled invocation");
+                                                            Ok(())
+                                                        },
+                                                        Err(err) => {
+                                                            warn!(?err, "failed to handle invocation");
+                                                            Err(err)
+                                                        },
+                                                    }
                                                 });
                                             }
                                             Err(err) => {
@@ -1264,14 +1275,8 @@ impl Host {
                                         }
                                     }
                                     Some(res) = tasks.join_next() => {
-                                        match res {
-                                            Ok(Ok(res)) => res,
-                                            Ok(Err(err)) => {
-                                                warn!(?err, "failed to serve invocation");
-                                            },
-                                            Err(err) => {
-                                                error!(?err, "export serving task failed");
-                                            }
+                                        if let Err(err) = res {
+                                            error!(?err, "export serving task failed");
                                         }
                                     }
                                 }

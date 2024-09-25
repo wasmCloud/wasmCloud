@@ -6,7 +6,7 @@ use anyhow::{bail, Context as _};
 use futures::stream::StreamExt as _;
 use tokio::sync::oneshot;
 use tokio::{join, spawn};
-use tracing::{debug, instrument, warn, Instrument as _};
+use tracing::{debug, instrument, trace, warn, Instrument as _};
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi_http::body::{HostIncomingBody, HyperOutgoingBody};
 use wasmtime_wasi_http::types::{
@@ -137,6 +137,7 @@ where
         let mut store = new_store(&self.engine, self.handler.clone(), self.max_execution_time);
         let pre = incoming_http_bindings::IncomingHttpPre::new(self.pre.clone())
             .context("failed to pre-instantiate `wasi:http/incoming-handler`")?;
+        trace!("instantiating `wasi:http/incoming-handler`");
         let bindings = pre
             .instantiate_async(&mut store)
             .await
@@ -159,24 +160,40 @@ where
             .new_response_outparam(tx)
             .context("failed to create response")?;
         let handle = spawn(async move {
-            bindings
+            debug!("invoking `wasi:http/incoming-handler.handle`");
+            if let Err(err) = bindings
                 .wasi_http_incoming_handler()
                 .call_handle(&mut store, request, response)
                 .await
-                .context("failed to call `wasi:http/incoming-handler.handle`")
+            {
+                warn!(?err, "failed to call `wasi:http/incoming-handler.handle`");
+                bail!(err.context("failed to call `wasi:http/incoming-handler.handle`"));
+            }
+            Ok(())
         });
         let res = async {
+            debug!("awaiting `wasi:http/incoming-handler.handle` response");
             match rx.await {
-                Ok(Ok(res)) => Ok(Ok(res)),
-                Ok(Err(err)) => Ok(Err(err)),
+                Ok(Ok(res)) => {
+                    debug!("successful `wasi:http/incoming-handler.handle` response received");
+                    Ok(Ok(res))
+                }
+                Ok(Err(err)) => {
+                    debug!(
+                        ?err,
+                        "unsuccessful `wasi:http/incoming-handler.handle` response received"
+                    );
+                    Ok(Err(err))
+                }
                 Err(_) => {
+                    debug!("`wasi:http/incoming-handler.handle` response sender dropped");
                     handle.await.context("failed to join handle task")??;
                     bail!("component did not call `response-outparam::set`")
                 }
             }
         }
         .await;
-        let success = res.is_ok();
+        let success = res.as_ref().is_ok_and(Result::is_ok);
         if let Err(err) = self
             .events
             .try_send(WrpcServeEvent::HttpIncomingHandlerHandleReturned {
