@@ -258,7 +258,7 @@ where
     }
 
     #[instrument]
-    fn drop(&mut self, bucket: Resource<store::Bucket>) -> anyhow::Result<()> {
+    async fn drop(&mut self, bucket: Resource<store::Bucket>) -> anyhow::Result<()> {
         self.table
             .delete(bucket)
             .context("failed to delete bucket")?;

@@ -57,7 +57,7 @@ impl<H: Handler> lattice::HostCallTargetInterface for Ctx<H> {
             .context("failed to push target interface")
     }
 
-    fn drop(&mut self, interface: Resource<Arc<CallTargetInterface>>) -> anyhow::Result<()> {
+    async fn drop(&mut self, interface: Resource<Arc<CallTargetInterface>>) -> anyhow::Result<()> {
         self.table.delete(interface)?;
         Ok(())
     }

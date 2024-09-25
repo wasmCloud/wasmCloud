@@ -105,7 +105,7 @@ where
     H: Handler,
 {
     #[instrument(skip(self))]
-    fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
+    async fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {
         self.table
             .delete(container)
             .context("failed to delete container")?;
@@ -511,7 +511,7 @@ where
 #[async_trait]
 impl<H: Handler> container::HostStreamObjectNames for Ctx<H> {
     #[instrument(skip(self))]
-    fn drop(&mut self, names: Resource<StreamObjectNames>) -> anyhow::Result<()> {
+    async fn drop(&mut self, names: Resource<StreamObjectNames>) -> anyhow::Result<()> {
         let _ = self
             .table
             .delete(names)
@@ -656,7 +656,7 @@ impl Subscribe for OutputStream {
 #[async_trait]
 impl<H: Handler> types::HostOutgoingValue for Ctx<H> {
     #[instrument(skip(self))]
-    fn drop(&mut self, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<()> {
+    async fn drop(&mut self, outgoing_value: Resource<OutgoingValue>) -> anyhow::Result<()> {
         self.table
             .delete(outgoing_value)
             .context("failed to delete outgoing value")?;
@@ -780,7 +780,7 @@ impl Subscribe for InputStream {
 #[async_trait]
 impl<H: Handler> types::HostIncomingValue for Ctx<H> {
     #[instrument(skip(self))]
-    fn drop(&mut self, incoming_value: Resource<IncomingValue>) -> anyhow::Result<()> {
+    async fn drop(&mut self, incoming_value: Resource<IncomingValue>) -> anyhow::Result<()> {
         let _ = self
             .table
             .delete(incoming_value)
@@ -826,21 +826,21 @@ impl<H: Handler> types::HostIncomingValue for Ctx<H> {
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<Resource<wasmtime_wasi::InputStream>>> {
+    ) -> anyhow::Result<Result<Resource<Box<dyn HostInputStream>>>> {
         let IncomingValue { stream, status, io } = self
             .table
             .delete(incoming_value)
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push(wasmtime_wasi::InputStream::Host(Box::new(InputStream {
+            .push(Box::new(InputStream {
                 ready: VecDeque::default(),
                 stream,
                 status: status.fuse(),
                 io: io.map(FutureExt::fuse).into(),
                 error: None,
                 closed: false,
-            })))
+            }) as _)
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
