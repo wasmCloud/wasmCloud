@@ -1,5 +1,4 @@
-#![allow(clippy::missing_safety_doc)]
-wit_bindgen::generate!();
+wit_bindgen::generate!({ generate_all });
 
 use exports::wasi::http::incoming_handler::Guest;
 use wasi::http::types::*;

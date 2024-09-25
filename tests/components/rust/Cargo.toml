@@ -18,4 +18,4 @@ serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 uuid = { version = "1", default-features = false }
 wasmcloud-component = { path = "../../../crates/component", default-features = false }
-wit-bindgen = { version = "0.30", default-features = false }
+wit-bindgen = { version = "0.32", default-features = false }
