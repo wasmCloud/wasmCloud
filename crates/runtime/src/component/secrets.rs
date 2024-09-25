@@ -25,8 +25,9 @@ pub trait Secrets {
     ) -> anyhow::Result<secrets::reveal::SecretValue>;
 }
 
+#[async_trait]
 impl<H: Handler> HostSecret for Ctx<H> {
-    fn drop(&mut self, secret: Resource<Secret>) -> std::result::Result<(), anyhow::Error> {
+    async fn drop(&mut self, secret: Resource<Secret>) -> anyhow::Result<()> {
         self.table.delete(secret)?;
         Ok(())
     }
