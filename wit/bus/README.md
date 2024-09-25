@@ -37,7 +37,7 @@ While ecosystem tooling for pulling and using WIT-manifest-only components devel
 In your project, include the following `wit/deps.toml`:
 
 ```yaml
-bus = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-bus-v0.1.0-draft/wit-wasmcloud-bus-0.1.0.tar.gz"
+bus = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-bus-v1.0.0/wit-wasmcloud-bus-0.1.0.tar.gz"
 ```
 
 From your project root (the folder above `wit/`), you should be able to run `wit-deps`:
