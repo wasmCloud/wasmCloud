@@ -111,7 +111,7 @@ pub(crate) fn adapt_component_to_wasi_preview2(
 ) -> Result<PathBuf> {
     let adapted_wasm_path = component_wasm_path.as_ref();
     let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
-    let wasm_bytes = adapt_wasi_preview1_component(&adapted_wasm_path, adapter_wasm_bytes)
+    let wasm_bytes = adapt_wasi_preview1_component(adapted_wasm_path, adapter_wasm_bytes)
         .with_context(|| {
             format!(
                 "failed to adapt component at [{}] to WASI preview2",
