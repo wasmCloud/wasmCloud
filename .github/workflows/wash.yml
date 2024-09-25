@@ -33,6 +33,7 @@ jobs:
         with:
           node-version: "18.x"
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
           shared-key: "${{ matrix.os }}-shared-cache"
@@ -54,6 +55,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
           shared-key: "ubuntu-22.04-shared-cache"
@@ -90,6 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
         if: ${{ matrix.wash-version == 'current' }}
+      - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
           shared-key: "ubuntu-22.04-shared-cache"
