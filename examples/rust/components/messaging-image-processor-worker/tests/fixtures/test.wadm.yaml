@@ -92,7 +92,7 @@ spec:
     - name: messaging-nats
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/messaging-nats:0.22.0
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
       traits:
         - type: link
           properties:
