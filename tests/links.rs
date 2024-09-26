@@ -102,9 +102,9 @@ async fn link_deletes() -> anyhow::Result<()> {
         .get_links()
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
-    assert!(resp.success);
-    assert!(resp.response.is_some());
-    let links = resp.response.unwrap();
+    assert!(resp.succeeded());
+    assert!(resp.data().is_some());
+    let links = resp.into_data().unwrap();
     assert_eq!(links.len(), 3);
     for link in links.iter() {
         match (&link.source_id, &link.name) {
@@ -435,9 +435,9 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         .get_links()
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
-    assert!(resp.success);
-    assert!(resp.response.is_some());
-    let links = resp.response.unwrap();
+    assert!(resp.succeeded());
+    assert!(resp.data().is_some());
+    let links = resp.into_data().unwrap();
     assert_eq!(links.len(), 3);
     for link in links.iter() {
         match &link.source_id {
@@ -490,9 +490,9 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         vec![interface_one, interface_two, interface_three],
     )
     .await?;
-    assert!(!invalid.success);
+    assert!(!invalid.succeeded());
     // This assertion will fail if we change the message, but it's a good test
-    assert_eq!(invalid.message,  "link already exists with different target, consider deleting the existing link or using a different link name");
+    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
     // Component one is already linked to component two on all interfaces
     let invalid = define_link(
         &ctl_client,
@@ -502,8 +502,8 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         vec![interface_one],
     )
     .await?;
-    assert!(!invalid.success);
-    assert_eq!(invalid.message,  "link already exists with different target, consider deleting the existing link or using a different link name");
+    assert!(!invalid.succeeded());
+    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
     // Component three is already linked to component one on all interfaces
     let invalid = define_link(
         &ctl_client,
@@ -513,8 +513,8 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         vec![interface_three],
     )
     .await?;
-    assert!(!invalid.success);
-    assert_eq!(invalid.message,  "link already exists with different target, consider deleting the existing link or using a different link name");
+    assert!(!invalid.succeeded());
+    assert_eq!(invalid.message(),  "link already exists with different target, consider deleting the existing link or using a different link name");
 
     nats_server.stop().await.context("failed to stop NATS")?;
     Ok(())
