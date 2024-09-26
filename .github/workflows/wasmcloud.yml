@@ -14,14 +14,15 @@ on:
           - wash-lib
           - wasmcloud
           - wasmcloud-component
+          - wasmcloud-control-interface
           - wasmcloud-core
           - wasmcloud-host
+          - wasmcloud-provider-sdk
           - wasmcloud-runtime
           - wasmcloud-secrets-client
           - wasmcloud-secrets-types
           - wasmcloud-test-util
           - wasmcloud-tracing
-          - wasmcloud-provider-sdk
       do-release:
         type: boolean
         description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
