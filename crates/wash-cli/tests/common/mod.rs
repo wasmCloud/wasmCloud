@@ -20,6 +20,7 @@ use tokio::{
 };
 
 use wash_lib::cli::output::{
+    AppDeleteCommandOutput, AppDeployCommandOutput, AppListCommandOutput, AppUndeployCommandOutput,
     CallCommandOutput, GetHostsCommandOutput, PullCommandOutput, StartCommandOutput,
     StopCommandOutput, UpCommandOutput,
 };
@@ -572,6 +573,84 @@ impl TestWashInstance {
             .await
             .context("failed to stop host")?;
         serde_json::from_slice(&output.stdout).context("failed to parse output of `wash stop host`")
+    }
+
+    /// Trigger the equivalent of `wash app deploy` on a [`TestWashInstance`]
+    pub(crate) async fn deploy_app(&self, name_or_path: &str) -> Result<AppDeployCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "deploy",
+                name_or_path,
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to deploy app")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app deploy`")
+    }
+
+    /// Trigger the equivalent of `wash app list` on a [`TestWashInstance`]
+    pub(crate) async fn list_apps(&self) -> Result<AppListCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "list",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to list apps")?;
+        serde_json::from_slice(&output.stdout).context("failed to parse output of `wash app list`")
+    }
+
+    /// Trigger the equivalent of `wash app undeploy --all` on a [`TestWashInstance`]
+    pub(crate) async fn undeploy_all_apps(&self) -> Result<AppUndeployCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "undeploy",
+                "--all",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to undeploy all apps")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app undeploy --all`")
+    }
+
+    /// Trigger the equivalent of `wash app delete --all-undeployed` on a [`TestWashInstance`]
+    pub(crate) async fn delete_all_undeployed_apps(&self) -> Result<AppDeleteCommandOutput> {
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+            .args([
+                "app",
+                "delete",
+                "--all-undeployed",
+                "--output",
+                "json",
+                "--ctl-port",
+                self.nats_port.to_string().as_ref(),
+            ])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to undeploy all apps")?;
+        serde_json::from_slice(&output.stdout)
+            .context("failed to parse output of `wash app undeploy --all`")
     }
 }
 
