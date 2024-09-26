@@ -137,3 +137,9 @@ pub struct AppListCommandOutput {
 pub struct AppUndeployCommandOutput {
     pub success: bool,
 }
+
+/// JSON Output representation of the `wash app delete` command
+#[derive(Debug, Deserialize)]
+pub struct AppDeleteCommandOutput {
+    pub success: bool,
+}

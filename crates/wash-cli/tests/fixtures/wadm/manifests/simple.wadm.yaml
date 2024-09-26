@@ -11,7 +11,7 @@ spec:
     - name: http-component
       type: component
       properties:
-        image: ghcr.io/wasmcloud/component-http-hello-world:0.1.0
+        image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0
       traits:
         - type: spreadscaler
           properties:
