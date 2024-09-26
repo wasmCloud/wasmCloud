@@ -75,7 +75,7 @@ spec:
     - name: httpclient
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-client:0.11.0
+        image: ghcr.io/wasmcloud/http-client:0.12.1
 
     - name: blobstore-fs
       type: capability
