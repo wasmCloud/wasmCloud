@@ -9,6 +9,9 @@ interface invoke {
 }
 
 world component {
-  import wasmcloud:postgres/query@0.1.0-draft;
+  // tinygo
+  include wasi:cli/imports@0.2.0;
+
+  import wasmcloud:postgres/query@0.1.1-draft;
   export invoke;
 }

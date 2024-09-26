@@ -1,6 +1,8 @@
 [cli]
+url = "https://github.com/WebAssembly/wasi-cli/archive/refs/tags/v0.2.0.tar.gz"
 sha256 = "285865a31d777181b075f39e92bcfe59c89cd6bacce660be1b9a627646956258"
 sha512 = "da2622210a9e3eea82b99f1a5b8a44ce5443d009cb943f7bca0bf9cf4360829b289913d7ee727c011f0f72994ea7dc8e661ebcc0a6b34b587297d80cd9b3f7e8"
+deps = ["clocks", "filesystem", "io", "random", "sockets"]
 
 [clocks]
 sha256 = "468b4d12892fe926b8eb5d398dbf579d566c93231fa44f415440572c695b7613"

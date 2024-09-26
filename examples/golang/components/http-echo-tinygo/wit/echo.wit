@@ -1,6 +1,9 @@
 package wasmcloud:echo;
 
 world echo {
+    // tinygo
+    include wasi:cli/imports@0.2.0;
+
     import wasi:logging/logging;
     export wasi:http/incoming-handler@0.2.0;
 }

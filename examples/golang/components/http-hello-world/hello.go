@@ -1,38 +1,55 @@
 package main
 
 import (
-	http "github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world/gen"
+	"net/http"
+
+	"github.com/bytecodealliance/wasm-tools-go/cm"
+	incominghandler "github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world/gen/wasi/http/incoming-handler"
+	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world/gen/wasi/http/types"
+	"github.com/wasmcloud/wasmcloud/examples/golang/components/http-hello-world/gen/wasi/io/streams"
 )
 
-// Helper type aliases to make code more readable
-type HttpRequest = http.ExportsWasiHttp0_2_0_IncomingHandlerIncomingRequest
-type HttpResponseWriter = http.ExportsWasiHttp0_2_0_IncomingHandlerResponseOutparam
-type HttpOutgoingResponse = http.WasiHttp0_2_0_TypesOutgoingResponse
-type HttpError = http.WasiHttp0_2_0_TypesErrorCode
-
-type HttpServer struct{}
-
 func init() {
-	httpserver := HttpServer{}
-	// Set the incoming handler struct to HttpServer
-	http.SetExportsWasiHttp0_2_0_IncomingHandler(httpserver)
+	incominghandler.Exports.Handle = handleRequest
 }
 
-func (h HttpServer) Handle(request HttpRequest, responseWriter HttpResponseWriter) {
-	// Construct HttpResponse to send back
-	headers := http.NewFields()
-	httpResponse := http.NewOutgoingResponse(headers)
-	httpResponse.SetStatusCode(200)
-	body := httpResponse.Body().Unwrap()
-	bodyWrite := body.Write().Unwrap()
+func handleRequest(request types.IncomingRequest, responseWriter types.ResponseOutparam) {
+	headers := types.NewFields()
+	httpResponse := types.NewOutgoingResponse(headers)
+	httpResponse.SetStatusCode(http.StatusOK)
 
-	// Send HTTP response
-	okResponse := http.Ok[HttpOutgoingResponse, HttpError](httpResponse)
-	http.StaticResponseOutparamSet(responseWriter, okResponse)
-	bodyWrite.BlockingWriteAndFlush([]uint8("Hello from Go!\n")).Unwrap()
-	bodyWrite.Drop()
-	http.StaticOutgoingBodyFinish(body, http.None[http.WasiHttp0_2_0_TypesTrailers]())
+	var body *types.OutgoingBody
+	var bodyStream *streams.OutputStream
+	if bodyResource := httpResponse.Body(); bodyResource.IsErr() {
+		types.ResponseOutparamSet(responseWriter, cm.Err[cm.Result[types.ErrorCodeShape, types.OutgoingResponse, types.ErrorCode]](
+			types.ErrorCodeInternalError(cm.Some("couldn't create body resource")),
+		))
+		return
+	} else {
+		body = bodyResource.OK()
+	}
+	if bodyStreamResource := body.Write(); bodyStreamResource.IsErr() {
+		types.ResponseOutparamSet(responseWriter, cm.Err[cm.Result[types.ErrorCodeShape, types.OutgoingResponse, types.ErrorCode]](
+			types.ErrorCodeInternalError(cm.Some("couldn't create body stream")),
+		))
+		return
+	} else {
+		bodyStream = bodyStreamResource.OK()
+	}
+
+	// Prepare the response by writing status & headers
+	okResponse := cm.OK[cm.Result[types.ErrorCodeShape, types.OutgoingResponse, types.ErrorCode]](httpResponse)
+	types.ResponseOutparamSet(responseWriter, okResponse)
+
+	// Write the body
+	bodyStream.BlockingWriteAndFlush(cm.ToList([]uint8("Hello from Go!\n")))
+	// Release the body stream ( nested resource )
+	bodyStream.ResourceDrop()
+
+	// Finish the body, releasing the body resource
+	// The second argument is for HTTP Trailers, usefull for HTTP/2
+	types.OutgoingBodyFinish(*body, cm.None[types.Fields]())
 }
 
-//go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
+//go:generate go run github.com/bytecodealliance/wasm-tools-go/cmd/wit-bindgen-go generate --world hello --out gen ./wit
 func main() {}

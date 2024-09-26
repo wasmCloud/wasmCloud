@@ -1,2 +1,3 @@
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
+cli = "https://github.com/WebAssembly/wasi-cli/archive/refs/tags/v0.2.0.tar.gz"
 logging = "./overrides/logging"

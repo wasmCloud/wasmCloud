@@ -1,6 +1,9 @@
 package wasmcloud:httpclient;
 
 world hello {
+  // tinygo
+  include wasi:cli/imports@0.2.0;
+
   import wasi:http/outgoing-handler@0.2.0;
   export wasi:http/incoming-handler@0.2.0;
 }
