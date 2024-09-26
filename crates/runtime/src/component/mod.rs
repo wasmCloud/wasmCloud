@@ -24,12 +24,14 @@ use wrpc_runtime_wasmtime::{
 };
 
 pub use bus::Bus;
+pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
 pub use logging::Logging;
 pub use secrets::Secrets;
 
 pub(crate) mod blobstore;
 mod bus;
+mod bus1_0_0;
 mod config;
 mod http;
 mod keyvalue;
@@ -165,6 +167,7 @@ macro_rules! skip_static_instances {
             | "wasi:sockets/udp@0.2.1"
             | "wasi:sockets/udp@0.2.2"
             | "wasmcloud:bus/lattice@1.0.0"
+            | "wasmcloud:bus/lattice@2.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
             | "wasmcloud:messaging/handler@0.2.0"
             | "wasmcloud:messaging/types@0.2.0"
@@ -402,8 +405,10 @@ where
         capability::unversioned_logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link unversioned `wasi:logging/logging`")?;
 
+        capability::bus1_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:bus/lattice@1.0.0`")?;
         capability::bus::lattice::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:bus/lattice`")?;
+            .context("failed to link `wasmcloud:bus/lattice@2.0.0`")?;
         capability::messaging::consumer::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:messaging/consumer`")?;
         capability::secrets::reveal::add_to_linker(&mut linker, |ctx| ctx)
