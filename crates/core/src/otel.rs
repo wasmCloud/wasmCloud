@@ -44,12 +44,8 @@ pub struct OtelConfig {
     #[serde(default)]
     pub additional_ca_paths: Vec<PathBuf>,
     /// The level of tracing to enable.
-    #[serde(default = "default_trace_level")]
+    #[serde(default)]
     pub trace_level: Level,
-}
-
-fn default_trace_level() -> Level {
-    Level::Info
 }
 
 impl OtelConfig {
