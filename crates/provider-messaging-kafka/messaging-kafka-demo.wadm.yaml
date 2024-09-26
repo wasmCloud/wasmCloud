@@ -44,4 +44,4 @@ spec:
         # - uncomment the line below
         #
         # image: file://../../messaging-kafka-provider.par.gz
-        image: ghcr.io/wasmcloud/messaging-kafka:canary
+        image: ghcr.io/wasmcloud/messaging-kafka:0.5.1
