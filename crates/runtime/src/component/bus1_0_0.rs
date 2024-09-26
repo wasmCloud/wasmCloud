@@ -1,6 +1,7 @@
+//! Compatibility implementation of the `wasmcloud:bus/lattice@1.0.0` interface
 use super::{Ctx, Handler, TableResult};
 
-use crate::capability::bus::lattice;
+use crate::capability::bus1_0_0::lattice;
 
 use std::sync::Arc;
 
@@ -10,15 +11,10 @@ use wasmcloud_core::CallTargetInterface;
 use wasmtime::component::Resource;
 
 #[async_trait]
-/// `wasmcloud:bus/lattice@2.0.0` implementation
+/// `wasmcloud:bus/lattice@1.0.0` implementation
 pub trait Bus {
-    /// Set the link name to use for a given list of interfaces, returning an error
-    /// if a link doesn't exist on the given interfaces for the given target
-    async fn set_link_name(
-        &self,
-        link_name: String,
-        interfaces: Vec<Arc<CallTargetInterface>>,
-    ) -> anyhow::Result<Result<(), String>>;
+    /// Set the link name to use for a given list of interfaces
+    async fn set_link_name(&self, link_name: String, interfaces: Vec<Arc<CallTargetInterface>>);
 }
 
 #[async_trait]
@@ -27,16 +23,15 @@ impl<H: Handler> lattice::Host for Ctx<H> {
         &mut self,
         link_name: String,
         interfaces: Vec<Resource<Arc<CallTargetInterface>>>,
-    ) -> anyhow::Result<Result<(), String>> {
+    ) -> anyhow::Result<()> {
         let interfaces = interfaces
             .into_iter()
             .map(|interface| self.table.get(&interface).cloned())
             .collect::<TableResult<_>>()
             .context("failed to convert call target interfaces")?;
-        self.handler
-            .set_link_name(link_name, interfaces)
-            .await
-            .context("failed to set link name")
+        // NOTE: We're try-unwrapping the outer error, the inner Result should be ignored.
+        let _ = self.handler.set_link_name(link_name, interfaces).await?;
+        Ok(())
     }
 }
 

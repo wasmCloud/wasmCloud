@@ -99,6 +99,6 @@ pub mod config {
 
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
 pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
-pub use wasmtime_bindings::wasmcloud::{bus, messaging, secrets};
+pub use wasmtime_bindings::wasmcloud::{bus1_0_0, bus2_0_0 as bus, messaging, secrets};
 pub use wasmtime_bindings::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;

@@ -2,7 +2,7 @@ package wasmcloud:component;
 
 /// All interfaces provided by the host. This may change in backwards-incompatible way.
 world interfaces {
-    import wasmcloud:bus/lattice@1.0.0;
+    import wasmcloud:bus/lattice@2.0.0;
 
     import wasi:blobstore/blobstore@0.2.0-draft;
     import wasi:config/store@0.2.0-draft;

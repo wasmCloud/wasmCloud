@@ -1,6 +1,5 @@
-use core::ops::Deref;
-
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,8 +14,8 @@ use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
 use wasmcloud_runtime::component::{
-    Bus, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, ReplacedInstanceTarget,
-    Secrets,
+    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging,
+    ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
@@ -80,13 +79,53 @@ impl Handler {
 }
 
 #[async_trait]
+impl Bus1_0_0 for Handler {
+    /// Set the current link name in use by the handler, which is otherwise "default".
+    ///
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/store.get`)
+    /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
+    #[instrument(level = "debug", skip(self))]
+    async fn set_link_name(&self, link_name: String, interfaces: Vec<Arc<CallTargetInterface>>) {
+        let interfaces = interfaces.iter().map(Deref::deref);
+        let mut targets = self.targets.write().await;
+        if link_name == "default" {
+            for CallTargetInterface {
+                namespace,
+                package,
+                interface,
+            } in interfaces
+            {
+                targets.remove(&format!("{namespace}:{package}/{interface}").into_boxed_str());
+            }
+        } else {
+            let link_name = Arc::from(link_name);
+            for CallTargetInterface {
+                namespace,
+                package,
+                interface,
+            } in interfaces
+            {
+                targets.insert(
+                    format!("{namespace}:{package}/{interface}").into_boxed_str(),
+                    Arc::clone(&link_name),
+                );
+            }
+        }
+    }
+}
+
+#[async_trait]
 impl Bus for Handler {
+    /// Set the current link name in use by the handler, which is otherwise "default".
+    ///
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/store.get`)
+    /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
     #[instrument(level = "debug", skip(self))]
     async fn set_link_name(
         &self,
         link_name: String,
         interfaces: Vec<Arc<CallTargetInterface>>,
-    ) -> anyhow::Result<std::result::Result<(), String>> {
+    ) -> anyhow::Result<Result<(), String>> {
         let links = self.instance_links.read().await;
         // Ensure that all interfaces have an established link with the given name.
         if let Some(interface_missing_link) = interfaces.iter().find_map(|i| {
@@ -109,7 +148,8 @@ impl Bus for Handler {
         // Explicitly drop the lock before calling `set_link_name` just to avoid holding the lock for longer than needed
         drop(links);
 
-        self.set_link_name(link_name, interfaces).await.map(Ok)
+        Bus1_0_0::set_link_name(self, link_name, interfaces).await;
+        Ok(Ok(()))
     }
 }
 

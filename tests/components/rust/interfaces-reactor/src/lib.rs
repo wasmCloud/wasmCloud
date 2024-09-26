@@ -154,12 +154,13 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     keyvalue::run_store_test(&body);
 
     eprintln!("test vault keyvalue/store...");
-    let _ = bus::lattice::set_link_name(
+    assert!(wasmcloud_component::wasmcloud::bus::lattice::set_link_name(
         "vault",
         vec![bus::lattice::CallTargetInterface::new(
             "wasi", "keyvalue", "store",
         )],
-    );
+    )
+    .is_ok());
     keyvalue::run_store_test(&body);
 
     eprintln!("test default keyvalue/atomics...");
