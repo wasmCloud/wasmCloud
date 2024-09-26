@@ -80,7 +80,7 @@ spec:
     - name: blobstore-fs
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/blobstore-fs:0.8.0
+        image: ghcr.io/wasmcloud/blobstore-fs:0.10.1
 
     - name: sqldb-postgres
       type: capability
