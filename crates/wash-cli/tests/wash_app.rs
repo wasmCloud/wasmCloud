@@ -70,7 +70,7 @@ spec:
     - name: httpserver
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/http-server:0.22.0
+        image: ghcr.io/wasmcloud/http-server:0.23.1
       traits:
         - type: link
           properties:
