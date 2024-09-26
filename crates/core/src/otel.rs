@@ -137,6 +137,7 @@ impl OtelConfig {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum OtelProtocol {
     Grpc,
     Http,
