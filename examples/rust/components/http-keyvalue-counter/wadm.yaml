@@ -44,7 +44,7 @@ spec:
     - name: kvredis
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/keyvalue-redis:0.25.0
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.28.1
         ## To configure OTEL integration for this provider specifically, uncomment the lines below
         # config:
         #   - name: otel
