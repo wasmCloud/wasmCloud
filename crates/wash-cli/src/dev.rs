@@ -27,15 +27,15 @@ use wit_parser::{Resolve, WorldId};
 
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
-    Metadata, Policy, Properties, SecretProperty, Specification, SpreadScalerProperty,
-    TargetConfig, TraitProperty,
+    Metadata, Properties, SecretProperty, Specification, SpreadScalerProperty, TargetConfig,
+    TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
 use wash_lib::cli::CommandOutput;
 use wash_lib::config::{cfg_dir, downloads_dir};
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
-use wash_lib::parser::{get_config, ProjectConfig};
+use wash_lib::parser::{get_config, ProjectConfig, TypeConfig};
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
@@ -632,6 +632,9 @@ impl ProjectDeps {
         // Generate components for all the dependencies
         let mut components = Vec::new();
 
+        // TODO: Deps that have the same properties other than interface should be combined
+        // into a single link
+
         // For each dependency, go through and generate the component along with necessary links
         for dep in self.dependencies.values().flatten() {
             let dep = dep.clone();
@@ -639,7 +642,7 @@ impl ProjectDeps {
                 .generate_component(session_id)
                 .context("failed to generate component")?;
 
-            // Generate links for the given component and it's spec, for known interfaces
+            // Generate links for the given component and its spec, for known interfaces
             match dep {
                 DependencySpec::Exports(DependencySpecInner {
                     wit: (ns, pkg, iface, version),
@@ -761,20 +764,22 @@ impl ProjectDeps {
         components.push(component);
 
         manifests.push(Manifest {
-            api_version: "0.0.0".into(),
+            api_version: "core.oam.dev/v1beta1".into(),
             kind: "Application".into(),
             metadata: Metadata {
                 name: app_name,
                 annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
-                labels: BTreeMap::new(),
+                labels: BTreeMap::from([("wasmcloud.dev/generated-by".into(), "wash dev".into())]),
             },
             spec: Specification {
                 components,
-                policies: Vec::from([Policy {
-                    name: "nats-kv".into(),
-                    policy_type: "policy.secret.wasmcloud.dev/v1alpha1".into(),
-                    properties: BTreeMap::from([("backend".into(), "nats-kv".into())]),
-                }]),
+                policies: Vec::with_capacity(0),
+                // TODO: When secrets are required, reenable the nats-kv policy
+                // policies: Vec::from([Policy {
+                //     name: "nats-kv".into(),
+                //     policy_type: "policy.secret.wasmcloud.dev/v1alpha1".into(),
+                //     properties: BTreeMap::from([("backend".into(), "nats-kv".into())]),
+                // }]),
             },
         });
 
@@ -810,12 +815,30 @@ impl ProjectDeps {
 
 /// Check whether the provided interface is ignored for the purpose of building dependencies.
 ///
-/// Dependencies are ignored normally if they are known-internal packages.
+/// Dependencies are ignored normally if they are known-internal packages or interfaces that
+/// are built into the host.
 fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
     matches!(
         (ns, pkg, iface),
-        ("wasi", "io", _) | ("wasi", "clocks", _) | ("wasi", "http", "types")
+        ("wasi", "http", "types")
+            | ("wasi", "runtime", "config")
+            | (
+                "wasi",
+                "cli" | "clocks" | "filesystem" | "io" | "logging" | "random" | "sockets",
+                _
+            )
+            | ("wasmcloud", "secrets" | "bus", _)
     )
+}
+
+/// Parse Build a [`wit_parser::Resolve`] from a provided component
+pub fn parse_component_wit(component: &[u8]) -> Result<(Resolve, WorldId)> {
+    match wit_parser::decoding::decode(component).context("failed to decode WIT component")? {
+        wit_parser::decoding::DecodedWasm::Component(resolve, world) => Ok((resolve, world)),
+        wit_parser::decoding::DecodedWasm::WitPackage(..) => {
+            bail!("binary-encoded WIT packages not currently supported for wash dev")
+        }
+    }
 }
 
 /// Parse Build a [`wit_parser::Resolve`] from a provided directory
@@ -926,13 +949,22 @@ fn generate_component_from_project_cfg(
                 },
             },
         },
-        traits: Some(vec![wadm_types::Trait {
-            trait_type: "spreadscaler".into(),
-            properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
-                instances: 1,
-                spread: Vec::new(),
-            }),
-        }]),
+        traits: match &cfg.project_type {
+            wash_lib::parser::TypeConfig::Component(_c) => Some(vec![wadm_types::Trait {
+                trait_type: "spreadscaler".into(),
+                properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
+                    instances: 100,
+                    spread: Vec::new(),
+                }),
+            }]),
+            wash_lib::parser::TypeConfig::Provider(_p) => Some(vec![wadm_types::Trait {
+                trait_type: "spreadscaler".into(),
+                properties: TraitProperty::SpreadScaler(SpreadScalerProperty {
+                    instances: 1,
+                    spread: Vec::new(),
+                }),
+            }]),
+        },
     })
 }
 
@@ -1325,7 +1357,7 @@ impl WashDevSession {
             "{} {}",
             emoji::GREEN_CHECK,
             style(format!(
-                "Successfully started host, logs @ [{}]",
+                "Successfully started host, logs writing to {}",
                 wasmcloud_log_path.display()
             ))
             .bold()
@@ -1469,8 +1501,14 @@ async fn run_dev_loop(
     let component_ref = format!("file://{}", artifact_path.display());
 
     // After the project is built, we must ensure dependencies are set up and running
-    let (resolve, world_id) =
-        parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?;
+    let (resolve, world_id) = if let TypeConfig::Component(_) = project_cfg.project_type {
+        let component_bytes = tokio::fs::read(&artifact_path)
+            .await
+            .context("failed to read component bytes from built artifact path")?;
+        parse_component_wit(&component_bytes).context("failed to parse WIT from component")?
+    } else {
+        parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?
+    };
 
     // Pull implied dependencies from WIT
     let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
@@ -1693,6 +1731,7 @@ async fn scale_down_component(
     Ok(())
 }
 
+// TODO: A wrapper around this to ensure that we stop the children in the event of returning an error would be good
 /// Handle `wash dev`
 pub async fn handle_command(
     cmd: DevCommand,
@@ -1812,7 +1851,11 @@ pub async fn handle_command(
 
     // Run the dev loop once (building the application, deploying deps, etc), before we start watching
     let mut dependencies = None;
-    run_dev_loop(RunDevLoopArgs {
+    // NOTE(brooksmtownsend): Yes, it would make more sense to return here. For some reason unknown to me
+    // trying to return any error here will just cause the dev loop to hang infinitely and require a force quit.
+    // Even a panic will display a tokio error and then hang. Thankfully, the error will just probably happen
+    // again when the dev loop runs and in that case it'll successfully exit out.
+    if let Err(e) = run_dev_loop(RunDevLoopArgs {
         dev_session: &wash_dev_session,
         nats_client: &nats_client,
         ctl_client: &ctl_client,
@@ -1823,7 +1866,12 @@ pub async fn handle_command(
         previous_deps: &mut dependencies,
     })
     .await
-    .context("failed to run initial dev loop iteration")?;
+    {
+        eprintln!(
+            "{} Failed to run first dev loop iteration, will retry: {e}",
+            emoji::WARN
+        );
+    }
 
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
@@ -1845,13 +1893,13 @@ pub async fn handle_command(
                     .await
                     .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
-                eprintln!("\n👀 watching for file changes (press Ctrl+c to stop)...");
+                eprintln!("\n👀 Watching for file changes (press Ctrl+c to stop)...");
             },
 
             // Process a stop
             _ = stop_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                eprintln!("🛑 received Ctrl + c, stopping devloop...");
+                eprintln!("🛑 Received Ctrl + c, stopping devloop...");
 
                 // Update the sessions file with the fact that this session stopped
                 wash_dev_session.in_use = false;
@@ -1865,14 +1913,33 @@ pub async fn handle_command(
 
                 // Stop the host, unless explicitly instructed to leave host running
                 if !cmd.leave_host_running {
-                    eprintln!("⏳ stopping wasmCloud instance...");
+                    eprintln!("⏳ Stopping wasmCloud instance...");
 
-                    // Stop host
+                    // Stop host via the control interface
+                    if let Some((ref host_id, _log_file)) = wash_dev_session.host_data.as_ref() {
+                        let receiver = ctl_client.events_receiver(vec!["host_stopped".to_string()]).await;
+                        if let Err(e) = ctl_client
+                            .stop_host(host_id, Some(2000))
+                            .await {
+                                eprintln!("{} failed to stop host through control interface: {e}", emoji::WARN);
+                            }
+
+                        // Wait for the host_stopped event to be received
+                        if let Ok(mut receiver) = receiver {
+                            receiver.recv().await;
+                        }
+                    }
+
+                    // Ensure that the host exited, if not, kill the process forcefully
                     if let Some(mut host) = wasmcloud_child {
-                        host
-                            .kill()
-                            .await
-                            .context("failed to stop wasmcloud process")?;
+                        if tokio::time::timeout(std::time::Duration::from_secs(5), host.wait()).await.context("failed to wait for wasmcloud process to stop, forcefully terminating").is_err() {
+                            eprintln!("{} Terminating host forcefully, this may leave provider processes running", emoji::WARN);
+                            host
+                                .kill()
+                                .await
+                                .context("failed to stop wasmcloud process")?;
+                        }
+
                     }
 
                     // Stop WADM
