@@ -68,7 +68,7 @@ spec:
     - name: sqldb-postgres
       type: capability
       properties:
-        image: ghcr.io/wasmcloud/sqldb-postgres:0.5.2
+        image: ghcr.io/wasmcloud/sqldb-postgres:0.7.1
         config:
           - name: 'default-postgres'
           ## To configure OTEL integration for this provider specifically, uncomment the lines below
