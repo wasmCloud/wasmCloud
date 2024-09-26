@@ -275,20 +275,35 @@ struct Args {
     #[clap(long = "enable-logs", env = "WASMCLOUD_LOGS_ENABLED", hide = true)]
     enable_logs: Option<bool>,
 
-    /// Overrides the OpenTelemetry endpoint used for emitting traces, metrics and logs. This can also be set with `OTEL_EXPORTER_OTLP_ENDPOINT`.
-    #[clap(long = "override-observability-endpoint")]
+    /// Overrides the OpenTelemetry endpoint used for emitting traces, metrics and logs.
+    #[clap(
+        long = "override-observability-endpoint",
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )]
     observability_endpoint: Option<String>,
 
-    /// Overrides the OpenTelemetry endpoint used for emitting traces. This can also be set with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
-    #[clap(long = "override-traces-endpoint", hide = true)]
+    /// Overrides the OpenTelemetry endpoint used for emitting traces.
+    #[clap(
+        long = "override-traces-endpoint",
+        env = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        hide = true
+    )]
     traces_endpoint: Option<String>,
 
-    /// Overrides the OpenTelemetry endpoint used for emitting metrics. This can also be set with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
-    #[clap(long = "override-metrics-endpoint", hide = true)]
+    /// Overrides the OpenTelemetry endpoint used for emitting metrics.
+    #[clap(
+        long = "override-metrics-endpoint",
+        env = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        hide = true
+    )]
     metrics_endpoint: Option<String>,
 
-    /// Overrides the OpenTelemetry endpoint used for emitting logs. This can also be set with `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
-    #[clap(long = "override-logs-endpoint", hide = true)]
+    /// Overrides the OpenTelemetry endpoint used for emitting logs.
+    #[clap(
+        long = "override-logs-endpoint",
+        env = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        hide = true
+    )]
     logs_endpoint: Option<String>,
 
     /// Configures whether grpc or http will be used for exporting the enabled telemetry. This defaults to 'http'.
