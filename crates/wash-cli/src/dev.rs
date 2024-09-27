@@ -126,7 +126,7 @@ pub struct DevCommand {
 ///
 /// let workspace_key = ProjectDependencyKey::Workspace; // alternatively ProjectDependencyKey::default()
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum ProjectDependencyKey {
     #[allow(unused)]
     RootWorkspace { name: String, path: PathBuf },
@@ -543,7 +543,7 @@ struct ProjectDeps {
     pub(crate) session_id: Option<String>,
 
     /// Lookup of dependencies by project key, with lookups into the pool
-    dependencies: HashMap<ProjectDependencyKey, Vec<DependencySpec>>,
+    dependencies: BTreeMap<ProjectDependencyKey, Vec<DependencySpec>>,
 
     /// The component to which dependencies belong
     ///
@@ -554,10 +554,10 @@ struct ProjectDeps {
     /// Dependencies that receive invocations for given interfaces (i.e. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
     ///
     /// The keys to this structure are indices into the `dependencies` member.
-    exporters: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+    exporters: BTreeMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
 
     /// Dependencies that perform invocations for given interfaces (i.e. `http-server` invoking a component's `wasi:http/incoming-handler` export)
-    importers: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+    importers: BTreeMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
 }
 
 impl ProjectDeps {
@@ -691,7 +691,7 @@ impl ProjectDeps {
                         ("wasi", "blobstore", "blobstore", _)
                         | ("wrpc", "blobstore", "blobstore", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: "default".into(),
+                                name: config_name(ns.as_str(), pkg.as_str()),
                                 properties: Some(HashMap::from([(
                                     "root".into(),
                                     DEFAULT_BLOBSTORE_ROOT_DIR.into(),
@@ -700,7 +700,7 @@ impl ProjectDeps {
                         }
                         ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: format!("{pkg}-config"),
+                                name: config_name(ns.as_str(), pkg.as_str()),
                                 properties: Some(HashMap::from([
                                     ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
                                     ("enable_bucket_auto_create".into(), "true".into()),
@@ -744,7 +744,7 @@ impl ProjectDeps {
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: "default".into(),
+                                    name: config_name(ns.as_str(), pkg.as_str()),
                                     properties: Some(HashMap::from([(
                                         "address".into(),
                                         DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
@@ -757,7 +757,7 @@ impl ProjectDeps {
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: "default".into(),
+                                    name: config_name(ns.as_str(), pkg.as_str()),
                                     properties: Some(HashMap::from([(
                                         "subscriptions".into(),
                                         DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
@@ -858,7 +858,8 @@ impl ProjectDeps {
 fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
     matches!(
         (ns, pkg, iface),
-        ("wasi", "http", "types")
+        ("wasi", "blobstore", "container" | "types")
+            | ("wasi", "http", "types")
             | ("wasi", "runtime", "config")
             | (
                 "wasi",
@@ -1004,6 +1005,10 @@ fn generate_component_from_project_cfg(
             }]),
         },
     })
+}
+
+fn config_name(ns: &str, pkg: &str) -> String {
+    format!("{}-{}-config", ns, pkg)
 }
 
 /// The path to the dev directory for wash
@@ -1300,7 +1305,7 @@ impl WashDevSession {
             })?;
         let wadm_binary = ensure_wadm(&wadm_opts.wadm_version, &install_dir).await?;
         let wadm_child = match start_wadm(
-            &session_dir,
+            &install_dir,
             &wadm_binary,
             wadm_log_file.into_std().await,
             Some(config),
@@ -1417,7 +1422,7 @@ fn find_provider_source_trait_config_value<'a>(
     if let Some(link_traits) = component
         .traits
         .as_ref()
-        .map(|ts| ts.iter().filter(|t| t.trait_type == "link"))
+        .map(|ts| ts.iter().filter(|t| t.is_link()))
     {
         // Find the first link config that is named "default" and has "address"
         for link_trait in link_traits {
@@ -1452,9 +1457,11 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                     .image
                     .starts_with("ghcr.io/wasmcloud/http-server") =>
             {
-                if let Some(address) =
-                    find_provider_source_trait_config_value(component, "default", "address")
-                {
+                if let Some(address) = find_provider_source_trait_config_value(
+                    component,
+                    &config_name("wasi", "http"),
+                    "address",
+                ) {
                     lines.push(format!(
                         "{} {}",
                         emoji::INFO_SQUARE,
@@ -1549,9 +1556,12 @@ async fn run_dev_loop(
 
     // After the project is built, we must ensure dependencies are set up and running
     let (resolve, world_id) = if let TypeConfig::Component(_) = project_cfg.project_type {
-        let component_bytes = tokio::fs::read(&artifact_path)
-            .await
-            .context("failed to read component bytes from built artifact path")?;
+        let component_bytes = tokio::fs::read(&artifact_path).await.with_context(|| {
+            format!(
+                "failed to read component bytes from built artifact path {}",
+                artifact_path.to_string_lossy()
+            )
+        })?;
         parse_component_wit(&component_bytes).context("failed to parse WIT from component")?
     } else {
         parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?
@@ -1596,11 +1606,12 @@ async fn run_dev_loop(
     );
     let component = generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
         .context("failed to generate app component")?;
+    current_project_deps.component = Some(component);
 
     // If deps haven't changed, then we can simply restart the component and return
     if previous_deps
         .as_ref()
-        .is_some_and(|deps| *deps == current_project_deps)
+        .is_some_and(|deps| deps.eq(&current_project_deps))
     {
         eprintln!(
             "{} {}",
@@ -1626,8 +1637,6 @@ async fn run_dev_loop(
         .with_context(|| format!("failed to reload component [{component_id}]"))?;
         return Ok(());
     }
-
-    current_project_deps.component = Some(component);
 
     // Convert the project deps into a fully-baked WADM manifests
     let manifests = current_project_deps
@@ -1696,8 +1705,10 @@ async fn run_dev_loop(
             .bold(),
         );
 
-        // Print all help text lines
-        eprintln!("{}", help_text_lines.join("\n"));
+        // Print all help text lines (as long as there are some)
+        if !help_text_lines.is_empty() {
+            eprintln!("{}", help_text_lines.join("\n"));
+        }
     }
 
     eprintln!(
