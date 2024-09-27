@@ -652,6 +652,28 @@ impl ProjectDeps {
                     wit: (ns, pkg, iface, version),
                     ..
                 }) => {
+                    // Check to see if this link (namespace, package, target) already exists,
+                    // and if so, add the interface to the existing link
+                    if component
+                        .traits
+                        .get_or_insert(Vec::new())
+                        .iter_mut()
+                        .any(|trt| {
+                            if let TraitProperty::Link(link) = &mut trt.properties {
+                                if link.namespace == ns
+                                    && link.package == pkg
+                                    && link.target.name == dep_component.name
+                                {
+                                    link.interfaces.push(iface.clone());
+                                    return true;
+                                }
+                            }
+                            false
+                        })
+                    {
+                        continue;
+                    }
+
                     // Build the relevant app->dep link trait
                     let mut link_property = LinkProperty {
                         namespace: ns.clone(),
@@ -678,7 +700,7 @@ impl ProjectDeps {
                         }
                         ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: format!("{pkg}-config").into(),
+                                name: format!("{pkg}-config"),
                                 properties: Some(HashMap::from([
                                     ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
                                     ("enable_bucket_auto_create".into(), "true".into()),
@@ -777,7 +799,15 @@ impl ProjectDeps {
             metadata: Metadata {
                 name: app_name,
                 annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
-                labels: BTreeMap::from([("wasmcloud.dev/generated-by".into(), "wash dev".into())]),
+                labels: BTreeMap::from([(
+                    "wasmcloud.dev/generated-by".into(),
+                    format!(
+                        "wash-dev{}",
+                        std::env::var("CARGO_PKG_VERSION")
+                            .map(|s| format!("-{}", s))
+                            .unwrap_or_default()
+                    ),
+                )]),
             },
             spec: Specification {
                 components: components.into_values().collect(),
