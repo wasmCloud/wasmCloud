@@ -1527,11 +1527,20 @@ async fn run_dev_loop(
         emoji::CONSTRUCTION_BARRIER,
         style("Building project...").bold(),
     );
-    let artifact_path = build_project(project_cfg, Some(&SignConfig::default()))
+    let Ok(Ok(artifact_path)) = build_project(project_cfg, Some(&SignConfig::default()))
         .await
-        .context("failed to build project")?
-        .canonicalize()
-        .context("failed to canonicalize path")?;
+        .context("failed to build project")
+        .map(|p| p.canonicalize().context("failed to canonicalize path"))
+    else {
+        eprintln!(
+            "{} {}",
+            emoji::ERROR,
+            style("Failed to build project").red()
+        );
+        // Failing to build the project can be corrected by changing the code and shouldn't
+        // stop the development loop
+        return Ok(());
+    };
     eprintln!(
         "✅ successfully built project at [{}]",
         artifact_path.display()
