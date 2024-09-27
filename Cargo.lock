@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "secrets-nats-kv"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
