@@ -1,6 +1,6 @@
 # wasmcloud-platform
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.2.0](https://img.shields.io/badge/AppVersion-1.2.0-informational?style=flat-square)
+![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.2.1](https://img.shields.io/badge/AppVersion-1.2.1-informational?style=flat-square)
 
 [wasmCloud](https://wasmcloud.com/docs/intro) is an open source project from the Cloud Native Computing Foundation (CNCF) that enables teams to build polyglot applications composed of reusable Wasm components and run them—resiliently and efficiently—across any cloud, Kubernetes, datacenter, or edge.
 
@@ -16,7 +16,7 @@ The wasmCloud Platform Helm Chart provides a turnkey solution, for running WebAs
 
 ## Getting Started
 
-The wasmCloud platform is comprised of three components, a NATS cluster as the backbone of its [lattice](https://wasmcloud.com/docs/concepts/lattice), [Wadm](https://wasmcloud.com/docs/ecosystem/wadm) for WebAssembly applications lifecycle management, and wasmCloud [host](https://wasmcloud.com/docs/concepts/hosts), which can be provided either by wasmcloud-operator - if preferring managed hosts - or wasmcloud-host.
+The wasmCloud platform is comprised of three components, a NATS cluster as the backbone of its [lattice](https://wasmcloud.com/docs/concepts/lattice), [Wadm](https://wasmcloud.com/docs/ecosystem/wadm) for WebAssembly applications lifecycle management, and wasmCloud [host](https://wasmcloud.com/docs/concepts/hosts), which can be provided either by [wasmcloud-operator](https://github.com/wasmcloud/wasmcloud-operator) - if preferring managed hosts - or [wasmcloud-host](https://github.com/wasmCloud/wasmCloud/tree/main/charts/wasmcloud-host).
 
 To take full advantage of the chart features, it's best to use wasmcloud-operator, and install the chart in two steps.
 
@@ -25,7 +25,6 @@ To take full advantage of the chart features, it's best to use wasmcloud-operato
 ```bash
 # By default, the chart installs NATS, Wadm, and wasmCloud Operator subcharts
 helm upgrade --install \
-    --create-namespace \
     wasmcloud-platform \
     --values https://raw.githubusercontent.com/wasmCloud/wasmcloud/main/charts/wasmcloud-platform/values.yaml \
     oci://ghcr.io/wasmcloud/charts/wasmcloud-platform \
@@ -44,7 +43,6 @@ kubectl wait --for=condition=available --timeout=600s deploy -l app.kubernetes.i
 
 ```bash
 helm upgrade --install \
-    --create-namespace \
     wasmcloud-platform \
     --values https://raw.githubusercontent.com/wasmCloud/wasmcloud/main/charts/wasmcloud-platform/values.yaml \
     oci://ghcr.io/wasmcloud/charts/wasmcloud-platform \

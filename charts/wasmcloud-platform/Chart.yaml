@@ -8,7 +8,7 @@ description: wasmCloud Platform Helm Chart provides a turnkey solution, for runn
 version: 0.1.0
 
 type: application
-appVersion: "1.2.0"
+appVersion: "1.2.1"
 
 kubeVersion: ">=1.24.0"
 
@@ -46,6 +46,7 @@ sources:
   - https://github.com/wasmCloud/wasmCloud
   - https://github.com/wasmCloud/wadm
   - https://github.com/nats-io/nats-server
+  - https://github.com/wasmCloud/wasmcloud-operator
 
 deprecated: false
 
