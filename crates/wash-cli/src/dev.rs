@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
 use tokio::{select, sync::mpsc};
+use tracing::debug;
 use wash_lib::app::AppManifest;
 use wash_lib::cli::stop::stop_provider;
 use wash_lib::common::CommandGroupUsage;
@@ -90,6 +91,11 @@ pub struct DevCommand {
     /// Path to code directory
     #[clap(name = "code-dir", long = "work-dir", env = "WASH_DEV_CODE_DIR")]
     pub code_dir: Option<PathBuf>,
+
+    /// Directories to ignore when watching for changes. This should be set
+    /// to directories where generated files are placed, such as `target/` or `dist/`
+    #[clap(name = "ignore-dir", long = "ignore-dir")]
+    pub ignore_dirs: Vec<PathBuf>,
 
     /// Whether to leave the host running after dev
     #[clap(
@@ -629,11 +635,9 @@ impl ProjectDeps {
             .context("missing/invalid component under test")?;
         let app_name = format!("dev-{}", component.name.to_lowercase().replace(" ", "-"));
 
-        // Generate components for all the dependencies
-        let mut components = Vec::new();
-
-        // TODO: Deps that have the same properties other than interface should be combined
-        // into a single link
+        // Generate components for all the dependencies, using a map from component name to component
+        // to remove duplicates
+        let mut components = HashMap::new();
 
         // For each dependency, go through and generate the component along with necessary links
         for dep in self.dependencies.values().flatten() {
@@ -674,7 +678,7 @@ impl ProjectDeps {
                         }
                         ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: "default".into(),
+                                name: format!("{pkg}-config").into(),
                                 properties: Some(HashMap::from([
                                     ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
                                     ("enable_bucket_auto_create".into(), "true".into()),
@@ -757,11 +761,15 @@ impl ProjectDeps {
             }
 
             // Add the dependency component after we've made necessary links
-            components.push(dep_component);
+            if let Some(c) = components.insert(dep_component.name.clone(), dep_component) {
+                debug!("replacing duplicate component [{}]", c.name);
+            }
         }
 
         // Add the application component after we've made necessary links
-        components.push(component);
+        if let Some(c) = components.insert(component.name.clone(), component) {
+            debug!("replacing duplicate component [{}]", c.name);
+        }
 
         manifests.push(Manifest {
             api_version: "core.oam.dev/v1beta1".into(),
@@ -772,7 +780,7 @@ impl ProjectDeps {
                 labels: BTreeMap::from([("wasmcloud.dev/generated-by".into(), "wash dev".into())]),
             },
             spec: Specification {
-                components,
+                components: components.into_values().collect(),
                 policies: Vec::with_capacity(0),
                 // TODO: When secrets are required, reenable the nats-kv policy
                 // policies: Vec::from([Policy {
@@ -1514,7 +1522,7 @@ async fn run_dev_loop(
     let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
         .context("failed to resolve dependent components")?;
     eprintln!(
-        "Detected component dependencies: {:?}",
+        "🔎 Detected component dependencies: {:?}",
         wit_implied_deps
             .iter()
             .map(DependencySpec::name)
@@ -1820,20 +1828,38 @@ pub async fn handle_command(
     let watcher_paused = pause_watch.clone();
 
     // Spawn a file watcher to listen for changes and send on reload_tx
+    let project_path_notify = project_path.clone();
     let mut watcher = notify::recommended_watcher(move |res: _| match res {
         Ok(event) => match event {
             NotifyEvent {
                 kind: EventKind::Create(_),
+                paths,
                 ..
             }
             | NotifyEvent {
                 kind: EventKind::Modify(ModifyKind::Data(_)),
+                paths,
                 ..
             }
             | NotifyEvent {
                 kind: EventKind::Remove(_),
+                paths,
                 ..
             } => {
+                // Ensure that paths that take place in ignored directories don't trigger a reload
+                if paths.iter().any(|p| {
+                    p.strip_prefix(project_path_notify.as_path())
+                        .is_ok_and(|p| {
+                            // Ignore Rust target directories
+                            p.starts_with("target")
+                                // Ignore wasmCloud build directories
+                                || p.starts_with("build")
+                                // Ignore user specifieddirectories
+                                || cmd.ignore_dirs.iter().any(|ignore| p.starts_with(ignore))
+                        })
+                }) {
+                    return;
+                }
                 // If watch has been paused for any reason, skip notifications
                 if watcher_paused.load(Ordering::SeqCst) {
                     return;
@@ -1875,6 +1901,10 @@ pub async fn handle_command(
 
     // Watch FS for changes and listen for Ctrl + C in tandem
     eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
+    let _ = reload_rx.try_recv();
+    let _ = reload_rx.try_recv();
+    let _ = reload_rx.try_recv();
+    let _ = reload_rx.try_recv();
     loop {
         select! {
             // Process a file change/reload
