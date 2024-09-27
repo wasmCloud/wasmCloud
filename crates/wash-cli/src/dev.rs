@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -866,6 +866,7 @@ fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
                 "cli" | "clocks" | "filesystem" | "io" | "logging" | "random" | "sockets",
                 _
             )
+            | ("wasmcloud", "messaging", "types")
             | ("wasmcloud", "secrets" | "bus", _)
     )
 }
@@ -1483,9 +1484,11 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                     .image
                     .starts_with("ghcr.io/wasmcloud/messaging-nats") =>
             {
-                if let Some(subscriptions) =
-                    find_provider_source_trait_config_value(component, "default", "subscriptions")
-                {
+                if let Some(subscriptions) = find_provider_source_trait_config_value(
+                    component,
+                    &config_name("wasmcloud", "messaging"),
+                    "subscriptions",
+                ) {
                     lines.push(format!(
                         "{} {}",
                         emoji::INFO,
@@ -1575,7 +1578,7 @@ async fn run_dev_loop(
         wit_implied_deps
             .iter()
             .map(DependencySpec::name)
-            .collect::<Vec<String>>()
+            .collect::<HashSet<String>>()
     );
     let pkey =
         ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
@@ -1608,11 +1611,11 @@ async fn run_dev_loop(
         .context("failed to generate app component")?;
     current_project_deps.component = Some(component);
 
-    // If deps haven't changed, then we can simply restart the component and return
-    if previous_deps
+    let project_deps_unchanged = previous_deps
         .as_ref()
-        .is_some_and(|deps| deps.eq(&current_project_deps))
-    {
+        .is_some_and(|deps| deps.eq(&current_project_deps));
+    // If deps haven't changed, then we can simply restart the component and return
+    if project_deps_unchanged {
         eprintln!(
             "{} {}",
             emoji::RECYCLE,
@@ -1653,27 +1656,31 @@ async fn run_dev_loop(
         let model_json =
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
-        // Write out manifests to local file if provided
-        if let Some(output_dir) = manifest_output_dir {
-            ensure!(
-                tokio::fs::metadata(output_dir)
-                    .await
-                    .context("failed to get manifest output dir metadata")
-                    .is_ok_and(|f| f.is_dir()),
-                "manifest output directory [{}] must be a folder",
-                output_dir.display()
-            );
-            tokio::fs::write(
-                output_dir.join(format!("{}.yaml", manifest.metadata.name)),
-                serde_yaml::to_string(&manifest).context("failed to convert manifest to YAML")?,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write out manifest YAML to output dir [{}]",
-                    output_dir.display(),
+        // Write out manifests to local file if provided and manifest dependencies changed
+        match manifest_output_dir {
+            Some(output_dir) if !project_deps_unchanged => {
+                ensure!(
+                    tokio::fs::metadata(output_dir)
+                        .await
+                        .context("failed to get manifest output dir metadata")
+                        .is_ok_and(|f| f.is_dir()),
+                    "manifest output directory [{}] must exist and be a folder",
+                    output_dir.display()
+                );
+                tokio::fs::write(
+                    output_dir.join(format!("{}.yaml", manifest.metadata.name)),
+                    serde_yaml::to_string(&manifest)
+                        .context("failed to convert manifest to YAML")?,
                 )
-            })?
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to write out manifest YAML to output dir [{}]",
+                        output_dir.display(),
+                    )
+                })?
+            }
+            _ => {}
         }
 
         // Put the manifest
