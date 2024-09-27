@@ -10,6 +10,7 @@ use crate::context::WashContext;
 
 pub const WASH_DIR: &str = ".wash";
 
+pub const DEV_DIR: &str = "dev";
 pub const DOWNLOADS_DIR: &str = "downloads";
 pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
 pub const WADM_PID_FILE: &str = "wadm.pid";
@@ -34,6 +35,11 @@ pub fn cfg_dir() -> Result<PathBuf> {
     }
 
     Ok(wash)
+}
+
+/// The path to the dev sessions directory for wash
+pub fn dev_dir() -> Result<PathBuf> {
+    Ok(cfg_dir()?.join(DEV_DIR))
 }
 
 /// The path to the downloads directory for wash
