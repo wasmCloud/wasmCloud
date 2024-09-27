@@ -6,7 +6,7 @@
 //
 use console::Emoji;
 
-pub static ERROR: Emoji<'_, '_> = Emoji("⛔  ", "");
+pub static ERROR: Emoji<'_, '_> = Emoji("⛔", "");
 pub static SPARKLE: Emoji<'_, '_> = Emoji("✨  ", "");
 pub static GREEN_CHECK: Emoji<'_, '_> = Emoji("✅", "");
 pub static WARN: Emoji<'_, '_> = Emoji("🟧️", "");
