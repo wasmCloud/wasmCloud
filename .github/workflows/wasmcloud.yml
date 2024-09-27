@@ -764,7 +764,7 @@ jobs:
         working-directory: ./crates/${{ matrix.crate }}
 
       - name: publish ${{ matrix.crate }} to crates.io
-        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) && !steps.ctx.outputs.prerelease
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
         working-directory: ./crates/${{ matrix.crate }}
