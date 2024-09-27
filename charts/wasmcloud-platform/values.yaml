@@ -1,6 +1,3 @@
-# # Global values that apply to all subcharts
-# global:
-
 fullnameOverride: "wasmcloud-platform"
 nameOverride: "wasmcloud-platform"
 
@@ -42,7 +39,7 @@ wadm:
   # Source: https://github.com/wasmCloud/wasmcloud-operator/blob/main/examples/quickstart/wadm-values.yaml
   wadm:
     image:
-      tag: v0.14.0
+      tag: v0.15.0
     config:
       nats:
         server: "nats://nats-headless.default.svc.cluster.local"
@@ -78,7 +75,7 @@ hostConfig:
   # # Number of hosts (pods). Defaults to 1.
   # hostReplicas: 1
   # Which version of wasmCloud to use; defaults to "latest"
-  version: "1.2.0"
+  version: "1.2.1"
   # registryCredentialsFile: config.json
   # natsCredentialsFile: secret.yaml
   resources:
