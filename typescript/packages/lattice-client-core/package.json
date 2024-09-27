@@ -33,7 +33,7 @@
     "test:types": "tsc",
     "dev": "vite build --watch --emptyOutDir false --clearScreen false",
     "build": "vite build",
-    "prepublish": "yarn build",
+    "prepack": "yarn build",
     "publish": "yarn npm publish --access public"
   },
   "peerDependencies": {

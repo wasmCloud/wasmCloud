@@ -31,7 +31,9 @@
     "lint:eslint:fix": "yarn lint:eslint --fix",
     "test:types": "tsc",
     "dev": "vite build --watch --emptyOutDir false --clearScreen false",
-    "build": "vite build"
+    "build": "vite build",
+    "prepack": "yarn build",
+    "publish": "yarn npm publish --access public"
   },
   "devDependencies": {
     "@types/eslint": "~8.56.10",
