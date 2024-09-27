@@ -33,7 +33,7 @@ use wadm_types::{
 };
 use wash_lib::build::{build_project, SignConfig};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{cfg_dir, downloads_dir};
+use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{get_config, ProjectConfig, TypeConfig};
@@ -64,7 +64,6 @@ const DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION: &str = "wasmcloud.dev";
 const DEFAULT_BLOBSTORE_ROOT_DIR: &str = "/tmp";
 const DEFAULT_KEYVALUE_BUCKET: &str = "wasmcloud";
 
-const WASH_DEV_DIR: &str = "dev";
 const WASH_SESSIONS_FILE_NAME: &str = "wash-dev-sessions.json";
 
 const SESSIONS_FILE_VERSION: Version = Version::new(0, 1, 0);
@@ -1014,9 +1013,7 @@ fn config_name(ns: &str, pkg: &str) -> String {
 
 /// The path to the dev directory for wash
 async fn dev_dir() -> Result<PathBuf> {
-    let dir = cfg_dir()
-        .context("failed to resolve config dir")?
-        .join(WASH_DEV_DIR);
+    let dir = wash_lib::config::dev_dir().context("failed to resolve config dir")?;
     if !tokio::fs::try_exists(&dir)
         .await
         .context("failed to check if dev dir exists")?
@@ -1465,7 +1462,7 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                 ) {
                     lines.push(format!(
                         "{} {}",
-                        emoji::INFO_SQUARE,
+                        emoji::SPARKLE,
                         style(format!(
                             "HTTP Server: Access your application at {}",
                             if address.starts_with("http") {
@@ -1491,7 +1488,7 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                 ) {
                     lines.push(format!(
                         "{} {}",
-                        emoji::INFO,
+                        emoji::SPARKLE,
                         style(format!(
                             "Messaging NATS: Listening on the following subscriptions [{}]",
                             subscriptions.split(",").collect::<Vec<&str>>().join(", "),
@@ -1552,7 +1549,8 @@ async fn run_dev_loop(
         return Ok(());
     };
     eprintln!(
-        "✅ successfully built project at [{}]",
+        "{} Successfully built project at [{}]",
+        emoji::GREEN_CHECK,
         artifact_path.display()
     );
     let component_ref = format!("file://{}", artifact_path.display());
@@ -1574,7 +1572,8 @@ async fn run_dev_loop(
     let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
         .context("failed to resolve dependent components")?;
     eprintln!(
-        "🔎 Detected component dependencies: {:?}",
+        "{} Detected component dependencies: {:?}",
+        emoji::INFO_SQUARE,
         wit_implied_deps
             .iter()
             .map(DependencySpec::name)
@@ -1810,7 +1809,10 @@ pub async fn handle_command(
         .await
         .context("failed to build wash dev session")?;
     let session_id = wash_dev_session.id.clone();
-    eprintln!("{} Resolved wash session ID [{session_id}]", emoji::INFO);
+    eprintln!(
+        "{} Resolved wash session ID [{session_id}]",
+        emoji::INFO_SQUARE
+    );
 
     let (mut nats_child, mut wadm_child, mut wasmcloud_child) = (None, None, None);
 
@@ -1927,7 +1929,7 @@ pub async fn handle_command(
             _ => {}
         },
         Err(e) => {
-            eprintln!("[error] watch failed: {:?}", e);
+            eprintln!("{} [error] watch failed: {:?}", emoji::ERROR, e);
         }
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
@@ -1957,10 +1959,10 @@ pub async fn handle_command(
     }
 
     // Watch FS for changes and listen for Ctrl + C in tandem
-    eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
-    let _ = reload_rx.try_recv();
-    let _ = reload_rx.try_recv();
-    let _ = reload_rx.try_recv();
+    eprintln!(
+        "{} Watching for file changes (press Ctrl+c to stop)...",
+        emoji::EYES
+    );
     let _ = reload_rx.try_recv();
     loop {
         select! {
@@ -1980,13 +1982,13 @@ pub async fn handle_command(
                     .await
                     .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
-                eprintln!("\n👀 Watching for file changes (press Ctrl+c to stop)...");
+                eprintln!("\n{} Watching for file changes (press Ctrl+c to stop)...", emoji::EYES);
             },
 
             // Process a stop
             _ = stop_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                eprintln!("🛑 Received Ctrl + c, stopping devloop...");
+                eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
                 // Update the sessions file with the fact that this session stopped
                 wash_dev_session.in_use = false;
@@ -1994,13 +1996,13 @@ pub async fn handle_command(
 
                 // Delete manifests related to the application
                 if let Some(dependencies) = dependencies {
-                    eprintln!("🧹 Cleaning up deployed WADM application(s)...");
+                    eprintln!("{} Cleaning up deployed WADM application(s)...", emoji::BROOM);
                     dependencies.delete_manifests(&nats_client, lattice).await?;
                 }
 
                 // Stop the host, unless explicitly instructed to leave host running
                 if !cmd.leave_host_running {
-                    eprintln!("⏳ Stopping wasmCloud instance...");
+                    eprintln!("{} Stopping wasmCloud instance...", emoji::HOURGLASS_DRAINING);
 
                     // Stop host via the control interface
                     if let Some((ref host_id, _log_file)) = wash_dev_session.host_data.as_ref() {
@@ -2031,6 +2033,7 @@ pub async fn handle_command(
 
                     // Stop WADM
                     if let Some(mut wadm) = wadm_child {
+                        eprintln!("{} Stopping wadm...", emoji::HOURGLASS_DRAINING);
                         wadm
                             .kill()
                             .await
@@ -2042,9 +2045,11 @@ pub async fn handle_command(
 
                     // Stop NATS
                     if let Some(mut nats) = nats_child {
+                        eprintln!("{} Stopping NATS...", emoji::HOURGLASS_DRAINING);
                         nats.kill().await?;
                     }
                 }
+                eprint!("✅ Dev session exited successfully");
 
                 break Ok(CommandOutput::default());
             },
