@@ -790,6 +790,7 @@ jobs:
         # NOTE(brooksmtownsend): Installing from my fork as updating workspace dependencies is not yet supported in the mainline
         # PR to follow: https://github.com/Byron/cargo-smart-release/pull/17
         run: cargo install cargo-smart-release --git https://github.com/brooksmtownsend/cargo-smart-release --branch feat/update-workspace-dependencies
+
       - name: dry run release
         if: ${{ !inputs.do-release }}
         run: |
@@ -800,6 +801,7 @@ jobs:
         if: ${{ !inputs.do-release }}
         uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f
         with:
+          branch: release-${{ inputs.crate }}
           signoff: true
           committer: wasmCloud Automation <automation@wasmcloud.com>
           title: Release ${{ inputs.crate }}
