@@ -4,19 +4,39 @@
 //! wasmcloud-invocations. Please note that right now this is only supported for providers. This
 //! module is only available with the `otel` feature enabled
 
-use async_nats::header::HeaderMap;
+use std::str::FromStr;
+
+use async_nats::header::{HeaderMap, HeaderName, HeaderValue};
 use opentelemetry::propagation::{Injector, TextMapPropagator};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::Result;
+
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct HeaderInjector {
     inner: HeaderMap,
 }
 
 impl HeaderInjector {
+    /// Creates a new header injector from an iterator of string tuples
+    pub fn from(headers: impl IntoIterator<Item = (String, String)>) -> Result<Self> {
+        let inner = headers
+            .into_iter()
+            .map(
+                |(h, v)| match (HeaderName::from_str(&h), HeaderValue::from_str(&v)) {
+                    (Ok(h), Ok(v)) => Ok((h, v)),
+                    (Err(e), _) => Err(format!("failed to build header name: {e}").into()),
+                    (_, Err(e)) => Err(format!("failed to build header name: {e}").into()),
+                },
+            )
+            .collect::<Result<HeaderMap>>()?;
+        Ok(HeaderInjector { inner })
+    }
+
     /// Creates a new injector using the given [`HeaderMap`]
     pub fn new(headers: HeaderMap) -> Self {
         HeaderInjector { inner: headers }
