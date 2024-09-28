@@ -253,7 +253,7 @@ oci-wasm = { version = "0.0.4", default-features = false }
 once_cell = { version = "1", default-features = false }
 opentelemetry = { version = "0.23", default-features = false }
 opentelemetry-appender-tracing = { version = "0.4", default-features = false }
-opentelemetry-nats = { version = "*", path = "./crates/opentelemetry-nats", default-features = false }
+opentelemetry-nats = { version = "0.2.0", path = "./crates/opentelemetry-nats", default-features = false }
 opentelemetry-otlp = { version = "0.16", default-features = false }
 opentelemetry_sdk = { version = "0.23", default-features = false }
 path-absolutize = { version = "3", default-features = false }
