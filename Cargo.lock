@@ -7300,7 +7300,7 @@ dependencies = [
  "uuid 1.10.0",
  "vaultrs",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
  "wasmcloud-core 0.11.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
@@ -7361,7 +7361,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7476,7 +7476,7 @@ dependencies = [
  "url",
  "uuid 1.10.0",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
  "wasmcloud-core 0.11.0",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
@@ -7652,7 +7652,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid 1.10.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wit-bindgen-wrpc 0.6.5",
@@ -7682,7 +7682,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
 ]
 
 [[package]]
@@ -7883,7 +7883,7 @@ dependencies = [
  "tracing",
  "url",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
  "wasmcloud-core 0.11.0",
  "wasmcloud-host",
  "wasmcloud-secrets-types 0.4.0",
