@@ -1145,23 +1145,32 @@ impl Host {
                         ..
                     },
                 )| {
-                    let name = claims_token
+                    let mut provider_description = ProviderDescription::builder()
+                        .id(provider_id)
+                        .image_ref(image_ref);
+                    if let Some(name) = claims_token
                         .as_ref()
                         .and_then(|claims| claims.claims.metadata.as_ref())
                         .and_then(|metadata| metadata.name.as_ref())
-                        .cloned();
-                    let annotations = Some(annotations.clone().into_iter().collect());
-                    ProviderDescription {
-                        id: provider_id.into(),
-                        image_ref: Some(image_ref.clone()),
-                        name: name.clone(),
-                        annotations,
-                        revision: claims_token
-                            .as_ref()
-                            .and_then(|claims| claims.claims.metadata.as_ref())
-                            .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
-                            .unwrap_or_default(),
+                    {
+                        provider_description = provider_description.name(name);
                     }
+                    provider_description
+                        .annotations(
+                            annotations
+                                .clone()
+                                .into_iter()
+                                .collect::<BTreeMap<String, String>>(),
+                        )
+                        .revision(
+                            claims_token
+                                .as_ref()
+                                .and_then(|claims| claims.claims.metadata.as_ref())
+                                .and_then(|jwt::CapabilityProvider { rev, .. }| *rev)
+                                .unwrap_or_default(),
+                        )
+                        .build()
+                        .expect("failed to build provider description")
                 },
             )
             .collect();
