@@ -1,0 +1,83 @@
+fullnameOverride: "wasmcloud-platform"
+nameOverride: "wasmcloud-platform"
+
+nats:
+  # Whether to install the nats chart (https://nats-io.github.io/k8s/helm/charts/nats)
+  enabled: true
+  fullnameOverride: "nats"
+  nameOverride: "nats"
+  # Source: https://github.com/wasmCloud/wasmcloud-operator/blob/main/examples/quickstart/nats-values.yaml
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+    leafnodes:
+      enabled: true
+    websocket:
+      enabled: true
+      port: 4223
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 10Gi
+      merge:
+        domain: default
+  # # Quickstart configuration
+  # statefulSet:
+  #   name: nats
+  # service:
+  #   name: nats
+  # headlessService:
+  #   name: nats-headless
+
+wadm:
+  # Whether to install the wadm chart (oci://ghcr.io/wasmcloud/charts/wadm)
+  enabled: true
+  fullnameOverride: "wadm"
+  nameOverride: "wadm"
+  # Source: https://github.com/wasmCloud/wasmcloud-operator/blob/main/examples/quickstart/wadm-values.yaml
+  wadm:
+    image:
+      tag: v0.15.0
+    config:
+      nats:
+        server: "nats://nats-headless.default.svc.cluster.local"
+        # creds:
+        #   jwt: ""
+        #   seed: ""
+        #   # If you're using the wasmCloud Operator, the secret could be created by the chart using the '.hostConfig.natsCredentialsFile' setting.
+        #   secretName: ""
+        #   key: "nats.creds"
+  resources: {}
+
+operator:
+  # Whether to install the wasmcloud-operator chart (oci://ghcr.io/wasmcloud/charts/wasmcloud-operator)
+  # Make sure to either install wasmCloud Operator or wasmCloud Host, not both
+  enabled: true
+  fullnameOverride: "wasmcloud-operator"
+  nameOverride: "wasmcloud-operator"
+  # image:
+  #   tag: 0.3.2
+
+host:
+  # Whether to install the wasmcloud-host chart (oci://ghcr.io/wasmcloud/charts/wasmcloud-host)
+  # Make sure to either install wasmCloud Operator or wasmCloud Host, not both
+  enabled: false
+  fullnameOverride: "wasmcloud"
+  nameOverride: "wasmcloud"
+
+hostConfig:
+  # Whether to use the wasmCloud host configuration custom resource; defaults to "false".
+  enabled: false
+  name: wasmcloud-host
+  lattice: default
+  # # Number of hosts (pods). Defaults to 1.
+  # hostReplicas: 1
+  # Which version of wasmCloud to use; defaults to "latest"
+  version: "1.2.1"
+  # registryCredentialsFile: config.json
+  # natsCredentialsFile: secret.yaml
+  resources:
+    nats: {}
+    wasmCloudHost: {}

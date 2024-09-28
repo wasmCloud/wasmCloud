@@ -14,14 +14,15 @@ on:
           - wash-lib
           - wasmcloud
           - wasmcloud-component
+          - wasmcloud-control-interface
           - wasmcloud-core
           - wasmcloud-host
+          - wasmcloud-provider-sdk
           - wasmcloud-runtime
           - wasmcloud-secrets-client
           - wasmcloud-secrets-types
           - wasmcloud-test-util
           - wasmcloud-tracing
-          - wasmcloud-provider-sdk
       do-release:
         type: boolean
         description: Leave unchecked to create a pull request with changes for verification, then check to create a release directly with changes
@@ -382,13 +383,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db
       - name: Build wasmCloud
-        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85
+        uses: docker/build-push-action@32945a339266b759abcbdc89316275140b0fc960
         with:
           context: .
           push: false
           platforms: linux/amd64,linux/arm64
       - name: Build wash
-        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85
+        uses: docker/build-push-action@32945a339266b759abcbdc89316275140b0fc960
         with:
           context: .
           file: ./crates/wash-cli/Dockerfile
@@ -763,7 +764,7 @@ jobs:
         working-directory: ./crates/${{ matrix.crate }}
 
       - name: publish ${{ matrix.crate }} to crates.io
-        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) && !steps.ctx.outputs.prerelease
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate))
         continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
         run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
         working-directory: ./crates/${{ matrix.crate }}
