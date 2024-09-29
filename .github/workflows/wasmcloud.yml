@@ -795,7 +795,8 @@ jobs:
         run: |
           git config --global user.email "automation@wasmcloud.com"
           git config --global user.name "wasmCloud automation"
-          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }}
+          cargo smart-release --update-crates-index --no-publish --execute --no-changelog-preview --no-push ${{ inputs.additional-args }} ${{ inputs.crate }} --allow-dirty
+
       - name: Create Pull Request
         if: ${{ !inputs.do-release }}
         uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f
