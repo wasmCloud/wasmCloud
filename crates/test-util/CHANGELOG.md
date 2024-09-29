@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v0.12.0 (2024-07-31)
+## v0.12.0 (2024-09-30)
+
+<csr-id-13edb3e395eeb304adb88fcda0ebf1ada2c295c4/>
+<csr-id-da879d3e50d32fe1c09edcf2b58cb2db9c9e2661/>
+<csr-id-d7677a3d1dc1e7a10e49b43c57a6206d4c367f30/>
+<csr-id-03433cfbd79ab1b652dd32c6077143fda2379df9/>
+<csr-id-94bfb0e23d4f1f58b70500eaa635717a6ba83484/>
+<csr-id-d8b19a210a60e39fbd4a1b9e8cd275116304e7e7/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-fa5a77bbf34411340c38bea8ac5975be5af2eeba/>
+<csr-id-c666ef50fecc1ee248bf78d486a915ee077e3b4a/>
+<csr-id-b56982f437209ecaff4fa6946f8fe4c3068a62cd/>
+<csr-id-388662a482442df3f74dfe8f9559fc4c07cedbe5/>
+<csr-id-c30bf33f754c15122ead7f041b7d3e063dd1db33/>
+<csr-id-4bd1c0bd6a5f338c6c3840b7d96d1143ac2905c6/>
+<csr-id-7e32b07b59d9b45047d9ed3a202c49104a7f0b73/>
+<csr-id-0f4745b323e3af3b991598ee13b2b166fba74358/>
+<csr-id-8e15d48258489dbb94f83cbea3872d4ee946c70b/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-bcbb402c2efe3dc881b06e666c70e01e94d3ad72/>
+<csr-id-e75ca8df4149c40c44ca0cd151f9d5f7d87cb2fa/>
 
 ### Chore
 
@@ -26,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-d8b19a210a60e39fbd4a1b9e8cd275116304e7e7/> replace mentions of 'actor' w/ 'component'
  - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
  - <csr-id-fa5a77bbf34411340c38bea8ac5975be5af2eeba/> bump to 0.1
+
+### Refactor
+
+ - <csr-id-5ea200a553f79f3da3cb3c21a113ad0a863c2025/> update test util for new ctrl-iface
+
+### Other
+
+ - <csr-id-c65d9cab4cc8917eedcad1672812bafad0311ee0/> upgrade to 0.36
+ - <csr-id-835b49613f7f0d6903ad53d78f49c17db1e3d90e/> release and update CHANGELOG
+
+### Chore
+
+ - <csr-id-d8a480bfba3769e56471d408f90d0aaf5a356a4a/> Adopt predefined testcontainers
 
 ### Documentation
 
@@ -61,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-4803b7f2381b5439f862746407ac13a31ebdfee3/> add wasmcloud-test-util crate
    This commit adds a `wasmcloud-test-util` crate, which contains utilities
    for testing wasmCloud hosts, providers, and actors locally
+ - <csr-id-8b2b1393a96d67dccbef921a757792214904e346/> Add predefined testcontainers
+ - <csr-id-df0696e9d5037135fbfb0319bf6b2ae84ae95161/> return link put response
 
 ### Bug Fixes
 
@@ -117,8 +152,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 36 commits contributed to the release over the course of 141 calendar days.
- - 34 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 42 commits contributed to the release.
+ - 40 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -128,6 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Update test util for new ctrl-iface ([`5ea200a`](https://github.com/wasmCloud/wasmCloud/commit/5ea200a553f79f3da3cb3c21a113ad0a863c2025))
+    - Adopt predefined testcontainers ([`d8a480b`](https://github.com/wasmCloud/wasmCloud/commit/d8a480bfba3769e56471d408f90d0aaf5a356a4a))
+    - Add predefined testcontainers ([`8b2b139`](https://github.com/wasmCloud/wasmCloud/commit/8b2b1393a96d67dccbef921a757792214904e346))
+    - Return link put response ([`df0696e`](https://github.com/wasmCloud/wasmCloud/commit/df0696e9d5037135fbfb0319bf6b2ae84ae95161))
+    - Upgrade to 0.36 ([`c65d9ca`](https://github.com/wasmCloud/wasmCloud/commit/c65d9cab4cc8917eedcad1672812bafad0311ee0))
+    - Release and update CHANGELOG ([`835b496`](https://github.com/wasmCloud/wasmCloud/commit/835b49613f7f0d6903ad53d78f49c17db1e3d90e))
     - Support field on SecretRequest ([`089c061`](https://github.com/wasmCloud/wasmCloud/commit/089c061be0bf07e6abdeafc17375417eafff4a1b))
     - Include name with secret config ([`c666ef5`](https://github.com/wasmCloud/wasmCloud/commit/c666ef50fecc1ee248bf78d486a915ee077e3b4a))
     - Address feedback, application name optional ([`b56982f`](https://github.com/wasmCloud/wasmCloud/commit/b56982f437209ecaff4fa6946f8fe4c3068a62cd))
