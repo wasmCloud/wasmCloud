@@ -67,16 +67,18 @@ on:
       - 'provider-messaging-kafka-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+'
       - 'provider-messaging-nats-v[0-9].[0-9]+.[0-9]+-*'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
-      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+'
       - 'provider-sdk-v[0-9].[0-9]+.[0-9]+-*'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+'
+      - 'provider-sqldb-postgres-v[0-9].[0-9]+.[0-9]+-*'
       - 'runtime-v[0-9].[0-9]+.[0-9]+'
       - 'runtime-v[0-9].[0-9]+.[0-9]+-*'
-      - 'secrets-types-v[0-9].[0-9]+.[0-9]+'
-      - 'secrets-types-v[0-9].[0-9]+.[0-9]+-*'
       - 'secrets-client-v[0-9].[0-9]+.[0-9]+'
       - 'secrets-client-v[0-9].[0-9]+.[0-9]+-*'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+'
+      - 'secrets-types-v[0-9].[0-9]+.[0-9]+-*'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+'
+      - 'test-util-v[0-9].[0-9]+.[0-9]+-*'
       - 'tracing-v[0-9].[0-9]+.[0-9]+'
       - 'tracing-v[0-9].[0-9]+.[0-9]+-*'
       - 'v[0-9].[0-9]+.[0-9]+'
@@ -722,6 +724,9 @@ jobs:
             workspace-dependencies: true
 
           - crate: runtime
+            workspace-dependencies: true
+
+          - crate: test-util
             workspace-dependencies: true
 
           - crate: tracing
