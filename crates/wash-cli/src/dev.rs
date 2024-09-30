@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -92,7 +92,8 @@ pub struct DevCommand {
     pub code_dir: Option<PathBuf>,
 
     /// Directories to ignore when watching for changes. This should be set
-    /// to directories where generated files are placed, such as `target/` or `dist/`
+    /// to directories where generated files are placed, such as `target/` or `dist/`.
+    /// Can be specified multiple times.
     #[clap(name = "ignore-dir", long = "ignore-dir")]
     pub ignore_dirs: Vec<PathBuf>,
 
@@ -1534,19 +1535,19 @@ async fn run_dev_loop(
         emoji::CONSTRUCTION_BARRIER,
         style("Building project...").bold(),
     );
-    let Ok(Ok(artifact_path)) = build_project(project_cfg, Some(&SignConfig::default()))
-        .await
-        .context("failed to build project")
-        .map(|p| p.canonicalize().context("failed to canonicalize path"))
-    else {
-        eprintln!(
-            "{} {}",
-            emoji::ERROR,
-            style("Failed to build project").red()
-        );
-        // Failing to build the project can be corrected by changing the code and shouldn't
-        // stop the development loop
-        return Ok(());
+    let artifact_path = match build_project(project_cfg, Some(&SignConfig::default())).await {
+        Ok(artifact_path) => artifact_path,
+        Err(e) => {
+            eprintln!(
+                "{} {}\n{}",
+                emoji::ERROR,
+                style("Failed to build project:").red(),
+                e
+            );
+            // Failing to build the project can be corrected by changing the code and shouldn't
+            // stop the development loop
+            return Ok(());
+        }
     };
     eprintln!(
         "{} Successfully built project at [{}]",
@@ -1560,7 +1561,7 @@ async fn run_dev_loop(
         let component_bytes = tokio::fs::read(&artifact_path).await.with_context(|| {
             format!(
                 "failed to read component bytes from built artifact path {}",
-                artifact_path.to_string_lossy()
+                artifact_path.display()
             )
         })?;
         parse_component_wit(&component_bytes).context("failed to parse WIT from component")?
@@ -1577,7 +1578,7 @@ async fn run_dev_loop(
         wit_implied_deps
             .iter()
             .map(DependencySpec::name)
-            .collect::<HashSet<String>>()
+            .collect::<BTreeSet<String>>()
     );
     let pkey =
         ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
@@ -1606,9 +1607,10 @@ async fn run_dev_loop(
         session_id,
         project_cfg.common.name.to_lowercase().replace(" ", "-"),
     );
-    let component = generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
-        .context("failed to generate app component")?;
-    current_project_deps.component = Some(component);
+    current_project_deps.component = Some(
+        generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
+            .context("failed to generate app component")?,
+    );
 
     let project_deps_unchanged = previous_deps
         .as_ref()
@@ -1929,7 +1931,7 @@ pub async fn handle_command(
             _ => {}
         },
         Err(e) => {
-            eprintln!("{} [error] watch failed: {:?}", emoji::ERROR, e);
+            eprintln!("{} Watch failed: {:?}", emoji::ERROR, e);
         }
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
@@ -1963,7 +1965,6 @@ pub async fn handle_command(
         "{} Watching for file changes (press Ctrl+c to stop)...",
         emoji::EYES
     );
-    let _ = reload_rx.try_recv();
     loop {
         select! {
             // Process a file change/reload
@@ -2049,7 +2050,7 @@ pub async fn handle_command(
                         nats.kill().await?;
                     }
                 }
-                eprint!("✅ Dev session exited successfully");
+                eprintln!("{} Dev session exited successfully", emoji::GREEN_CHECK);
 
                 break Ok(CommandOutput::default());
             },
