@@ -707,6 +707,7 @@ func main() {}
                     path: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
                     registry: RegistryConfig::default(),
+                    dev: None,
                 },
                 &ComponentConfig {
                     wasm_target: wasm_target.clone(),

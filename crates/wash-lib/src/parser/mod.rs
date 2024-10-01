@@ -1,18 +1,17 @@
 //! Parse wasmcloud.toml files which specify key information for building and signing
 //! WebAssembly modules and native capability provider binaries
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    fs,
-    path::PathBuf,
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Display;
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
 use serde::Deserialize;
+use wadm_types::SecretSourceProperty;
 use wasmcloud_control_interface::RegistryCredential;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -283,6 +282,8 @@ pub struct CommonConfig {
     pub wasm_bin_name: Option<String>,
     /// Optional artifact OCI registry configuration. Primarily used for `wash push` & `wash pull` commands
     pub registry: RegistryConfig,
+    /// Configuration for development environments and/or DX related plugins
+    pub dev: Option<DevConfig>,
 }
 
 impl CommonConfig {
@@ -343,6 +344,9 @@ impl Display for WasmTarget {
     }
 }
 
+/// De-serialization friendly project configuration data
+///
+/// This structure is normally de-serialized from `wasmcloud.toml`
 #[derive(Deserialize, Debug)]
 struct RawProjectConfig {
     /// The language of the project, e.g. rust, tinygo. This is used to determine which config to parse.
@@ -363,16 +367,29 @@ struct RawProjectConfig {
     #[serde(default)]
     pub revision: i32,
 
-    #[serde(alias = "component")]
+    /// Confgiguration relevant to components
     pub component: Option<RawComponentConfig>,
+
+    /// Confgiguration relevant to providers
     pub provider: Option<RawProviderConfig>,
 
+    /// Rust configuration and options
     pub rust: Option<RawRustConfig>,
+
+    /// TinyGo related configuration and options
     pub tinygo: Option<RawTinyGoConfig>,
+
+    /// Golang related configuration and options
     pub go: Option<RawGoConfig>,
+
+    /// Configuration for image registry usage
     pub registry: Option<RawRegistryConfig>,
+
+    /// Configuration for development environments and/or DX related plugins
+    pub dev: Option<RawDevConfig>,
 }
 
+/// Configuration related to Golang configuration
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct GoConfig {
     /// The path to the go binary. Optional, will default to `go` if not specified.
@@ -381,6 +398,7 @@ pub struct GoConfig {
     pub disable_go_generate: bool,
 }
 
+/// De-serialization-friendly representation of Golang configuration
 #[derive(Deserialize, Debug, PartialEq, Default)]
 struct RawGoConfig {
     /// The path to the go binary. Optional, will default to `go` if not specified.
@@ -491,6 +509,102 @@ impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
             scheduler: raw.scheduler,
             garbage_collector: raw.garbage_collector,
         })
+    }
+}
+
+/// Specification for how to wire up configuration
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DevConfigSpec {
+    /// Existing config with the given name
+    Named { name: String },
+    /// Explicitly specified configuration with all values presented
+    Values { values: BTreeMap<String, String> },
+}
+
+/// Specification for how to wire up secrets
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DevSecretSpec {
+    /// Existing secret with a name and source properties
+    Existing {
+        name: String,
+        source: SecretSourceProperty,
+    },
+    /// Explicitly specified secret values with all values presented
+    Values {
+        name: String,
+        values: BTreeMap<String, String>,
+    },
+}
+
+/// De-serialization-friendly representation of development environment configuration
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+struct RawDevConfig {
+    /// Top level override of the WADM application manifest(s) to use for development
+    ///
+    /// If unspecified, it is up to tools to generate a manifest from available information.
+    pub manifests: Option<Vec<PathBuf>>,
+
+    /// Configuration values to be set up
+    #[serde(alias = "configs")]
+    pub config: Option<Vec<DevConfigSpec>>,
+
+    /// Configuration values to be set up
+    pub secrets: Option<Vec<DevSecretSpec>>,
+}
+
+/// Configuration for development environments and/or DX related plugins
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct DevConfig {
+    /// Top level override of the WADM application manifest(s) to use for development
+    ///
+    /// If this value is specified, tooling should strive to use the provided manifest where possible.
+    /// If unspecified, it is up to tools to generate a manifest from available information.
+    pub manifests: Vec<PathBuf>,
+
+    /// Configuration values to be passed ot the
+    #[serde(alias = "configs")]
+    pub config: Vec<DevConfigSpec>,
+
+    /// Configuration values to be passed ot the
+    pub secrets: Vec<DevSecretSpec>,
+}
+
+impl DevConfig {
+    /// Convert to a [`DevConfig`] from a [`RawDevConfig`] which likely serialized from disk
+    fn from_raw(
+        RawDevConfig {
+            mut manifests,
+            config,
+            secrets,
+        }: RawDevConfig,
+    ) -> Result<Self> {
+        // Ensure the paths to all provided manifests are valid
+        if let Some(manifest_paths) = manifests.as_mut() {
+            for m in manifest_paths.iter_mut() {
+                *m = m.canonicalize().with_context(|| {
+                    format!(
+                        "failed to resolve path to manifest [{}], does the file exists?",
+                        m.display()
+                    )
+                })?;
+            }
+        }
+
+        Ok(Self {
+            manifests: manifests.unwrap_or_default(),
+            config: config.unwrap_or_default(),
+            secrets: secrets.unwrap_or_default(),
+        })
+    }
+}
+
+impl TryFrom<RawDevConfig> for DevConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RawDevConfig) -> std::result::Result<Self, Self::Error> {
+        Self::from_raw(value)
     }
 }
 
@@ -606,6 +720,7 @@ impl RawProjectConfig {
             path: project_path,
             wasm_bin_name,
             registry,
+            dev: None,
         })
     }
 
@@ -649,6 +764,8 @@ impl RawProjectConfig {
             .transpose()?
             .unwrap_or_default();
 
+        let dev = self.dev.map(DevConfig::try_from).transpose()?;
+
         let common_config_result: Result<CommonConfig> = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
@@ -669,6 +786,7 @@ impl RawProjectConfig {
                         path: project_path,
                         wasm_bin_name: None,
                         registry: registry_config,
+                        dev,
                     }),
 
                     Err(err) => {
@@ -689,6 +807,7 @@ impl RawProjectConfig {
                     path: project_path,
                     wasm_bin_name: None,
                     registry: registry_config,
+                    dev,
                 })
             }
         };
