@@ -443,7 +443,7 @@ impl DependencySpec {
     }
 
     /// Convert to a component that can be used in a [`Manifest`] with a given suffix for uniqueness
-    fn generate_component(&self, suffix: &str) -> Result<Component> {
+    fn generate_dep_component(&self, suffix: &str) -> Result<Component> {
         let name = format!("{}-dep-{}", suffix, self.name());
         let properties = self
             .generate_properties(suffix)
@@ -642,9 +642,18 @@ impl ProjectDeps {
         // For each dependency, go through and generate the component along with necessary links
         for dep in self.dependencies.values().flatten() {
             let dep = dep.clone();
-            let mut dep_component = dep
-                .generate_component(session_id)
-                .context("failed to generate component")?;
+            // If a dependency could not be generated into a component, skip it
+            let Ok(mut dep_component) = dep
+                .generate_dep_component(session_id)
+                .context("failed to generate component")
+            else {
+                eprintln!(
+                    "{} Failed to generate component for dep [{}]",
+                    emoji::WARN,
+                    dep.name()
+                );
+                continue;
+            };
 
             // Generate links for the given component and its spec, for known interfaces
             match dep {
