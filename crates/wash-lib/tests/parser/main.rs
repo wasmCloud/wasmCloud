@@ -51,6 +51,7 @@ fn rust_component() {
                 .unwrap(),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
+            dev: None,
         }
     );
 }
@@ -103,6 +104,7 @@ fn rust_component_with_revision() {
                 .unwrap(),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
+            dev: None,
         }
     );
 }
@@ -152,6 +154,7 @@ fn tinygo_component_module() {
                 .unwrap(),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
+            dev: None,
         }
     );
 }
@@ -369,6 +372,7 @@ fn minimal_rust_component() {
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
+            dev: None,
         }
     );
 }
@@ -423,6 +427,7 @@ fn cargo_toml_component() {
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
+            dev: None,
         }
     );
 }
