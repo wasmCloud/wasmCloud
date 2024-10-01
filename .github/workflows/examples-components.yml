@@ -45,7 +45,8 @@ jobs:
     strategy:
       matrix:
         wash-version:
-          - 0.34.1
+          # TODO(thomastaylor312): Reenable/update this once we release the new version of wash with the deps stuff
+          # - 0.34.1
           - current
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
@@ -82,7 +83,7 @@ jobs:
       fail-fast: false
       matrix:
         wash-version:
-          - 0.34.1
+          # - 0.34.1
           - current
         project:
           # Golang example components
@@ -205,7 +206,8 @@ jobs:
 
       # Build example project(s)
       - name: build project
-        run: wash build
+        # TODO(thomastaylor312): Remove skip-fetch once we've put all the wit in OCI
+        run: wash build --skip-fetch
         working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
 
       # Run the local.wadm that comes with the example

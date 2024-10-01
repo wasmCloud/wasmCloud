@@ -355,7 +355,7 @@ fn minimal_rust_component() {
     let config = assert_ok!(result);
 
     let mut expected_key_dir =
-        home::home_dir().expect("Unable to determine the user's home directory");
+        etcetera::home_dir().expect("Unable to determine the user's home directory");
     expected_key_dir.push(".wash/keys");
 
     assert_eq!(
@@ -409,7 +409,7 @@ fn cargo_toml_component() {
     let config = assert_ok!(result);
 
     let mut expected_key_dir =
-        home::home_dir().expect("Unable to determine the user's home directory");
+        etcetera::home_dir().expect("Unable to determine the user's home directory");
     expected_key_dir.push(".wash/keys");
 
     assert_eq!(
@@ -465,7 +465,7 @@ fn minimal_rust_component_p2() {
     let config = assert_ok!(result);
 
     let mut expected_default_key_dir =
-        home::home_dir().expect("Unable to determine the user's home directory");
+        etcetera::home_dir().expect("Unable to determine the user's home directory");
     expected_default_key_dir.push(".wash/keys");
 
     assert_eq!(

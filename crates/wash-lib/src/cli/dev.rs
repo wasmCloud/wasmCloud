@@ -10,7 +10,10 @@ use crate::{
     parser::{ProjectConfig, TypeConfig},
 };
 
+use super::CommonPackageArgs;
+
 /// Perform a single execution of the dev loop for an artifact
+#[allow(clippy::too_many_arguments)]
 pub async fn run_dev_loop(
     project_cfg: &ProjectConfig,
     component_id: &str,
@@ -18,10 +21,13 @@ pub async fn run_dev_loop(
     host_id: &ServerId,
     ctl_client: &Client,
     sign_cfg: Option<SignConfig>,
+    package_args: &CommonPackageArgs,
+    skip_fetch: bool,
 ) -> Result<()> {
-    let built_artifact_path = build_project(project_cfg, sign_cfg.as_ref())
-        .await?
-        .canonicalize()?;
+    let built_artifact_path =
+        build_project(project_cfg, sign_cfg.as_ref(), package_args, skip_fetch)
+            .await?
+            .canonicalize()?;
 
     // Restart the artifact so that changes can be observed
     match project_cfg.project_type {

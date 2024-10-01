@@ -1,0 +1,12 @@
+[template]
+
+raw = [
+  "*.wasm",
+  "tests/fixtures/wadm.template.yaml",
+]
+
+exclude = [
+  "build/",
+  "gen/",
+  "keys/",
+]

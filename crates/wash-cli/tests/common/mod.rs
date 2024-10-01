@@ -293,6 +293,7 @@ impl TestWashInstance {
             host_seed_str,
             "--cluster-seed",
             cluster_seed_str,
+            "--multi-local",
         ]
         .iter()
         .map(ToString::to_string)
@@ -664,6 +665,16 @@ pub struct TestSetup {
     pub project_dir: PathBuf,
 }
 
+impl TestSetup {
+    #[allow(dead_code)]
+    /// A helper that returns a new `wash` binary command configured to use the project directory
+    pub fn base_command(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_wash"));
+        cmd.current_dir(&self.project_dir);
+        cmd
+    }
+}
+
 #[allow(dead_code)]
 pub struct WorkspaceTestSetup {
     /// The path to the directory for the test.
@@ -680,20 +691,43 @@ pub struct WorkspaceTestSetup {
 #[allow(dead_code)]
 pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_component_from_template(component_name, template_name).await?;
-    std::env::set_current_dir(&project_dir)?;
+    // Get the current dir so we can reset it after creating the new component
+    let project_dir =
+        init_component_from_template(component_name, template_name, &test_dir).await?;
     Ok(TestSetup {
         test_dir,
         project_dir,
     })
 }
 
-/// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud, and sets the environment to use the created component's directory.
+/// Same as `init`, but takes a path to a template directory. If the given path is absolute, it is
+/// used as the template directory, otherwise this will use the top level directory of the
+/// repository as the root path it joins the relative path with
+#[allow(dead_code)]
+pub async fn init_path(component_name: &str, path: impl AsRef<Path>) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    let joined_path = if path.as_ref().is_absolute() {
+        path.as_ref().to_path_buf()
+    } else {
+        let root = get_workspace_root()
+            .await
+            .context("Couldn't get workspace root")?;
+        root.join(path)
+    };
+    let project_dir =
+        init_component_from_template_path(component_name, joined_path, &test_dir).await?;
+    Ok(TestSetup {
+        test_dir,
+        project_dir,
+    })
+}
+
+/// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud
 #[allow(dead_code)]
 pub async fn init_component_from_template(
     component_name: &str,
     template_name: &str,
+    parent_dir: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -705,6 +739,7 @@ pub async fn init_component_from_template(
             "--silent",
             "--no-git-init",
         ])
+        .current_dir(parent_dir.as_ref())
         .kill_on_drop(true)
         .status()
         .await
@@ -712,16 +747,62 @@ pub async fn init_component_from_template(
 
     assert!(status.success());
 
-    let project_dir = std::env::current_dir()?.join(component_name);
+    let project_dir = parent_dir.as_ref().join(component_name);
+    Ok(project_dir)
+}
+
+/// Initializes a new component from the given path
+pub async fn init_component_from_template_path(
+    component_name: &str,
+    path: impl AsRef<Path>,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "component",
+            component_name,
+            "--path",
+            path.as_ref().as_os_str().to_string_lossy().as_ref(),
+            "--silent",
+            "--no-git-init",
+        ])
+        .current_dir(parent_dir.as_ref())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate project")?;
+    assert!(status.success());
+    let project_dir = parent_dir.as_ref().join(component_name);
     Ok(project_dir)
 }
 
 #[allow(dead_code)]
 pub async fn init_provider(provider_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_provider_from_template(provider_name, template_name).await?;
-    std::env::set_current_dir(&project_dir)?;
+    let project_dir = init_provider_from_template(provider_name, template_name, &test_dir).await?;
+    Ok(TestSetup {
+        test_dir,
+        project_dir,
+    })
+}
+
+/// Same as `init_provider`, but takes a path to a template directory. If the given path is
+/// absolute, it is used as the template directory, otherwise this will use the top level directory
+/// of the repository as the root path it joins the relative path with
+#[allow(dead_code)]
+pub async fn init_provider_path(provider_name: &str, path: impl AsRef<Path>) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    let joined_path = if path.as_ref().is_absolute() {
+        path.as_ref().to_path_buf()
+    } else {
+        let root = get_workspace_root()
+            .await
+            .context("Couldn't get workspace root")?;
+        root.join(path)
+    };
+    let project_dir =
+        init_provider_from_template_path(provider_name, joined_path, &test_dir).await?;
     Ok(TestSetup {
         test_dir,
         project_dir,
@@ -733,6 +814,7 @@ pub async fn init_provider(provider_name: &str, template_name: &str) -> Result<T
 pub async fn init_provider_from_template(
     provider_name: &str,
     template_name: &str,
+    parent_dir: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -744,6 +826,7 @@ pub async fn init_provider_from_template(
             "--silent",
             "--no-git-init",
         ])
+        .current_dir(parent_dir.as_ref())
         .kill_on_drop(true)
         .status()
         .await
@@ -751,7 +834,34 @@ pub async fn init_provider_from_template(
 
     assert!(status.success());
 
-    let project_dir = std::env::current_dir()?.join(provider_name);
+    let project_dir = parent_dir.as_ref().join(provider_name);
+    Ok(project_dir)
+}
+
+/// Initializes a new provider from the given path
+#[allow(dead_code)]
+pub async fn init_provider_from_template_path(
+    provider_name: &str,
+    path: impl AsRef<Path>,
+    parent_dir: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "provider",
+            provider_name,
+            "--path",
+            path.as_ref().as_os_str().to_string_lossy().as_ref(),
+            "--silent",
+            "--no-git-init",
+        ])
+        .current_dir(parent_dir.as_ref())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate provider")?;
+    assert!(status.success());
+    let project_dir = parent_dir.as_ref().join(provider_name);
     Ok(project_dir)
 }
 
@@ -844,12 +954,11 @@ pub async fn wait_for_single_host(
 #[allow(dead_code)]
 pub async fn init_workspace(component_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
     let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
 
     let project_dirs: Vec<_> =
         futures::future::try_join_all(component_names.iter().map(|component_name| async {
             let project_dir =
-                init_component_from_template(component_name, "hello-world-rust").await?;
+                init_component_from_template(component_name, "hello-world-rust", &test_dir).await?;
             Result::<PathBuf>::Ok(project_dir)
         }))
         .await?;
@@ -945,4 +1054,82 @@ pub async fn wait_for_no_nats() -> Result<()> {
     )
     .await
     .context("number of nats-server processes should be zero")
+}
+
+/// Helper that gets the top level directory of a workspace.
+#[allow(dead_code)]
+pub async fn get_workspace_root() -> Result<PathBuf> {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "locate-project",
+            "--workspace",
+            "-q",
+            "--message-format=plain",
+        ])
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to get workspace root: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(PathBuf::from(String::from_utf8(output.stdout)?)
+        .parent()
+        .unwrap()
+        .to_path_buf())
+}
+
+/// Gets the path to the fixture
+#[allow(dead_code)]
+pub fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+/// Loads the fixture with the given name into a temporary directory. This will copy the fixture
+/// from the tests/fixtures directory into a temporary directory and return the tempdir containing
+/// that directory (and its path)
+#[allow(dead_code)]
+pub async fn load_fixture(fixture: &str) -> anyhow::Result<TestSetup> {
+    let temp_dir = tempfile::tempdir()?;
+    let fixture_path = fixture_dir().join(fixture);
+    // This will error if it doesn't exist, which is what we want
+    tokio::fs::metadata(&fixture_path).await?;
+    let copied_path = temp_dir.path().join(fixture_path.file_name().unwrap());
+    copy_dir(&fixture_path, &copied_path).await?;
+    Ok(TestSetup {
+        test_dir: temp_dir,
+        project_dir: copied_path,
+    })
+}
+
+#[allow(dead_code)]
+async fn copy_dir(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(&destination).await?;
+    let mut entries = tokio::fs::read_dir(source).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let filetype = entry.file_type().await?;
+        if filetype.is_dir() {
+            // Skip the deps directory in case it is there from debugging
+            if entry.path().file_name().unwrap_or_default() == "deps" {
+                continue;
+            }
+            Box::pin(copy_dir(
+                entry.path(),
+                destination.as_ref().join(entry.file_name()),
+            ))
+            .await?;
+        } else {
+            let path = entry.path();
+            let extension = path.extension().unwrap_or_default();
+            // Skip any .lock or .wasm files that might be there from debugging
+            if extension == "lock" || extension == "wasm" {
+                continue;
+            }
+            tokio::fs::copy(path, destination.as_ref().join(entry.file_name())).await?;
+        }
+    }
+    Ok(())
 }

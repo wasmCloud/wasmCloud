@@ -1,0 +1,8 @@
+# Rust build artifacts
+Cargo.lock
+
+# Wash build artifacts
+build/
+
+# Wit dependencies
+deps/

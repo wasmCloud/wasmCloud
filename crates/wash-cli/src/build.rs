@@ -6,7 +6,7 @@ use serde_json::json;
 
 use wash_lib::{
     build::{build_project, sign_component_wasm, SignConfig},
-    cli::CommandOutput,
+    cli::{CommandOutput, CommonPackageArgs},
     parser::{get_config, TypeConfig},
 };
 
@@ -17,6 +17,9 @@ pub struct BuildCommand {
     /// Path to the wasmcloud.toml file or parent folder to use for building
     #[clap(short = 'p', long = "config-path")]
     config_path: Option<PathBuf>,
+
+    #[clap(flatten)]
+    pub package_args: CommonPackageArgs,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[clap(long = "keys-directory", env = "WASH_KEYS", hide_env_values = true)]
@@ -51,6 +54,11 @@ pub struct BuildCommand {
     /// Skip building the artifact and only use configuration to sign
     #[clap(long = "sign-only", conflicts_with = "build_only")]
     pub sign_only: bool,
+
+    /// Skip wit dependency fetching and use only what is currently present in the wit directory
+    /// (useful for airgapped or disconnected environments)
+    #[clap(long = "skip-fetch")]
+    pub skip_wit_fetch: bool,
 }
 
 pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
@@ -89,7 +97,13 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                 )?;
                 config.common.path.join(signed_path)
             } else {
-                build_project(&config, sign_config.as_ref()).await?
+                build_project(
+                    &config,
+                    sign_config.as_ref(),
+                    &command.package_args,
+                    command.skip_wit_fetch,
+                )
+                .await?
             };
 
             let json_output = HashMap::from([
@@ -120,6 +134,8 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,
                 }),
+                &command.package_args,
+                command.skip_wit_fetch,
             )
             .await
             .context("failed to build provider")?;
