@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
+use std::hash::Hash;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -28,15 +29,15 @@ use wit_parser::{Resolve, WorldId};
 
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
-    Metadata, Properties, SecretProperty, Specification, SpreadScalerProperty, TargetConfig,
-    TraitProperty,
+    Metadata, Properties, SecretProperty, SecretSourceProperty, Specification,
+    SpreadScalerProperty, TargetConfig, TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
 use wash_lib::cli::CommandOutput;
 use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
-use wash_lib::parser::{get_config, ProjectConfig, TypeConfig};
+use wash_lib::parser::{get_config, DevConfigSpec, DevSecretSpec, ProjectConfig, TypeConfig};
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
@@ -1510,57 +1511,37 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
     lines
 }
 
-struct RunDevLoopArgs<'a> {
-    dev_session: &'a WashDevSession,
+/// State that is used/updated per loop of `wash dev`
+struct RunLoopState<'a> {
+    dev_session: &'a mut WashDevSession,
     nats_client: &'a async_nats::Client,
     ctl_client: &'a CtlClient,
     project_cfg: &'a ProjectConfig,
     lattice: &'a str,
     session_id: &'a str,
     manifest_output_dir: Option<&'a PathBuf>,
-    previous_deps: &'a mut Option<ProjectDeps>,
+    previous_deps: Option<ProjectDeps>,
+    artifact_path: Option<PathBuf>,
+    component_id: Option<String>,
+    component_ref: Option<String>,
 }
 
-/// Run one iteration of the development loop
-async fn run_dev_loop(
-    RunDevLoopArgs {
+/// Generate manifests that should be deployed, based on the current run loop state
+async fn generate_manifests(
+    RunLoopState {
         dev_session,
-        nats_client,
         ctl_client,
         project_cfg,
-        lattice,
         session_id,
+        ref mut previous_deps,
+        artifact_path,
+        component_id,
+        component_ref,
         manifest_output_dir,
-        previous_deps,
-    }: RunDevLoopArgs<'_>,
-) -> Result<()> {
-    // Build the project (equivalent to `wash build`)
-    eprintln!(
-        "{} {}",
-        emoji::CONSTRUCTION_BARRIER,
-        style("Building project...").bold(),
-    );
-    let artifact_path = match build_project(project_cfg, Some(&SignConfig::default())).await {
-        Ok(artifact_path) => artifact_path,
-        Err(e) => {
-            eprintln!(
-                "{} {}\n{}",
-                emoji::ERROR,
-                style("Failed to build project:").red(),
-                e
-            );
-            // Failing to build the project can be corrected by changing the code and shouldn't
-            // stop the development loop
-            return Ok(());
-        }
-    };
-    eprintln!(
-        "{} Successfully built project at [{}]",
-        emoji::GREEN_CHECK,
-        artifact_path.display()
-    );
-    let component_ref = format!("file://{}", artifact_path.display());
-
+        ..
+    }: &mut RunLoopState<'_>,
+) -> Result<Vec<Manifest>> {
+    let artifact_path = artifact_path.as_ref().context("missing artifact path")?;
     // After the project is built, we must ensure dependencies are set up and running
     let (resolve, world_id) = if let TypeConfig::Component(_) = project_cfg.project_type {
         let component_bytes = tokio::fs::read(&artifact_path).await.with_context(|| {
@@ -1588,8 +1569,12 @@ async fn run_dev_loop(
     let pkey =
         ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
             .context("failed to build key for project")?;
-    let mut current_project_deps = ProjectDeps::from_known_deps(pkey, wit_implied_deps)
-        .context("failed to build project dependencies")?;
+
+    let mut current_project_deps = match previous_deps {
+        Some(deps) => deps.clone(),
+        None => ProjectDeps::from_known_deps(pkey, wit_implied_deps)
+            .context("failed to build project dependencies")?,
+    };
 
     // Pull and merge in implied dependencies from project-level wasmcloud.toml
     let implied_project_deps =
@@ -1604,23 +1589,20 @@ async fn run_dev_loop(
         .context("failed to merge & override project-specified deps")?;
 
     // After we've merged, we can update the session ID to belong to this session
-    current_project_deps.session_id = Some(session_id.into());
+    current_project_deps.session_id = Some(session_id.to_string());
 
     // Generate component that represents the main Webassembly component/provider being developed
-    let component_id = format!(
-        "{}-{}",
-        session_id,
-        project_cfg.common.name.to_lowercase().replace(" ", "-"),
-    );
-    current_project_deps.component = Some(
-        generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
-            .context("failed to generate app component")?,
-    );
+    let component_id = component_id.as_ref().context("missing component id")?;
+    let component_ref = component_ref.as_ref().context("missing component ref")?;
+    current_project_deps.component =
+        generate_component_from_project_cfg(project_cfg, component_id, component_ref)
+            .map(Some)
+            .context("failed to generate app component")?;
 
+    // If deps haven't changed, then we can simply restart the component and return
     let project_deps_unchanged = previous_deps
         .as_ref()
         .is_some_and(|deps| deps.eq(&current_project_deps));
-    // If deps haven't changed, then we can simply restart the component and return
     if project_deps_unchanged {
         eprintln!(
             "{} {}",
@@ -1639,12 +1621,14 @@ async fn run_dev_loop(
                 .as_ref()
                 .context("missing host ID for session")?
                 .0,
-            &component_id,
-            &component_ref,
+            component_id,
+            component_ref,
         )
         .await
         .with_context(|| format!("failed to reload component [{component_id}]"))?;
-        return Ok(());
+
+        // Return with no generated manifests
+        return Ok(Vec::new());
     }
 
     // Convert the project deps into a fully-baked WADM manifests
@@ -1652,7 +1636,275 @@ async fn run_dev_loop(
         .generate_wadm_manifests()
         .with_context(|| {
             format!("failed to generate a WADM manifest from (session [{session_id}])")
-        })?;
+        })?
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    // Write out manifests to local files if a manifest output dir was specified
+    if let Some(output_dir) = &manifest_output_dir {
+        for manifest in manifests.iter() {
+            ensure!(
+                tokio::fs::metadata(output_dir)
+                    .await
+                    .context("failed to get manifest output dir metadata")
+                    .is_ok_and(|f| f.is_dir()),
+                "manifest output directory [{}] must exist and be a folder",
+                output_dir.display()
+            );
+            tokio::fs::write(
+                output_dir.join(format!("{}.yaml", manifest.metadata.name)),
+                serde_yaml::to_string(&manifest).context("failed to convert manifest to YAML")?,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write out manifest YAML to output dir [{}]",
+                    output_dir.display(),
+                )
+            })?
+        }
+    }
+
+    // Update deps, since they must be different
+    *previous_deps = Some(current_project_deps);
+
+    Ok(manifests)
+}
+
+/// Load existing manifests specified
+///
+/// # Arguments
+///
+/// * `manifest_paths` - paths to manifest
+/// * `project_config` - Project configuration
+/// * `component_id` - ID of the component under development
+/// * `component_ref` - Image ref of the component under development
+///
+async fn augment_existing_manifests(
+    manifest_paths: &Vec<PathBuf>,
+    project_config: &ProjectConfig,
+    _component_id: &str,
+    component_ref: &str,
+) -> Result<Vec<Manifest>> {
+    let mut manifests = Vec::with_capacity(manifest_paths.len());
+    for manifest_path in manifest_paths {
+        // Read the manifest
+        let mut manifest = serde_yaml::from_slice::<Manifest>(
+            &tokio::fs::read(&manifest_path).await.with_context(|| {
+                format!("failed to read manifest @ [{}]", manifest_path.display())
+            })?,
+        )
+        .context("failed to parse manifest YAML")?;
+
+        // Augment the manifest with the component, if present
+        for component in manifest.spec.components.as_mut_slice() {
+            let (image_ref, config, secrets) = match component.properties {
+                Properties::Component { ref mut properties } => (
+                    &mut properties.image,
+                    &mut properties.config,
+                    &mut properties.secrets,
+                ),
+                Properties::Capability { ref mut properties } => (
+                    &mut properties.image,
+                    &mut properties.config,
+                    &mut properties.secrets,
+                ),
+            };
+
+            // If we're not dealing with a relevant component, skip
+            if image_ref != component_ref {
+                continue;
+            }
+
+            // Apply config specs
+            if let Some(specs) = project_config.common.dev.as_ref().map(|d| &d.config) {
+                for spec in specs {
+                    update_config_properties_by_spec(config, spec)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to update secret proeprties for component [{}]",
+                                component.name
+                            )
+                        })?;
+                }
+            }
+
+            // Apply secret specs
+            if let Some(specs) = project_config.common.dev.as_ref().map(|d| &d.secrets) {
+                for spec in specs {
+                    update_secret_properties_by_spec(secrets, spec)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to update secret proeprties for component [{}]",
+                                component.name
+                            )
+                        })?;
+                }
+            }
+        }
+
+        manifests.push(manifest);
+    }
+
+    Ok(manifests)
+}
+
+/// Update config properties (normally part of a [`Component`] in a [`Manifest`]) with a given config spec
+async fn update_config_properties_by_spec(
+    configs: &mut Vec<ConfigProperty>,
+    spec: &DevConfigSpec,
+) -> Result<()> {
+    match spec {
+        DevConfigSpec::Named { name } => {
+            // Add any named configs that are not present
+            if !configs.iter().any(|c| c.name == *name) {
+                configs.push(ConfigProperty {
+                    name: name.to_string(),
+                    properties: None,
+                })
+            }
+        }
+        DevConfigSpec::Values { values } => {
+            // Add values explicitly to the bottom of the list, overriding the others
+            configs.push(ConfigProperty {
+                name: "dev-overrides".into(),
+                properties: Some(HashMap::from_iter(values.clone())),
+            })
+        }
+    }
+    Ok(())
+}
+
+/// Update config properties (normally part of a [`Component`] in a [`Manifest`]) with a given config spec
+async fn update_secret_properties_by_spec(
+    secrets: &mut Vec<SecretProperty>,
+    spec: &DevSecretSpec,
+) -> Result<()> {
+    match spec {
+        DevSecretSpec::Existing { name, source } => {
+            // Add any named secrets that are not present
+            if !secrets.iter().any(|c| c.name == *name) {
+                secrets.push(SecretProperty {
+                    name: name.to_string(),
+                    properties: source.clone(),
+                })
+            }
+        }
+        DevSecretSpec::Values { name, values } => {
+            // TODO: Create the secret in the store
+
+            // Go through all provided values and build the secret a secret
+            for (k, v) in values {
+                // TODO: support ENV-specified secrets
+                // TODO: warn user about using secrets in plain text, for any *non* env-specified
+                ensure!(
+                    !v.starts_with("$ENV:"),
+                    "ENV-loaded secrets are not yet supported"
+                );
+
+                // TODO: Store the secret value in the secret store (NATS KV), with the specified key
+
+                // Add values explicitly to the bottom of the list, overriding the others
+                secrets.push(SecretProperty {
+                    name: name.to_string(),
+                    properties: SecretSourceProperty {
+                        policy: "nats-kv".into(),
+                        key: k.into(),
+                        field: None,
+                        version: None,
+                    },
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run one iteration of the development loop
+async fn run_dev_loop(state: &mut RunLoopState<'_>) -> Result<()> {
+    // Build the project (equivalent to `wash build`)
+    eprintln!(
+        "{} {}",
+        emoji::CONSTRUCTION_BARRIER,
+        style("Building project...").bold(),
+    );
+    // Build the project (equivalent to `wash build`)
+    let built_artifact_path =
+        match build_project(state.project_cfg, Some(&SignConfig::default())).await {
+            Ok(artifact_path) => artifact_path,
+            Err(e) => {
+                eprintln!(
+                    "{} {}\n{}",
+                    emoji::ERROR,
+                    style("Failed to build project:").red(),
+                    e
+                );
+                // Failing to build the project can be corrected by changing the code and shouldn't
+                // stop the development loop
+                return Ok(());
+            }
+        };
+    eprintln!(
+        "{} Successfully built project at [{}]",
+        emoji::GREEN_CHECK,
+        built_artifact_path.display()
+    );
+
+    // Update the dev loop state for reuse
+    state.component_id = Some(format!(
+        "{}-{}",
+        state.session_id,
+        state
+            .project_cfg
+            .common
+            .name
+            .to_lowercase()
+            .replace(" ", "-"),
+    ));
+    state.component_ref = Some(format!("file://{}", built_artifact_path.display()));
+    state.artifact_path = Some(built_artifact_path);
+
+    // Generate the manifests that we need to deploy/update
+    //
+    // If the project configuration specified an *existing* manifest, we must merge, not generate
+    let manifests = match state
+        .project_cfg
+        .common
+        .dev
+        .as_ref()
+        .map(|rdc| &rdc.manifests)
+    {
+        // If a manifest already exists, use it
+        Some(manifest_paths) if !manifest_paths.is_empty() => augment_existing_manifests(
+            manifest_paths,
+            state.project_cfg,
+            state
+                .component_id
+                .as_ref()
+                .context("missing component_id")?,
+            state
+                .component_ref
+                .as_ref()
+                .context("missing component id")?,
+        )
+        .await
+        .context("failed to create manifest from existing [{}]")?,
+        // If no manifest exists, we must generate one or more manifests
+        _ => generate_manifests(state)
+            .await
+            .context("failed to generate manifests")?,
+    };
+
+    let component_id = state
+        .component_id
+        .as_ref()
+        .context("unexpectedly missing component_id")?;
+    let component_ref = state
+        .component_ref
+        .as_ref()
+        .context("unexpectedly missing component_ref")?;
 
     // Apply all manifests
     for manifest in manifests {
@@ -1662,35 +1914,14 @@ async fn run_dev_loop(
         let model_json =
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
-        // Write out manifests to local file if provided and manifest dependencies changed
-        match manifest_output_dir {
-            Some(output_dir) if !project_deps_unchanged => {
-                ensure!(
-                    tokio::fs::metadata(output_dir)
-                        .await
-                        .context("failed to get manifest output dir metadata")
-                        .is_ok_and(|f| f.is_dir()),
-                    "manifest output directory [{}] must exist and be a folder",
-                    output_dir.display()
-                );
-                tokio::fs::write(
-                    output_dir.join(format!("{}.yaml", manifest.metadata.name)),
-                    serde_yaml::to_string(&manifest)
-                        .context("failed to convert manifest to YAML")?,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to write out manifest YAML to output dir [{}]",
-                        output_dir.display(),
-                    )
-                })?
-            }
-            _ => {}
-        }
-
         // Put the manifest
-        match wash_lib::app::put_model(nats_client, Some(lattice.into()), &model_json).await {
+        match wash_lib::app::put_model(
+            state.nats_client,
+            Some(state.lattice.to_string()),
+            &model_json,
+        )
+        .await
+        {
             Ok(_) => {}
             Err(e) if e.to_string().contains("already exists") => {}
             Err(e) => {
@@ -1700,8 +1931,8 @@ async fn run_dev_loop(
 
         // Deploy the manifest
         deploy_model_from_manifest(
-            nats_client,
-            Some(lattice.into()),
+            state.nats_client,
+            Some(state.lattice.to_string()),
             AppManifest::ModelName(manifest.metadata.name.clone()),
             None,
         )
@@ -1731,21 +1962,19 @@ async fn run_dev_loop(
     );
     // Scale the component to zero, trusting that wadm will re-create it
     scale_down_component(
-        ctl_client,
-        project_cfg,
-        &dev_session
+        state.ctl_client,
+        state.project_cfg,
+        &state
+            .dev_session
             .host_data
             .as_ref()
             .context("missing host ID for session")?
             .0,
-        &component_id,
-        &component_ref,
+        component_id,
+        component_ref,
     )
     .await
     .with_context(|| format!("failed to reload component [{component_id}]"))?;
-
-    // Update deps, since they must be different
-    *previous_deps = Some(current_project_deps);
 
     Ok(())
 }
@@ -1941,24 +2170,26 @@ pub async fn handle_command(
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
 
-    // Run the dev loop once (building the application, deploying deps, etc), before we start watching
-    let mut dependencies = None;
-    // NOTE(brooksmtownsend): Yes, it would make more sense to return here. For some reason unknown to me
-    // trying to return any error here will just cause the dev loop to hang infinitely and require a force quit.
-    // Even a panic will display a tokio error and then hang. Thankfully, the error will just probably happen
-    // again when the dev loop runs and in that case it'll successfully exit out.
-    if let Err(e) = run_dev_loop(RunDevLoopArgs {
-        dev_session: &wash_dev_session,
+    // Build sup state for the run loop
+    let mut run_loop_state = RunLoopState {
+        dev_session: &mut wash_dev_session,
         nats_client: &nats_client,
         ctl_client: &ctl_client,
         project_cfg: &project_cfg,
         lattice,
         session_id: &session_id,
         manifest_output_dir: cmd.manifest_output_dir.as_ref(),
-        previous_deps: &mut dependencies,
-    })
-    .await
-    {
+        previous_deps: None,
+        artifact_path: None,
+        component_id: None,
+        component_ref: None,
+    };
+
+    // NOTE(brooksmtownsend): Yes, it would make more sense to return here. For some reason unknown to me
+    // trying to return any error here will just cause the dev loop to hang infinitely and require a force quit.
+    // Even a panic will display a tokio error and then hang. Thankfully, the error will just probably happen
+    // again when the dev loop runs and in that case it'll successfully exit out.
+    if let Err(e) = run_dev_loop(&mut run_loop_state).await {
         eprintln!(
             "{} Failed to run first dev loop iteration, will retry: {e}",
             emoji::WARN
@@ -1975,16 +2206,8 @@ pub async fn handle_command(
             // Process a file change/reload
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                run_dev_loop(RunDevLoopArgs {
-                    dev_session: &wash_dev_session,
-                    nats_client: &nats_client,
-                    ctl_client: &ctl_client,
-                    project_cfg: &project_cfg,
-                    lattice,
-                    session_id: &session_id,
-                    manifest_output_dir: cmd.manifest_output_dir.as_ref(),
-                    previous_deps: &mut dependencies,
-                })
+                run_dev_loop(&mut run_loop_state
+                )
                     .await
                     .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
@@ -1997,11 +2220,11 @@ pub async fn handle_command(
                 eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
                 // Update the sessions file with the fact that this session stopped
-                wash_dev_session.in_use = false;
-                SessionMetadata::persist_session(&wash_dev_session).await?;
+                run_loop_state.dev_session.in_use = false;
+                SessionMetadata::persist_session(run_loop_state.dev_session).await?;
 
                 // Delete manifests related to the application
-                if let Some(dependencies) = dependencies {
+                if let Some(dependencies) = run_loop_state.previous_deps {
                     eprintln!("{} Cleaning up deployed WADM application(s)...", emoji::BROOM);
                     dependencies.delete_manifests(&nats_client, lattice).await?;
                 }
@@ -2027,14 +2250,16 @@ pub async fn handle_command(
 
                     // Ensure that the host exited, if not, kill the process forcefully
                     if let Some(mut host) = wasmcloud_child {
-                        if tokio::time::timeout(std::time::Duration::from_secs(5), host.wait()).await.context("failed to wait for wasmcloud process to stop, forcefully terminating").is_err() {
-                            eprintln!("{} Terminating host forcefully, this may leave provider processes running", emoji::WARN);
-                            host
-                                .kill()
-                                .await
-                                .context("failed to stop wasmcloud process")?;
-                        }
-
+                        if tokio::time::timeout(std::time::Duration::from_secs(5), host.wait())
+                            .await
+                            .context("failed to wait for wasmcloud process to stop, forcefully terminating")
+                            .is_err() {
+                                eprintln!("{} Terminating host forcefully, this may leave provider processes running", emoji::WARN);
+                                host
+                                    .kill()
+                                    .await
+                                    .context("failed to stop wasmcloud process")?;
+                            }
                     }
 
                     // Stop WADM
@@ -2055,8 +2280,8 @@ pub async fn handle_command(
                         nats.kill().await?;
                     }
                 }
-                eprintln!("{} Dev session exited successfully", emoji::GREEN_CHECK);
 
+                eprintln!("{} Dev session exited successfully", emoji::GREEN_CHECK);
                 break Ok(CommandOutput::default());
             },
         }
