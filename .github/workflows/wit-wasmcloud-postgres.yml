@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
 
@@ -26,7 +27,14 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tarball=wit-wasmcloud-postgres-${version}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "version is ${version}"
+    - uses: ./.github/actions/configure-wkg
     - name: Build
+      working-directory: wit/postgres
+      run: wkg wit build -o package.wasm
+    - name: Push version-tagged WebAssembly binary to GHCR
+      working-directory: wit/postgres
+      run: wkg publish package.wasm
+    - name: Package tarball for release
       run: |
         tar -cvzf ${{ steps.ctx.outputs.tarball }} -C wit postgres/wit
     - name: Release
