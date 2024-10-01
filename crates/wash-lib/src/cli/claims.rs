@@ -1347,8 +1347,7 @@ mod test {
 
         let project_config = assert_ok!(result);
 
-        let mut expected_default_key_dir = home::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Unable to determine the user's home directory"))?;
+        let mut expected_default_key_dir = etcetera::home_dir()?;
         expected_default_key_dir.push(".wash/keys");
 
         assert_eq!(

@@ -21,16 +21,22 @@ async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = ["cargo", "derive", "env", "std", "string"] }
+clap = { workspace = true, features = [
+    "cargo",
+    "derive",
+    "env",
+    "std",
+    "string",
+] }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
 crossterm = { workspace = true, features = ["events", "windows"] }
 docker_credential = { workspace = true }
+etcetera = { workspace = true }
 file-guard = { workspace = true }
 futures = { workspace = true }
-home = { workspace = true }
 http = { workspace = true }
 humantime.workspace = true
 indicatif = { workspace = true }
@@ -84,6 +90,7 @@ wash-lib = { workspace = true, features = [
     "start",
     "plugin",
 ] }
+wasm-pkg-core = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true }
@@ -92,7 +99,7 @@ weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
 wit-bindgen-wrpc = { workspace = true }
 wit-parser = { workspace = true }
-wrpc-interface-http = { workspace = true, features = [ "http-body" ] }
+wrpc-interface-http = { workspace = true, features = ["http-body"] }
 wrpc-transport = { workspace = true }
 wrpc-transport-nats = { workspace = true }
 
@@ -105,6 +112,7 @@ reqwest = { workspace = true }
 serial_test = { workspace = true }
 sysinfo = { workspace = true }
 wat = { workspace = true }
+wit-component = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }

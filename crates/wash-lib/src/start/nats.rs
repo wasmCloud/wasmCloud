@@ -487,7 +487,7 @@ mod test {
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok(), "NATS should be able to start");
 
-        let creds = home::home_dir().unwrap().join("nats.creds");
+        let creds = etcetera::home_dir().unwrap().join("nats.creds");
         let config: NatsConfig = NatsConfig::new_leaf(
             "127.0.0.1",
             4243,

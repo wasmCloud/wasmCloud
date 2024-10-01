@@ -53,9 +53,9 @@ command-group = { workspace = true, features = ["with-tokio"] }
 config = { workspace = true, features = ["toml"], optional = true }
 console = { workspace = true, optional = true }
 dialoguer = { workspace = true, optional = true }
+etcetera = { workspace = true }
 futures = { workspace = true }
 heck = { workspace = true, optional = true }
-home = { workspace = true }
 humantime = { workspace = true }
 ignore = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
@@ -96,6 +96,8 @@ wascap = { workspace = true }
 wasi-preview1-component-adapter-provider = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
+wasm-pkg-client = { workspace = true }
+wasm-pkg-core = { workspace = true }
 wasmcloud-core = { workspace = true, features = [
     "oci",
     "reqwest",
@@ -116,7 +118,12 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 
 [build-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "time", "macros", "net"] }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "time",
+    "macros",
+    "net",
+] }
 
 [dev-dependencies]
 claims = { workspace = true }

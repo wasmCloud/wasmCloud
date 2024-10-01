@@ -33,7 +33,7 @@ use wadm_types::{
     SpreadScalerProperty, TargetConfig, TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::CommandOutput;
+use wash_lib::cli::{CommandOutput, CommonPackageArgs};
 use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
@@ -85,6 +85,9 @@ pub struct DevCommand {
     #[clap(flatten)]
     pub wadm_opts: WadmOpts,
 
+    #[clap(flatten)]
+    pub package_args: CommonPackageArgs,
+
     /// ID of the host to use for `wash dev`
     /// if one is not selected, `wash dev` will attempt to use the single host in the lattice
     #[clap(long = "host-id", name = "host-id", value_parser)]
@@ -113,6 +116,11 @@ pub struct DevCommand {
     /// Write generated WADM manifest(s) to a given folder (every time they are generated)
     #[clap(long = "manifest-output-dir", env = "WASH_DEV_MANIFEST_OUTPUT_DIR")]
     pub manifest_output_dir: Option<PathBuf>,
+
+    /// Skip wit dependency fetching and use only what is currently present in the wit directory
+    /// (useful for airgapped or disconnected environments)
+    #[clap(long = "skip-fetch")]
+    pub skip_wit_fetch: bool,
 }
 
 /// Keys that index the list of dependencies in a [`ProjectDeps`]
@@ -1517,6 +1525,8 @@ struct RunLoopState<'a> {
     artifact_path: Option<PathBuf>,
     component_id: Option<String>,
     component_ref: Option<String>,
+    package_args: &'a CommonPackageArgs,
+    skip_fetch: bool,
 }
 
 /// Generate manifests that should be deployed, based on the current run loop state
@@ -1830,21 +1840,27 @@ async fn run_dev_loop(state: &mut RunLoopState<'_>) -> Result<()> {
         style("Building project...").bold(),
     );
     // Build the project (equivalent to `wash build`)
-    let built_artifact_path =
-        match build_project(state.project_cfg, Some(&SignConfig::default())).await {
-            Ok(artifact_path) => artifact_path,
-            Err(e) => {
-                eprintln!(
-                    "{} {}\n{}",
-                    emoji::ERROR,
-                    style("Failed to build project:").red(),
-                    e
-                );
-                // Failing to build the project can be corrected by changing the code and shouldn't
-                // stop the development loop
-                return Ok(());
-            }
-        };
+    let built_artifact_path = match build_project(
+        state.project_cfg,
+        Some(&SignConfig::default()),
+        state.package_args,
+        state.skip_fetch,
+    )
+    .await
+    {
+        Ok(artifact_path) => artifact_path,
+        Err(e) => {
+            eprintln!(
+                "{} {}\n{}",
+                emoji::ERROR,
+                style("Failed to build project:").red(),
+                e
+            );
+            // Failing to build the project can be corrected by changing the code and shouldn't
+            // stop the development loop
+            return Ok(());
+        }
+    };
     eprintln!(
         "{} Successfully built project at [{}]",
         emoji::GREEN_CHECK,
@@ -2175,6 +2191,8 @@ pub async fn handle_command(
         artifact_path: None,
         component_id: None,
         component_ref: None,
+        package_args: &cmd.package_args,
+        skip_fetch: cmd.skip_wit_fetch,
     };
 
     // NOTE(brooksmtownsend): Yes, it would make more sense to return here. For some reason unknown to me
