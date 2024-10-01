@@ -15,10 +15,15 @@ use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
+use etcetera::BaseStrategy;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::info;
+use wasm_pkg_client::{
+    caching::{CachingClient, FileCache},
+    RegistryMapping,
+};
 
 use crate::{
     config::{
@@ -245,6 +250,77 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             timeout_ms,
             ctx,
         })
+    }
+}
+
+// NOTE(thomastaylor312): This is copied from the `wkg` CLI until
+// https://github.com/bytecodealliance/wasm-pkg-tools/issues/98 is worked on
+
+/// Common arguments for wasm package tooling. Because this allows for maximum compatibility, the
+/// environment variables are prefixed with `WKG_` rather than `WASH_`
+#[derive(Args, Debug, Clone)]
+pub struct CommonPackageArgs {
+    /// The path to the configuration file.
+    #[arg(long = "pkg-config", env = "WKG_CONFIG_FILE")]
+    config: Option<PathBuf>,
+    /// The path to the cache directory. Defaults to the system cache directory.
+    #[arg(long = "pkg-cache", env = "WKG_CACHE_DIR")]
+    cache: Option<PathBuf>,
+}
+
+impl CommonPackageArgs {
+    /// Helper to load the config from the given path
+    pub async fn load_config(&self) -> anyhow::Result<wasm_pkg_client::Config> {
+        let mut conf = if let Some(config_file) = self.config.as_ref() {
+            wasm_pkg_client::Config::from_file(config_file)
+                .await
+                .context(format!("error loading config file {config_file:?}"))
+        } else {
+            wasm_pkg_client::Config::global_defaults()
+                .await
+                .map_err(anyhow::Error::from)
+        }?;
+        let wasmcloud_label = "wasmcloud".parse().unwrap();
+        // If they don't have a config set for the wasmcloud namespace, set it to the default defined here
+        if conf.namespace_registry(&wasmcloud_label).is_none() {
+            conf.set_namespace_registry(
+                wasmcloud_label,
+                RegistryMapping::Registry("wasmcloud.com".parse().unwrap()),
+            );
+        }
+        // Same for wrpc
+        let wrpc_label = "wrpc".parse().unwrap();
+        if conf.namespace_registry(&wrpc_label).is_none() {
+            conf.set_namespace_registry(
+                wrpc_label,
+                RegistryMapping::Registry("bytecodealliance.org".parse().unwrap()),
+            );
+        }
+        Ok(conf)
+    }
+
+    /// Helper for loading the [`FileCache`]
+    pub async fn load_cache(&self) -> anyhow::Result<FileCache> {
+        let dir = if let Some(dir) = self.cache.as_ref() {
+            dir.clone()
+        } else {
+            // We're using native strategy here because it matches what `dirs` does with computing the cache dir
+            etcetera::base_strategy::choose_native_strategy()
+                .context("unable to find cache directory")?
+                .cache_dir()
+        };
+        let dir = dir.join("wkg");
+        FileCache::new(dir).await
+    }
+
+    /// Helper for loading a caching client. This should be the most commonly used method for
+    /// loading a client, but if you need to modify the config or use your own cache, you can use
+    /// the [`CommonPackageArgs::load_config`] and [`CommonPackageArgs::load_cache`] methods.
+    pub async fn get_client(&self) -> anyhow::Result<CachingClient<FileCache>> {
+        let config = self.load_config().await?;
+        let cache = self.load_cache().await?;
+        let client = wasm_pkg_client::Client::new(config);
+        Ok(CachingClient::new(Some(client), cache))
     }
 }
 

@@ -225,6 +225,7 @@ data-encoding = { version = "2", default-features = false }
 deadpool-postgres = { version = "0.13", default-features = false }
 dialoguer = { version = "0.10", default-features = false }
 docker_credential = { version = "1.3.1", default-features = false }
+etcetera = { version = "0.8", default-features = false }
 file-guard = { version = "0.2.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 geo-types = { version = "0.7", default-features = false }
@@ -339,6 +340,8 @@ wascap = { version = "^0.15.0", path = "./crates/wascap", default-features = fal
 wash-cli = { version = "0", path = "./crates/wash-cli", default-features = false }
 wash-lib = { version = "^0.27.0", path = "./crates/wash-lib", default-features = false }
 wasi = { version = "0.13.2", default-features = false }
+wasm-pkg-client = { version = "0.6", default-features = false }
+wasm-pkg-core = { version = "0.6", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "25", default-features = false }
 wasm-encoder = { version = "0.218", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }

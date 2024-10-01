@@ -23,20 +23,26 @@ use crate::{
     parser::{CommonConfig, ComponentConfig, LanguageConfig, RustConfig, TinyGoConfig, WasmTarget},
 };
 
-/// Builds a wasmCloud component using the installed language toolchain, then signs the component with
-/// keys, capability claims, and additional friendly information like name, version, revision, etc.
+/// Builds a wasmCloud component using the installed language toolchain, then signs the component
+/// with keys, capability claims, and additional friendly information like name, version, revision,
+/// etc.
 ///
 /// # Arguments
-/// * `component_config`: [`ComponentConfig`] for required information to find, build, and sign an component
+/// * `component_config`: [`ComponentConfig`] for required information to find, build, and sign a
+///   component
 /// * `language_config`: [`LanguageConfig`] specifying which language the component is written in
-/// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and [`CommonConfig::version`]
-/// * `signing`: Optional [`SignConfig`] with information for signing the component. If omitted, the component will only be built
+/// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and
+///   [`CommonConfig::version`]
+/// * `signing`: Optional [`SignConfig`] with information for signing the component. If omitted, the
+///   component will only be built
+/// * `package_args`: Optional overrides for loading wasm packages
 pub async fn build_component(
     component_config: &ComponentConfig,
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
+    // Build component
     let component_wasm_path = if let Some(raw_command) = component_config.build_command.as_ref() {
         build_custom_component(common_config, component_config, raw_command).await?
     } else {

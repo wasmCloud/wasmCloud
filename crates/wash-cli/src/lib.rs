@@ -24,3 +24,4 @@ pub mod secrets;
 pub mod style;
 pub mod ui;
 pub mod util;
+pub mod wit;

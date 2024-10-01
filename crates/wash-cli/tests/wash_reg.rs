@@ -1,22 +1,17 @@
-mod common;
-
-use common::{
-    fetch_artifact_digest, get_json_output, output_to_string, test_dir_file,
-    test_dir_with_subfolder, wash,
-};
-use tokio::process::Command;
-
 use std::{
-    env,
     fs::{remove_dir_all, File},
     io::prelude::*,
 };
 
 use anyhow::{Context, Result};
-
 use serde_json::json;
 
-use crate::common::{init, set_test_file_content};
+mod common;
+
+use common::{
+    fetch_artifact_digest, get_json_output, init, output_to_string, set_test_file_content,
+    test_dir_file, test_dir_with_subfolder, wash,
+};
 
 const ECHO_WASM: &str = "ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0";
 const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
@@ -246,10 +241,10 @@ async fn integration_reg_config() -> Result<()> {
         /* template_name= */ "hello-world-rust",
     )
     .await?;
-    let project_dir = test_setup.project_dir;
-    env::set_current_dir(&project_dir)?;
+    let project_dir = test_setup.project_dir.clone();
 
-    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+    let status = test_setup
+        .base_command()
         .args(["build"])
         .kill_on_drop(true)
         .status()
@@ -263,9 +258,11 @@ async fn integration_reg_config() -> Result<()> {
     assert!(signed_file.exists(), "signed file not found!");
 
     //===== Setup registry config
-    env::set_var("WASH_REG_URL", LOCAL_REGISTRY);
-    env::set_var("WASH_REG_USER", "iambatman");
-    env::set_var("WASH_REG_PASSWORD", "iamvengeance");
+    let envs = vec![
+        ("WASH_REG_URL", LOCAL_REGISTRY),
+        ("WASH_REG_USER", "iambatman"),
+        ("WASH_REG_PASSWORD", "iamvengeance"),
+    ];
     set_test_file_content(
         &project_dir.join("wasmcloud.toml").clone(),
         r#"
@@ -315,6 +312,7 @@ async fn integration_reg_config() -> Result<()> {
             "--user",
             "iambatman",
         ])
+        .envs(envs.clone().into_iter())
         .output()
         .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
 
@@ -345,6 +343,7 @@ async fn integration_reg_config() -> Result<()> {
             "--user",
             "iambatman",
         ])
+        .envs(envs.clone().into_iter())
         .stderr(std::process::Stdio::inherit())
         .output()
         .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
@@ -367,6 +366,7 @@ async fn integration_reg_config() -> Result<()> {
             "--output",
             "json",
         ])
+        .envs(envs.into_iter())
         .output()
         .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
 
@@ -378,11 +378,9 @@ async fn integration_reg_config() -> Result<()> {
     assert_eq!(output, expected_json);
 
     //===== case: Push (with a repository url) to test file configuration
-    env::remove_var("WASH_REG_URL");
-    env::remove_var("WASH_REG_USER");
-    env::remove_var("WASH_REG_PASSWORD");
     let push_url = "hello:0.4.0";
-    let cmd = wash()
+    let cmd = test_setup
+        .base_command()
         .args([
             "push",
             push_url,
@@ -394,6 +392,7 @@ async fn integration_reg_config() -> Result<()> {
         ])
         .stderr(std::process::Stdio::inherit())
         .output()
+        .await
         .unwrap_or_else(|e| panic!("failed to push artifact {e}"));
 
     assert!(cmd.status.success());

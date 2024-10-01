@@ -28,6 +28,7 @@ async fn build_plugin(plugin_dir_name: &str) -> PathBuf {
             .join("wash"),
     )
     .arg("build")
+    .arg("--skip-fetch")
     .current_dir(&plugin_dir)
     .status()
     .await

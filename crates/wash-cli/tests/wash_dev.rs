@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::{process::Command, sync::RwLock, time::Duration};
+use tokio::{sync::RwLock, time::Duration};
 
 mod common;
 use common::{
@@ -23,7 +23,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
         /* template_name= */ "hello-world-rust",
     )
     .await?;
-    let project_dir = test_setup.project_dir;
+    let project_dir = test_setup.project_dir.clone();
 
     let dir = test_dir_with_subfolder("dev_hello_component");
 
@@ -35,7 +35,8 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     let mut nats = start_nats(nats_port, &dir).await?;
 
     let dev_cmd = Arc::new(RwLock::new(
-        Command::new(env!("CARGO_BIN_EXE_wash"))
+        test_setup
+            .base_command()
             .args([
                 "dev",
                 "--nats-port",
@@ -74,7 +75,7 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     )
     .await
     .context("timed out while waiting for file path to get created")?;
-    assert!(signed_file_path.exists(), "signed component file was built",);
+    assert!(signed_file_path.exists(), "signed component file was built");
 
     let process_pid = dev_cmd
         .write()

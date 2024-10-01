@@ -1,0 +1,47 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: tinygo-hello-world
+  annotations:
+    description: 'HTTP hello world demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)'
+    wasmcloud.dev/authors: wasmCloud team
+    wasmcloud.dev/source-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-hello-world/wadm.yaml
+    wasmcloud.dev/readme-md-url: https://github.com/wasmCloud/wasmCloud/blob/main/examples/golang/components/http-hello-world/README.md
+    wasmcloud.dev/homepage: https://github.com/wasmCloud/wasmCloud/tree/main/examples/golang/components/http-hello-world
+    wasmcloud.dev/categories: |
+      http,outgoing-http,http-server,tinygo,golang,example
+spec:
+  components:
+    - name: http-component
+      type: component
+      properties:
+        image: file://./build/http_hello_world_s.wasm
+      traits:
+        # Govern the spread/scheduling of the component
+        - type: spreadscaler
+          properties:
+            instances: 1
+
+    # Add a capability provider that enables HTTP access
+    - name: httpserver
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/http-server:0.23.1
+      traits:
+        # Link the httpserver to the component, and configure the HTTP server
+        # to listen on port 8080 for incoming requests
+        #
+        # Since the HTTP server calls the `http-component` component, we establish
+        # a unidirectional link from this `httpserver` provider (the "source")
+        # to the `http-component` component (the "target"), so the server can invoke
+        # the component to handle a request.
+        - type: link
+          properties:
+            target: http-component
+            namespace: wasi
+            package: http
+            interfaces: [incoming-handler]
+            source_config:
+              - name: default-http
+                properties:
+                  address: 127.0.0.1:8080

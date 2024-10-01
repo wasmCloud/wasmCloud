@@ -32,7 +32,7 @@ use wadm_types::{
     TraitProperty,
 };
 use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::CommandOutput;
+use wash_lib::cli::{CommandOutput, CommonPackageArgs};
 use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
@@ -82,6 +82,9 @@ pub struct DevCommand {
     #[clap(flatten)]
     pub wadm_opts: WadmOpts,
 
+    #[clap(flatten)]
+    pub package_args: CommonPackageArgs,
+
     /// ID of the host to use for `wash dev`
     /// if one is not selected, `wash dev` will attempt to use the single host in the lattice
     #[clap(long = "host-id", name = "host-id", value_parser)]
@@ -110,6 +113,11 @@ pub struct DevCommand {
     /// Write generated WADM manifest(s) to a given folder (every time they are generated)
     #[clap(long = "manifest-output-dir", env = "WASH_DEV_MANIFEST_OUTPUT_DIR")]
     pub manifest_output_dir: Option<PathBuf>,
+
+    /// Skip wit dependency fetching and use only what is currently present in the wit directory
+    /// (useful for airgapped or disconnected environments)
+    #[clap(long = "skip-fetch")]
+    pub skip_wit_fetch: bool,
 }
 
 /// Keys that index the list of dependencies in a [`ProjectDeps`]
@@ -1523,6 +1531,8 @@ struct RunDevLoopArgs<'a> {
     session_id: &'a str,
     manifest_output_dir: Option<&'a PathBuf>,
     previous_deps: &'a mut Option<ProjectDeps>,
+    package_args: &'a CommonPackageArgs,
+    skip_fetch: bool,
 }
 
 /// Run one iteration of the development loop
@@ -1536,6 +1546,8 @@ async fn run_dev_loop(
         session_id,
         manifest_output_dir,
         previous_deps,
+        package_args,
+        skip_fetch,
     }: RunDevLoopArgs<'_>,
 ) -> Result<()> {
     // Build the project (equivalent to `wash build`)
@@ -1544,7 +1556,14 @@ async fn run_dev_loop(
         emoji::CONSTRUCTION_BARRIER,
         style("Building project...").bold(),
     );
-    let artifact_path = match build_project(project_cfg, Some(&SignConfig::default())).await {
+    let artifact_path = match build_project(
+        project_cfg,
+        Some(&SignConfig::default()),
+        package_args,
+        skip_fetch,
+    )
+    .await
+    {
         Ok(artifact_path) => artifact_path,
         Err(e) => {
             eprintln!(
@@ -1960,6 +1979,8 @@ pub async fn handle_command(
         session_id: &session_id,
         manifest_output_dir: cmd.manifest_output_dir.as_ref(),
         previous_deps: &mut dependencies,
+        package_args: &cmd.package_args,
+        skip_fetch: cmd.skip_wit_fetch,
     })
     .await
     {
@@ -1988,6 +2009,8 @@ pub async fn handle_command(
                     session_id: &session_id,
                     manifest_output_dir: cmd.manifest_output_dir.as_ref(),
                     previous_deps: &mut dependencies,
+                    package_args: &cmd.package_args,
+                    skip_fetch: cmd.skip_wit_fetch,
                 })
                     .await
                     .context("failed to run dev loop iteration")?;

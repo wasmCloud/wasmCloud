@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing::info;
+use wasm_pkg_core::{lock::LockFile, wit::OutputType};
 use wit_parser::{Resolve, WorldId};
 
-use crate::parser::{ProjectConfig, TypeConfig};
+use crate::{
+    cli::CommonPackageArgs,
+    parser::{ProjectConfig, TypeConfig},
+};
 
 mod component;
 pub use component::*;
@@ -55,7 +59,42 @@ pub struct SignConfig {
 pub async fn build_project(
     config: &ProjectConfig,
     signing: Option<&SignConfig>,
+    package_args: &CommonPackageArgs,
+    skip_fetch: bool,
 ) -> Result<PathBuf> {
+    if !skip_fetch {
+        // Fetch dependencies for the component before building
+        let client = package_args.get_client().await?;
+        let lock_path = &config.common.path.join(wasm_pkg_core::lock::LOCK_FILE_NAME);
+        let mut lock = if tokio::fs::try_exists(&lock_path).await? {
+            LockFile::load_from_path(lock_path, false).await?
+        } else {
+            LockFile::new_with_path([], lock_path).await?
+        };
+        let conf_path = &config
+            .common
+            .path
+            .join(wasm_pkg_core::config::CONFIG_FILE_NAME);
+        let wkg_conf = if tokio::fs::try_exists(&conf_path).await? {
+            wasm_pkg_core::config::Config::load_from_path(conf_path).await?
+        } else {
+            wasm_pkg_core::config::Config::default()
+        };
+
+        wasm_pkg_core::wit::fetch_dependencies(
+            &wkg_conf,
+            &config.common.path.join("wit"),
+            &mut lock,
+            client,
+            OutputType::Wit,
+        )
+        .await?;
+        // Write out the lock file
+        lock.write()
+            .await
+            .context("Unable to write lock file for dependencies")?;
+    }
+
     match &config.project_type {
         TypeConfig::Component(component_config) => {
             build_component(component_config, &config.language, &config.common, signing).await
