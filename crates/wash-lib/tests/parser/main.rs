@@ -34,7 +34,7 @@ fn rust_component() {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
-            wasi_preview2_adapter_path: None,
+            wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
         })
@@ -85,7 +85,7 @@ fn rust_component_with_revision() {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
-            wasi_preview2_adapter_path: None,
+            wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
             ..ComponentConfig::default()
@@ -135,7 +135,7 @@ fn tinygo_component_module() {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
-            wasi_preview2_adapter_path: None,
+            wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
         })
@@ -174,8 +174,8 @@ fn tinygo_component() {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
-            wasi_preview2_adapter_path: None,
-            wasm_target: WasmTarget::WasiPreview2,
+            wasip1_adapter_path: None,
+            wasm_target: WasmTarget::WasiP2,
             ..ComponentConfig::default()
         })
     );
@@ -352,7 +352,7 @@ fn minimal_rust_component() {
             key_directory: expected_key_dir,
             destination: None,
             call_alias: None,
-            wasi_preview2_adapter_path: None,
+            wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
         })
@@ -406,7 +406,7 @@ fn cargo_toml_component() {
             key_directory: expected_key_dir,
             destination: None,
             call_alias: None,
-            wasi_preview2_adapter_path: None,
+            wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
         })
@@ -427,13 +427,13 @@ fn cargo_toml_component() {
     );
 }
 
-/// wasm_target=wasm32-wasi-preview2 is properly parsed
+/// wasm_target=wasm32-wasip2 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
-fn minimal_rust_component_preview2() {
+fn minimal_rust_component_p2() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_component_preview2.toml",
+            "./tests/parser/files/minimal_rust_component_wasip2.toml",
         )),
         None,
     );
@@ -449,20 +449,20 @@ fn minimal_rust_component_preview2() {
         TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
             key_directory: expected_default_key_dir,
-            wasm_target: WasmTarget::WasiPreview2,
+            wasm_target: WasmTarget::WasiP2,
             wit_world: Some("test-world".to_string()),
             ..Default::default()
         })
     );
 }
 
-/// wasm_target=wasm32-wasi-preview1 is properly parsed
+/// wasm_target=wasm32-wasip1 is properly parsed
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
-fn minimal_rust_component_preview1() {
+fn minimal_rust_component_wasip1() {
     let result = get_config(
         Some(PathBuf::from(
-            "./tests/parser/files/minimal_rust_component_preview1.toml",
+            "./tests/parser/files/minimal_rust_component_wasip1.toml",
         )),
         None,
     );
@@ -471,7 +471,7 @@ fn minimal_rust_component_preview1() {
     assert!(matches!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            wasm_target: WasmTarget::WasiPreview1,
+            wasm_target: WasmTarget::WasiP1,
             ..
         })
     ));

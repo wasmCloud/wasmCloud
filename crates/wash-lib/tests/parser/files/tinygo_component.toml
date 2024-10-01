@@ -9,7 +9,7 @@ registry = "localhost:8080"
 push_insecure = false
 key_directory = "./keys"
 destination = "./build/testcomponent.wasm"
-wasm_target = "wasm32-wasi-preview2"
+wasm_target = "wasm32-wasip2"
 call_alias = "testcomponent"
 
 [tinygo]

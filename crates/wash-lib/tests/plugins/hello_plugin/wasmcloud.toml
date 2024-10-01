@@ -4,4 +4,4 @@ type = "component"
 
 [component]
 wit_world = "plugin"
-wasm_target = "wasm32-wasi-preview2"
+wasm_target = "wasm32-wasip2"
