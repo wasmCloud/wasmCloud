@@ -7,9 +7,9 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
@@ -20,9 +20,18 @@ jobs:
           version=${GITHUB_REF_NAME#wash-plugin-v}
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "version is ${version}"
+    - uses: ./.github/actions/configure-wkg
     - name: Build
+      working-directory: crates/wash-lib
       run: |
-        cd crates/
+        wkg wit build -o package.wasm
+    - name: Push version-tagged WebAssembly binary to GHCR
+      working-directory: crates/wash-lib
+      run: |
+        wkg publish package.wasm
+    - name: Create tarball for release
+      working-directory: crates
+      run: |
         tar czf wash-plugins-${{ steps.ctx.outputs.version }}.tar.gz wash-lib/wit
     - name: Release
       uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
