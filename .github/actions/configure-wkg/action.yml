@@ -4,6 +4,12 @@ inputs:
   wkg-version:
     description: version of wkg to install. Should be a valid tag from https://github.com/bytecodealliance/wasm-pkg-tools/releases
     default: "v0.7.0"
+  oci-username:
+    description: username for oci registry
+    required: true
+  oci-password:
+    description: password for oci registry
+    required: true
 
 runs:
   using: composite
@@ -17,8 +23,8 @@ runs:
     - name: Generate and set wkg config
       shell: bash
       env:
-        WKG_OCI_USERNAME: ${{ github.repository_owner }}
-        WKG_OCI_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        WKG_OCI_USERNAME: ${{ inputs.oci-username }}
+        WKG_OCI_PASSWORD: ${{ inputs.oci-password }}
       run: |
         cat << EOF > wkg-config.toml
         [namespace_registries]

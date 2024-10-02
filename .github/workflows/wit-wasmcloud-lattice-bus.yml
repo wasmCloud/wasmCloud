@@ -27,6 +27,9 @@ jobs:
           echo "tarball=wit-wasmcloud-bus-${version}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "version is ${version}"
     - uses: ./.github/actions/configure-wkg
+      with:
+        oci-username: ${{ github.repository_owner }}
+        oci-password: ${{ secrets.GITHUB_TOKEN }}
     - name: Build
       working-directory: wit/bus
       run: wkg wit build -o package.wasm
