@@ -1,4 +1,2 @@
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
-cli = "https://github.com/WebAssembly/wasi-cli/archive/refs/tags/v0.2.0.tar.gz"
-keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
-logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+sdk = "https://github.com/wasmCloud/component-sdk-go/archive/v0.0.1.tar.gz"
