@@ -17,25 +17,25 @@ pub struct OtelConfig {
     #[serde(default)]
     pub enable_observability: bool,
     /// Determine whether traces should be enabled.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_traces: Option<bool>,
     /// Determine whether metrics should be enabled.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_metrics: Option<bool>,
     /// Determine whether logs should be enabled.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_logs: Option<bool>,
     /// Overrides the OpenTelemetry endpoint for all signals.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub observability_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for traces.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub traces_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for metrics.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics_endpoint: Option<String>,
     /// Overrides the OpenTelemetry endpoint for logs.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logs_endpoint: Option<String>,
     /// Determines whether http or grpc will be used for exporting the telemetry.
     #[serde(default)]
@@ -44,12 +44,8 @@ pub struct OtelConfig {
     #[serde(default)]
     pub additional_ca_paths: Vec<PathBuf>,
     /// The level of tracing to enable.
-    #[serde(default = "default_trace_level")]
+    #[serde(default)]
     pub trace_level: Level,
-}
-
-fn default_trace_level() -> Level {
-    Level::Info
 }
 
 impl OtelConfig {
@@ -137,6 +133,7 @@ impl OtelConfig {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum OtelProtocol {
     Grpc,
     Http,

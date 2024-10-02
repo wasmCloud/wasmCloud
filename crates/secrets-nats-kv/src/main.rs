@@ -18,6 +18,12 @@ struct Args {
     command: Command,
 }
 
+#[derive(Parser, Clone, Debug)]
+struct GlobalOpts {
+    #[clap(long, env = "NATS_CREDSFILE")]
+    nats_creds_file: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Run the NATS KV secrets backend
@@ -59,6 +65,9 @@ struct RunCommand {
     /// The API version to use for the secrets backend
     #[clap(long, default_value = SECRETS_API_VERSION)]
     secrets_api_version: String,
+
+    #[command(flatten)]
+    global: GlobalOpts,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -93,6 +102,9 @@ struct PutCommand {
         conflicts_with = "string"
     )]
     binary: Option<PathBuf>,
+
+    #[command(flatten)]
+    global: GlobalOpts,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -108,6 +120,9 @@ struct AddSecretMappingCommand {
     /// The names of the secrets that the public key is allowed to access. Can be specified multiple times.
     #[clap(long = "secret")]
     secrets: Vec<String>,
+
+    #[command(flatten)]
+    global: GlobalOpts,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -123,6 +138,9 @@ struct RemoveSecretMappingCommand {
     /// The names of the secrets that the public key should no longer be able to access. Can be specified multiple times.
     #[clap(long = "secret")]
     secrets: Vec<String>,
+
+    #[command(flatten)]
+    global: GlobalOpts,
 }
 
 #[tokio::main]
@@ -145,9 +163,26 @@ async fn run(args: RunCommand) -> anyhow::Result<()> {
     let encryption_xkey = XKey::from_seed(&args.encryption_xkey_seed)
         .context("failed to create encryption key from seed")?;
 
-    let nats_client = async_nats::connect(&args.nats_address)
-        .await
-        .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?;
+    let nats_client = match args.global.nats_creds_file {
+        Some(creds_file) => async_nats::ConnectOptions::new()
+            .credentials_file(creds_file.clone())
+            .await
+            .context(format!(
+                "failed to read NATS credentials file '{}'",
+                &creds_file
+            ))?
+            .connect(&args.nats_address)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to NATS at {} with credentials file '{}'",
+                    args.nats_address, creds_file
+                )
+            })?,
+        None => async_nats::connect(&args.nats_address)
+            .await
+            .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
+    };
 
     let api = Api::new(
         server_xkey,
@@ -168,9 +203,27 @@ async fn run(args: RunCommand) -> anyhow::Result<()> {
 async fn put(args: PutCommand) -> anyhow::Result<()> {
     let server_xkey = XKey::from_seed(&args.transit_xkey_seed)
         .context("failed to create server key from seed")?;
-    let nats_client = async_nats::connect(&args.nats_address)
-        .await
-        .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?;
+
+    let nats_client = match args.global.nats_creds_file {
+        Some(creds_file) => async_nats::ConnectOptions::new()
+            .credentials_file(creds_file.clone())
+            .await
+            .context(format!(
+                "failed to read NATS credentials file '{}'",
+                &creds_file
+            ))?
+            .connect(&args.nats_address)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to NATS at {} with credentials file '{}'",
+                    args.nats_address, creds_file
+                )
+            })?,
+        None => async_nats::connect(&args.nats_address)
+            .await
+            .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
+    };
 
     let binary_secret = args
         .binary
@@ -204,9 +257,26 @@ async fn add_mapping(args: AddSecretMappingCommand) -> anyhow::Result<()> {
         "at least one secret must be provided to add a mapping"
     );
 
-    let nats_client = async_nats::connect(&args.nats_address)
-        .await
-        .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?;
+    let nats_client = match args.global.nats_creds_file {
+        Some(creds_file) => async_nats::ConnectOptions::new()
+            .credentials_file(creds_file.clone())
+            .await
+            .context(format!(
+                "failed to read NATS credentials file '{}'",
+                &creds_file
+            ))?
+            .connect(&args.nats_address)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to NATS at {} with credentials file '{}'",
+                    args.nats_address, creds_file
+                )
+            })?,
+        None => async_nats::connect(&args.nats_address)
+            .await
+            .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
+    };
 
     client::add_mapping(
         &nats_client,
@@ -228,9 +298,26 @@ async fn remove_mapping(args: RemoveSecretMappingCommand) -> anyhow::Result<()> 
         "at least one secret must be provided to remove a mapping"
     );
 
-    let nats_client = async_nats::connect(&args.nats_address)
-        .await
-        .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?;
+    let nats_client = match args.global.nats_creds_file {
+        Some(creds_file) => async_nats::ConnectOptions::new()
+            .credentials_file(creds_file.clone())
+            .await
+            .context(format!(
+                "failed to read NATS credentials file '{}'",
+                &creds_file
+            ))?
+            .connect(&args.nats_address)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to NATS at {} with credentials file '{}'",
+                    args.nats_address, creds_file
+                )
+            })?,
+        None => async_nats::connect(&args.nats_address)
+            .await
+            .with_context(|| format!("failed to connect to NATS at {}", args.nats_address))?,
+    };
 
     client::remove_mapping(
         &nats_client,

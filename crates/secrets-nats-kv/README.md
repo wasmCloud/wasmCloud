@@ -14,7 +14,8 @@ cargo install --path .
 
 Run the binary using the `run` subcommand, supplying xkey private keys to use for encryption and transit. You can generate xkeys using `wash keys gen curve` or the [nk CLI](https://docs.nats.io/using-nats/nats-tools/nk). All other arguments are optional for configuring the topic prefix to listen on, the bucket to store secrets in, etc.
 
-⚠️ These keys are samples to show proper usage and should not be used for your own backend.
+>[!CAUTION]
+> ⚠️ These keys are samples to show proper usage and should not be used for your own backend.
 
 ```bash
 nats-server -js &
@@ -75,3 +76,37 @@ All secrets are accessed using an allow-list of mappings. You can remove a mappi
 ```bash
 secrets-nats-kv remove-mapping MAVCGEGKMVT5UCIDSHJO25VHD2VDNDRA3LIHYH2TPIUQS7JCMS472AFJ --secret secret-foo
 ```
+
+## Runtime Recommendations
+
+> [!CAUTION]
+> This backend is largely intended to provide an example of a secrets backend implementation. It is not recommended for production use, however it may be used in production as long as you are aware of the limitations and risks.
+
+### Key Management
+
+All values in the `WASMCLOUD_SECRETS` bucket are encrypted with a single encryption key (the `ENCRYPTION_XKEY_SEED` environment variable). This key *must* be the same key used to encrypt and decrypt all values in the bucket. If you lose this key, you will not be able to decrypt any of the values stored in the bucket. You *must* back up this key in an external secrets store in order to guarantee that you do not lose this key.
+
+#### Key Rotation
+
+Online key rotation is currently not supported. If you need to rotate the encryption key, you will need to do the following:
+* stop all running instances of the secrets-nats-kv backend
+* generate a new encryption key
+* read every value from the `WASMCLOUD_SECRETS` bucket, decrypt each value with the old key and write them back to the bucket with the new key
+* start the new secrets-nats-kv backend instances with the new key
+
+### Resiliency
+
+> [!NOTE]
+> You can configure the `WASMCLOUD_SECRETS` bucket by using the `--bucket` flag when running the binary. The default bucket is `WASMCLOUD_SECRETS`, but you will need to adjust the following commands if you change the bucket name.
+
+State for the backend is stored in two buckets: `WASMCLOUD_SECRETS` and `SECRETS-nats-kv_state`. The former stores all secrets while the latter stores all mappings. If you lose the state of the backend, you will lose all secrets and mappings. You *must* back up the state of the backend in order to guarantee that you do not lose any data. You also *must* edit the underlying streams so that they are replicaed to more than one node, which requires running at least a 3-node NATS cluster.
+
+```
+nats --creds host.creds stream edit KV_WASMCLOUD_SECRETS --replicas 3
+nats --creds host.creds stream edit KV_SECRETS-nats-kv_state --replicas 3
+```
+
+You may want to adjust the replicas to 5 instead of 3 depending on your risk tolerance. You will need at least 3 or 5 members of the NATS cluster in order for these commands to succeed.
+
+
+You should also run more than one instance of the secrets-nats-kv backend.

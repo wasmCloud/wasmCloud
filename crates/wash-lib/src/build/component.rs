@@ -3,7 +3,6 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{self},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -32,20 +31,20 @@ use crate::{
 /// * `language_config`: [`LanguageConfig`] specifying which language the component is written in
 /// * `common_config`: [`CommonConfig`] specifying common parameters like [`CommonConfig::name`] and [`CommonConfig::version`]
 /// * `signing`: Optional [`SignConfig`] with information for signing the component. If omitted, the component will only be built
-pub fn build_component(
+pub async fn build_component(
     component_config: &ComponentConfig,
     language_config: &LanguageConfig,
     common_config: &CommonConfig,
     signing_config: Option<&SignConfig>,
 ) -> Result<PathBuf> {
     let component_wasm_path = if let Some(raw_command) = component_config.build_command.as_ref() {
-        build_custom_component(common_config, component_config, raw_command)?
+        build_custom_component(common_config, component_config, raw_command).await?
     } else {
         // Build component based on language toolchain
         match language_config {
             LanguageConfig::Rust(rust_config) => {
                 let rust_wasm_path =
-                    build_rust_component(common_config, rust_config, component_config)?;
+                    build_rust_component(common_config, rust_config, component_config).await?;
                 match component_config.wasm_target {
                     WasmTarget::CoreModule | WasmTarget::WasiPreview1 => rust_wasm_path,
                     WasmTarget::WasiPreview2 => {
@@ -55,7 +54,7 @@ pub fn build_component(
             }
             LanguageConfig::TinyGo(tinygo_config) => {
                 let go_wasm_path =
-                    build_tinygo_component(common_config, tinygo_config, component_config)?;
+                    build_tinygo_component(common_config, tinygo_config, component_config).await?;
 
                 match component_config.wasm_target {
                     // NOTE(lxf): historically, wasip1 was being adapted to p2 which is different from rust target.
@@ -86,7 +85,8 @@ pub fn build_component(
                     common_config,
                     component_config,
                     component_config.build_command.as_ref().unwrap(),
-                )?
+                )
+                .await?
             }
             LanguageConfig::Go(_) => {
                 bail!("build command is required for unsupported language go");
@@ -182,14 +182,14 @@ pub fn sign_component_wasm(
 }
 
 /// Builds a rust component and returns the path to the file.
-fn build_rust_component(
+async fn build_rust_component(
     common_config: &CommonConfig,
     rust_config: &RustConfig,
     component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let mut command = match rust_config.cargo_path.as_ref() {
-        Some(path) => process::Command::new(path),
-        None => process::Command::new("cargo"),
+        Some(path) => tokio::process::Command::new(path),
+        None => tokio::process::Command::new("cargo"),
     };
 
     // Change directory into the project directory
@@ -199,9 +199,10 @@ fn build_rust_component(
     let result = command
         .args(["build", "--release", "--target", build_target])
         .status()
+        .await
         .map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
-                anyhow!("{:?} command is not found", command.get_program())
+                anyhow!("{:?} command is not found", command.as_std().get_program())
             } else {
                 anyhow!(e)
             }
@@ -253,7 +254,7 @@ fn build_rust_component(
 }
 
 /// Builds a tinygo component and returns the path to the file.
-fn build_tinygo_component(
+async fn build_tinygo_component(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
     component_config: &ComponentConfig,
@@ -265,8 +266,8 @@ fn build_tinygo_component(
     std::env::set_current_dir(&common_config.path)?;
 
     let mut command = match &tinygo_config.tinygo_path {
-        Some(path) => process::Command::new(path),
-        None => process::Command::new("tinygo"),
+        Some(path) => tokio::process::Command::new(path),
+        None => tokio::process::Command::new("tinygo"),
     };
 
     // Ensure the target directory which will contain the eventual filename exists
@@ -279,7 +280,9 @@ fn build_tinygo_component(
 
     let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
-        generate_tinygo_bindgen(parent_dir).context("generating golang bindgen code failed")?;
+        generate_tinygo_bindgen(parent_dir)
+            .await
+            .context("generating golang bindgen code failed")?;
     }
 
     let build_args = match &component_config.wasm_target {
@@ -310,9 +313,9 @@ fn build_tinygo_component(
         ],
     };
 
-    let result = command.args(build_args).status().map_err(|e| {
+    let result = command.args(build_args).status().await.map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.get_program())
+            anyhow!("{:?} command is not found", command.as_std().get_program())
         } else {
             anyhow!(e)
         }
@@ -335,7 +338,7 @@ fn build_tinygo_component(
 }
 
 /// Builds a wasmCloud component using a custom override command, then returns the path to the file.
-fn build_custom_component(
+async fn build_custom_component(
     common_config: &CommonConfig,
     component_config: &ComponentConfig,
     raw_command: &str,
@@ -343,18 +346,21 @@ fn build_custom_component(
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
     let (command, args) = parse_custom_command(raw_command)?;
-    let mut command = process::Command::new(command);
+    let mut command = tokio::process::Command::new(command);
     // All remaining elements of the split command are interpreted as arguments
     command
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let output = command.output().map_err(|e| {
+    let output = command.output().await.map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
-            anyhow!("`{:?}` was not found", command.get_program())
+            anyhow!("`{:?}` was not found", command.as_std().get_program())
         } else {
-            anyhow!(format!("failed to run `{:?}`: {e}", command.get_program()))
+            anyhow!(format!(
+                "failed to run `{:?}`: {e}",
+                command.as_std().get_program()
+            ))
         }
     })?;
     if !output.status.success() {
@@ -390,7 +396,7 @@ fn build_custom_component(
 }
 
 /// Generate the bindgen code that `TinyGo` components need
-fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
+async fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
     if !user_dir.as_ref().exists() {
         bail!(
             "directory @ [{}] does not exist",
@@ -398,13 +404,14 @@ fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
         );
     }
 
-    let mut command = process::Command::new("go");
+    let mut command = tokio::process::Command::new("go");
     let result = command
         .args(vec!["generate", "./..."])
         .status()
+        .await
         .map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
-                anyhow!("{:?} command is not found", command.get_program())
+                anyhow!("{:?} command is not found", command.as_std().get_program())
             } else {
                 anyhow!(e)
             }
@@ -730,8 +737,8 @@ func main() {}
     }
 
     /// Ensure that golang component generation works with a bindgen'd component
-    #[test]
-    fn golang_generate_bindgen_component_basic() -> Result<()> {
+    #[tokio::test]
+    async fn golang_generate_bindgen_component_basic() -> Result<()> {
         let project_dir = tempfile::tempdir()?;
 
         // Set up directories
@@ -750,7 +757,9 @@ func main() {}
 
         // Multiple worlds without specifying them in the wit-bindgen call. This should fail.
         assert!(std::env::set_current_dir(&project_dir).is_ok());
-        generate_tinygo_bindgen(&project_dir).context("failed to run tinygo bindgen")?;
+        generate_tinygo_bindgen(&project_dir)
+            .await
+            .context("failed to run tinygo bindgen")?;
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?
@@ -763,8 +772,8 @@ func main() {}
 
     /// Ensure that golang component generation works with a bindgen'd component
     /// which has multiple worlds
-    #[test]
-    fn golang_generate_bindgen_component_multi_world() -> Result<()> {
+    #[tokio::test]
+    async fn golang_generate_bindgen_component_multi_world() -> Result<()> {
         let project_dir = tempfile::tempdir()?;
 
         // Set up directories
@@ -785,7 +794,7 @@ func main() {}
 
         // Run bindgen generation process
         assert!(std::env::set_current_dir(&project_dir).is_ok());
-        assert!(generate_tinygo_bindgen(&project_dir).is_err());
+        assert!(generate_tinygo_bindgen(&project_dir).await.is_err());
 
         let dir_contents = fs::read_dir(output_dir)
             .context("failed to read dir")?

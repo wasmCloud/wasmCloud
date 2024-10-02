@@ -15,7 +15,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use nkeys::XKey;
 use std::{collections::HashSet, time::Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use wascap::jwt::{CapabilityProvider, Host};
 use wascap::prelude::{validate_token, Claims, Component};
 use wasmcloud_secrets_types::*;
@@ -470,19 +470,16 @@ impl Api {
                 .request(subject.clone(), "lock".into())
                 .await
                 .map_err(|e| {
-                    println!("Error locking state stream: {}", e);
-                    error!("Error locking state stream: {}", e);
+                    debug!("Error locking state stream: {}", e);
                     BackoffError::transient("")
                 })?;
             match serde_json::from_slice(&resp.payload) {
                 Ok(Response::Ok(p)) => Ok(p),
                 Ok(Response::Err { error: e }) => {
-                    println!("Error locking state stream: {:?}", e);
-                    error!("Error locking state stream: {:?}", e);
+                    debug!("Error locking state stream: {:?}", e);
                     Err(BackoffError::transient("unable to get lock"))
                 }
                 Err(e) => {
-                    println!("Error locking state stream: {}", e);
                     error!("Error locking state stream: {}", e);
                     Err(BackoffError::permanent("error publishing message"))
                 }

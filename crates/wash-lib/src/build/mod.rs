@@ -58,7 +58,7 @@ pub async fn build_project(
 ) -> Result<PathBuf> {
     match &config.project_type {
         TypeConfig::Component(component_config) => {
-            build_component(component_config, &config.language, &config.common, signing)
+            build_component(component_config, &config.language, &config.common, signing).await
         }
         TypeConfig::Provider(provider_config) => {
             build_provider(provider_config, &config.language, &config.common, signing).await

@@ -428,9 +428,9 @@ checksum = "0c4b4d0bd25bd0b74681c0ad21497610ce1b7c91b1022cd21c80c6fbdd9476b0"
 
 [[package]]
 name = "aws-config"
-version = "1.5.6"
+version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "848d7b9b605720989929279fa644ce8f244d0ce3146fcca5b70e4eb7b3c020fc"
+checksum = "8191fb3091fa0561d1379ef80333c3c7191c6f0435d986e85821bcf7acbd1126"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -491,9 +491,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.51.0"
+version = "1.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c09fd4b5c7ed75f52b913b4f3ff0501dae7f8cb9125f6d45db4553980cbc0528"
+checksum = "f571deb0a80c20d21d9f3e8418c1712af9ff4bf399d057e5549a934eca4844e2"
 dependencies = [
  "ahash",
  "aws-credential-types",
@@ -526,9 +526,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.42.0"
+version = "1.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1c46924fb1add65bba55636e12812cae2febf68c0f37361766f627ddcca91ce"
+checksum = "2cb5f98188ec1435b68097daa2a37d74b9d17c9caa799466338a8d1544e71b9d"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -700,9 +700,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03701449087215b5369c7ea17fef0dd5d24cb93439ec5af0c7615f58c3f22605"
+checksum = "147100a7bea70fa20ef224a6bad700358305f5dc0f84649c53769761395b355b"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -777,12 +777,12 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.7.6"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f43644eed690f5374f1af436ecd6aea01cd201f6fbdf0178adaf6907afb2cec"
+checksum = "504e3947307ac8326a5437504c517c4b56716c9d98fac0028c2acc7ca47d70ae"
 dependencies = [
  "async-trait",
- "axum-core 0.4.4",
+ "axum-core 0.4.5",
  "bytes",
  "futures-util",
  "http 1.1.0",
@@ -825,9 +825,9 @@ dependencies = [
 
 [[package]]
 name = "axum-core"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e6b8ba012a258d63c9adfa28b9ddcf66149da6f986c5b5452e629d5ee64bf00"
+checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
 dependencies = [
  "async-trait",
  "bytes",
@@ -886,7 +886,7 @@ dependencies = [
  "pin-project",
  "quick-xml",
  "rand 0.8.5",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "rustc_version",
  "serde",
  "serde_json",
@@ -2614,8 +2614,8 @@ dependencies = [
  "aho-corasick",
  "bstr",
  "log",
- "regex-automata 0.4.7",
- "regex-syntax 0.8.4",
+ "regex-automata 0.4.8",
+ "regex-syntax 0.8.5",
 ]
 
 [[package]]
@@ -3094,7 +3094,7 @@ dependencies = [
  "globset",
  "log",
  "memchr",
- "regex-automata 0.4.7",
+ "regex-automata 0.4.8",
  "same-file",
  "walkdir",
  "winapi-util",
@@ -3812,7 +3812,7 @@ dependencies = [
  "lazy_static",
  "olpc-cjson",
  "regex",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "serde",
  "serde_json",
  "sha2",
@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-nats"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-nats 0.36.0",
  "opentelemetry 0.23.0",
@@ -4079,7 +4079,7 @@ checksum = "914a1c2265c98e2446911282c6ac86d8524f495792c38c5bd884f80499c7538a"
 dependencies = [
  "parse-display-derive",
  "regex",
- "regex-syntax 0.8.4",
+ "regex-syntax 0.8.5",
 ]
 
 [[package]]
@@ -4091,7 +4091,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "regex-syntax 0.8.4",
+ "regex-syntax 0.8.5",
  "structmeta",
  "syn 2.0.77",
 ]
@@ -4717,14 +4717,14 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.10.6"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4219d74c6b67a3654a9fbebc4b419e22126d13d2f3c4a07ee0cb61ff79a79619"
+checksum = "38200e5ee88914975b69f657f0801b6f6dccafd44fd9326302a4aaeecfacb1d8"
 dependencies = [
  "aho-corasick",
  "memchr",
- "regex-automata 0.4.7",
- "regex-syntax 0.8.4",
+ "regex-automata 0.4.8",
+ "regex-syntax 0.8.5",
 ]
 
 [[package]]
@@ -4738,13 +4738,13 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38caf58cc5ef2fed281f89292ef23f6365465ed9a41b7a7754eb4e26496c92df"
+checksum = "368758f23274712b504848e9d5a6f010445cc8b87a7cdb4d7cbee666c1288da3"
 dependencies = [
  "aho-corasick",
  "memchr",
- "regex-syntax 0.8.4",
+ "regex-syntax 0.8.5",
 ]
 
 [[package]]
@@ -4761,9 +4761,9 @@ checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
+checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "reqwest"
@@ -4810,9 +4810,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.7"
+version = "0.12.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8f4955649ef5c38cc7f9e8aa41761d48fb9677197daea9984dc54f56aad5e63"
+checksum = "f713147fbe92361e52392c73b8c9e48c04c6625bce969ef54dc901e58e042a7b"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "secrets-nats-kv"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -5814,9 +5814,9 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tempfile"
-version = "3.12.0"
+version = "3.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cbcdd0c794ebb0d4cf35e88edd2f7d2c4c3e9a5a6dab322839b321c6a87a64"
+checksum = "f0f2c9fc62d0beef6951ccffd757e241266a2c833136efbe35af6cd2567dca5b"
 dependencies = [
  "cfg-if",
  "fastrand 2.1.1",
@@ -6888,7 +6888,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -6920,7 +6920,7 @@ dependencies = [
  "provider-archive",
  "rand 0.8.5",
  "regex",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "rmp-serde",
  "rmpv",
  "sanitize-filename",
@@ -6951,7 +6951,7 @@ dependencies = [
  "wascap 0.15.0",
  "wash-lib",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-secrets-types 0.4.0",
  "wat",
@@ -6966,7 +6966,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6995,7 +6995,7 @@ dependencies = [
  "path-absolutize",
  "provider-archive",
  "regex",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "rmp-serde",
  "semver",
  "serde",
@@ -7024,7 +7024,7 @@ dependencies = [
  "wasi-preview1-component-adapter-provider",
  "wasm-encoder 0.217.0",
  "wasmcloud-control-interface 1.0.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-test-util",
  "wasmparser 0.217.0",
  "wasmtime",
@@ -7174,6 +7174,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-encoder"
+version = "0.218.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22b896fa8ceb71091ace9bcb81e853f54043183a1c9667cf93422c40252ffa0a"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
 name = "wasm-gen"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7255,7 +7264,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "1.2.1"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7274,7 +7283,7 @@ dependencies = [
  "rand 0.8.5",
  "redis",
  "regex",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "rmp-serde",
  "rustversion",
  "secrets-nats-kv",
@@ -7291,8 +7300,8 @@ dependencies = [
  "uuid 1.10.0",
  "vaultrs",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-control-interface 2.1.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-host",
  "wasmcloud-provider-blobstore-azure",
  "wasmcloud-provider-blobstore-fs",
@@ -7352,7 +7361,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7368,7 +7377,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-opentelemetry 0.24.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
 ]
 
 [[package]]
@@ -7401,7 +7410,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
@@ -7416,7 +7425,7 @@ dependencies = [
  "oci-wasm",
  "once_cell",
  "provider-archive",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "rustls 0.23.13",
  "rustls-native-certs 0.8.0",
  "rustls-pemfile 2.1.3",
@@ -7467,8 +7476,8 @@ dependencies = [
  "url",
  "uuid 1.10.0",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-control-interface 2.1.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-runtime",
  "wasmcloud-secrets-client",
  "wasmcloud-secrets-types 0.4.0",
@@ -7589,7 +7598,7 @@ version = "0.23.1"
 dependencies = [
  "anyhow",
  "async-nats 0.36.0",
- "axum 0.7.6",
+ "axum 0.7.7",
  "axum-server",
  "base64 0.22.1",
  "bytes",
@@ -7597,7 +7606,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.1",
  "pin-project-lite",
- "reqwest 0.12.7",
+ "reqwest 0.12.8",
  "serde",
  "serde_json",
  "thiserror",
@@ -7643,7 +7652,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid 1.10.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
  "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "wit-bindgen-wrpc 0.6.5",
@@ -7673,7 +7682,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
+ "wasmcloud-control-interface 2.1.0",
 ]
 
 [[package]]
@@ -7739,7 +7748,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "uuid 1.10.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-tracing",
  "wrpc-interface-http",
  "wrpc-transport 0.26.8",
@@ -7777,7 +7786,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7801,7 +7810,7 @@ dependencies = [
  "wascap 0.15.0",
  "wasi-preview1-component-adapter-provider",
  "wasmcloud-component",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
  "wasmparser 0.217.0",
  "wasmtime",
  "wasmtime-wasi",
@@ -7817,7 +7826,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-secrets-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-nats 0.36.0",
  "nkeys 0.4.4",
@@ -7874,8 +7883,8 @@ dependencies = [
  "tracing",
  "url",
  "wascap 0.15.0",
- "wasmcloud-control-interface 2.0.0",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-control-interface 2.1.0",
+ "wasmcloud-core 0.11.0",
  "wasmcloud-host",
  "wasmcloud-secrets-types 0.4.0",
 ]
@@ -7899,7 +7908,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.24.0",
  "tracing-subscriber",
- "wasmcloud-core 0.10.0",
+ "wasmcloud-core 0.11.0",
 ]
 
 [[package]]
@@ -8281,22 +8290,22 @@ dependencies = [
 
 [[package]]
 name = "wast"
-version = "217.0.0"
+version = "218.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79004ecebded92d3c710d4841383368c7f04b63d0992ddd6b0c7d5029b7629b7"
+checksum = "8a53cd1f0fa505df97557e36a58bddb8296e2fcdcd089529545ebfdb18a1b9d7"
 dependencies = [
  "bumpalo",
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.217.0",
+ "wasm-encoder 0.218.0",
 ]
 
 [[package]]
 name = "wat"
-version = "1.217.0"
+version = "1.218.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c126271c3d92ca0f7c63e4e462e40c69cca52fd4245fcda730d1cf558fb55088"
+checksum = "4f87f8e14e776762e07927c27c2054d2cf678aab9aae2d431a79b3e31e4dd391"
 dependencies = [
  "wast",
 ]

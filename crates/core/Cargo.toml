@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-core"
-version = "0.10.0"
+version = "0.11.0"
 description = "wasmCloud core functionality shared throughout the ecosystem"
 
 authors.workspace = true

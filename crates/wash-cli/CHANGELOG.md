@@ -5,7 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.34.1 (2024-09-30)
+
+### Chore
+
+ - <csr-id-ce1d5d1ed7c503e2cf357047a4a849f74be7b51e/> update blobstore-fs provider references
+ - <csr-id-d28ebe1783c7535ac30cccad1dacc70cb921f371/> update messaging-nats provider references
+ - <csr-id-215eeadc555dfc8a57cee96856febf63113f62a1/> update keyvalue-nats provider references
+ - <csr-id-e2b6287bde6c9b905d96f93f93a1a7d73940283c/> update http-server provider references
+ - <csr-id-e6936ce5113db8434ffb2cc927e779e677ad0bd4/> update http-client provider references
+ - <csr-id-b382e8669dd31e44855142d2b478421884710e3d/> update wash dev kv provider to keyvalue-nats 0.3.0
+ - <csr-id-f8de84b251122b3319f7b1c8d86cb749cb4a8e37/> update version of keyvalue-nats used to 0.2.0
+
+### New Features
+
+ - <csr-id-095b9f448d3ec37fc55050d08f1d861f127336b9/> enable undeploying and deleting multiple apps
+   This commit enables wash to:
+   
+   - Undeploy all applications at the same time
+   - Delete all undeployed applications
+   
+   The combination of `wash app undeploy --all` and `wash app delete
+   --all-undeployed` are meant to be used to gether in order to clear all
+   apps in a given lattice.
+ - <csr-id-4d299c3f00ab862e0f3deed29b8f29be7099956f/> enable using custom wasmCloud host path
+   This commit adds a `--host-path` option to `wash` that enables using a
+   custom host binary for running the wasmCloud host.
+ - <csr-id-ce1569cb6423f3bc42ff645e8c062287d8b3b78f/> Implemented Humantime duration input for --watch flags
+   - Backwards compatibility with millisecond input still maintained
+   - Improved terminal handling while watching application lattice
+   - watch interval for 'app list' is now configurable with a default interval of 1000ms.
+   - Added Short flag of -w as an alternative to --watch
+ - <csr-id-f0cb812a2eb719a3f69c14805ab89cdc273754e4/> Allow wash to re-use registry credentials from Docker
+
+### Bug Fixes
+
+ - <csr-id-9243e5248d73df5b47dff38723027c36bb6be264/> improve error handling, dependency resolution
+
+### Refactor
+
+ - <csr-id-6cdcf8ae093a0214787ee99132844d5cb92d8b3d/> reorganize `wash up` and `wash config`
+   This commit starts the reorganization of `wash-cli` code into the
+   `src/cmd` hierarchy, which should make it easier to separate shared
+   functionality, (sub)command invocation and specific logic.
+
+### Test
+
+ - <csr-id-71fc4b8f60a1f5f469912b712452f1c96a7744ef/> add test for wash app undeploy --all
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 14 commits contributed to the release over the course of 9 calendar days.
+ - 10 days passed between releases.
+ - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Improve error handling, dependency resolution ([`9243e52`](https://github.com/wasmCloud/wasmCloud/commit/9243e5248d73df5b47dff38723027c36bb6be264))
+    - Add test for wash app undeploy --all ([`71fc4b8`](https://github.com/wasmCloud/wasmCloud/commit/71fc4b8f60a1f5f469912b712452f1c96a7744ef))
+    - Enable undeploying and deleting multiple apps ([`095b9f4`](https://github.com/wasmCloud/wasmCloud/commit/095b9f448d3ec37fc55050d08f1d861f127336b9))
+    - Update blobstore-fs provider references ([`ce1d5d1`](https://github.com/wasmCloud/wasmCloud/commit/ce1d5d1ed7c503e2cf357047a4a849f74be7b51e))
+    - Update messaging-nats provider references ([`d28ebe1`](https://github.com/wasmCloud/wasmCloud/commit/d28ebe1783c7535ac30cccad1dacc70cb921f371))
+    - Update keyvalue-nats provider references ([`215eead`](https://github.com/wasmCloud/wasmCloud/commit/215eeadc555dfc8a57cee96856febf63113f62a1))
+    - Update http-server provider references ([`e2b6287`](https://github.com/wasmCloud/wasmCloud/commit/e2b6287bde6c9b905d96f93f93a1a7d73940283c))
+    - Update http-client provider references ([`e6936ce`](https://github.com/wasmCloud/wasmCloud/commit/e6936ce5113db8434ffb2cc927e779e677ad0bd4))
+    - Enable using custom wasmCloud host path ([`4d299c3`](https://github.com/wasmCloud/wasmCloud/commit/4d299c3f00ab862e0f3deed29b8f29be7099956f))
+    - Reorganize `wash up` and `wash config` ([`6cdcf8a`](https://github.com/wasmCloud/wasmCloud/commit/6cdcf8ae093a0214787ee99132844d5cb92d8b3d))
+    - Update wash dev kv provider to keyvalue-nats 0.3.0 ([`b382e86`](https://github.com/wasmCloud/wasmCloud/commit/b382e8669dd31e44855142d2b478421884710e3d))
+    - Update version of keyvalue-nats used to 0.2.0 ([`f8de84b`](https://github.com/wasmCloud/wasmCloud/commit/f8de84b251122b3319f7b1c8d86cb749cb4a8e37))
+    - Implemented Humantime duration input for --watch flags ([`ce1569c`](https://github.com/wasmCloud/wasmCloud/commit/ce1569cb6423f3bc42ff645e8c062287d8b3b78f))
+    - Allow wash to re-use registry credentials from Docker ([`f0cb812`](https://github.com/wasmCloud/wasmCloud/commit/f0cb812a2eb719a3f69c14805ab89cdc273754e4))
+</details>
+
 ## v0.34.0 (2024-09-19)
+
+### Other
+
+ - <csr-id-84633c20117cab57890a62b7b2e734df78133933/> wash-cli: 0.33.1
 
 ### Bug Fixes
 
@@ -18,9 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 1 commit contributed to the release.
+ - 2 commits contributed to the release.
  - 1 day passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -30,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Wash-cli: 0.33.1 ([`84633c2`](https://github.com/wasmCloud/wasmCloud/commit/84633c20117cab57890a62b7b2e734df78133933))
     - Multiple generated dependencies collision in project ([`4680de9`](https://github.com/wasmCloud/wasmCloud/commit/4680de9d2f1e3a2e672833ccac9c2356ef208145))
 </details>
 
@@ -40,6 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-id-9ac2e29babcaa3e9789c42d05d9d3ad4ccd5fcc7/>
 <csr-id-c65d9cab4cc8917eedcad1672812bafad0311ee0/>
 <csr-id-2ee92718a7d4dcef9a31cca42761672b2b69c5dd/>
+<csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/>
+<csr-id-69039793fe275c35ebf647d52f117c0bbf3bf675/>
 
 ### Chore
 
