@@ -69,7 +69,10 @@ pub async fn build_project(
         let mut lock = if tokio::fs::try_exists(&lock_path).await? {
             LockFile::load_from_path(lock_path, false).await?
         } else {
-            LockFile::new_with_path([], lock_path).await?
+            let mut lock = LockFile::new_with_path([], lock_path).await?;
+            // If it is a new file, write the empty file now in case the next step fails
+            lock.write().await?;
+            lock
         };
         let conf_path = &config
             .common
