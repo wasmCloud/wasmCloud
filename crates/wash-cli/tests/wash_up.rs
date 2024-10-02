@@ -12,6 +12,7 @@ use common::{
     find_open_port, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
     wait_for_single_host, TestWashInstance, HELLO_OCI_REF,
 };
+use wash_cli::config::WASMCLOUD_HOST_VERSION;
 
 const RGX_COMPONENT_START_MSG: &str = r"Component \[(?P<component_id>[^]]+)\] \(ref: \[(?P<component_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -279,7 +280,7 @@ async fn integration_up_works_with_labels() -> Result<()> {
 #[serial]
 async fn integration_up_works_with_new_patch_version_if_possible() -> Result<()> {
     // 1.0.2 is a sufficient version to test the latest is 1.0.4
-    let a_previous_version = "1.0.2";
+    let a_previous_version = WASMCLOUD_HOST_VERSION.trim_start_matches("v");
     let instance: TestWashInstance = TestWashInstance::create().await?;
 
     let default_version = semver::Version::parse(a_previous_version)?;
@@ -292,10 +293,41 @@ async fn integration_up_works_with_new_patch_version_if_possible() -> Result<()>
     assert!(host.is_some(), "host is present");
     if let Some(host) = host {
         if let Some(version) = &host.version {
+            let new_patched_version = semver::Version::parse(version)?;
             assert!(
-                semver::Version::parse(version)? >= default_version,
-                "host has the correct version"
+                new_patched_version.major == default_version.major,
+                "major version of host should not change"
             );
+            assert!(
+                new_patched_version.minor == default_version.minor,
+                "minor version of host should not change"
+            );
+            assert!(
+                new_patched_version.patch >= default_version.patch,
+                "patch version cannot be smaller"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure that wash up is starting a secific version
+///  of wasmcloud host if wasmcloud parameter is specified
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<()> {
+    let instance: TestWashInstance =
+        TestWashInstance::create_with_extra_args(["--wasmcloud-version", "v1.0.4"]).await?;
+    // Get host data, ensure we find the host with the right label
+    let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
+
+    assert!(cmd_output.success, "call command succeeded");
+    let host = cmd_output.hosts.first();
+    assert!(host.is_some(), "host is present");
+    if let Some(host) = host {
+        if let Some(version) = &host.version {
+            assert_eq!(version, "1.0.4", "specified version is overwritten")
         }
     }
 

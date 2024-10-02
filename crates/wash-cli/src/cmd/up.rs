@@ -588,10 +588,18 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     } else {
         None
     };
-    let version = wasmcloud_opts
-        .wasmcloud_version
-        .unwrap_or(WASMCLOUD_HOST_VERSION.to_string());
-
+    let wasmcloud_version = if let Some(version) = wasmcloud_opts.wasmcloud_version {
+        version
+    } else {
+        if let Some(new_version) =
+            new_patch_version_of_after_string("wasmCloud", "wasmCloud", WASMCLOUD_HOST_VERSION)
+                .await?
+        {
+            new_version.to_string()
+        } else {
+            WASMCLOUD_HOST_VERSION.to_string()
+        }
+    };
     // Download wasmCloud if not already installed
     let wasmcloud_bin_path = match wasmcloud_opts.host_path {
         // If an override was provided we can use it
@@ -606,11 +614,11 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         None if !wasmcloud_opts.start_only => {
             spinner.update_spinner_message(" Downloading wasmCloud ...".to_string());
 
-            ensure_wasmcloud(&version, &install_dir).await?
+            ensure_wasmcloud(&wasmcloud_version, &install_dir).await?
         }
         // If no override was provided, we must attempt to find the binary
         None => {
-            if let Some(path) = find_wasmcloud_binary(&install_dir, &version).await {
+            if let Some(path) = find_wasmcloud_binary(&install_dir, &wasmcloud_version).await {
                 path
             } else {
                 // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
@@ -687,7 +695,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
     // Write the pid file with the selected version and process ID.
     let pid_file_contents = json!({
-        "version": version,
+        "version": wasmcloud_version,
         "pid": wasmcloud_child.id().unwrap()
     });
 
