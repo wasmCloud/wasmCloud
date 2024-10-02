@@ -1,0 +1,18 @@
+package wasmcloud:examples;
+
+world starter-kit {
+  // component sdk
+  include wasmcloud:component/imports;
+
+  // http server
+  export wasi:http/incoming-handler@0.2.0;
+
+  // message listener
+  export wasmcloud:messaging/handler@0.2.0;
+
+  // counter datastore
+  import wasi:keyvalue/atomics@0.2.0-draft;
+  import wasi:keyvalue/store@0.2.0-draft;
+
+  // You can import or export any additional WIT interfaces here
+}

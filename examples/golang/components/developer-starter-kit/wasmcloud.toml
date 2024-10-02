@@ -1,0 +1,8 @@
+name = "starter-kit"
+version = "0.1.0"
+language = "tinygo"
+type = "component"
+
+[component]
+wit_world = "starter-kit"
+wasm_target = "wasm32-wasi-preview2"
