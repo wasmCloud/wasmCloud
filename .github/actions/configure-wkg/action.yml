@@ -3,7 +3,7 @@ name: Install and configure wkg (linux only)
 inputs:
   wkg-version:
     description: version of wkg to install. Should be a valid tag from https://github.com/bytecodealliance/wasm-pkg-tools/releases
-    default: "v0.7.0"
+    default: "v0.6.0"
   oci-username:
     description: username for oci registry
     required: true
@@ -17,7 +17,7 @@ runs:
     - name: Download wkg
       shell: bash
       run: |
-        curl -L https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/${{ inputs.wkg-version }}/wkg-x86_64-unknown-linux-gnu -o wkg
+        curl --fail -L https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/${{ inputs.wkg-version }}/wkg-x86_64-unknown-linux-gnu -o wkg
         chmod +x wkg;
         echo "$(realpath .)" >> "$GITHUB_PATH";
     - name: Generate and set wkg config
