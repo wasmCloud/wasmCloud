@@ -152,7 +152,7 @@ jobs:
               docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
       - uses: ./.github/actions/install-nix
@@ -173,7 +173,7 @@ jobs:
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
-    runs-on: windows-latest-8-cores
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
 
@@ -240,7 +240,7 @@ jobs:
           path: artifact
 
   test-linux:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     needs: build-bin
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
@@ -252,7 +252,7 @@ jobs:
       - run: ./bin/wasmcloud --version
 
   test-windows:
-    runs-on: windows-latest-8-cores
+    runs-on: windows-latest
     needs: build-windows
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
@@ -271,7 +271,7 @@ jobs:
           - nextest
 
     name: cargo ${{ matrix.check }}
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
       - uses: ./.github/actions/install-nix
@@ -280,7 +280,7 @@ jobs:
       - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
 
   build-doc:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
       - uses: ./.github/actions/install-nix
@@ -359,7 +359,7 @@ jobs:
       azurecr_password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
   deploy-doc:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     needs: build-doc
     permissions:
       contents: read
@@ -374,7 +374,7 @@ jobs:
         id: deployment
 
   docker:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     env:
       DOCKER_BUILD_RECORD_UPLOAD: false
     needs:
@@ -407,7 +407,7 @@ jobs:
           - bin: wash
             prefix: wash-cli-
 
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
       packages: write
@@ -551,7 +551,7 @@ jobs:
       - oci
       - test-linux
       - test-windows
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -622,7 +622,7 @@ jobs:
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs: cargo
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
 
@@ -647,7 +647,7 @@ jobs:
       - cargo
       - build-bin
       - test-linux
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
 
@@ -748,7 +748,7 @@ jobs:
 
     name: publish ${{ matrix.crate }} to crates.io
     needs: cargo
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
 

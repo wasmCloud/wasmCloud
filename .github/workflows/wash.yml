@@ -26,17 +26,17 @@ jobs:
     strategy:
       fail-fast: false # Ensure we can run the full suite even if one OS fails
       matrix:
-        os: [ubuntu-22.04, windows-latest-8-cores, macos-12]
+        os: [ubuntu-22.04, windows-latest, macos-12]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
         with:
-          node-version: "18.x"
+          node-version: '18.x'
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
       - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "${{ matrix.os }}-shared-cache"
+          shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
         uses: taiki-e/install-action@42c270942d62c8642a0086bc5854743d9a9c510d
         with:
@@ -62,18 +62,18 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
         with:
-          go-version: "1.22"
+          go-version: '1.22'
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         with:
-          tinygo-version: "0.31.0"
-          install-binaryen: "false"
+          tinygo-version: '0.31.0'
+          install-binaryen: 'false'
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@ef4c4da08a9673f93d4eb8a5da1e942bf24a37ea
         with:
-          cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
+          cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
         uses: taiki-e/install-action@42c270942d62c8642a0086bc5854743d9a9c510d
         with:
@@ -103,7 +103,7 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
         uses: taiki-e/install-action@42c270942d62c8642a0086bc5854743d9a9c510d
