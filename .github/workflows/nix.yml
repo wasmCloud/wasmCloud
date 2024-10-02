@@ -18,28 +18,28 @@ concurrency:
 
 jobs:
   fmt:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix fmt
+      - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix fmt
 
   run:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix run -L . -- --version
+      - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix run -L . -- --version
 
   develop:
-    runs-on: ubuntu-22.04-16-cores
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix develop -L --ignore-environment -c cargo tree
+      - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
+      - uses: ./.github/actions/install-nix
+        with:
+          cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - run: nix develop -L --ignore-environment -c cargo tree
