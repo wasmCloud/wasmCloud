@@ -35,8 +35,7 @@ async fn new_patch_releases_of_after(
         .into_iter()
         .filter(|release| match &release.get_main_artifact_release() {
             Some(version) => {
-                return after_version.major == version.major
-                    && after_version.minor == version.minor;
+                after_version.major == version.major && after_version.minor == version.minor
             }
             None => false,
         })

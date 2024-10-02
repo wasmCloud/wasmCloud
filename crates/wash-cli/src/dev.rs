@@ -1229,7 +1229,7 @@ impl WashDevSession {
                 )
             })?;
         let wadm_version = &wadm_opts.wadm_version.unwrap_or(WADM_VERSION.to_string());
-        let wadm_binary = ensure_wadm(&wadm_version, &install_dir).await?;
+        let wadm_binary = ensure_wadm(wadm_version, &install_dir).await?;
         let wadm_child = match start_wadm(
             &session_dir,
             &wadm_binary,
@@ -1250,7 +1250,7 @@ impl WashDevSession {
             .clone()
             .wasmcloud_version
             .unwrap_or(WASMCLOUD_HOST_VERSION.to_string());
-        let wasmcloud_binary = ensure_wasmcloud(&wasmcloud_version, &install_dir).await?;
+        let wasmcloud_binary = ensure_wasmcloud(wasmcloud_version, &install_dir).await?;
         let log_output: Stdio = tokio::fs::File::create(&wasmcloud_log_path)
             .await
             .with_context(|| {

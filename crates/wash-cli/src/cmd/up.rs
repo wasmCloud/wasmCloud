@@ -590,15 +590,12 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
     let wasmcloud_version = if let Some(version) = wasmcloud_opts.wasmcloud_version {
         version
+    } else if let Some(new_version) =
+        new_patch_version_of_after_string("wasmCloud", "wasmCloud", WASMCLOUD_HOST_VERSION).await?
+    {
+        new_version.to_string()
     } else {
-        if let Some(new_version) =
-            new_patch_version_of_after_string("wasmCloud", "wasmCloud", WASMCLOUD_HOST_VERSION)
-                .await?
-        {
-            new_version.to_string()
-        } else {
-            WASMCLOUD_HOST_VERSION.to_string()
-        }
+        WASMCLOUD_HOST_VERSION.to_string()
     };
     // Download wasmCloud if not already installed
     let wasmcloud_bin_path = match wasmcloud_opts.host_path {
