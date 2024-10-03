@@ -12,7 +12,7 @@ export default defineConfig({
       name: 'lattice-client-core',
       formats: ['es', 'cjs'],
     },
-    outDir: 'build',
+    outDir: 'dist',
     rollupOptions: {
       plugins: [sourceMaps()],
     },

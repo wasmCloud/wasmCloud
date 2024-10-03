@@ -12,16 +12,16 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./build/index.d.ts",
-      "import": "./build/lattice-client-react.js",
-      "require": "./build/lattice-client-react.cjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/lattice-client-react.js",
+      "require": "./dist/lattice-client-react.cjs",
       "default": "./src/index.ts"
     }
   },
-  "main": "./build/lattice-client-react.cjs",
-  "types": "./build/index.d.ts",
+  "main": "./dist/lattice-client-react.cjs",
+  "types": "./dist/index.d.ts",
   "files": [
-    "build",
+    "dist",
     "README.md"
   ],
   "scripts": {

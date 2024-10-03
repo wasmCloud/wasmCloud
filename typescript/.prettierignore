@@ -6,3 +6,5 @@ dist
 .pnp.loader.mjs
 .idea
 **/tmp/**
+test-results
+playwright-report
