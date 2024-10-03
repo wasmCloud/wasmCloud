@@ -272,14 +272,17 @@ impl CommonPackageArgs {
     /// Helper to load the config from the given path
     pub async fn load_config(&self) -> anyhow::Result<wasm_pkg_client::Config> {
         let mut conf = if let Some(config_file) = self.config.as_ref() {
-            wasm_pkg_client::Config::from_file(config_file)
+            // Get the default config so we have the default fallbacks
+            let mut conf = wasm_pkg_client::Config::default();
+            let loaded = wasm_pkg_client::Config::from_file(config_file)
                 .await
-                .context(format!("error loading config file {config_file:?}"))
+                .context(format!("error loading config file {config_file:?}"))?;
+            // Merge the two configs
+            conf.merge(loaded);
+            conf
         } else {
-            wasm_pkg_client::Config::global_defaults()
-                .await
-                .map_err(anyhow::Error::from)
-        }?;
+            wasm_pkg_client::Config::global_defaults().await?
+        };
         let wasmcloud_label = "wasmcloud".parse().unwrap();
         // If they don't have a config set for the wasmcloud namespace, set it to the default defined here
         if conf.namespace_registry(&wasmcloud_label).is_none() {

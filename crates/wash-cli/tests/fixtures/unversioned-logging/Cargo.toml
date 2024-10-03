@@ -1,0 +1,24 @@
+[package]
+name = "blobby"
+version = "0.4.1"
+authors = ["wasmCloud Team"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "blobby"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0.81"
+form_urlencoded = "1.2.1"
+http = "1.1.0"
+wasi = "0.13.2"
+wit-bindgen = "0.32"
+
+[profile.release]
+# Optimize for small code size
+lto = true
+opt-level = "s"
+strip = true

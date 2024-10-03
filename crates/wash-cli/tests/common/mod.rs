@@ -46,6 +46,9 @@ pub const FERRIS_SAYS_OCI_REF: &str = "ghcr.io/wasmcloud/components/ferris-says-
 
 pub const DEFAULT_WASH_INVOCATION_TIMEOUT_MS_ARG: &str = "40000";
 
+#[allow(unused)]
+const WKG_CONFIG_FILE: &str = "wkg_config.toml";
+
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
 pub fn wash() -> std::process::Command {
@@ -667,10 +670,28 @@ pub struct TestSetup {
 
 impl TestSetup {
     #[allow(dead_code)]
+    /// Used to create a new [`TestSetup`] instance. This ensures a default wkg config is used for
+    /// the test as well
+    async fn new(test_dir: TempDir, project_dir: PathBuf) -> Result<Self> {
+        let conf = wasm_pkg_client::Config::default();
+        conf.to_file(test_dir.path().join(WKG_CONFIG_FILE)).await?;
+        Ok(Self {
+            test_dir,
+            project_dir,
+        })
+    }
+
+    #[allow(dead_code)]
     /// A helper that returns a new `wash` binary command configured to use the project directory
+    /// and other test configuration
     pub fn base_command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_wash"));
         cmd.current_dir(&self.project_dir);
+        cmd.env(
+            "WKG_CONFIG_FILE",
+            self.test_dir.path().join(WKG_CONFIG_FILE),
+        );
+        cmd.env("WKG_CACHE_DIR", self.test_dir.path().join("cache"));
         cmd
     }
 }
@@ -694,10 +715,7 @@ pub async fn init(component_name: &str, template_name: &str) -> Result<TestSetup
     // Get the current dir so we can reset it after creating the new component
     let project_dir =
         init_component_from_template(component_name, template_name, &test_dir).await?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
+    TestSetup::new(test_dir, project_dir).await
 }
 
 /// Same as `init`, but takes a path to a template directory. If the given path is absolute, it is
@@ -716,10 +734,7 @@ pub async fn init_path(component_name: &str, path: impl AsRef<Path>) -> Result<T
     };
     let project_dir =
         init_component_from_template_path(component_name, joined_path, &test_dir).await?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
+    TestSetup::new(test_dir, project_dir).await
 }
 
 /// Initializes a new component from a wasmCloud example in wasmcloud/wasmcloud
@@ -781,10 +796,7 @@ pub async fn init_component_from_template_path(
 pub async fn init_provider(provider_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
     let project_dir = init_provider_from_template(provider_name, template_name, &test_dir).await?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
+    TestSetup::new(test_dir, project_dir).await
 }
 
 /// Same as `init_provider`, but takes a path to a template directory. If the given path is
@@ -803,10 +815,7 @@ pub async fn init_provider_path(provider_name: &str, path: impl AsRef<Path>) -> 
     };
     let project_dir =
         init_provider_from_template_path(provider_name, joined_path, &test_dir).await?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
+    TestSetup::new(test_dir, project_dir).await
 }
 
 /// Initializes a new provider from a template provider template
@@ -1099,10 +1108,7 @@ pub async fn load_fixture(fixture: &str) -> anyhow::Result<TestSetup> {
     tokio::fs::metadata(&fixture_path).await?;
     let copied_path = temp_dir.path().join(fixture_path.file_name().unwrap());
     copy_dir(&fixture_path, &copied_path).await?;
-    Ok(TestSetup {
-        test_dir: temp_dir,
-        project_dir: copied_path,
-    })
+    TestSetup::new(temp_dir, copied_path).await
 }
 
 #[allow(dead_code)]

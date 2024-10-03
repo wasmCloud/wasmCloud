@@ -8054,6 +8054,7 @@ dependencies = [
  "warp",
  "wascap 0.15.0",
  "wash-lib",
+ "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
  "wasmcloud-core 0.12.0",
@@ -8392,9 +8393,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-client"
-version = "0.6.0"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cb71f38906d6affe7c8015aed1a878d2b61659f5ce0182800c4b9d71174d13a"
+checksum = "b5c36ab0f85473016aabec2e0b862264fb924a69e4c841e519cf72aaf3c71e13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8425,9 +8426,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-common"
-version = "0.6.0"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf1084234b0de575069a113d538830c02e8f3c00929b605d41e3d926c6d27c0b"
+checksum = "14e2b37ab75178c1a24cf538725c335796073f160e658a56934ade435948b12a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8447,9 +8448,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-pkg-core"
-version = "0.6.0"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12eb8cef2baef2c938b711449ccca9d125a894518a627a3f9b2d77d0fdd6b896"
+checksum = "330b2ce7691f666b105ba10ad0f5e8f01bd282ddbab22a968489ffcc7cd6a07b"
 dependencies = [
  "anyhow",
  "futures-util",

@@ -113,6 +113,7 @@ serial_test = { workspace = true }
 sysinfo = { workspace = true }
 wat = { workspace = true }
 wit-component = { workspace = true }
+wasm-pkg-client = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }
