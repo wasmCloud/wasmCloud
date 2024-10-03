@@ -56,7 +56,7 @@ jobs:
           shared-key: "ubuntu-22.04-shared-cache"
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@07b43ed508403fa32c11f04dd608931cdf6748e2
+        uses: taiki-e/install-action@36f1b7ecb53a94489f74d85cea2f20a8225c82ae
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: build wash (current)
@@ -173,7 +173,7 @@ jobs:
         with:
           tinygo-version: "0.30.0"
           install-binaryen: "false"
-      - uses: taiki-e/install-action@07b43ed508403fa32c11f04dd608931cdf6748e2
+      - uses: taiki-e/install-action@36f1b7ecb53a94489f74d85cea2f20a8225c82ae
         if: ${{ matrix.project.lang == 'golang' }}
         with:
           tool: wit-bindgen-cli
