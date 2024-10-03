@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use async_nats_0_33::RequestErrorKind;
+use async_nats::RequestErrorKind;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm_client::Result;
@@ -328,7 +328,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<CommandOutput> {
 }
 
 pub(crate) async fn deploy_model_from_manifest(
-    client: &async_nats_0_33::Client,
+    client: &async_nats::Client,
     lattice: Option<String>,
     manifest: AppManifest,
     version: Option<String>,
@@ -565,7 +565,7 @@ async fn get_applications(cmd: ListCommand, sp: &Spinner) -> Result<CommandOutpu
 }
 
 async fn watch_applications(
-    client: &async_nats_0_33::Client,
+    client: &async_nats::Client,
     lattice: Option<String>,
     watch: Option<Duration>,
 ) -> Result<()> {

@@ -834,11 +834,7 @@ impl ProjectDeps {
     }
 
     /// Delete all manifests associated with this [`ProjectDeps`]
-    async fn delete_manifests(
-        &self,
-        client: &async_nats_0_33::Client,
-        lattice: &str,
-    ) -> Result<()> {
+    async fn delete_manifests(&self, client: &async_nats::Client, lattice: &str) -> Result<()> {
         for manifest in self
             .generate_wadm_manifests()
             .context("failed to generate manifests")?
@@ -1516,7 +1512,7 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
 
 struct RunDevLoopArgs<'a> {
     dev_session: &'a WashDevSession,
-    nats_client: &'a async_nats_0_33::Client,
+    nats_client: &'a async_nats::Client,
     ctl_client: &'a CtlClient,
     project_cfg: &'a ProjectConfig,
     lattice: &'a str,
@@ -1853,7 +1849,7 @@ pub async fn handle_command(
             .await
             .context("failed to create wasmcloud control client")?,
     );
-    let lattice = &ctl_client.lattice;
+    let lattice = ctl_client.lattice();
 
     // See if the host is running by retrieving an inventory
     if let Err(_e) = ctl_client.get_host_inventory(&host_id).await {

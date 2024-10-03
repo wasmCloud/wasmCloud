@@ -34,7 +34,7 @@ pub(crate) async fn invoke(
 
     sp.finish_and_clear();
 
-    let message = if config_response.message.is_empty() && config_response.success {
+    let message = if config_response.succeeded() {
         let mut out_name = name;
         let mut config_type = "Configuration";
         if is_secret {
@@ -46,11 +46,11 @@ pub(crate) async fn invoke(
         format!("{config_type} '{out_name}' put successfully.")
     } else {
         config_response
-            .message
-            .replace(format!("{SECRET_PREFIX}_").as_str(), "")
+            .message()
+            .replace(&format!("{SECRET_PREFIX}_"), "")
     };
     let json_out = HashMap::from_iter([
-        ("success".to_string(), json!(config_response.success)),
+        ("success".to_string(), json!(config_response.succeeded())),
         ("message".to_string(), json!(message)),
     ]);
     let output = CommandOutput::new(message, json_out);

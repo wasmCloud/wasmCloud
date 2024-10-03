@@ -35,7 +35,8 @@ async fn integration_get_hosts_serial() -> Result<()> {
     assert!(cmd_output.success, "command returned success");
     assert_eq!(cmd_output.hosts.len(), 1, "hosts contains one host");
     assert_eq!(
-        cmd_output.hosts[0].id, wash_instance.host_id,
+        cmd_output.hosts[0].id(),
+        wash_instance.host_id,
         "single host ID matches has the wash ID"
     );
 
@@ -107,30 +108,31 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
     );
     let inventory = &cmd_output.inventories[0];
     assert!(
-        inventory.components.is_empty(),
+        inventory.components().is_empty(),
         "host inventory contains no components "
     );
     assert_eq!(
-        inventory.host_id, wash_instance.host_id,
+        inventory.host_id(),
+        wash_instance.host_id,
         "host ID matches request"
     );
     assert!(
-        !inventory.labels.is_empty(),
+        !inventory.labels().is_empty(),
         "at least one label on the host"
     );
     assert!(
-        inventory.labels.contains_key("hostcore.os"),
+        inventory.labels().contains_key("hostcore.os"),
         "hostcore.os label is present"
     );
     assert!(
-        inventory.labels.contains_key("hostcore.arch"),
+        inventory.labels().contains_key("hostcore.arch"),
         "hostcore.arch label is present"
     );
     assert!(
-        inventory.labels.contains_key("hostcore.osfamily"),
+        inventory.labels().contains_key("hostcore.osfamily"),
         "hostcore.osfmaily label is present"
     );
-    assert!(inventory.providers.is_empty(), "host has no providers");
+    assert!(inventory.providers().is_empty(), "host has no providers");
 
     Ok(())
 }

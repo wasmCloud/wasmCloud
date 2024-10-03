@@ -6,7 +6,7 @@ use wash_lib::cli::link::{
     delete_link, get_links, put_link, LinkCommand, LinkDelCommand, LinkPutCommand, LinkQueryCommand,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wasmcloud_control_interface::InterfaceLinkDefinition;
+use wasmcloud_control_interface::Link;
 
 use crate::appearance::spinner::Spinner;
 use crate::ctl::{link_del_output, links_table};
@@ -34,7 +34,7 @@ pub fn link_put_output(
 }
 
 /// Generate output for the link query command
-pub fn link_query_output(list: Vec<InterfaceLinkDefinition>) -> CommandOutput {
+pub fn link_query_output(list: Vec<Link>) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("links".to_string(), json!(list));
     CommandOutput::new(links_table(list), map)
@@ -88,7 +88,7 @@ pub async fn handle_command(
 
             let failure = put_link(
                 opts.try_into()?,
-                InterfaceLinkDefinition {
+                Link {
                     source_id: source_id.to_string(),
                     target: target.to_string(),
                     name,
@@ -103,7 +103,9 @@ pub async fn handle_command(
             .map_or_else(
                 |e| Some(format!("{e}")),
                 // If the operation was unsuccessful, return the error message
-                |ctl_response| (!ctl_response.success).then_some(ctl_response.message),
+                |ctl_response| {
+                    (!ctl_response.succeeded()).then_some(ctl_response.message().to_string())
+                },
             );
 
             link_put_output(&source_id, &target, failure)?

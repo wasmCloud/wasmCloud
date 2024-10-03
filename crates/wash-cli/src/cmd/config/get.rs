@@ -32,11 +32,11 @@ pub(crate) async fn invoke(
 
     sp.finish_and_clear();
 
-    if !config_response.message.is_empty() && !config_response.success {
-        error!("Error getting {config_type}: {}", config_response.message);
+    if !config_response.succeeded() {
+        error!("Error getting {config_type}: {}", config_response.message());
     };
 
-    if let Some(config) = config_response.response {
+    if let Some(config) = config_response.into_data() {
         Ok(CommandOutput::new(
             format!("{:?}", config),
             config.into_iter().map(|(k, v)| (k, json!(v))).collect(),

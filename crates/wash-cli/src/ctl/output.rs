@@ -8,7 +8,7 @@ use term_table::{
     Table,
 };
 use wash_lib::{cli::CommandOutput, plugin::subcommand::Metadata};
-use wasmcloud_control_interface::{Host, HostInventory, InterfaceLinkDefinition};
+use wasmcloud_control_interface::{Host, HostInventory, Link};
 
 use crate::util::format_optional;
 
@@ -55,7 +55,7 @@ pub fn link_del_output(
     }
 }
 
-pub fn links_table(mut list: Vec<InterfaceLinkDefinition>) -> String {
+pub fn links_table(mut list: Vec<Link>) -> String {
     // Sort the list based on the `source_id` field in ascending order
     list.sort_by(|a, b| a.source_id.cmp(&b.source_id));
 
@@ -93,7 +93,8 @@ pub fn links_table(mut list: Vec<InterfaceLinkDefinition>) -> String {
 /// Helper function to transform a Host list into a table string for printing
 pub fn hosts_table(mut hosts: Vec<Host>) -> String {
     // Sort hosts by uptime_seconds in descending order
-    hosts.sort_by(|a, b| b.uptime_seconds.cmp(&a.uptime_seconds));
+    // hosts.sort_by(|a, b| b.uptime_seconds().cmp(&a.uptime_seconds()));
+    hosts.sort_by_key(|a| std::cmp::Reverse(a.uptime_seconds()));
 
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
@@ -106,9 +107,9 @@ pub fn hosts_table(mut hosts: Vec<Host>) -> String {
 
     hosts.iter().for_each(|h| {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(h.id.clone(), 2, Alignment::Left),
-            TableCell::new_with_alignment(h.friendly_name.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(format!("{}", h.uptime_seconds), 1, Alignment::Left),
+            TableCell::new_with_alignment(h.id().to_string(), 2, Alignment::Left),
+            TableCell::new_with_alignment(h.friendly_name().to_string(), 1, Alignment::Left),
+            TableCell::new_with_alignment(format!("{}", h.uptime_seconds()), 1, Alignment::Left),
         ]))
     });
 
@@ -121,20 +122,20 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
     crate::util::configure_table_style(&mut table, 3);
 
     // Sort the host inventories alphabetically by host_id
-    invs.sort_by(|a, b| a.host_id.cmp(&b.host_id));
+    invs.sort_by(|a, b| a.host_id().cmp(b.host_id()));
 
-    invs.into_iter().for_each(|mut inv| {
+    invs.into_iter().for_each(|inv| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Host ID", 2, Alignment::Left),
             TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
         ]));
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(inv.host_id.clone(), 2, Alignment::Left),
-            TableCell::new_with_alignment(inv.friendly_name.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(inv.host_id().to_string(), 2, Alignment::Left),
+            TableCell::new_with_alignment(inv.friendly_name().to_string(), 1, Alignment::Left),
         ]));
 
         // Sort the labels alphabetically by key
-        let mut sorted_labels: Vec<_> = inv.labels.iter().collect();
+        let mut sorted_labels: Vec<_> = inv.labels().iter().collect();
         sorted_labels.sort_by(|a, b| a.0.cmp(b.0));
 
         if !sorted_labels.is_empty() {
@@ -169,20 +170,25 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
         )]));
 
         // Sort the components alphabetically by name
-        inv.components.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut components = inv.components().clone();
+        components.sort_by(|a, b| a.name().cmp(&b.name()));
 
-        if !inv.components.is_empty() {
+        if !components.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Component ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
                 TableCell::new_with_alignment("Max count", 1, Alignment::Left),
             ]));
-            inv.components.iter().for_each(|a| {
+            components.iter().for_each(|a| {
                 let a = a.clone();
                 table.add_row(Row::new(vec![
-                    TableCell::new_with_alignment(a.id, 1, Alignment::Left),
-                    TableCell::new_with_alignment(format_optional(a.name), 1, Alignment::Left),
-                    TableCell::new_with_alignment(a.max_instances, 1, Alignment::Left),
+                    TableCell::new_with_alignment(a.id(), 1, Alignment::Left),
+                    TableCell::new_with_alignment(
+                        format_optional(a.name().map(String::from)),
+                        1,
+                        Alignment::Left,
+                    ),
+                    TableCell::new_with_alignment(a.max_instances(), 1, Alignment::Left),
                 ]))
             });
         } else {
@@ -200,18 +206,23 @@ pub fn host_inventories_table(mut invs: Vec<HostInventory>) -> String {
         )]));
 
         // Sort the providers alphabetically by name
-        inv.providers.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut providers = inv.providers().clone();
+        providers.sort_by(|a, b| a.name().cmp(&b.name()));
 
-        if !inv.providers.is_empty() {
+        if !providers.is_empty() {
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
                 TableCell::new_with_alignment("Name", 1, Alignment::Left),
             ]));
-            inv.providers.iter().for_each(|p| {
+            inv.providers().iter().for_each(|p| {
                 let p = p.clone();
                 table.add_row(Row::new(vec![
-                    TableCell::new_with_alignment(p.id, 1, Alignment::Left),
-                    TableCell::new_with_alignment(format_optional(p.name), 1, Alignment::Left),
+                    TableCell::new_with_alignment(p.id(), 1, Alignment::Left),
+                    TableCell::new_with_alignment(
+                        format_optional(p.name().map(String::from)),
+                        1,
+                        Alignment::Left,
+                    ),
                 ]))
             });
         } else {
