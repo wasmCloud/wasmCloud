@@ -18,8 +18,8 @@ github.com/urfave/cli/v3 v3.0.0-alpha9 h1:P0RMy5fQm1AslQS+XCmy9UknDXctOmG/q/FZkU
 github.com/urfave/cli/v3 v3.0.0-alpha9/go.mod h1:0kK/RUFHyh+yIKSfWxwheGndfnrvYSmYFVeKCh03ZUc=
 github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 h1:gEOO8jv9F4OT7lGCjxCBTO/36wtF6j2nSip77qHd4x4=
 github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1/go.mod h1:Ohn+xnUBiLI6FVj/9LpzZWtj1/D6lUovWYBkxHVV3aM=
-go.wasmcloud.dev/component v0.0.1 h1:sIsv0qkxCwRgwf8Pkoq4FxV783VdepzPJ2eU3g0BW5U=
-go.wasmcloud.dev/component v0.0.1/go.mod h1:OIHhTDo0O6T2GZ2E5oiJiZeT15zBm0OUBCRSdtUdo24=
+go.wasmcloud.dev/component v0.0.2 h1:ueE48/I7BLOr7SeU6WzpKXgjHw4H1xSvzTrKg0Xl9t4=
+go.wasmcloud.dev/component v0.0.2/go.mod h1:OIHhTDo0O6T2GZ2E5oiJiZeT15zBm0OUBCRSdtUdo24=
 go.wasmcloud.dev/wadge v0.5.1 h1:APsu3jHuUKrio8CHMbZKQ6T7TIltBNgltCu1YFeYC00=
 go.wasmcloud.dev/wadge v0.5.1/go.mod h1:BkAxt9wF08UWbRYblfxbTtupn0rQLtsgTKeu22SBGRg=
 golang.org/x/mod v0.21.0 h1:vvrHzRwRfVKSiLrG+d4FMl/Qi4ukBCE6kZlTUkDYRT0=

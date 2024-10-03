@@ -4,7 +4,7 @@ go 1.23.1
 
 require (
 	github.com/bytecodealliance/wasm-tools-go v0.2.1
-	go.wasmcloud.dev/component v0.0.1
+	go.wasmcloud.dev/component v0.0.2
 	go.wasmcloud.dev/wadge v0.5.1
 )
 
