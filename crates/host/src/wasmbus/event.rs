@@ -96,27 +96,27 @@ pub fn component_scale_failed(
 
 pub fn linkdef_set(link: &Link) -> serde_json::Value {
     json!({
-        "source_id": link.source_id,
-        "target": link.target,
-        "name": link.name,
-        "wit_namespace": link.wit_namespace,
-        "wit_package": link.wit_package,
-        "interfaces": link.interfaces,
-        "source_config": link.source_config,
-        "target_config": link.target_config,
+        "source_id": link.source_id(),
+        "target": link.target(),
+        "name": link.name(),
+        "wit_namespace": link.wit_namespace(),
+        "wit_package": link.wit_package(),
+        "interfaces": link.interfaces(),
+        "source_config": link.source_config(),
+        "target_config": link.target_config(),
     })
 }
 
 pub fn linkdef_set_failed(link: &Link, error: &anyhow::Error) -> serde_json::Value {
     json!({
-        "source_id": link.source_id,
-        "target": link.target,
-        "name": link.name,
-        "wit_namespace": link.wit_namespace,
-        "wit_package": link.wit_package,
-        "interfaces": link.interfaces,
-        "source_config": link.source_config,
-        "target_config": link.target_config,
+        "source_id": link.source_id(),
+        "target": link.target(),
+        "name": link.name(),
+        "wit_namespace": link.wit_namespace(),
+        "wit_package": link.wit_package(),
+        "interfaces": link.interfaces(),
+        "source_config": link.source_config(),
+        "target_config": link.target_config(),
         "error": format!("{error:#}"),
     })
 }

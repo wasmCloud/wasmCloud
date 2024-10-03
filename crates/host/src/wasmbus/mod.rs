@@ -2051,31 +2051,35 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<CtlResponse<()>> {
-        let StartProviderCommand {
-            config,
-            provider_id,
-            provider_ref,
-            annotations,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
+        let cmd = serde_json::from_slice::<StartProviderCommand>(payload.as_ref())
             .context("failed to deserialize provider start command")?;
 
-        if self.providers.read().await.contains_key(&provider_id) {
+        if self.providers.read().await.contains_key(cmd.provider_id()) {
             return Ok(CtlResponse::error(
                 "provider with that ID is already running",
             ));
         }
 
-        info!(provider_ref, provider_id, "handling start provider"); // Log at info since starting providers can take a while
+        // NOTE: We log at info since starting providers can take a while
+        info!(
+            provider_ref = cmd.provider_ref(),
+            provider_id = cmd.provider_id(),
+            "handling start provider"
+        );
 
         let host_id = host_id.to_string();
         spawn(async move {
+            let config = cmd.config();
+            let provider_id = cmd.provider_id();
+            let provider_ref = cmd.provider_ref();
+            let annotations = cmd.annotations();
+
             if let Err(err) = self
                 .handle_start_provider_task(
-                    &config,
-                    &provider_id,
-                    &provider_ref,
-                    annotations.unwrap_or_default(),
+                    config,
+                    provider_id,
+                    provider_ref,
+                    annotations.cloned().unwrap_or_default(),
                     &host_id,
                 )
                 .await
@@ -2208,10 +2212,10 @@ impl Host {
             let provider_links = all_links
                 .values()
                 .flatten()
-                .filter(|link| link.source_id == provider_id || link.target == provider_id);
+                .filter(|link| link.source_id() == provider_id || link.target() == provider_id);
             let link_definitions = stream::iter(provider_links)
                 .filter_map(|link| async {
-                    if link.source_id == provider_id || link.target == provider_id {
+                    if link.source_id() == provider_id || link.target() == provider_id {
                         match self
                             .resolve_link_config(
                                 link.clone(),
@@ -2226,8 +2230,8 @@ impl Host {
                                 error!(
                                     error = ?e,
                                     provider_id,
-                                    source_id = link.source_id,
-                                    target = link.target,
+                                    source_id = link.source_id(),
+                                    target = link.target(),
                                     "failed to resolve link config, skipping link"
                                 );
                                 None
@@ -2700,21 +2704,16 @@ impl Host {
     #[instrument(level = "debug", skip_all)]
     async fn handle_link_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<CtlResponse<()>> {
         let payload = payload.as_ref();
-        let interface_link_definition: Link = serde_json::from_slice(payload)
+        let link: Link = serde_json::from_slice(payload)
             .context("failed to deserialize wrpc link definition")?;
 
         let link_set_result: anyhow::Result<()> = async {
-            let Link {
-                source_id,
-                target,
-                wit_namespace,
-                wit_package,
-                interfaces,
-                name,
-                source_config: _,
-                target_config: _,
-                ..
-            } = interface_link_definition.clone();
+            let source_id = link.source_id();
+            let target = link.target();
+            let wit_namespace = link.wit_namespace();
+            let wit_package = link.wit_package();
+            let interfaces = link.interfaces();
+            let name = link.name();
 
             let ns_and_package = format!("{wit_namespace}:{wit_package}");
             debug!(
@@ -2728,51 +2727,59 @@ impl Host {
 
             // Validate all configurations
             self.validate_config(
-                interface_link_definition
-                    .source_config
+                link
+                    .source_config()
+                    .clone()
                     .iter()
-                    .chain(&interface_link_definition.target_config)
+                    .chain(link.target_config())
             ).await?;
 
             let mut component_spec = self
-                .get_component_spec(&source_id)
+                .get_component_spec(source_id)
                 .await?
                 .unwrap_or_default();
 
             // If the link is defined from this source on the same interface and link name, but to a different target,
             // we need to reject this link and suggest deleting the existing link or using a different link name.
             if let Some(existing_conflict_link) = component_spec.links.iter().find(|link| {
-                link.source_id == source_id
-                    && link.wit_namespace == wit_namespace
-                    && link.wit_package == wit_package
-                    && link.name == name
-                    && link.target != target
+                link.source_id() == source_id
+                    && link.wit_namespace() == wit_namespace
+                    && link.wit_package() == wit_package
+                    && link.name() == name
+                    && link.target() != target
             }) {
-                error!(source_id, desired_target = target, existing_target = existing_conflict_link.target, ns_and_package, name, "link already exists with different target, consider deleting the existing link or using a different link name");
+                error!(
+                    source_id,
+                    desired_target = target,
+                    existing_target = existing_conflict_link.target(),
+                    ns_and_package,
+                    name,
+                    "link already exists with different target, consider deleting the existing link or using a different link name"
+                );
                 bail!("link already exists with different target, consider deleting the existing link or using a different link name");
             }
 
             // If we can find an existing link with the same source, target, namespace, package, and name, update it.
             // Otherwise, add the new link to the component specification.
             if let Some(existing_link_index) = component_spec.links.iter().position(|link| {
-                link.source_id == source_id
-                    && link.target == target
-                    && link.wit_namespace == wit_namespace
-                    && link.wit_package == wit_package
-                    && link.name == name
+                link.source_id() == source_id
+                    && link.target() == target
+                    && link.wit_namespace() == wit_namespace
+                    && link.wit_package() == wit_package
+                    && link.name() == name
             }) {
                 if let Some(existing_link) = component_spec.links.get_mut(existing_link_index) {
-                    *existing_link = interface_link_definition.clone();
+                    *existing_link = link.clone();
                 }
             } else {
-                component_spec.links.push(interface_link_definition.clone());
+                component_spec.links.push(link.clone());
             };
 
             // Update component specification with the new link
             self.store_component_spec(&source_id, &component_spec)
                 .await?;
 
-            self.put_backwards_compat_provider_link(&interface_link_definition)
+            self.put_backwards_compat_provider_link(&link)
                 .await?;
 
             Ok(())
@@ -2780,18 +2787,12 @@ impl Host {
         .await;
 
         if let Err(e) = link_set_result {
-            self.publish_event(
-                "linkdef_set_failed",
-                event::linkdef_set_failed(&interface_link_definition, &e),
-            )
-            .await?;
+            self.publish_event("linkdef_set_failed", event::linkdef_set_failed(&link, &e))
+                .await?;
             Ok(CtlResponse::error(e.to_string().as_ref()))
         } else {
-            self.publish_event(
-                "linkdef_set",
-                event::linkdef_set(&interface_link_definition),
-            )
-            .await?;
+            self.publish_event("linkdef_set", event::linkdef_set(&link))
+                .await?;
             Ok(CtlResponse::<()>::success("successfully set link".into()))
         }
     }
@@ -2825,10 +2826,10 @@ impl Host {
         // and update the component specification.
         let deleted_link = if let Some(existing_link_index) =
             component_spec.links.iter().position(|link| {
-                link.source_id == source_id
-                    && link.wit_namespace == wit_namespace
-                    && link.wit_package == wit_package
-                    && link.name == link_name
+                link.source_id() == source_id
+                    && link.wit_namespace() == wit_namespace
+                    && link.wit_package() == wit_package
+                    && link.name() == link_name
             }) {
             // Sanity safety check since `swap_remove` will panic if the index is out of bounds
             if existing_link_index < component_spec.links.len() {
@@ -2850,15 +2851,18 @@ impl Host {
         }
 
         // For idempotency, we always publish the deleted event, even if the link didn't exist
+        let deleted_link_target = deleted_link
+            .as_ref()
+            .map(|link| String::from(link.target()));
         self.publish_event(
             "linkdef_deleted",
             event::linkdef_deleted(
                 source_id,
-                deleted_link.as_ref().map(|link| &link.target),
+                deleted_link_target.as_ref(),
                 link_name,
                 wit_namespace,
                 wit_package,
-                deleted_link.as_ref().map(|link| &link.interfaces),
+                deleted_link.as_ref().map(|link| link.interfaces()),
             ),
         )
         .await?;
@@ -3159,11 +3163,11 @@ impl Host {
         // Only attempt to publish the backwards-compatible provider link definition if the link
         // does not contain any secret values.
         let source_config_contains_secret = link
-            .source_config
+            .source_config()
             .iter()
             .any(|c| c.starts_with(SECRET_PREFIX));
         let target_config_contains_secret = link
-            .target_config
+            .target_config()
             .iter()
             .any(|c| c.starts_with(SECRET_PREFIX));
         if source_config_contains_secret || target_config_contains_secret {
@@ -3182,7 +3186,7 @@ impl Host {
         if let Err(e) = self
             .rpc_nats
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.source_id),
+                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.source_id()),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload.clone(),
             )
@@ -3197,7 +3201,7 @@ impl Host {
         if let Err(e) = self
             .rpc_nats
             .publish_with_headers(
-                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.target),
+                format!("wasmbus.rpc.{lattice}.{}.linkdefs.put", link.target()),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
                 payload,
             )
@@ -3251,12 +3255,12 @@ impl Host {
         let lattice = &self.host_config.lattice;
         // The provider expects the [`wasmcloud_core::InterfaceLinkDefinition`]
         let link = wasmcloud_core::InterfaceLinkDefinition {
-            source_id: link.source_id.clone(),
-            target: link.target.clone(),
-            wit_namespace: link.wit_namespace.clone(),
-            wit_package: link.wit_package.clone(),
-            name: link.name.clone(),
-            interfaces: link.interfaces.clone(),
+            source_id: link.source_id().to_string(),
+            target: link.target().to_string(),
+            wit_namespace: link.wit_namespace().to_string(),
+            wit_package: link.wit_package().to_string(),
+            name: link.name().to_string(),
+            interfaces: link.interfaces().clone(),
             // Configuration isn't needed for deletion
             ..Default::default()
         };
@@ -3377,7 +3381,8 @@ impl Host {
                         .iter()
                         .filter_map(|(source_id, links)| {
                             // Only consider links that are either the source or target of the new link
-                            if source_id == &spec_link.source_id || source_id == &spec_link.target {
+                            if source_id == spec_link.source_id() || source_id == spec_link.target()
+                            {
                                 Some(links)
                             } else {
                                 None
@@ -3395,12 +3400,12 @@ impl Host {
             // For every new link, if a provider is running on this host as the source or target,
             // send the link to the provider for handling based on the xkey public key.
             for link in new_links {
-                if let Some(provider) = providers.get(&link.source_id) {
+                if let Some(provider) = providers.get(link.source_id()) {
                     if let Err(e) = self.put_provider_link(provider, link).await {
                         error!(?e, "failed to put provider link");
                     }
                 }
-                if let Some(provider) = providers.get(&link.target) {
+                if let Some(provider) = providers.get(link.target()) {
                     if let Err(e) = self.put_provider_link(provider, link).await {
                         error!(?e, "failed to put provider link");
                     }
@@ -3621,10 +3626,10 @@ impl Host {
         provider_xkey: &XKey,
     ) -> anyhow::Result<wasmcloud_core::InterfaceLinkDefinition> {
         let (source_bundle, raw_source_secrets) = self
-            .fetch_config_and_secrets(link.source_config.as_slice(), provider_jwt, application)
+            .fetch_config_and_secrets(link.source_config().as_slice(), provider_jwt, application)
             .await?;
         let (target_bundle, raw_target_secrets) = self
-            .fetch_config_and_secrets(link.target_config.as_slice(), provider_jwt, application)
+            .fetch_config_and_secrets(link.target_config().as_slice(), provider_jwt, application)
             .await?;
 
         let source_config = source_bundle.get_config().await;
@@ -3683,12 +3688,12 @@ impl Host {
         };
 
         Ok(wasmcloud_core::InterfaceLinkDefinition {
-            source_id: link.source_id,
-            target: link.target,
-            name: link.name,
-            wit_namespace: link.wit_namespace,
-            wit_package: link.wit_package,
-            interfaces: link.interfaces,
+            source_id: link.source_id().to_string(),
+            target: link.target().to_string(),
+            name: link.name().to_string(),
+            wit_namespace: link.wit_namespace().to_string(),
+            wit_package: link.wit_package().to_string(),
+            interfaces: link.interfaces().clone(),
             source_config: source_config.clone(),
             target_config: target_config.clone(),
             source_secrets,
@@ -3707,21 +3712,19 @@ impl Host {
 /// - A `HashMap` in the form of `link_name` -> `instance` -> target
 fn component_import_links(links: &[Link]) -> HashMap<Box<str>, HashMap<Box<str>, Box<str>>> {
     let mut m = HashMap::new();
-    for Link {
-        name,
-        target,
-        wit_namespace,
-        wit_package,
-        interfaces,
-        ..
-    } in links
-    {
-        let instances: &mut HashMap<Box<str>, Box<str>> =
-            m.entry(name.clone().into_boxed_str()).or_default();
-        for interface in interfaces {
+    for link in links {
+        let instances: &mut HashMap<Box<str>, Box<str>> = m
+            .entry(link.name().to_string().into_boxed_str())
+            .or_default();
+        for interface in link.interfaces() {
             instances.insert(
-                format!("{wit_namespace}:{wit_package}/{interface}").into_boxed_str(),
-                target.clone().into_boxed_str(),
+                format!(
+                    "{}:{}/{interface}",
+                    link.wit_namespace(),
+                    link.wit_package(),
+                )
+                .into_boxed_str(),
+                link.target().to_string().into_boxed_str(),
             );
         }
     }
@@ -3998,76 +4001,81 @@ mod test {
         use wasmcloud_control_interface::Link;
 
         let links = vec![
-            Link {
-                source_id: "source_component".to_string(),
-                target: "kv-redis".to_string(),
-                wit_namespace: "wasi".to_string(),
-                wit_package: "keyvalue".to_string(),
-                interfaces: vec!["atomics".to_string(), "store".to_string()],
-                name: "default".to_string(),
-                source_config: vec![],
-                target_config: vec![],
-            },
-            Link {
-                source_id: "source_component".to_string(),
-                target: "kv-vault".to_string(),
-                wit_namespace: "wasi".to_string(),
-                wit_package: "keyvalue".to_string(),
-                interfaces: vec!["atomics".to_string(), "store".to_string()],
-                name: "secret".to_string(),
-                source_config: vec![],
-                target_config: vec!["my-secret".to_string()],
-            },
-            Link {
-                source_id: "source_component".to_string(),
-                target: "kv-vault-offsite".to_string(),
-                wit_namespace: "wasi".to_string(),
-                wit_package: "keyvalue".to_string(),
-                interfaces: vec!["atomics".to_string()],
-                name: "secret".to_string(),
-                source_config: vec![],
-                target_config: vec!["my-secret".to_string()],
-            },
-            Link {
-                source_id: "http".to_string(),
-                target: "source_component".to_string(),
-                wit_namespace: "wasi".to_string(),
-                wit_package: "http".to_string(),
-                interfaces: vec!["incoming-handler".to_string()],
-                name: "default".to_string(),
-                source_config: vec!["some-port".to_string()],
-                target_config: vec![],
-            },
-            Link {
-                source_id: "source_component".to_string(),
-                target: "httpclient".to_string(),
-                wit_namespace: "wasi".to_string(),
-                wit_package: "http".to_string(),
-                interfaces: vec!["outgoing-handler".to_string()],
-                name: "default".to_string(),
-                source_config: vec![],
-                target_config: vec!["some-port".to_string()],
-            },
-            Link {
-                source_id: "source_component".to_string(),
-                target: "other_component".to_string(),
-                wit_namespace: "custom".to_string(),
-                wit_package: "foo".to_string(),
-                interfaces: vec!["bar".to_string(), "baz".to_string()],
-                name: "default".to_string(),
-                source_config: vec![],
-                target_config: vec![],
-            },
-            Link {
-                source_id: "other_component".to_string(),
-                target: "target".to_string(),
-                wit_namespace: "wit".to_string(),
-                wit_package: "package".to_string(),
-                interfaces: vec!["interface3".to_string()],
-                name: "link2".to_string(),
-                source_config: vec![],
-                target_config: vec![],
-            },
+            Link::builder()
+                .source_id("source_component")
+                .target("kv-redis")
+                .wit_namespace("wasi")
+                .wit_package("keyvalue")
+                .interfaces(vec!["atomics".into(), "store".into()])
+                .name("default")
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("source_component")
+                .target("kv-vault")
+                .wit_namespace("wasi")
+                .wit_package("keyvalue")
+                .interfaces(vec!["atomics".into(), "store".into()])
+                .name("secret")
+                .source_config(vec![])
+                .target_config(vec!["my-secret".into()])
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("source_component")
+                .target("kv-vault-offsite")
+                .wit_namespace("wasi")
+                .wit_package("keyvalue")
+                .interfaces(vec!["atomics".into()])
+                .name("secret")
+                .source_config(vec![])
+                .target_config(vec!["my-secret".into()])
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("http")
+                .target("source_component")
+                .wit_namespace("wasi")
+                .wit_package("http")
+                .interfaces(vec!["incoming-handler".into()])
+                .name("default")
+                .source_config(vec!["some-port".into()])
+                .target_config(vec![])
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("source_component")
+                .target("httpclient")
+                .wit_namespace("wasi")
+                .wit_package("http")
+                .interfaces(vec!["outgoing-handler".into()])
+                .name("default")
+                .source_config(vec![])
+                .target_config(vec!["some-port".into()])
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("source_component")
+                .target("other_component")
+                .wit_namespace("custom")
+                .wit_package("foo")
+                .interfaces(vec!["bar".into(), "baz".into()])
+                .name("default")
+                .source_config(vec![])
+                .target_config(vec![])
+                .build()
+                .expect("failed to build link"),
+            Link::builder()
+                .source_id("other_component")
+                .target("target")
+                .wit_namespace("wit")
+                .wit_package("package")
+                .interfaces(vec!["interface3".into()])
+                .name("link2")
+                .source_config(vec![])
+                .target_config(vec![])
+                .build()
+                .expect("failed to build link"),
         ];
 
         let links_map = super::component_import_links(&links);
