@@ -165,11 +165,11 @@ jobs:
           package: wasmcloud-${{ matrix.config.target }}
       - run: ${{ matrix.config.test-bin }}
       - uses: ./.github/actions/build-nix
-        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+        if: ${{ !endsWith(matrix.config.target, 'fhs') && github.event_name != 'pull_request' }}
         with:
           package: wasmcloud-${{ matrix.config.target }}-oci
       - run: ${{ matrix.config.test-oci }}
-        if: ${{ !endsWith(matrix.config.target, 'fhs') }}
+        if: ${{ !endsWith(matrix.config.target, 'fhs') && github.event_name != 'pull_request' }}
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
@@ -375,6 +375,7 @@ jobs:
         id: deployment
 
   docker:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     env:
       DOCKER_BUILD_RECORD_UPLOAD: false
@@ -400,6 +401,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
   oci:
+    if: github.event_name != 'pull_request'
     strategy:
       matrix:
         include:
