@@ -224,7 +224,7 @@ impl ProviderAuctionAck {
     /// Get the Host ID for the provider auction acknowledgement
     #[must_use]
     pub fn host_id(&self) -> &str {
-        self.provider_ref.as_ref()
+        self.host_id.as_ref()
     }
 
     /// Get the provider ref for the provider auction acknowledgement
@@ -236,7 +236,7 @@ impl ProviderAuctionAck {
     /// Get the provider ID for the provider auction acknowledgement
     #[must_use]
     pub fn provider_id(&self) -> &str {
-        self.provider_ref.as_ref()
+        self.provider_id.as_ref()
     }
 
     /// Get the constraints for the provider auction acknowledgement
@@ -328,7 +328,7 @@ impl ProviderAuctionRequest {
     /// Get the provider ID for the auction request
     #[must_use]
     pub fn provider_id(&self) -> &str {
-        self.provider_ref.as_ref()
+        self.provider_id.as_ref()
     }
 
     /// Get the constraints acknowledged by the auction request
@@ -439,6 +439,11 @@ impl DeleteInterfaceLinkDefinitionRequest {
     pub fn wit_package(&self) -> &str {
         self.wit_package.as_ref()
     }
+
+    #[must_use]
+    pub fn builder() -> DeleteInterfaceLinkDefinitionRequestBuilder {
+        DeleteInterfaceLinkDefinitionRequestBuilder::default()
+    }
 }
 
 #[derive(Default, Clone, PartialEq, Eq)]
@@ -489,4 +494,105 @@ impl DeleteInterfaceLinkDefinitionRequestBuilder {
 /// Helper function to provide a default link name
 fn default_link_name() -> LinkName {
     "default".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{
+        ComponentAuctionAck, ComponentAuctionRequest, DeleteInterfaceLinkDefinitionRequest,
+        ProviderAuctionAck, ProviderAuctionRequest,
+    };
+
+    #[test]
+    fn component_auction_ack_builder() {
+        assert_eq!(
+            ComponentAuctionAck {
+                component_ref: "component_ref".into(),
+                component_id: "component_id".into(),
+                host_id: "host_id".into(),
+                constraints: BTreeMap::from([("a".into(), "b".into())])
+            },
+            ComponentAuctionAck::builder()
+                .component_ref("component_ref".into())
+                .component_id("component_id".into())
+                .host_id("host_id".into())
+                .constraints(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn component_auction_request_builder() {
+        assert_eq!(
+            ComponentAuctionRequest {
+                component_ref: "component_ref".into(),
+                component_id: "component_id".into(),
+                constraints: BTreeMap::from([("a".into(), "b".into())])
+            },
+            ComponentAuctionRequest::builder()
+                .component_ref("component_ref".into())
+                .component_id("component_id".into())
+                .constraints(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn provider_auction_ack_builder() {
+        assert_eq!(
+            ProviderAuctionAck {
+                provider_ref: "provider_ref".into(),
+                provider_id: "provider_id".into(),
+                host_id: "host_id".into(),
+                constraints: BTreeMap::from([("a".into(), "b".into())])
+            },
+            ProviderAuctionAck::builder()
+                .provider_ref("provider_ref".into())
+                .provider_id("provider_id".into())
+                .host_id("host_id".into())
+                .constraints(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn provider_auction_request_builder() {
+        assert_eq!(
+            ProviderAuctionRequest {
+                provider_ref: "provider_ref".into(),
+                provider_id: "provider_id".into(),
+                constraints: BTreeMap::from([("a".into(), "b".into())])
+            },
+            ProviderAuctionRequest::builder()
+                .provider_ref("provider_ref".into())
+                .provider_id("provider_id".into())
+                .constraints(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn delete_interface_link_definition_request_builder() {
+        assert_eq!(
+            DeleteInterfaceLinkDefinitionRequest {
+                source_id: "source_id".into(),
+                name: "name".into(),
+                wit_namespace: "wit_namespace".into(),
+                wit_package: "wit_package".into(),
+            },
+            DeleteInterfaceLinkDefinitionRequest::builder()
+                .source_id("source_id".into())
+                .name("name".into())
+                .wit_namespace("wit_namespace".into())
+                .wit_package("wit_package".into())
+                .build()
+                .unwrap()
+        )
+    }
 }

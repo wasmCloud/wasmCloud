@@ -408,3 +408,70 @@ impl HostLabel {
         &self.value
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::{ComponentDescription, ProviderDescription};
+
+    use super::{Host, HostInventory};
+
+    #[test]
+    fn host_builder() {
+        assert_eq!(
+            Host {
+                rpc_host: Some("rpc_host".into()),
+                ctl_host: Some("ctl_host".into()),
+                friendly_name: "friendly_name".into(),
+                id: "id".into(),
+                js_domain: Some("js_domain".into()),
+                labels: BTreeMap::from([("a".into(), "b".into())]),
+                lattice: "lattice".into(),
+                uptime_human: Some("t".into()),
+                uptime_seconds: 1,
+                version: Some("1.0.0".into()),
+            },
+            Host::builder()
+                .rpc_host("rpc_host".into())
+                .ctl_host("ctl_host".into())
+                .friendly_name("friendly_name".into())
+                .id("id".into())
+                .js_domain("js_domain".into())
+                .labels(BTreeMap::from([("a".into(), "b".into())]))
+                .lattice("lattice".into())
+                .uptime_human("t".into())
+                .uptime_seconds(1)
+                .version("1.0.0".into())
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn host_inventory_builder() {
+        assert_eq!(
+            HostInventory {
+                components: Vec::from([ComponentDescription::default()]),
+                providers: Vec::from([ProviderDescription::default()]),
+                host_id: "host_id".into(),
+                friendly_name: "friendly_name".into(),
+                labels: BTreeMap::from([("a".into(), "b".into())]),
+                version: "1.0.0".into(),
+                uptime_human: "t".into(),
+                uptime_seconds: 1
+            },
+            HostInventory::builder()
+                .components(Vec::from([ComponentDescription::default()]))
+                .providers(Vec::from([ProviderDescription::default()]))
+                .host_id("host_id".into())
+                .friendly_name("friendly_name".into())
+                .labels(BTreeMap::from([("a".into(), "b".into())]))
+                .version("1.0.0".into())
+                .uptime_human("t".into())
+                .uptime_seconds(1)
+                .build()
+                .unwrap()
+        )
+    }
+}

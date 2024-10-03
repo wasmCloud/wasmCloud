@@ -227,6 +227,12 @@ impl ComponentInstanceBuilder {
         self
     }
 
+    #[must_use]
+    pub fn annotations(mut self, v: BTreeMap<String, String>) -> Self {
+        self.annotations = Some(v);
+        self
+    }
+
     pub fn build(self) -> Result<ComponentInstance> {
         Ok(ComponentInstance {
             image_ref: self
@@ -239,5 +245,57 @@ impl ComponentInstanceBuilder {
             max_instances: self.max_instances.unwrap_or_default(),
             annotations: self.annotations,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{ComponentDescription, ComponentInstance};
+
+    #[test]
+    fn component_desc_builder() {
+        assert_eq!(
+            ComponentDescription {
+                id: "id".into(),
+                image_ref: "ref".into(),
+                name: Some("name".into()),
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                revision: 0,
+                max_instances: 1,
+            },
+            ComponentDescription::builder()
+                .id("id".into())
+                .name("test".into())
+                .image_ref("ref".into())
+                .name("name".into())
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .revision(0)
+                .max_instances(1)
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn component_instance_builder() {
+        assert_eq!(
+            ComponentInstance {
+                instance_id: "id".into(),
+                image_ref: "ref".into(),
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                revision: 0,
+                max_instances: 1,
+            },
+            ComponentInstance::builder()
+                .instance_id("id".into())
+                .image_ref("ref".into())
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .revision(0)
+                .max_instances(1)
+                .build()
+                .unwrap()
+        )
     }
 }
