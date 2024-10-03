@@ -1,0 +1,37 @@
+on:
+  workflow_call: {}
+
+env:
+  TURBO_CACHE_DIR: ./.turbo/cache
+  TURBO_TELEMETRY_DISABLED: true
+  TURBO_RUN_SUMMARY: true
+
+defaults:
+  run:
+    working-directory: ./typescript
+
+jobs:
+  run:
+    name: Format + Lint + Unit Test
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
+
+      - name: Setup
+        uses: ./.github/actions/ts-setup
+        with:
+          package-manager: yarn
+          working-directory: ./typescript
+
+      - name: Run Tests
+        run: yarn turbo lint format test:unit
+
+      # TODO: add a step here for uploading test results once unit tests are running
+  
+  e2e:
+    name: E2E
+
+    uses: ./.github/workflows/ts-test-e2e.yml

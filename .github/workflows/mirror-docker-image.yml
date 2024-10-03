@@ -14,7 +14,6 @@ on:
       output-image:
         description: |
           Image path under 'wasmcloud/mirrors' to use (ex. 'a' -> 'wasmcloud/mirrors/a:<tag>', 'tools/b' -> 'wasmcloud/mirrors/tools/b:<tag>')
-        optional: true
 
 permissions: {}
 

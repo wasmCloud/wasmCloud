@@ -1,0 +1,34 @@
+name: Typescript
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'typescript/apps/*'
+      - 'typescript/packages/*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: washboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/ts-build.yml
+
+  test:
+    name: Test
+    uses: ./.github/workflows/ts-test.yml
+
+  release:
+    name: Release
+    if: startswith(github.ref, 'refs/tags/typescript/')
+    needs: [build, test]
+    uses: ./.github/workflows/ts-release.yml
