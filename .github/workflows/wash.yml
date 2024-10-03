@@ -45,6 +45,13 @@ jobs:
         uses: taiki-e/install-action@07b43ed508403fa32c11f04dd608931cdf6748e2
         with:
           tool: wit-bindgen-cli
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+        with:
+          go-version: '1.22'
+      - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
+        with:
+          tinygo-version: '0.31.0'
+          install-binaryen: 'false'
 
       # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
       - name: Build wash
