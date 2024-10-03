@@ -14,9 +14,15 @@ import (
 	"github.com/wasmCloud/wasmcloud/examples/golang/components/developer-starter-kit/gen/wasi/keyvalue/store"
 )
 
+// replaced in tests
 var (
-	// replaced in tests
 	storeName = "default"
+
+	// NOTE: Use the wasi default http.Client.
+	// You can also build your own `http.Client` using `wasihttp.DefaultTransport` or constructing a `wasihttp.Transport`.
+	// var httpClient := &http.Client{Transport: wasihttp.DefaultTransport}
+	// var httpClient := &http.Client{Transport: &wasihttp.Transport{ConnectTimeout: 30 * time.Second}}
+	httpClient = wasihttp.DefaultClient
 )
 
 func handleHTTP(w http.ResponseWriter, r *http.Request) {
@@ -81,11 +87,6 @@ func counterHandler(w http.ResponseWriter, _ *http.Request) {
 
 func proxyHandler(w http.ResponseWriter, _ *http.Request) {
 	logger := wasilog.ContextLogger("proxyHandler")
-	// NOTE: Use the wasi default http.Client.
-	// You can also build your own `http.Client` using `wasihttp.DefaultTransport` or constructing a `wasihttp.Transport`.
-	// var httpClient := &http.Client{Transport: wasihttp.DefaultTransport}
-	// var httpClient := &http.Client{Transport: &wasihttp.Transport{ConnectTimeout: 30 * time.Second}}
-	httpClient := wasihttp.DefaultClient
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if err != nil {

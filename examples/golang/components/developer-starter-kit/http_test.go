@@ -95,6 +95,44 @@ func TestFileHandler(t *testing.T) {
 	})
 }
 
+type fakeTransport struct {
+	body   []byte
+	called bool
+}
+
+func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.called = true
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBuffer(f.body)),
+	}, nil
+}
+func TestProxyHandler(t *testing.T) {
+	currentClient := httpClient
+	t.Cleanup(func() {
+		httpClient = currentClient
+	})
+
+	fakeBody := []byte("hello from example.com")
+	httpClient = &http.Client{
+		Transport: &fakeTransport{body: fakeBody},
+	}
+
+	body := bytes.NewBuffer(fakeBody)
+	req := mustNewRequest(t, "POST", "/example_dot_com", body)
+	wadgeRoundtrip(t, req, func(resp *http.Response, respErr error) {
+		if respErr != nil {
+			t.Fatalf("unexpected error: %s", respErr)
+		}
+		defer resp.Body.Close()
+
+		buf := responseBody(t, resp)
+		if want, got := fakeBody, buf; !bytes.Equal(want, got) {
+			t.Fatalf("unexpected response body: want %q, got %q", want, got)
+		}
+	})
+}
+
 func TestHTTPCounterHandler(t *testing.T) {
 	previousStoreName := storeName
 	t.Cleanup(func() {
