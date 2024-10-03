@@ -211,7 +211,7 @@ jobs:
   build-lipo:
     name: wasmcloud-universal-darwin
     needs: build-bin
-    runs-on: macos-12
+    runs-on: macos-13
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
