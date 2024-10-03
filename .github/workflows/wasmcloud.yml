@@ -173,6 +173,7 @@ jobs:
 
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
+    if: startswith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
