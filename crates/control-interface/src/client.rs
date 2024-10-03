@@ -658,13 +658,15 @@ impl Client {
             host_id.as_str(),
         );
         debug!("start_provider:request {}", &subject);
-        let bytes = json_serialize(StartProviderCommand {
-            host_id,
-            provider_ref: IdentifierKind::is_provider_ref(provider_ref)?,
-            provider_id: IdentifierKind::is_component_id(provider_id)?,
-            annotations,
-            config: provider_configuration,
-        })?;
+        let mut cmd = StartProviderCommand::builder()
+            .host_id(&host_id)
+            .provider_ref(&IdentifierKind::is_provider_ref(provider_ref)?)
+            .provider_id(&IdentifierKind::is_component_id(provider_id)?);
+        if let Some(annotations) = annotations {
+            cmd = cmd.annotations(annotations);
+        }
+        let cmd = cmd.config(provider_configuration).build()?;
+        let bytes = json_serialize(cmd)?;
 
         match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => Ok(json_deserialize(&msg.payload)?),

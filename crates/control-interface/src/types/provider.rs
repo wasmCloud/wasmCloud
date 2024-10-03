@@ -119,3 +119,31 @@ impl ProviderDescriptionBuilder {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::ProviderDescription;
+
+    #[test]
+    fn provider_description_builder() {
+        assert_eq!(
+            ProviderDescription {
+                id: "id".into(),
+                image_ref: Some("ref".into()),
+                name: Some("name".into()),
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                revision: 0,
+            },
+            ProviderDescription::builder()
+                .id("id")
+                .image_ref("ref")
+                .name("name")
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .revision(0)
+                .build()
+                .unwrap()
+        )
+    }
+}

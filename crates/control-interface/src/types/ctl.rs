@@ -153,6 +153,11 @@ impl ScaleComponentCommand {
     pub fn host_id(&self) -> &str {
         &self.host_id
     }
+
+    #[must_use]
+    pub fn builder() -> ScaleComponentCommandBuilder {
+        ScaleComponentCommandBuilder::default()
+    }
 }
 
 /// Builder that produces [`ScaleComponentCommand`]s
@@ -240,36 +245,68 @@ impl ScaleComponentCommandBuilder {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct StartProviderCommand {
-    /// Optional set of annotations used to describe the nature of this provider start command. For
-    /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<BTreeMap<String, String>>,
     /// Unique identifier of the provider to start.
-    pub provider_id: ComponentId,
+    provider_id: ComponentId,
+    /// The image reference of the provider to be started
+    #[serde(default)]
+    provider_ref: String,
+    /// The host ID on which to start the provider
+    #[serde(default)]
+    host_id: String,
     /// A list of named configs to use for this provider. It is not required to specify a config.
     /// Configs are merged together before being given to the provider, with values from the right-most
     /// config in the list taking precedence. For example, given ordered configs foo {a: 1, b: 2},
     /// bar {b: 3, c: 4}, and baz {c: 5, d: 6}, the resulting config will be: {a: 1, b: 3, c: 5, d:
     /// 6}
     #[serde(default)]
-    pub config: Vec<String>,
-    /// The host ID on which to start the provider
-    #[serde(default)]
-    pub host_id: String,
-    /// The image reference of the provider to be started
-    #[serde(default)]
-    pub provider_ref: String,
+    config: Vec<String>,
+    /// Optional set of annotations used to describe the nature of this provider start command. For
+    /// example, autonomous agents may wish to "tag" start requests as part of a given deployment
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    annotations: Option<BTreeMap<String, String>>,
+}
+
+impl StartProviderCommand {
+    #[must_use]
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    #[must_use]
+    pub fn provider_ref(&self) -> &str {
+        &self.provider_ref
+    }
+
+    #[must_use]
+    pub fn host_id(&self) -> &str {
+        &self.host_id
+    }
+
+    #[must_use]
+    pub fn config(&self) -> &Vec<String> {
+        &self.config
+    }
+
+    #[must_use]
+    pub fn annotations(&self) -> Option<&BTreeMap<String, String>> {
+        self.annotations.as_ref()
+    }
+
+    #[must_use]
+    pub fn builder() -> StartProviderCommandBuilder {
+        StartProviderCommandBuilder::default()
+    }
 }
 
 /// A builder that produces [`StartProviderCommand`]s
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct StartProviderCommandBuilder {
-    pub(crate) host_id: Option<String>,
-    pub(crate) provider_id: Option<ComponentId>,
-    pub(crate) provider_ref: Option<String>,
-    pub(crate) annotations: Option<BTreeMap<String, String>>,
-    pub(crate) config: Option<Vec<String>>,
+    host_id: Option<String>,
+    provider_id: Option<ComponentId>,
+    provider_ref: Option<String>,
+    annotations: Option<BTreeMap<String, String>>,
+    config: Option<Vec<String>>,
 }
 
 impl StartProviderCommandBuilder {
@@ -347,6 +384,11 @@ impl StopHostCommand {
     pub fn timeout(&self) -> Option<u64> {
         self.timeout
     }
+
+    #[must_use]
+    pub fn builder() -> StopHostCommandBuilder {
+        StopHostCommandBuilder::default()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -405,6 +447,11 @@ impl StopProviderCommand {
     #[must_use]
     pub fn provider_id(&self) -> &str {
         &self.provider_id
+    }
+
+    #[must_use]
+    pub fn builder() -> StopProviderCommandBuilder {
+        StopProviderCommandBuilder::default()
     }
 }
 
@@ -488,6 +535,11 @@ impl UpdateComponentCommand {
     pub fn annotations(&self) -> Option<&BTreeMap<String, String>> {
         self.annotations.as_ref()
     }
+
+    #[must_use]
+    pub fn builder() -> UpdateComponentCommandBuilder {
+        UpdateComponentCommandBuilder::default()
+    }
 }
 
 /// Builder for [`UpdateComponentCommand`]s
@@ -543,5 +595,110 @@ impl UpdateComponentCommandBuilder {
             })?,
             annotations: self.annotations,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{
+        ScaleComponentCommand, StartProviderCommand, StopHostCommand, StopProviderCommand,
+        UpdateComponentCommand,
+    };
+
+    #[test]
+    fn scale_component_command_builder() {
+        assert_eq!(
+            ScaleComponentCommand {
+                component_ref: "component_ref".into(),
+                component_id: "component_id".into(),
+                host_id: "host_id".into(),
+                config: vec!["c".into()],
+                allow_update: true,
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+                max_instances: 1,
+            },
+            ScaleComponentCommand::builder()
+                .component_ref("component_ref")
+                .component_id("component_id")
+                .host_id("host_id")
+                .config(vec!["c".into()])
+                .allow_update(true)
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .max_instances(1)
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn start_provider_command_builder() {
+        assert_eq!(
+            StartProviderCommand {
+                provider_id: "provider_id".into(),
+                provider_ref: "provider_ref".into(),
+                host_id: "host_id".into(),
+                config: vec!["p".into()],
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+            },
+            StartProviderCommand::builder()
+                .provider_id("provider_id")
+                .provider_ref("provider_ref")
+                .host_id("host_id")
+                .config(vec!["p".into()])
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn stop_host_command_builder() {
+        assert_eq!(
+            StopHostCommand {
+                host_id: "host_id".into(),
+                timeout: Some(1),
+            },
+            StopHostCommand::builder()
+                .host_id("host_id")
+                .timeout(1)
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn stop_provider_command_builder() {
+        assert_eq!(
+            StopProviderCommand {
+                host_id: "host_id".into(),
+                provider_id: "provider_id".into(),
+            },
+            StopProviderCommand::builder()
+                .provider_id("provider_id")
+                .host_id("host_id")
+                .build()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn update_component_command_builder() {
+        assert_eq!(
+            UpdateComponentCommand {
+                host_id: "host_id".into(),
+                component_id: "component_id".into(),
+                new_component_ref: "new_component_ref".into(),
+                annotations: Some(BTreeMap::from([("a".into(), "b".into())])),
+            },
+            UpdateComponentCommand::builder()
+                .host_id("host_id")
+                .component_id("component_id")
+                .new_component_ref("new_component_ref")
+                .annotations(BTreeMap::from([("a".into(), "b".into())]))
+                .build()
+                .unwrap()
+        )
     }
 }
