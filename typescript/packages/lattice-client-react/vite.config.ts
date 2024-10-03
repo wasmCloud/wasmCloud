@@ -13,7 +13,7 @@ export default defineConfig({
       name: 'lattice-client-react',
       formats: ['es' as const, 'cjs' as const],
     },
-    outDir: 'build',
+    outDir: 'dist',
     sourcemap: true,
     rollupOptions: {
       plugins: [sourceMaps()],

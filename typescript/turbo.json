@@ -3,7 +3,7 @@
   "globalDependencies": ["**/.env.*local"],
   "tasks": {
     "lint": {
-      "dependsOn": ["^lint", "^build"]
+      "dependsOn": ["^build", "^lint"]
     },
     "lint:fix": {
       "dependsOn": ["^lint:fix"]
@@ -25,7 +25,7 @@
     },
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "build/**"],
+      "outputs": ["dist/**"],
       "env": ["NODE_ENV"],
       "inputs": [
         "$TURBO_DEFAULT$",

@@ -9,8 +9,11 @@
   ],
   "scripts": {
     "build": "turbo run build",
+    "dev": "turbo run dev",
     "start": "turbo run dev",
     "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "test:unit": "turbo run test:unit",
     "turbo:build": "turbo run build --cache-dir .turbo/cache",
     "turbo:dev": "turbo run dev",
     "turbo:lint": "turbo run lint",

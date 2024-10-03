@@ -23,8 +23,8 @@ dist
 *.sln
 *.sw?
 
-/playwright-report
-/test-results
+playwright-report
+test-results
 
 
 .yarn/*
