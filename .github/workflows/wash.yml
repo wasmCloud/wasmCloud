@@ -46,11 +46,14 @@ jobs:
         with:
           tool: wit-bindgen-cli
 
+      # Run builds and tests only on Linux and macOS for PRs, Windows on `main`
       - name: Build wash
+        if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make build
         working-directory: ./crates/wash-cli
 
       - name: Run all wash & wash-lib unit tests
+        if: ${{ matrix.os != 'windows-latest' || github.ref == 'refs/heads/main' }}
         run: make test-wash-ci
         working-directory: ./crates/wash-cli
 
