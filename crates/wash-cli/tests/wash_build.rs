@@ -1,6 +1,6 @@
 mod common;
 
-use common::{init, init_path, init_workspace};
+use common::{init, init_path, init_workspace, load_fixture};
 
 use anyhow::{Context, Ok, Result};
 use std::env;
@@ -90,6 +90,31 @@ async fn integration_build_rust_component_with_existing_deps_signed() -> Result<
     let unsigned_file = project_dir.join("build/http_hello_world.wasm");
     assert!(unsigned_file.exists(), "unsigned file not found!");
     let signed_file = project_dir.join("build/http_hello_world_s.wasm");
+    assert!(signed_file.exists(), "signed file not found!");
+    let lock_file = project_dir.join(LOCK_FILE_NAME);
+    assert!(lock_file.exists(), "lock file not found!");
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_with_logging_interface() -> Result<()> {
+    // We test a dep from git above, so this tests with a local path so we can test local changes
+    let test_setup = load_fixture("unversioned-logging").await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    let status = test_setup
+        .base_command()
+        .args(["build"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/blobby.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/blobby_s.wasm");
     assert!(signed_file.exists(), "signed file not found!");
     let lock_file = project_dir.join(LOCK_FILE_NAME);
     assert!(lock_file.exists(), "lock file not found!");

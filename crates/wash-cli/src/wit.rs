@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use anyhow::Ok;
 use clap::{Args, Subcommand};
-use wash_lib::cli::{CommandOutput, CommonPackageArgs};
+use wash_lib::{
+    build::monkey_patch_fetch_logging,
+    cli::{CommandOutput, CommonPackageArgs},
+};
 use wasm_pkg_core::{
     lock::LockFile,
     wit::{self, OutputType},
@@ -93,12 +96,13 @@ impl FetchArgs {
         let client = self.common.get_client().await?;
         let wkg_config = wasm_pkg_core::config::Config::load().await?;
         let mut lock_file = LockFile::load(false).await?;
-        wit::fetch_dependencies(
-            &wkg_config,
-            self.dir,
+        monkey_patch_fetch_logging(
+            wkg_config,
+            self.dir
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Could find parent directory for wit"))?,
             &mut lock_file,
             client,
-            self.output_type.unwrap_or_default(),
         )
         .await?;
         // Now write out the lock file since everything else succeeded

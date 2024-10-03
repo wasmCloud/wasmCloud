@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use wasmcloud_control_interface::{ClientBuilder as CtlClientBuilder, Host};
@@ -124,7 +123,7 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
         .context("unexpected wasmcloud instance(s) running")?;
 
     let test_setup = init("hello", "hello-world-rust").await?;
-    let project_dir = test_setup.project_dir;
+    let project_dir = test_setup.project_dir.clone();
     let dir = test_dir_with_subfolder("dev_hello_component");
 
     wait_for_no_hosts()
@@ -184,7 +183,8 @@ manifests = [
 
     // Run wash dev
     let dev_cmd = Arc::new(RwLock::new(
-        Command::new(env!("CARGO_BIN_EXE_wash"))
+        test_setup
+            .base_command()
             .args([
                 "dev",
                 "--nats-port",
