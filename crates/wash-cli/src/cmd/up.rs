@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use async_nats_0_33::Client;
+use async_nats::Client;
 use clap::Parser;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -739,7 +739,7 @@ async fn running_host_count(ctl_client: &CtlClient) -> Result<WasmCloudHostState
         .await
         .map_err(|e| anyhow!(e))?
         .into_iter()
-        .filter_map(|r| r.response)
+        .filter_map(|r| r.into_data())
         .count()
     {
         1 => return Ok(WasmCloudHostState::Running),
@@ -774,7 +774,7 @@ fn is_process_running(pid: &str) -> bool {
 /// then loads and deploys the WADM manifest.
 #[allow(clippy::too_many_arguments)]
 fn process_wadm_manifest(
-    client: async_nats_0_33::Client,
+    client: Client,
     lattice: String,
     host_started: Arc<AtomicBool>,
     host_state: WasmCloudHostState,
@@ -828,7 +828,7 @@ fn process_wadm_manifest(
 /// Helper function to deploy a WADM application (including removing a previous version)
 /// for use when calling `wash up --manifest`
 async fn deploy_wadm_application(
-    client: &async_nats_0_33::Client,
+    client: &Client,
     manifest: AppManifest,
     lattice: &str,
 ) -> Result<()> {

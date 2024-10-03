@@ -179,7 +179,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
         sp.update_spinner_message(" Purging NATS Jetstream ...".to_string());
         // SAFETY: nats_client is checked to be Ok() above
         let client = nats_client.unwrap();
-        let js_client = async_nats_0_33::jetstream::new(client);
+        let js_client = async_nats::jetstream::new(client);
 
         if cmd.purge == PurgeJetstream::All || cmd.purge == PurgeJetstream::Wasmcloud {
             join_all(vec![
@@ -290,7 +290,7 @@ where
 
 /// Delete a Jetstream stream, ignoring errors if the stream doesn't exist
 async fn delete_stream_idempotent(
-    js: &async_nats_0_33::jetstream::Context,
+    js: &async_nats::jetstream::Context,
     stream_name: impl AsRef<str>,
 ) -> Result<()> {
     match js.delete_stream(stream_name).await {
@@ -302,7 +302,7 @@ async fn delete_stream_idempotent(
 
 /// Delete a Jetstream key-value bucket, ignoring errors if the bucket doesn't exist
 async fn delete_kv_idempotent(
-    js: &async_nats_0_33::jetstream::Context,
+    js: &async_nats::jetstream::Context,
     key: impl AsRef<str>,
 ) -> Result<()> {
     match js.delete_key_value(key).await {

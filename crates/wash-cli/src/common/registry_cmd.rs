@@ -7,17 +7,13 @@ use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::warn;
+
+use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
+use wash_lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
+use wash_lib::parser::get_config;
 use wash_lib::registry::{
     identify_artifact, pull_oci_artifact, push_oci_artifact, ArtifactType, OciPullOptions,
     OciPushOptions,
-};
-use wash_lib::{
-    cli::{
-        input_vec_to_hashmap,
-        registry::{RegistryPullCommand, RegistryPushCommand},
-        CommandOutput, OutputKind,
-    },
-    parser::get_config,
 };
 use wasmcloud_control_interface::RegistryCredential;
 
@@ -36,11 +32,9 @@ pub async fn registry_pull(
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryCredential {
-            username: Some(user),
-            password: Some(password),
-            ..Default::default()
-        }),
+        (Some(user), Some(password)) => Ok(RegistryCredential::from_username_password(
+            &user, &password, "oci",
+        )),
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
@@ -49,8 +43,8 @@ pub async fn registry_pull(
         OciPullOptions {
             digest: cmd.digest,
             allow_latest: cmd.allow_latest,
-            user: credentials.username,
-            password: credentials.password,
+            user: credentials.username().map(String::from),
+            password: credentials.password().map(String::from),
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
         },
@@ -111,11 +105,9 @@ pub async fn registry_push(
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
     let credentials = match (cmd.opts.user, cmd.opts.password) {
-        (Some(user), Some(password)) => Ok(RegistryCredential {
-            username: Some(user),
-            password: Some(password),
-            ..Default::default()
-        }),
+        (Some(user), Some(password)) => Ok(RegistryCredential::from_username_password(
+            &user, &password, "oci",
+        )),
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
@@ -130,8 +122,8 @@ pub async fn registry_push(
         OciPushOptions {
             config: cmd.config.map(PathBuf::from),
             allow_latest: cmd.allow_latest,
-            user: credentials.username,
-            password: credentials.password,
+            user: credentials.username().map(String::from),
+            password: credentials.password().map(String::from),
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
@@ -209,11 +201,9 @@ async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredenti
         credentials
     } else {
         match get_credential(registry) {
-            Ok(DockerCredential::UsernamePassword(username, password)) => RegistryCredential {
-                username: Some(username),
-                password: Some(password),
-                ..Default::default()
-            },
+            Ok(DockerCredential::UsernamePassword(username, password)) => {
+                RegistryCredential::from_username_password(&username, &password, "oci")
+            }
             // IdentityTokens are not supported method.
             Ok(DockerCredential::IdentityToken(_)) | Err(_) => RegistryCredential::default(),
         }

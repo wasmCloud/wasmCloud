@@ -79,7 +79,7 @@ async fn integration_up_can_start_wasmcloud_and_component_serial() -> Result<()>
         .await
         .context(format!(
             "could not start hello component on new host [{}]",
-            host.id
+            host.id()
         ))?;
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
@@ -267,7 +267,7 @@ async fn integration_up_works_with_labels() -> Result<()> {
         cmd_output
             .hosts
             .iter()
-            .any(|h| h.labels.get("is-label-test").is_some_and(|v| v == "yes")),
+            .any(|h| h.labels().get("is-label-test").is_some_and(|v| v == "yes")),
         "a host is present which has the created label",
     );
 

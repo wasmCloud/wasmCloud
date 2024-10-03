@@ -68,7 +68,7 @@ async fn integration_scale_component_serial() -> Result<()> {
             .inventories
             .into_iter()
             .next()
-            .map(|i| i.components)
+            .map(|i| i.components().clone())
             .unwrap_or_default();
         if components.is_empty() && retries > 4 {
             panic!("Should have started the component")
@@ -77,8 +77,7 @@ async fn integration_scale_component_serial() -> Result<()> {
             continue;
         } else {
             assert_eq!(components.len(), 1);
-            let max = components[0].max_instances;
-            assert_eq!(max, 10);
+            assert_eq!(components[0].max_instances(), 10);
             break;
         }
     }
