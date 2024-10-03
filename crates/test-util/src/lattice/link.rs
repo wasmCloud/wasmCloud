@@ -23,16 +23,19 @@ pub async fn assert_advertise_link(
     let wit_namespace = wit_namespace.as_ref();
     let wit_package = wit_package.as_ref();
     client
-        .put_link(Link {
-            source_id: source_id.to_string(),
-            target: target.to_string(),
-            name: link_name.to_string(),
-            wit_namespace: wit_namespace.to_string(),
-            wit_package: wit_package.to_string(),
-            interfaces,
-            source_config,
-            target_config,
-        })
+        .put_link(
+            Link::builder()
+                .source_id(source_id)
+                .target(target)
+                .name(link_name)
+                .wit_namespace(wit_namespace)
+                .wit_package(wit_package)
+                .interfaces(interfaces)
+                .source_config(source_config)
+                .target_config(target_config)
+                .build()
+                .map_err(|e| anyhow!(e).context("failed to build link"))?,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to advertise link"))
 }
