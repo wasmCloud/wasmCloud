@@ -1,0 +1,73 @@
+name: Typescript / Setup
+
+description: |
+  Setup a Typescript project for building and testing.
+
+branding:
+  icon: settings
+  color: blue
+
+inputs:
+  working-directory:
+    description: Working directory
+    required: false
+    default: ./typescript
+  package-manager:
+    description: Package manager to use (yarn, npm, pnpm)
+    required: false
+    default: yarn
+
+runs:
+  using: composite
+  
+  steps:
+    - name: Validate Inputs
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "Package manager: ${{ inputs.package-manager }}"
+        if [ "${{ inputs.package-manager }}" != "yarn" ] && [ "${{ inputs.package-manager }}" != "npm" ] && [ "${{ inputs.package-manager }}" != "pnpm" ]; then
+          echo "Invalid package manager"
+          exit 1
+        fi
+
+    - name: Setup Node.js
+      uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
+      with:
+        node-version-file: ${{ inputs.working-directory }}/.tool-versions
+        cache-dependency-path: |-
+          ${{
+            inputs.package-manager == 'yarn' && '${{ inputs.working-directory }}/yarn.lock' ||
+            inputs.package-manager == 'pnpm' && '${{ inputs.working-directory }}/pnpm-lock.yaml' ||
+            '${{ inputs.working-directory }}/package-lock.json'
+          }}
+
+    - name: Setup Package Manager
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        corepack enable
+        ${{ inputs.package-manager }} --version
+
+    - name: Cache Turbo Build
+      uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9
+      with:
+        path: ${{ inputs.working-directory }}/.turbo
+        key: ${{ runner.os }}-turbo-${{ github.sha }}-${{ github.workflow }}
+        restore-keys: |
+          ${{ runner.os }}-turbo-${{ github.sha }}-
+          ${{ runner.os }}-turbo-
+
+    - name: Install Dependencies
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash
+      run: ${{ inputs.package-manager }} install
+
+    - name: Turbo Run Summary
+      uses: gacts/run-and-post-run@4683764dd706df847f57b9bed39d08164bcd2690
+      with:
+
+        post: |
+          echo "::group::Turbo Run Summary"
+          cat ${{ inputs.working-directory }}/.turbo/runs/*.json || echo 'No Turbo Run Summary found'
+          echo "::endgroup::"

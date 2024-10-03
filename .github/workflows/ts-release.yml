@@ -1,0 +1,20 @@
+on:
+  workflow_call: {}
+
+jobs:
+  # typescript/apps/*
+  washboard-ui:
+    name: apps/washboard-ui
+    if: startsWith(github.ref, 'refs/tags/typescript/apps/washboard-ui')
+    uses: ./.github/workflows/ts-release-app-washboard.yml
+
+  # TODO: Add workflows for releasing packages
+  # # typescript/packages/*
+  # lattice-client-core:
+  #   name: packages/lattice-client-core
+  #   if: startsWith(github.ref, 'refs/tags/typescript/lattice-client-core/v')
+  #   uses: ./.github/workflows/ts-release-app-lattice-client-core.yml
+  # lattice-client-react:
+  #   name: packages/lattice-client-react
+  #   if: startsWith(github.ref, 'refs/tags/typescript/lattice-client-react/v')
+  #   uses: ./.github/workflows/ts-release-app-lattice-client-react.yml

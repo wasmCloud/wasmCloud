@@ -1,0 +1,50 @@
+on:
+  workflow_call: {}
+
+defaults:
+  run:
+    working-directory: ./typescript/apps/washboard-ui
+
+jobs:
+  run:
+    name: E2E Tests
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        wash:
+          - version: 0.32.1
+          - version: 0.33.0
+          - version: 0.34.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
+
+      - name: Setup
+        uses: ./.github/actions/ts-setup
+        with:
+          package-manager: yarn
+          working-directory: ./typescript
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Install `wash` CLI
+        uses: taiki-e/install-action@07b43ed508403fa32c11f04dd608931cdf6748e2
+        with:
+          tool: wash-cli@${{ matrix.wash.version }}
+
+      - name: Run Playwright Tests
+        run: npx playwright test
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874
+        if: always()
+        with:
+          name: playwright-report-${{ matrix.wash.version }}
+          retention-days: 30
+          path: |
+            ./typescript/apps/washboard-ui/playwright-report
+            ./typescript/apps/washboard-ui/test-results
