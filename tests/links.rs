@@ -107,18 +107,18 @@ async fn link_deletes() -> anyhow::Result<()> {
     let links = resp.into_data().unwrap();
     assert_eq!(links.len(), 3);
     for link in links.iter() {
-        match (&link.source_id, &link.name) {
+        match (link.source_id(), link.name()) {
             (id, name) if id == component_one && name == link_name_one => {
-                assert_eq!(link.target, component_two);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_two);
+                assert_eq!(link.interfaces().len(), 3);
             }
             (id, name) if id == component_one && name == link_name_two => {
-                assert_eq!(link.target, component_two);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_two);
+                assert_eq!(link.interfaces().len(), 3);
             }
             (id, name) if id == component_two && name == link_name_three => {
-                assert_eq!(link.target, component_one);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_one);
+                assert_eq!(link.interfaces().len(), 3);
             }
             (id, name) => bail!("unexpected link source {id} with name {name}"),
         }
@@ -440,18 +440,18 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
     let links = resp.into_data().unwrap();
     assert_eq!(links.len(), 3);
     for link in links.iter() {
-        match &link.source_id {
+        match link.source_id() {
             id if id == component_one => {
-                assert_eq!(link.target, component_two);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_two);
+                assert_eq!(link.interfaces().len(), 3);
             }
             id if id == component_two => {
-                assert_eq!(link.target, component_three);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_three);
+                assert_eq!(link.interfaces().len(), 3);
             }
             id if id == component_three => {
-                assert_eq!(link.target, component_one);
-                assert_eq!(link.interfaces.len(), 3);
+                assert_eq!(link.target(), component_one);
+                assert_eq!(link.interfaces().len(), 3);
             }
             id => bail!("unexpected link source {id}"),
         }
