@@ -88,7 +88,7 @@
         targets.powerpc64le-unknown-linux-gnu = false;
         targets.s390x-unknown-linux-gnu = false;
         targets.wasm32-unknown-unknown = false;
-        targets.wasm32-wasi = false;
+        targets.wasm32-wasip1 = false;
 
         build.packages = [
           "wash-cli"
