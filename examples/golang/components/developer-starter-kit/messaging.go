@@ -7,6 +7,15 @@ import (
 	"go.wasmcloud.dev/component/log/wasilog"
 )
 
+type messagingConsumerAdapter struct {
+	Publish func(msg types.BrokerMessage) (result cm.Result[string, struct{}, string])
+}
+
+// NOTE(lxf): this is overridden in tests
+var messagingConsumer = &messagingConsumerAdapter{
+	Publish: consumer.Publish,
+}
+
 func handleMessage(msg types.BrokerMessage) cm.Result[string, struct{}, string] {
 	logger := wasilog.ContextLogger("handleMessage")
 	replyTo := msg.ReplyTo.Some()
@@ -21,7 +30,11 @@ func handleMessage(msg types.BrokerMessage) cm.Result[string, struct{}, string] 
 			Body:    msg.Body,
 			ReplyTo: cm.None[string](),
 		}
-		consumer.Publish(reply)
+		res := messagingConsumer.Publish(reply)
+		if res.IsErr() {
+			logger.Error("Failed to send reply", "error", *res.Err())
+			return res
+		}
 	}
 
 	return cm.OK[cm.Result[string, struct{}, string]](struct{}{})

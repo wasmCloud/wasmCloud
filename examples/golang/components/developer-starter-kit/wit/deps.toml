@@ -1,4 +1,6 @@
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.0.tar.gz"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
-sdk = "https://github.com/wasmCloud/component-sdk-go/archive/v0.0.1.tar.gz"
+
+component-sdk = "../../../../../../component-sdk-go/wit"
+#component-sdk = "https://github.com/wasmCloud/component-sdk-go/archive/v0.0.1.tar.gz"

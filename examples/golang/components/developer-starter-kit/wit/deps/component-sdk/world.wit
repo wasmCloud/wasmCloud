@@ -3,9 +3,6 @@ package wasmcloud:component;
 world exports {
   // wasi
   export wasi:http/incoming-handler@0.2.0;
-
-  // wasmcloud
-  export wasmcloud:messaging/handler@0.2.0;
 }
 
 world imports {
@@ -19,7 +16,6 @@ world imports {
 
   // wasmcloud
   import wasmcloud:bus/lattice@1.0.0;
-  import wasmcloud:messaging/consumer@0.2.0;
   import wasmcloud:secrets/store@0.1.0-draft;
   import wasmcloud:secrets/reveal@0.1.0-draft;
 }

@@ -6,6 +6,12 @@ sha512 = "da2622210a9e3eea82b99f1a5b8a44ce5443d009cb943f7bca0bf9cf4360829b289913
 sha256 = "468b4d12892fe926b8eb5d398dbf579d566c93231fa44f415440572c695b7613"
 sha512 = "e6b53a07221f1413953c9797c68f08b815fdaebf66419bbc1ea3e8b7dece73731062693634731f311a03957b268cf9cc509c518bd15e513c318aa04a8459b93a"
 
+[component-sdk]
+path = "../../../../../../component-sdk-go/wit"
+sha256 = "310d65f4eb81fd8ed3d848e4d1c783351a1f2d9c1b11de393a038b3c10a56c36"
+sha512 = "bdc6271a5052aa0d40e6f293c468c4b412b1186dacc4afba10c8c9de361c364eb3c1959e3c73425f05646d61e7b40d1c8c36dd47e24c12636ecdb1d4ee07705f"
+deps = ["cli", "clocks", "config", "filesystem", "io", "lattice", "logging", "random", "secrets", "sockets"]
+
 [config]
 sha256 = "9148c06861712b69170af7b8ec37896b4104297d920fdec9f3bcc0b1eee4a5c8"
 sha512 = "25a54101620f279c835b39f56f6dbf8a92b374b6faaf6cf6aaa1ea06d8b97b9b79788cf8abd9c2ad0c11e3629dba6a2513b71f2c54b9f95027054ae54a4615b8"
@@ -45,12 +51,6 @@ sha512 = "aa9c819dfd9e85b19661f6087ffd824c44fc38c8a4bc1005c4e7fd34fe844633c52cae
 [random]
 sha256 = "7371d03c037d924caba2587fb2e7c5773a0d3c5fcecbf7971e0e0ba57973c53d"
 sha512 = "964c4e8925a53078e4d94ba907b54f89a0b7e154f46823a505391471466c17f53c8692682e5c85771712acd88b348686173fc07c53a3cfe3d301b8cd8ddd0de4"
-
-[sdk]
-url = "https://github.com/wasmCloud/component-sdk-go/archive/v0.0.1.tar.gz"
-sha256 = "ec5b1fc6183ecd80b8328e2345d96d2b7e9fc8c2085300389d21c078ab03729f"
-sha512 = "5b1488b7be9f9e05b713aa9cc5465eb730550eab3ae3a9a5ca8a243947a6ae9b90e4a4f06ecd9cc9a375306bb619c54b16856a73d25aa227c45352b88ec741db"
-deps = ["cli", "clocks", "config", "filesystem", "io", "lattice", "logging", "messaging", "random", "secrets", "sockets"]
 
 [secrets]
 sha256 = "4c965f81e4f8510e917976dc7017b070d23b964724e3ca058f28ec9e3d691854"

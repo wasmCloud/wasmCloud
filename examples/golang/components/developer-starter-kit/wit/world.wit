@@ -9,6 +9,7 @@ world starter-kit {
 
   // message listener
   export wasmcloud:messaging/handler@0.2.0;
+  import wasmcloud:messaging/consumer@0.2.0;
 
   // counter datastore
   import wasi:keyvalue/atomics@0.2.0-draft;
