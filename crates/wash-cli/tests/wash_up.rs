@@ -1,8 +1,10 @@
 use std::fs::{read_to_string, remove_dir_all};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
+use semver::Version;
 use serial_test::serial;
 use tempfile::NamedTempFile;
 use tokio::{process::Command, time::Duration};
@@ -334,44 +336,54 @@ async fn integration_up_works_with_specific_wasmcloud_host_version() -> Result<(
     Ok(())
 }
 
-// /// Ensure that wash up can start a new host with the new version of wadm if a new patch is available
-// #[tokio::test]
-// #[serial]
-// async fn integration_up_works_with_new_wadm_patch_version() -> Result<()> {
-//     use wash_lib::start::WADM_BINARY;
-//     // 0.12.1 is a sufficient version to test the latest is 0.12.2
-//     let previous_wadm_version = "0.12.1";
-//     let instance = TestWashInstance::create().await?;
+/// Ensure that wash up can start a new host with the new version of wadm if a new patch is available
+#[tokio::test]
+#[serial]
+async fn integration_up_works_with_specified_wadm_version() -> Result<()> {
+    use wash_lib::start::WADM_BINARY;
+    // 0.12.0 is a sufficient version to test the latest is 0.12.2
+    let previous_wadm_version = "v0.12.0";
+    let instance =
+        TestWashInstance::create_with_extra_args(["--wadm-version", previous_wadm_version]).await?;
 
-//     // Get host data, ensure we find the host with the right label
-//     let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
+    // Get host data, ensure we find the host with the right label
+    let cmd_output = instance.get_hosts().await.context("failed to call hosts")?;
 
-//     assert!(cmd_output.success, "call command succeeded");
-//     let host = cmd_output.hosts.first();
-//     assert!(host.is_some(), "host is present");
-//     let wadm_path = PathBuf::from_str(WADM_BINARY)
-//         .context("failed to parse wadm binary path")?
-//         .canonicalize()
-//         .context("failed to canonicalize wadm binary path")?;
-//     let wadm_path = instance.test_dir.join(wadm_path);
-//     let wadm_output = Command::new(wadm_path)
-//         .args(["--version"])
-//         .output()
-//         .await
-//         .context("failed to run wadm --version")?;
-//     let wadm_version = String::from_utf8_lossy(&wadm_output.stdout);
-//     let Version {
-//         major,
-//         minor,
-//         patch,
-//         ..
-//     } = semver::Version::parse(&wadm_version)?;
-//     let previous_version = semver::Version::parse(previous_wadm_version)?;
-//     assert_eq!(major, previous_version.major);
-//     assert_eq!(minor, previous_version.minor);
-//     assert!(patch >= previous_version.patch);
-//     Ok(())
-// }
+    assert!(cmd_output.success, "call command succeeded");
+    let host = cmd_output.hosts.first();
+    assert!(host.is_some(), "host is present");
+    let wadm_path = PathBuf::from_str(WADM_BINARY)
+        .context("failed to parse wadm binary path")?
+        .canonicalize()
+        .context("failed to canonicalize wadm binary path")?;
+    let wadm_path = instance.test_dir.join(wadm_path);
+    let wadm_output = Command::new(wadm_path)
+        .args(["--version"])
+        .output()
+        .await
+        .context("failed to run wadm --version")?;
+    let wadm_version = String::from_utf8_lossy(&wadm_output.stdout);
+    let Version {
+        major,
+        minor,
+        patch,
+        ..
+    } = semver::Version::parse(&wadm_version)?;
+    let previous_version = semver::Version::parse(previous_wadm_version)?;
+    assert_eq!(
+        major, previous_version.major,
+        "major version should not change"
+    );
+    assert_eq!(
+        minor, previous_version.minor,
+        "minor version should not change"
+    );
+    assert_eq!(
+        patch, previous_version.patch,
+        "patch version should not change"
+    );
+    Ok(())
+}
 
 /// Ensure that wash up works with a provided WADM manifest
 #[tokio::test]
