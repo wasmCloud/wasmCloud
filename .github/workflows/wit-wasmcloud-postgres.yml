@@ -20,6 +20,7 @@ jobs:
       with:
         sparse-checkout: |
           wit
+          .github
     - name: Extract tag context
       id: ctx
       run: |
