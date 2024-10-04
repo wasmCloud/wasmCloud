@@ -37,7 +37,9 @@ use wash_lib::cli::CommandOutput;
 use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
-use wash_lib::parser::{get_config, DevConfigSpec, DevSecretSpec, ProjectConfig, TypeConfig};
+use wash_lib::parser::{
+    get_config, DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig, TypeConfig,
+};
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
@@ -1689,40 +1691,52 @@ async fn generate_manifests(
 /// * `component_ref` - Image ref of the component under development
 ///
 async fn augment_existing_manifests(
-    manifest_paths: &Vec<PathBuf>,
+    manifest_paths: &Vec<DevManifestComponentTarget>,
     project_config: &ProjectConfig,
-    _component_id: &str,
-    component_ref: &str,
+    generated_component_id: &str,
+    generated_component_ref: &str,
 ) -> Result<Vec<Manifest>> {
     let mut manifests = Vec::with_capacity(manifest_paths.len());
-    for manifest_path in manifest_paths {
+    for component_target in manifest_paths {
         // Read the manifest
         let mut manifest = serde_yaml::from_slice::<Manifest>(
-            &tokio::fs::read(&manifest_path).await.with_context(|| {
-                format!("failed to read manifest @ [{}]", manifest_path.display())
-            })?,
+            &tokio::fs::read(&component_target.path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to read manifest @ [{}]",
+                        component_target.path.display()
+                    )
+                })?,
         )
         .context("failed to parse manifest YAML")?;
 
         // Augment the manifest with the component, if present
         for component in manifest.spec.components.as_mut_slice() {
-            let (image_ref, config, secrets) = match component.properties {
+            // If neither the component ID nor the ref match, then skip
+            if !component_target.matches(component) {
+                continue;
+            }
+
+            // Once we know we're on a component that matches we can extract information to modify
+            let (id, image_ref, config, secrets) = match &mut component.properties {
                 Properties::Component { ref mut properties } => (
+                    &mut properties.id,
                     &mut properties.image,
                     &mut properties.config,
                     &mut properties.secrets,
                 ),
                 Properties::Capability { ref mut properties } => (
+                    &mut properties.id,
                     &mut properties.image,
                     &mut properties.config,
                     &mut properties.secrets,
                 ),
             };
 
-            // If we're not dealing with a relevant component, skip
-            if image_ref != component_ref {
-                continue;
-            }
+            // Update the ID and image ref
+            *id = Some(generated_component_id.into());
+            *image_ref = generated_component_ref.into();
 
             // Apply config specs
             if let Some(specs) = project_config.dev.as_ref().map(|d| &d.config) {
@@ -1805,8 +1819,8 @@ async fn update_secret_properties_by_spec(
 
             // Go through all provided values and build the secret a secret
             for (k, v) in values {
-                // TODO: support ENV-specified secrets
-                // TODO: warn user about using secrets in plain text, for any *non* env-specified
+                // TODO: Support ENV-specified secrets
+                // TODO: Warn user about using secrets in plain text, for any *non* env-specified
                 ensure!(
                     !v.starts_with("$ENV:"),
                     "ENV-loaded secrets are not yet supported"
@@ -1878,9 +1892,9 @@ async fn run_dev_loop(state: &mut RunLoopState<'_>) -> Result<()> {
     //
     // If the project configuration specified an *existing* manifest, we must merge, not generate
     let manifests = match state.project_cfg.dev.as_ref().map(|rdc| &rdc.manifests) {
-        // If a manifest already exists, use it
-        Some(manifest_paths) if !manifest_paths.is_empty() => augment_existing_manifests(
-            manifest_paths,
+        // If manifest targets were present, use them and generate targets
+        Some(targets) if !targets.is_empty() => augment_existing_manifests(
+            targets,
             state.project_cfg,
             state
                 .component_id
