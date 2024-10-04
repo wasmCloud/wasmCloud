@@ -169,10 +169,14 @@ async fn get_linked_components(
             linkdefs
                 .into_iter()
                 .filter_map(|link| {
-                    if link.source_id == component_id {
-                        Some(ProviderDetails { id: link.target })
-                    } else if link.target == component_id {
-                        Some(ProviderDetails { id: link.source_id })
+                    if link.source_id() == component_id {
+                        Some(ProviderDetails {
+                            id: link.target().to_string(),
+                        })
+                    } else if link.target() == component_id {
+                        Some(ProviderDetails {
+                            id: link.source_id().to_string(),
+                        })
                     } else {
                         None
                     }
