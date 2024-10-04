@@ -1249,7 +1249,6 @@ mod test {
                     .unwrap(),
                 wasm_bin_name: None,
                 registry: RegistryConfig::default(),
-                dev: None,
             }
         );
 
@@ -1385,7 +1384,6 @@ mod test {
                     .unwrap(),
                 wasm_bin_name: None,
                 registry: RegistryConfig::default(),
-                dev: None,
             }
         );
 

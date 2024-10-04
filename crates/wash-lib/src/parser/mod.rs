@@ -11,7 +11,7 @@ use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
 use serde::Deserialize;
-use wadm_types::SecretSourceProperty;
+use wadm_types::{Component, Properties, SecretSourceProperty};
 use wasmcloud_control_interface::RegistryCredential;
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -52,6 +52,8 @@ pub struct ProjectConfig {
     pub project_type: TypeConfig,
     /// Configuration common among all project types & languages.
     pub common: CommonConfig,
+    /// Configuration for development environments and/or DX related plugins
+    pub dev: Option<DevConfig>,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
@@ -282,8 +284,6 @@ pub struct CommonConfig {
     pub wasm_bin_name: Option<String>,
     /// Optional artifact OCI registry configuration. Primarily used for `wash push` & `wash pull` commands
     pub registry: RegistryConfig,
-    /// Configuration for development environments and/or DX related plugins
-    pub dev: Option<DevConfig>,
 }
 
 impl CommonConfig {
@@ -544,7 +544,7 @@ struct RawDevConfig {
     /// Top level override of the WADM application manifest(s) to use for development
     ///
     /// If unspecified, it is up to tools to generate a manifest from available information.
-    pub manifests: Option<Vec<PathBuf>>,
+    pub manifests: Option<Vec<DevManifestComponentTarget>>,
 
     /// Configuration values to be set up
     #[serde(alias = "configs")]
@@ -554,6 +554,57 @@ struct RawDevConfig {
     pub secrets: Option<Vec<DevSecretSpec>>,
 }
 
+/// Target that specifies a single component in a given manifest path
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct DevManifestComponentTarget {
+    /// Name of the component that should be targeted
+    pub component_name: Option<String>,
+
+    /// The ID of the component that should be targeted
+    pub component_id: Option<String>,
+
+    /// The image reference of the component that should be targeted
+    pub component_ref: Option<String>,
+
+    /// The manifest in which the target exists
+    pub path: PathBuf,
+}
+
+impl DevManifestComponentTarget {
+    pub fn matches(&self, component: &Component) -> bool {
+        let (component_id, component_ref) = match &component.properties {
+            Properties::Component { ref properties } => (&properties.id, &properties.image),
+            Properties::Capability { ref properties } => (&properties.id, &properties.image),
+        };
+
+        if self
+            .component_name
+            .as_ref()
+            .is_some_and(|v| v == &component.name)
+        {
+            return true;
+        }
+
+        if self
+            .component_id
+            .as_ref()
+            .is_some_and(|a| component_id.as_ref().is_some_and(|b| a == b))
+        {
+            return true;
+        }
+
+        if self
+            .component_ref
+            .as_ref()
+            .is_some_and(|v| v == component_ref)
+        {
+            return true;
+        }
+
+        false
+    }
+}
+
 /// Configuration for development environments and/or DX related plugins
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
 pub struct DevConfig {
@@ -561,7 +612,7 @@ pub struct DevConfig {
     ///
     /// If this value is specified, tooling should strive to use the provided manifest where possible.
     /// If unspecified, it is up to tools to generate a manifest from available information.
-    pub manifests: Vec<PathBuf>,
+    pub manifests: Vec<DevManifestComponentTarget>,
 
     /// Configuration values to be passed ot the
     #[serde(alias = "configs")]
@@ -575,23 +626,11 @@ impl DevConfig {
     /// Convert to a [`DevConfig`] from a [`RawDevConfig`] which likely serialized from disk
     fn from_raw(
         RawDevConfig {
-            mut manifests,
+            manifests,
             config,
             secrets,
         }: RawDevConfig,
     ) -> Result<Self> {
-        // Ensure the paths to all provided manifests are valid
-        if let Some(manifest_paths) = manifests.as_mut() {
-            for m in manifest_paths.iter_mut() {
-                *m = m.canonicalize().with_context(|| {
-                    format!(
-                        "failed to resolve path to manifest [{}], does the file exists?",
-                        m.display()
-                    )
-                })?;
-            }
-        }
-
         Ok(Self {
             manifests: manifests.unwrap_or_default(),
             config: config.unwrap_or_default(),
@@ -720,7 +759,6 @@ impl RawProjectConfig {
             path: project_path,
             wasm_bin_name,
             registry,
-            dev: None,
         })
     }
 
@@ -786,7 +824,6 @@ impl RawProjectConfig {
                         path: project_path,
                         wasm_bin_name: None,
                         registry: registry_config,
-                        dev,
                     }),
 
                     Err(err) => {
@@ -807,7 +844,6 @@ impl RawProjectConfig {
                     path: project_path,
                     wasm_bin_name: None,
                     registry: registry_config,
-                    dev,
                 })
             }
         };
@@ -816,6 +852,7 @@ impl RawProjectConfig {
             language: language_config,
             project_type: project_type_config,
             common: common_config_result?,
+            dev,
         })
     }
 }
