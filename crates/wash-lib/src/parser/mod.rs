@@ -407,6 +407,10 @@ pub struct TinyGoConfig {
     pub tinygo_path: Option<PathBuf>,
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
     pub disable_go_generate: bool,
+    /// The scheduler to use for the TinyGo build. Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
+    pub scheduler: Option<String>,
+    /// The garbage collector to use for the TinyGo build. Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
+    pub garbage_collector: Option<String>,
 }
 
 impl TinyGoConfig {
@@ -427,6 +431,10 @@ struct RawTinyGoConfig {
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
     #[serde(default)]
     pub disable_go_generate: bool,
+    /// The scheduler to use for the TinyGo build. Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
+    pub scheduler: Option<String>,
+    /// The garbage collector to use for the TinyGo build. Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
+    pub garbage_collector: Option<String>,
 }
 
 impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
@@ -436,6 +444,8 @@ impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
         Ok(Self {
             tinygo_path: raw.tinygo_path,
             disable_go_generate: raw.disable_go_generate,
+            scheduler: raw.scheduler,
+            garbage_collector: raw.garbage_collector,
         })
     }
 }
