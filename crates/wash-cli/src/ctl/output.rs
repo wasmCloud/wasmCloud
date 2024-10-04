@@ -57,7 +57,7 @@ pub fn link_del_output(
 
 pub fn links_table(mut list: Vec<Link>) -> String {
     // Sort the list based on the `source_id` field in ascending order
-    list.sort_by(|a, b| a.source_id.cmp(&b.source_id));
+    list.sort_by(|a, b| a.source_id().cmp(b.source_id()));
 
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4);
@@ -71,19 +71,19 @@ pub fn links_table(mut list: Vec<Link>) -> String {
 
     list.iter().for_each(|l| {
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(l.source_id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(l.target.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.source_id().to_string(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.target().to_string(), 1, Alignment::Left),
             TableCell::new_with_alignment(
                 format!(
                     "{}:{}/{}",
-                    l.wit_namespace,
-                    l.wit_package,
-                    l.interfaces.join(",")
+                    l.wit_namespace(),
+                    l.wit_package(),
+                    l.interfaces().join(",")
                 ),
                 1,
                 Alignment::Left,
             ),
-            TableCell::new_with_alignment(l.name.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.name().to_string(), 1, Alignment::Left),
         ]))
     });
 

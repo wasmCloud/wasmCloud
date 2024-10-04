@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::json;
 use wash_lib::cli::link::{
     delete_link, get_links, put_link, LinkCommand, LinkDelCommand, LinkPutCommand, LinkQueryCommand,
@@ -88,16 +88,17 @@ pub async fn handle_command(
 
             let failure = put_link(
                 opts.try_into()?,
-                Link {
-                    source_id: source_id.to_string(),
-                    target: target.to_string(),
-                    name,
-                    wit_namespace,
-                    wit_package,
-                    interfaces,
-                    source_config,
-                    target_config,
-                },
+                Link::builder()
+                    .source_id(&source_id)
+                    .target(&target)
+                    .name(&name)
+                    .wit_namespace(&wit_namespace)
+                    .wit_package(&wit_package)
+                    .interfaces(interfaces)
+                    .source_config(source_config)
+                    .target_config(target_config)
+                    .build()
+                    .map_err(|e| anyhow!(e).context("failed to build link"))?,
             )
             .await
             .map_or_else(
