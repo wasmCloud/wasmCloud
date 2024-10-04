@@ -168,7 +168,15 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
             )
         })?;
     wasmcloud_toml
-        .write_all(b"\n[dev]\nmanifests = [\"test.wadm.yaml\"]\n")
+        .write_all(
+            r#"
+[dev]
+manifests = [
+  { component_name = "http-handler", path = "test.wadm.yaml" }
+]
+"#
+            .as_bytes(),
+        )
         .await
         .context("failed tow write dev configuration content to file")?;
     wasmcloud_toml.flush().await?;
@@ -202,7 +210,7 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
                 .context("get components")?
                 .into_iter()
                 .map(|v| v.into_data())
-                .nth(0)
+                .next()
             {
                 return Ok::<Option<Host>, anyhow::Error>(h);
             }
