@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use wasmcloud_control_interface::ClientBuilder as CtlClientBuilder;
+use wasmcloud_control_interface::{ClientBuilder as CtlClientBuilder, Host};
 
 mod common;
 use common::{
@@ -41,10 +41,12 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
         Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "dev",
+                "--nats-connect-only",
                 "--nats-port",
                 nats_port.to_string().as_ref(),
-                "--nats-connect-only",
                 "--ctl-port",
+                nats_port.to_string().as_ref(),
+                "--rpc-port",
                 nats_port.to_string().as_ref(),
             ])
             .kill_on_drop(true)
@@ -132,6 +134,15 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
     let nats_port = find_open_port().await?;
     let mut nats = start_nats(nats_port, &dir).await?;
 
+    // Create a ctl client to check the cluster
+    let ctl_client = CtlClientBuilder::new(
+        async_nats::connect(format!("127.0.0.1:{nats_port}"))
+            .await
+            .context("failed to create nats client")?,
+    )
+    .lattice("default")
+    .build();
+
     // Write out the fixture configuration to disk
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("./tests/fixtures/wadm/hello-world-rust-dev-override.yaml");
@@ -157,9 +168,10 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
             )
         })?;
     wasmcloud_toml
-        .write_all(b"[dev]\nmanifest = \"test.wadm.yaml\"\n")
+        .write_all(b"\n[dev]\nmanifests = [\"test.wadm.yaml\"]\n")
         .await
         .context("failed tow write dev configuration content to file")?;
+    wasmcloud_toml.flush().await?;
 
     // Run wash dev
     let dev_cmd = Arc::new(RwLock::new(
@@ -171,6 +183,8 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
                 "--nats-connect-only",
                 "--ctl-port",
                 nats_port.to_string().as_ref(),
+                "--rpc-port",
+                nats_port.to_string().as_ref(),
             ])
             .kill_on_drop(true)
             .spawn()
@@ -178,17 +192,8 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
     ));
     let watch_dev_cmd = dev_cmd.clone();
 
-    // Create a ctl client to check the cluster
-    let ctl_client = CtlClientBuilder::new(
-        async_nats::connect(format!("127.0.0.1:{nats_port}"))
-            .await
-            .context("failed to create nats client")?,
-    )
-    .lattice("default")
-    .build();
-
     // Get the host that was created
-    let host = tokio::time::timeout(Duration::from_secs(3), async {
+    let host = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Some(h) = ctl_client
                 .get_hosts()
@@ -197,10 +202,9 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
                 .context("get components")?
                 .into_iter()
                 .map(|v| v.into_data())
-                .collect::<Vec<_>>()
-                .first()
+                .nth(0)
             {
-                return Ok(h);
+                return Ok::<Option<Host>, anyhow::Error>(h);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -226,20 +230,19 @@ async fn integration_override_manifest_yaml_serial() -> Result<()> {
                     }
                 }
                 // If the file got built, we know dev succeeded
-                if ctl_client
+                let host_inventory = ctl_client
                     .get_host_inventory(&host_id)
                     .await
                     .map_err(|e| anyhow!(e))
                     .map(|v| v.into_data())
-                    .context("failed to get host inventory")
-                    .is_ok_and(|inv| {
-                        inv.is_some_and(|cs| {
-                            cs.components()
-                                .iter()
-                                .any(|c| c.name() == Some("ferris-says"))
-                        })
+                    .context("failed to get host inventory");
+                if host_inventory.is_ok_and(|inv| {
+                    inv.is_some_and(|cs| {
+                        cs.components()
+                            .iter()
+                            .any(|c| c.name() == Some("ferris-says"))
                     })
-                {
+                }) {
                     break Ok(()) as anyhow::Result<()>;
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
