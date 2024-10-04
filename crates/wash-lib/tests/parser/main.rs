@@ -108,6 +108,28 @@ fn rust_component_with_revision() {
 }
 
 #[test]
+fn tinygo_component_module_scheduler_gc() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/tinygo_component_scheduler_gc.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+
+    assert_eq!(
+        config.language,
+        LanguageConfig::TinyGo(TinyGoConfig {
+            tinygo_path: None,
+            disable_go_generate: false,
+            scheduler: Some("none".into()),
+            garbage_collector: Some("leaking".into()),
+        })
+    );
+}
+
+#[test]
 fn tinygo_component_module() {
     let result = get_config(
         Some(PathBuf::from(
@@ -123,6 +145,8 @@ fn tinygo_component_module() {
         LanguageConfig::TinyGo(TinyGoConfig {
             tinygo_path: Some("path/to/tinygo".into()),
             disable_go_generate: false,
+            scheduler: None,
+            garbage_collector: None,
         })
     );
 
