@@ -29,6 +29,8 @@ runs:
         cat << EOF > wkg-config.toml
         [namespace_registries]
         wasmcloud = "wasmcloud.com"
+        wrpc = "bytecodealliance.org"
+        wasi = "wasi.dev"
 
         [registry."wasmcloud.com".oci]
         auth = { username = "${WKG_OCI_USERNAME}", password = "${WKG_OCI_PASSWORD}" }
