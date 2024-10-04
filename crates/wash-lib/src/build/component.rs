@@ -297,7 +297,8 @@ async fn build_tinygo_component(
             "-no-debug",
             ".",
         ],
-        WasmTarget::WasiP2 => vec![
+        WasmTarget::WasiP2 => {
+            let mut args = vec![
             "build",
             "-o",
             filename.as_str(),
@@ -309,8 +310,21 @@ async fn build_tinygo_component(
             component_config.wit_world.as_ref().context(
                 "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
             )?,
-            ".",
-        ],
+        ];
+
+            if let Some(scheduler) = &tinygo_config.scheduler {
+                args.push("-scheduler");
+                args.push(scheduler);
+            }
+
+            if let Some(gc) = &tinygo_config.garbage_collector {
+                args.push("-gc");
+                args.push(gc);
+            }
+
+            args.push(".");
+            args
+        }
     };
 
     let result = command.args(build_args).status().await.map_err(|e| {
