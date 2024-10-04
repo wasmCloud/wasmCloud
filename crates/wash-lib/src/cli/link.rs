@@ -185,12 +185,12 @@ pub async fn put_link(wco: WashConnectionOptions, link: Link) -> Result<CtlRespo
         .with_context(|| {
             format!(
                 "Failed to create link between {} and {} on {}:{}/{:?}. Link name: {}",
-                link.source_id,
-                link.target,
-                link.wit_namespace,
-                link.wit_package,
-                link.interfaces,
-                link.name
+                link.source_id(),
+                link.target(),
+                link.wit_namespace(),
+                link.wit_package(),
+                link.interfaces(),
+                link.name()
             )
         })
 }

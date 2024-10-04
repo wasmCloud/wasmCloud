@@ -343,7 +343,7 @@ wasi-preview1-component-adapter-provider = { version = "25", default-features = 
 wasm-encoder = { version = "0.218", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-component = { version = "0", path = "crates/component", default-features = false }
-wasmcloud-control-interface = { version = "2.0.0", path = "./crates/control-interface", default-features = false }
+wasmcloud-control-interface = { version = "2.2.0", path = "./crates/control-interface", default-features = false }
 wasmcloud-core = { version = "^0.11.0", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "0.20.0", path = "./crates/host", default-features = false }
 wasmcloud-provider-blobstore-azure = { version = "*", path = "./crates/provider-blobstore-azure", default-features = false }
