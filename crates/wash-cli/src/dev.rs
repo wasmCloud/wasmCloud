@@ -599,7 +599,10 @@ impl ProjectDeps {
     /// Note that the `other` will override the values `self`, where necessary.
     fn merge_override(&mut self, other: Self) -> Result<()> {
         // ProjectDeps should have matching sessions, if specified
-        if self.session_id != other.session_id {
+        if self.session_id.is_some()
+            && other.session_id.is_some()
+            && self.session_id != other.session_id
+        {
             bail!(
                 "session IDs (if specified) must match for merging deps. Session ID [{}] does not match [{}]",
                 self.session_id.as_deref().unwrap_or("<none>"),
@@ -1254,10 +1257,7 @@ impl WashDevSession {
 
         let session_dir = self.base_dir().await?;
 
-        // Start NATS
         let install_dir = downloads_dir()?;
-        let nats_log_path = session_dir.join("nats.log");
-        let nats_binary = ensure_nats_server(&nats_opts.nats_version, &install_dir).await?;
         let nats_host = nats_opts.nats_host.clone().unwrap_or_else(|| {
             wasmcloud_opts
                 .ctl_host
@@ -1268,28 +1268,36 @@ impl WashDevSession {
             .nats_port
             .unwrap_or(wasmcloud_opts.ctl_port.unwrap_or(4222));
         let nats_listen_address = format!("{}:{}", nats_host, nats_port);
-        let nats_config = NatsConfig {
-            host: nats_host,
-            port: nats_port,
-            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{nats_port}")),
-            js_domain: nats_opts.nats_js_domain,
-            remote_url: nats_opts.nats_remote_url,
-            credentials: nats_opts.nats_credsfile.clone(),
-            websocket_port: nats_opts.nats_websocket_port,
-            config_path: nats_opts.nats_configfile,
-        };
-        let nats_child = match start_nats(
-            &install_dir,
-            &nats_binary,
-            nats_config,
-            &nats_log_path,
-            CommandGroupUsage::CreateNew,
-        )
-        .await
-        {
-            Ok(c) => Some(c),
-            Err(e) if e.to_string().contains("already listening") => None,
-            Err(e) => bail!("failed to start NATS server for wash dev: {e}"),
+
+        let nats_child = if nats_opts.connect_only {
+            None
+        } else {
+            // Start NATS
+            let nats_log_path = session_dir.join("nats.log");
+            let nats_binary = ensure_nats_server(&nats_opts.nats_version, &install_dir).await?;
+            let nats_config = NatsConfig {
+                host: nats_host,
+                port: nats_port,
+                store_dir: std::env::temp_dir().join(format!("wash-jetstream-{nats_port}")),
+                js_domain: nats_opts.nats_js_domain,
+                remote_url: nats_opts.nats_remote_url,
+                credentials: nats_opts.nats_credsfile.clone(),
+                websocket_port: nats_opts.nats_websocket_port,
+                config_path: nats_opts.nats_configfile,
+            };
+            match start_nats(
+                &install_dir,
+                &nats_binary,
+                nats_config,
+                &nats_log_path,
+                CommandGroupUsage::CreateNew,
+            )
+            .await
+            {
+                Ok(c) => Some(c),
+                Err(e) if e.to_string().contains("already listening") => None,
+                Err(e) => bail!("failed to start NATS server for wash dev: {e}"),
+            }
         };
 
         // Start WADM
@@ -1717,7 +1725,7 @@ async fn augment_existing_manifests(
             }
 
             // Apply config specs
-            if let Some(specs) = project_config.common.dev.as_ref().map(|d| &d.config) {
+            if let Some(specs) = project_config.dev.as_ref().map(|d| &d.config) {
                 for spec in specs {
                     update_config_properties_by_spec(config, spec)
                         .await
@@ -1731,7 +1739,7 @@ async fn augment_existing_manifests(
             }
 
             // Apply secret specs
-            if let Some(specs) = project_config.common.dev.as_ref().map(|d| &d.secrets) {
+            if let Some(specs) = project_config.dev.as_ref().map(|d| &d.secrets) {
                 for spec in specs {
                     update_secret_properties_by_spec(secrets, spec)
                         .await
@@ -1869,13 +1877,7 @@ async fn run_dev_loop(state: &mut RunLoopState<'_>) -> Result<()> {
     // Generate the manifests that we need to deploy/update
     //
     // If the project configuration specified an *existing* manifest, we must merge, not generate
-    let manifests = match state
-        .project_cfg
-        .common
-        .dev
-        .as_ref()
-        .map(|rdc| &rdc.manifests)
-    {
+    let manifests = match state.project_cfg.dev.as_ref().map(|rdc| &rdc.manifests) {
         // If a manifest already exists, use it
         Some(manifest_paths) if !manifest_paths.is_empty() => augment_existing_manifests(
             manifest_paths,
