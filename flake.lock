@@ -301,11 +301,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1728028094,
-        "narHash": "sha256-y9dPb42NhdUZ6+sMNF2nuCA/Wj0gGetuYgPxIflLYwg=",
+        "lastModified": 1728051091,
+        "narHash": "sha256-i+EQDk9L8ieZ/P6PTJ5Bk0kSbSVLHEb934wNX96gPEY=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "7288448c4212efb7eb1170d5ef3eb7a1c7bbd153",
+        "rev": "5318b44ef7909e9baaba7e7cfa5bc332e01bd5e7",
         "type": "github"
       },
       "original": {
