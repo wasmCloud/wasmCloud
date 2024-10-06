@@ -1,0 +1,60 @@
+name: Extract Tag Information
+description: 'Extracts semantic version information from a tag ref'
+
+inputs:
+  ref:
+    description: 'The ref to extract information from'
+    required: true
+  package_pattern:
+    description: 'The pattern to match the package name'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - id: extract
+      name: Extract Tag Information
+      shell: bash
+      run: |
+        REF=${{ inputs.ref }}
+        if [[ $REF =~ ^refs/tags/(.*/)?v?([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
+          echo "tag=${BASH_REMATCH[0]}"
+          echo "major=${BASH_REMATCH[2]}"
+          echo "minor=${BASH_REMATCH[3]}"
+          echo "patch=${BASH_REMATCH[4]}"
+          echo "prerelease=${BASH_REMATCH[6]}"
+          echo "build=${BASH_REMATCH[9]}"
+        else
+          echo "tag=$REF"
+          echo "major=0"
+          echo "minor=0"
+          echo "patch=0"
+          echo "prerelease="
+          echo "build="
+        fi
+
+outputs:
+  tag:
+    description: 'The tag ref'
+    value: ${{ steps.extract.outputs.tag }}
+
+  major:
+    description: 'The major version. Defaults to 0 if not found'
+    value: ${{ steps.extract.outputs.major }}
+
+  minor:
+    description: 'The minor version. Defaults to 0 if not found'
+    value: ${{ steps.extract.outputs.minor }}
+
+  patch:
+    description: 'The patch version. Defaults to 0 if not found'
+    value: ${{ steps.extract.outputs.patch }}
+
+  prerelease:
+    description: 'The prerelease version. Defaults to empty if not found'
+    value: ${{ steps.extract.outputs.prerelease }}
+
+  build:
+    description: 'The build version. Defaults to empty if not found'
+    value: ${{ steps.extract.outputs.build }}
