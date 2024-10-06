@@ -19,3 +19,7 @@ world messaging-handler-oh-two {
 world messaging-handler {
     export wasmcloud:messaging/incoming-handler@0.3.0;
 }
+
+world watcher {
+    export wasi:keyvalue/watcher@0.2.0-draft;
+}

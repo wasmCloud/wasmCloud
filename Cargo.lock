@@ -8296,6 +8296,7 @@ version = "1.6.1"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum",
  "base64 0.22.1",
  "bytes",
  "clap",
