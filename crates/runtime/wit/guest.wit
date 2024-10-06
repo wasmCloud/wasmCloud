@@ -15,3 +15,7 @@ world incoming-http {
 world messaging-handler {
     export wasmcloud:messaging/handler@0.2.0;
 }
+
+world watcher {
+    export wasi:keyvalue/watcher@0.2.0-draft;
+}
