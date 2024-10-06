@@ -12,6 +12,7 @@ world interfaces {
     import wasi:keyvalue/batch@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     import wasi:random/random@0.2.2;
+    import wasi:keyvalue/watcher@0.2.0-draft;
 
     import wasmcloud:messaging/consumer@0.2.0;
     import wasmcloud:messaging/producer@0.3.0;

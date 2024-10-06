@@ -1,0 +1,13 @@
+[package]
+name = "http-keyvalue-watcher"
+edition = "2021"
+version = "0.1.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmcloud-component = { path = "../../../../crates/component" }
+wit-bindgen = { version = "0.32" }
