@@ -83,7 +83,7 @@ jobs:
             test_deploy: wadm.yaml
           - name: "messaging-nats"
             lang: "rust"
-            test_deploy: wadm.yaml
+            test_deploy: local.wadm.yaml
     steps:
       - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938
 

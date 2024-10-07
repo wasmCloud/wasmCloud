@@ -10,31 +10,26 @@ spec:
     - name: test-component
       type: component
       properties:
-        image: file://./component/build/custom_template_test_component.wasm
-        ## To configure OTEL integration for this provider specifically, uncomment the lines below
-        # config:
-        #   - name: otel
-        #     properties:
-        #       otel_exporter_otlp_endpoint: "http://all-in-one:4318"
-        #       otel_exporter_otlp_traces_endpoint: "http://traces-backend/v1/traces"
-        #       otel_exporter_otlp_metrics_endpoint: "http://metrics-backend/v1/metrics"
-        #       otel_exporter_otlp_logs_endpoint: "http://logs-backend/v1/logs"
+        image: ghcr.io/wasmcloud/components/echo-messaging-rust:0.1.0
       traits:
+        # Govern the spread/scheduling of the component
         - type: spreadscaler
           properties:
             instances: 1
-        # Link the component to the provider on wasmcloud:example/system-info
+        # Establish a unidirectional link to the messaging capability provider (powered by NATS),
+        # so the `echo` component can make use of messaging interface functionality
+        # (i.e. making interacting with the messaging system, in this case NATS)
         - type: link
           properties:
             target: custom-template
             namespace: wasmcloud
-            package: example
-            interfaces: [system-info]
+            package: messaging
+            interfaces: [consumer]
 
     - name: custom-template
       type: capability
       properties:
-        image: file://./build/wasmcloud-provider-custom-template.par.gz
+        image: file://./build/wasmcloud-example-messaging-nats.par.gz
         id: custom-template
         config:
           - name: provider-config
