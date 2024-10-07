@@ -285,54 +285,54 @@ where
 
     let bin_path_ref = bin_path.as_ref();
 
-    if let Some(parent_path) = bin_path_ref.parent() {
-        let config_path = parent_path.join(NATS_SERVER_CONF);
-        let host = config.host.clone();
-        let port = config.port;
-
-        let mut cmd_args = vec![
-            "-js".to_string(),
-            "--addr".to_string(),
-            host,
-            "--port".to_string(),
-            port.to_string(),
-            "--pid".to_string(),
-            parent_path
-                .join(NATS_SERVER_PID)
-                .to_string_lossy()
-                .to_string(),
-            "--config".to_string(),
-        ];
-
-        if let Some(nats_cfg_path) = &config.config_path {
-            anyhow::ensure!(
-                nats_cfg_path.is_file(),
-                "The provided NATS config File [{:?}] is not a valid File",
-                nats_cfg_path
-            );
-
-            cmd_args.push(nats_cfg_path.to_string_lossy().to_string());
-        } else {
-            config.write_to_path(&config_path).await?;
-            cmd_args.push(config_path.to_string_lossy().to_string());
-        }
-
-        let mut cmd = Command::new(bin_path_ref);
-        cmd.stderr(stderr.into())
-            .stdin(Stdio::null())
-            .args(&cmd_args);
-        let child = if command_group == CommandGroupUsage::CreateNew {
-            cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()
-        } else {
-            cmd.spawn().map_err(anyhow::Error::from)?
-        };
-
-        wait_for_server(&host_addr, "NATS server")
-            .await
-            .map(|()| child)
-    } else {
+    let Some(parent_path) = bin_path_ref.parent() else {
         bail!("could not write config to disk, couldn't find download directory")
+    };
+
+    let config_path = parent_path.join(NATS_SERVER_CONF);
+    let host = config.host.clone();
+    let port = config.port;
+
+    let mut cmd_args = vec![
+        "-js".to_string(),
+        "--addr".to_string(),
+        host,
+        "--port".to_string(),
+        port.to_string(),
+        "--pid".to_string(),
+        parent_path
+            .join(NATS_SERVER_PID)
+            .to_string_lossy()
+            .to_string(),
+        "--config".to_string(),
+    ];
+
+    if let Some(nats_cfg_path) = &config.config_path {
+        anyhow::ensure!(
+            nats_cfg_path.is_file(),
+            "The provided NATS config File [{:?}] is not a valid File",
+            nats_cfg_path
+        );
+
+        cmd_args.push(nats_cfg_path.to_string_lossy().to_string());
+    } else {
+        config.write_to_path(&config_path).await?;
+        cmd_args.push(config_path.to_string_lossy().to_string());
     }
+
+    let mut cmd = Command::new(bin_path_ref);
+    cmd.stderr(stderr.into())
+        .stdin(Stdio::null())
+        .args(&cmd_args);
+    let child = if command_group == CommandGroupUsage::CreateNew {
+        cmd.group_spawn().map_err(anyhow::Error::from)?.into_inner()
+    } else {
+        cmd.spawn().map_err(anyhow::Error::from)?
+    };
+
+    wait_for_server(&host_addr, "NATS server")
+        .await
+        .map(|()| child)
 }
 
 /// Helper function to get the path to the NATS server pid file
