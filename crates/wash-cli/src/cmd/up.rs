@@ -26,10 +26,11 @@ use wash_lib::config::{
 };
 use wash_lib::context::fs::ContextDir;
 use wash_lib::context::ContextManager;
+use wash_lib::generate::emoji;
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, find_wasmcloud_binary, nats_pid_path,
     start_nats_server, start_wadm, start_wasmcloud_host, NatsConfig, WadmConfig,
-    NATS_SERVER_BINARY, WADM_PID,
+    NATS_SERVER_BINARY, NATS_SERVER_CONF, WADM_PID,
 };
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -878,6 +879,20 @@ pub(crate) async fn start_nats(
         .await;
     let nats_process =
         start_nats_server(nats_binary, nats_log_file, nats_config, command_group).await?;
+    eprintln!(
+        "{} NATS server successfully started, using config @ [{}]",
+        emoji::INFO_SQUARE,
+        nats_binary
+            .parent()
+            .context("unexpectedly missing parent dir")?
+            .join(NATS_SERVER_CONF)
+            .display()
+    );
+    eprintln!(
+        "{} NATS server logs written to [{}]",
+        emoji::INFO_SQUARE,
+        nats_log_path.display()
+    );
 
     // save the PID so we can kill it later
     if let Some(pid) = nats_process.id() {
