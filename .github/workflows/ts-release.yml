@@ -1,6 +1,9 @@
 on:
   workflow_call: {}
 
+permissions:
+  contents: write
+
 jobs:
   # typescript/apps/*
   washboard-ui:
