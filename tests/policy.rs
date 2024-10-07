@@ -37,7 +37,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     // Build the host
     let host = WasmCloudTestHost::start_custom(
         &nats_url,
-        LATTICE,
+        vec![LATTICE.to_string()],
         None,
         None,
         // Since if a policy service is specified, the requests are deny-by-default
