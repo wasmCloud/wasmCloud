@@ -67,10 +67,11 @@ struct Args {
     #[clap(
         short = 'x',
         long = "lattice",
-        default_value = "default",
+        default_values_t = ["default".to_string()],
+        value_delimiter = ',',
         env = "WASMCLOUD_LATTICE"
     )]
-    lattice: String,
+    lattice: Vec<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
     host_seed: Option<String>,
@@ -452,9 +453,17 @@ async fn main() -> anyhow::Result<()> {
             "Invalid secrets topic"
         );
     }
+
+    let lattices = args
+        .lattice
+        .into_iter()
+        .collect::<HashSet<String>>()
+        .into_iter()
+        .collect::<Vec<String>>();
+
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
-        lattice: Arc::from(args.lattice),
+        lattices,
         host_key,
         config_service_enabled: args.config_service_enabled,
         js_domain: args.js_domain,
