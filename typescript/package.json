@@ -26,7 +26,7 @@
   "devDependencies": {
     "@types/node": "^20.16.10",
     "@wasmcloud/prettier-config": "workspace:*",
-    "eslint": "^8.57.0",
+    "eslint": "^9.12.0",
     "eslint-config-turbo": "^2.1.2",
     "prettier": "^3.3.3",
     "turbo": "^2.1.3",
