@@ -1,1 +1,2 @@
-postgres = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-postgres-v0.1.0-draft/wit-wasmcloud-postgres-0.1.0-draft.tar.gz"
+postgres = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-postgres-v0.1.1-draft/wit-wasmcloud-postgres-0.1.1-draft.tar.gz"
+cli = "https://github.com/WebAssembly/wasi-cli/archive/refs/tags/v0.2.0.tar.gz"

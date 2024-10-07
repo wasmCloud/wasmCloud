@@ -5,13 +5,13 @@ This folder contains a WebAssembly component that makes use of:
 - The [`wasmcloud:postgres` WIT contract][contract]
 - The [`sqldb-postgres-provider`][provider] Capability Provider
 
-[contract]: ./wit/deps/postgres/provider.wit
+[contract]: ./wit/deps/postgres/query.wit
 [provider]: ../../../../crates/provider-sqldb-postgres
 
 ## 📦 Dependencies
 
-- `go` 1.21.1
-- `tinygo` 0.30
+- `go` 1.23
+- `tinygo` 0.33+
 - [`docker`][docker] for easily running instances of [`postgres`]
 - [`wash`][wash] for building and running the components and [wasmCloud][wasmcloud] hosts
 
@@ -107,37 +107,5 @@ wash call go_sqldb_postgres_query-querier wasmcloud:examples/invoke.call
 ```
 
 Note that the name of the component is prefixed with the WADM application, and the interface on it we call is defined in `wit/provider.wit` (the `call` function of the `invoke` interface).
-
-## ⌨️ Code guide
-
-With [wasmCloud][wasmcloud], you write only the important bits of your business logic, so the code for this component is short, with the important bits highlighted below:
-
-```go
-func (c Component) Call() string {
-    query := interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(CREATE_TABLE_QUERY, make([]PgValue, 0))
-    if query.IsErr() {
-        return fmt.Sprintf("ERROR: failed to create table: %v", query.UnwrapErr())
-    }
-    val := interfaces.WasmcloudPostgres0_1_0_draft_TypesPgValueText("inserted example go row!")
-    insertResult := interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(INSERT_QUERY, []PgValue{val})
-    if insertResult.IsErr() {
-        return fmt.Sprintf("ERROR: failed to insert row: %v", insertResult.UnwrapErr())
-    }
-    insertedRows := insertResult.Unwrap()
-    var rowEntry []RowEntry
-    if len(insertedRows) == 1 {
-        rowEntry = insertedRows[0]
-    } else {
-        return "ERROR: failed to insert row"
-    }
-
-    for _, row := range rowEntry {
-        if row.ColumnName == "description" {
-            return fmt.Sprintf("SUCCESS: inserted and retrieved: %v", row.Value.GetText())
-        }
-    }
-    return "ERROR: failed to retrieve inserted row"
-}
-```
 
 [wasmcloud]: https://wasmcloud.com/docs/intro

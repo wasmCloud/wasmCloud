@@ -4,9 +4,9 @@ This is a simple TinyGo Wasm example that makes accepts a http request, then mak
 
 ## Prerequisites
 
-- `go` 1.21.1
-- `tinygo` 0.30
-- [`wash`](https://wasmcloud.com/docs/installation) 0.26.0
+- `go` 1.23.0
+- `tinygo` 0.33
+- [`wash`](https://wasmcloud.com/docs/installation) 0.34.1
 - `wasmtime` 17.0.0 (if running with wasmtime)
 
 ## Building

@@ -1,4 +1,4 @@
-package wasmcloud:postgres@0.1.0-draft;
+package wasmcloud:postgres@0.1.1-draft;
 
 /// Types used by components and providers of a SQLDB Postgres interface
 interface types {
