@@ -16,16 +16,12 @@ pub struct HostMetrics {
     // but we don't really hve a way of getting at those. We should figure out a way to get at that
     // information so we don't have to duplicate it here.
     pub host_id: String,
-    /// The host's lattice ID.
-    // Eventually a host will be able to support multiple lattices, so this will need to either be
-    // removed or metrics will need to be scoped per-lattice.
-    pub lattice_id: String,
 }
 
 impl HostMetrics {
     /// Construct a new [`HostMetrics`] instance for accessing the various wasmcloud host metrics linked to the provided meter.
     #[must_use]
-    pub fn new(meter: &Meter, host_id: String, lattice_id: String) -> Self {
+    pub fn new(meter: &Meter, host_id: String) -> Self {
         let wasmcloud_host_handle_rpc_message_duration_ns = meter
             .u64_histogram("wasmcloud_host.handle_rpc_message.duration")
             .with_description("Duration in nanoseconds each handle_rpc_message operation took")
@@ -47,7 +43,6 @@ impl HostMetrics {
             component_invocations: component_invocation_count,
             component_errors: component_error_count,
             host_id,
-            lattice_id,
         }
     }
 

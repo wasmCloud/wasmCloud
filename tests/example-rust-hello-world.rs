@@ -48,7 +48,7 @@ async fn example_rust_http_hello_world() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, LATTICE)
+    let host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
         .await
         .context("failed to start test host")?;
 
