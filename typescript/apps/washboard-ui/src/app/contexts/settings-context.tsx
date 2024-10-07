@@ -35,7 +35,7 @@ export function SettingsProvider({children}: PropsWithChildren): ReactElement {
     if (
       darkMode === DarkModeOption.Dark ||
       (darkMode === DarkModeOption.System &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches)
+        globalThis.matchMedia('(prefers-color-scheme: dark)').matches)
     ) {
       document.documentElement.classList.add('dark');
     } else {

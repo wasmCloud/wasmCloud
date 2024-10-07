@@ -184,7 +184,7 @@ function useToast(): UseToastReturn {
     listeners.push(setState);
     return (): void => {
       const index = listeners.indexOf(setState);
-      if (index > -1) {
+      if (index !== -1) {
         listeners.splice(index, 1);
       }
     };
