@@ -6,16 +6,16 @@ use crate::cmd::up::WasmcloudOpts;
 use crate::creds::parse_credsfile;
 
 // NATS configuration values
-pub const NATS_SERVER_VERSION: &str = "v2.10.18";
+pub const NATS_SERVER_VERSION: &str = "v2.10.20";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_NATS_WEBSOCKET_PORT: &str = "4223";
 
 // wadm configuration values
-pub const WADM_VERSION: &str = "v0.14.0";
+pub const WADM_VERSION: &str = "v0.16.1";
 
 // wasmCloud configuration values, https://wasmcloud.com/docs/reference/host-config
-pub const WASMCLOUD_HOST_VERSION: &str = "v1.2.1";
+pub const WASMCLOUD_HOST_VERSION: &str = "v1.3.0";
 
 // NATS isolation configuration variables
 pub const WASMCLOUD_LATTICE: &str = "WASMCLOUD_LATTICE";
