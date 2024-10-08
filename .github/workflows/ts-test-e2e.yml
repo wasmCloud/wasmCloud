@@ -3,13 +3,18 @@ name: ts-test-e2e
 on:
   workflow_call: {}
 
-defaults:
-  run:
-    working-directory: ./typescript/apps/washboard-ui
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
+
+    env:
+      # store browsers in the node_modules folder
+      PLAYWRIGHT_BROWSERS_PATH: 0
+
+    defaults:
+      run:
+        working-directory: ./typescript/apps/washboard-ui
 
     strategy:
       matrix:
@@ -17,6 +22,7 @@ jobs:
           - version: 0.32.1
           - version: 0.33.0
           - version: 0.34.1
+          - version: latest
 
     steps:
       - name: Checkout
@@ -31,9 +37,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Install `wash` CLI
-        uses: taiki-e/install-action@e29814c376696105d80cec9e9efaa98bae8e7347
+        uses: taiki-e/cache-cargo-install-action@a49e1f43f2bac04fc78da022dd719260115fe96e
         with:
-          tool: wash-cli@${{ matrix.wash.version }}
+          tool: ${{ matrix.wash.version == 'latest' && 'wash-cli' || 'wash-cli@${{ matrix.wash.version }}' }}
+          git: ${{ matrix.wash.version == 'latest' && github.repository }}
+          rev: ${{ matrix.wash.version == 'latest' && github.sha }}
 
       - name: Run Playwright Tests
         run: npx playwright test
