@@ -12,10 +12,6 @@ inputs:
     description: Working directory
     required: false
     default: ./typescript
-  package-manager:
-    description: Package manager to use (yarn, npm, pnpm)
-    required: false
-    default: yarn
 
 runs:
   using: composite
@@ -25,12 +21,7 @@ runs:
       uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
       with:
         node-version-file: ${{ inputs.working-directory }}/.tool-versions
-        cache-dependency-path: |-
-          ${{
-            inputs.package-manager == 'yarn' && '${{ inputs.working-directory }}/yarn.lock' ||
-            inputs.package-manager == 'pnpm' && '${{ inputs.working-directory }}/pnpm-lock.yaml' ||
-            '${{ inputs.working-directory }}/package-lock.json'
-          }}
+        cache-dependency-path: ${{ inputs.working-directory }}/yarn.lock
 
     - name: Setup Package Manager
       shell: bash
