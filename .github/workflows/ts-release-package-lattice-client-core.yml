@@ -1,4 +1,4 @@
-name: ts-release (washboard-ui)
+name: ts-release (@wasmcloud/lattice-client-core)
 
 on:
   workflow_call: {}
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   release:
-    name: washboard-ui
+    name: '@wasmcloud/lattice-client-core'
 
     runs-on: ubuntu-latest
 
@@ -23,11 +23,8 @@ jobs:
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: build-assets
-          pattern: washboard-ui/dist
-          path: washboard-ui
-      
-      - name: Compress Asset
-        run: tar -czf washboard.tar.gz washboard-ui
+          path: lattice-client-core
+          pattern: lattice-client-core/dist
 
       - name: Create Release
         uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191
@@ -35,4 +32,4 @@ jobs:
           draft: false
           prerelease: ${{ steps.extract.outputs.prerelease != '' }}
           make_latest: false
-          files: washboard.tar.gz
+          files: lattice-client-core/
