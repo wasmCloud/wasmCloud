@@ -1,6 +1,7 @@
 name: Typescript
 
 on:
+  merge_group:
   push:
     branches:
       - main
