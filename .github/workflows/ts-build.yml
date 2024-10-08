@@ -1,3 +1,5 @@
+name: ts-build
+
 on:
   workflow_call: {}
 
@@ -11,9 +13,7 @@ defaults:
     working-directory: ./typescript
 
 jobs:
-  run:
-    name: Build
-
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,3 +27,10 @@ jobs:
 
       - name: Build
         run: yarn turbo build
+
+      - name: Upload Build
+        uses: actions/upload-artifact@604373da6381bf24206979c74d06a550515601b9
+        with:
+          name: build-assets
+          path: 
+            ./typescript/**/dist/

@@ -1,3 +1,5 @@
+name: ts-test-e2e
+
 on:
   workflow_call: {}
 
@@ -6,9 +8,7 @@ defaults:
     working-directory: ./typescript/apps/washboard-ui
 
 jobs:
-  run:
-    name: E2E Tests
-
+  e2e:
     runs-on: ubuntu-latest
 
     strategy:

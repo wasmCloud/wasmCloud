@@ -1,4 +1,4 @@
-name: Typescript
+name: typescript
 
 on:
   merge_group:
@@ -21,15 +21,12 @@ concurrency:
 
 jobs:
   build:
-    name: Build
     uses: ./.github/workflows/ts-build.yml
 
   test:
-    name: Test
     uses: ./.github/workflows/ts-test.yml
 
   release:
-    name: Release
     if: startswith(github.ref, 'refs/tags/typescript/')
     needs: [build, test]
     uses: ./.github/workflows/ts-release.yml
