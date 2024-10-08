@@ -25,7 +25,6 @@ jobs:
       - name: Setup
         uses: ./.github/actions/ts-setup
         with:
-          package-manager: yarn
           working-directory: ./typescript
 
       - name: Run Tests
