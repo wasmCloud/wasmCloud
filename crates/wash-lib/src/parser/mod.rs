@@ -401,16 +401,56 @@ impl TryFrom<RawGoConfig> for GoConfig {
     }
 }
 
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum TinyGoScheduler {
+    None,
+    Tasks,
+    Asyncify,
+}
+
+impl TinyGoScheduler {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Tasks => "tasks",
+            Self::Asyncify => "asyncify",
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum TinyGoGarbageCollector {
+    None,
+    Conservative,
+    Leaking,
+}
+
+impl TinyGoGarbageCollector {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Conservative => "conservative",
+            Self::Leaking => "leaking",
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
     pub disable_go_generate: bool,
-    /// The scheduler to use for the TinyGo build. Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
-    pub scheduler: Option<String>,
-    /// The garbage collector to use for the TinyGo build. Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
-    pub garbage_collector: Option<String>,
+    /// The scheduler to use for the TinyGo build.
+    ///
+    /// Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
+    pub scheduler: Option<TinyGoScheduler>,
+    /// The garbage collector to use for the TinyGo build.
+    ///
+    /// Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
+    pub garbage_collector: Option<TinyGoGarbageCollector>,
 }
 
 impl TinyGoConfig {
@@ -431,10 +471,14 @@ struct RawTinyGoConfig {
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
     #[serde(default)]
     pub disable_go_generate: bool,
-    /// The scheduler to use for the TinyGo build. Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
-    pub scheduler: Option<String>,
-    /// The garbage collector to use for the TinyGo build. Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
-    pub garbage_collector: Option<String>,
+    /// The scheduler to use for the TinyGo build.
+    ///
+    /// Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
+    pub scheduler: Option<TinyGoScheduler>,
+    /// The garbage collector to use for the TinyGo build.
+    ///
+    /// Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
+    pub garbage_collector: Option<TinyGoGarbageCollector>,
 }
 
 impl TryFrom<RawTinyGoConfig> for TinyGoConfig {

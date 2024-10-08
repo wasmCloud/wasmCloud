@@ -4,7 +4,7 @@ use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
     get_config, CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig,
-    TinyGoConfig, TypeConfig, WasmTarget,
+    TinyGoConfig, TinyGoGarbageCollector, TinyGoScheduler, TypeConfig, WasmTarget,
 };
 
 #[test]
@@ -123,8 +123,8 @@ fn tinygo_component_module_scheduler_gc() {
         LanguageConfig::TinyGo(TinyGoConfig {
             tinygo_path: None,
             disable_go_generate: false,
-            scheduler: Some("none".into()),
-            garbage_collector: Some("leaking".into()),
+            scheduler: Some(TinyGoScheduler::None),
+            garbage_collector: Some(TinyGoGarbageCollector::Leaking),
         })
     );
 }

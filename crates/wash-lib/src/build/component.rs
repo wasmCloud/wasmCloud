@@ -314,12 +314,12 @@ async fn build_tinygo_component(
 
             if let Some(scheduler) = &tinygo_config.scheduler {
                 args.push("-scheduler");
-                args.push(scheduler);
+                args.push(scheduler.as_str());
             }
 
             if let Some(gc) = &tinygo_config.garbage_collector {
                 args.push("-gc");
-                args.push(gc);
+                args.push(gc.as_str());
             }
 
             args.push(".");
