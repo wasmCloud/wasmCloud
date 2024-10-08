@@ -34,11 +34,9 @@ If you're new to the wasmCloud ecosystem, a great place to start is the [getting
 The following commands launch wasmCloud in a local development environment and deploy a simple "hello world" WebAssembly component, written in Rust, Go, TypeScript, or Python.
 
 ```console
-wash up -d
 wash new component helloworld
-wash build -p ./helloworld
-wash app deploy ./helloworld/wadm.yaml
-curl localhost:8080
+wash dev --work-dir helloworld
+curl localhost:8000
 ```
 
 ## Features
