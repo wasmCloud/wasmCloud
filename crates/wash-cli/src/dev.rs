@@ -38,7 +38,8 @@ use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{
-    get_config, DevConfigSpec, DevManifestComponentTarget, DevSecretSpec, ProjectConfig, TypeConfig,
+    get_config, DevConfigSpec, DevManifestComponentTarget, DevSecretSpec,
+    InterfaceComponentOverride, InterfaceOverrides, ProjectConfig, TypeConfig, WitInterfaceSpec,
 };
 use wash_lib::start::{
     ensure_nats_server, ensure_wadm, ensure_wasmcloud, start_wadm, start_wasmcloud_host,
@@ -224,6 +225,67 @@ impl DependencySpec {
         }
     }
 
+    /// Retrieve the wit for this dependency
+    fn wit(&self) -> &WitInterfaceSpec {
+        match self {
+            DependencySpec::Exports(inner) => &inner.wit,
+            DependencySpec::Imports(inner) => &inner.wit,
+        }
+    }
+
+    /// Get the inner data of the dependency spec
+    fn inner(&self) -> &DependencySpecInner {
+        match self {
+            DependencySpec::Exports(inner) => inner,
+            DependencySpec::Imports(inner) => inner,
+        }
+    }
+
+    /// Get the inner data of the dependency spec
+    fn inner_mut(&mut self) -> &mut DependencySpecInner {
+        match self {
+            DependencySpec::Exports(inner) => inner,
+            DependencySpec::Imports(inner) => inner,
+        }
+    }
+
+    /// Add a configuration to the list of configurations on the dependency
+    fn add_config(&mut self, cfg: impl Into<wadm_types::ConfigProperty>) {
+        match self {
+            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
+                inner.configs.push(cfg.into())
+            }
+        }
+    }
+
+    /// Add one or more loose properties to an existing, creating it if it does not exist
+    fn add_config_properties_to_existing(
+        &mut self,
+        name: impl AsRef<str>,
+        new_props: impl Into<BTreeMap<String, String>>,
+    ) {
+        let name = name.as_ref();
+        let new_props = new_props.into();
+        match self {
+            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
+                match inner.configs.iter_mut().find(|c| c.name == name) {
+                    Some(ConfigProperty {
+                        ref mut properties, ..
+                    }) => match properties {
+                        Some(properties) => properties.extend(new_props),
+                        None => {
+                            *properties = Some(HashMap::from_iter(new_props));
+                        }
+                    },
+                    None => self.add_config(wadm_types::ConfigProperty {
+                        name: name.into(),
+                        properties: Some(HashMap::from_iter(new_props)),
+                    }),
+                }
+            }
+        }
+    }
+
     /// Retrieve secrets for this component spec
     fn secrets(&self) -> &Vec<SecretProperty> {
         match self {
@@ -231,9 +293,45 @@ impl DependencySpec {
             DependencySpec::Imports(inner) => &inner.secrets,
         }
     }
-}
 
-impl DependencySpec {
+    /// Add a secret to the list of secrets on the dependency
+    fn add_secret(&mut self, cfg: impl Into<wadm_types::SecretProperty>) {
+        match self {
+            DependencySpec::Exports(inner) | DependencySpec::Imports(inner) => {
+                inner.secrets.push(cfg.into())
+            }
+        }
+    }
+
+    /// Set the image reference for this dependency spec
+    fn set_image_ref(&mut self, s: impl AsRef<str>) {
+        match self {
+            DependencySpec::Exports(DependencySpecInner { image_ref, .. }) => {
+                image_ref.replace(s.as_ref().to_string());
+            }
+            DependencySpec::Imports(DependencySpecInner { image_ref, .. }) => {
+                image_ref.replace(s.as_ref().to_string());
+            }
+        }
+    }
+
+    /// Set the image reference for this dependency spec
+    fn set_link_name(&mut self, s: impl AsRef<str>) {
+        match self {
+            DependencySpec::Exports(DependencySpecInner { link_name, .. }) => {
+                *link_name = s.as_ref().to_string();
+            }
+            DependencySpec::Imports(DependencySpecInner { link_name, .. }) => {
+                *link_name = s.as_ref().to_string();
+            }
+        }
+    }
+
+    /// Override the contents of this dependency spec with another
+    fn override_with(&mut self, other: &Self) {
+        self.inner_mut().override_with(other.inner())
+    }
+
     /// Derive which local component should be used given a WIT interface to be satisified
     ///
     /// # Examples
@@ -254,70 +352,85 @@ impl DependencySpec {
             // Deal with known prefixes
             ("wasi", "keyvalue", "atomics" | "store" | "batch") => {
                 Some(Self::Exports(DependencySpecInner {
-                    wit: (
-                        ns,
-                        pkg,
-                        iface,
-                        version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                    ),
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: pkg,
+                        interface: Some(iface),
+                        function: None,
+                        version,
+                    },
                     delegated_to_workspace: false,
                     link_name: "default".into(),
                     image_ref: Some(DEFAULT_KEYVALUE_PROVIDER_IMAGE.into()),
-                    ..Default::default()
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
                 }))
             }
             ("wasi", "http", "outgoing-handler") => Some(Self::Exports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_HTTP_CLIENT_PROVIDER_IMAGE.into()),
-                ..Default::default()
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
             ("wasi", "blobstore", "blobstore") | ("wrpc", "blobstore", "blobstore") => {
                 Some(Self::Exports(DependencySpecInner {
-                    wit: (
-                        ns,
-                        pkg,
-                        iface,
-                        version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                    ),
+                    wit: WitInterfaceSpec {
+                        namespace: ns,
+                        package: pkg,
+                        interface: Some(iface),
+                        function: None,
+                        version,
+                    },
                     delegated_to_workspace: false,
                     link_name: "default".into(),
                     image_ref: Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE.into()),
-                    ..Default::default()
+                    is_component: false,
+                    configs: Default::default(),
+                    secrets: Default::default(),
                 }))
             }
             ("wasmcloud", "messaging", "consumer") => Some(Self::Exports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                ..Default::default()
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
             _ => Some(Self::Exports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: None,
-                ..Default::default()
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
         }
     }
@@ -341,43 +454,52 @@ impl DependencySpec {
             (ns, pkg, iface) if is_ignored_iface_dep(ns, pkg, iface) => None,
             // Handle known interfaces
             ("wasi", "http", "incoming-handler") => Some(Self::Imports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE.into()),
-                ..Default::default()
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
             ("wasmcloud", "messaging", "handler") => Some(Self::Imports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                ..Default::default()
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
             // Treat all other dependencies as custom, and track them as dependencies,
             // though they cannot be resolved to a proper dependency without an explicit override/
             // other configuration method
             _ => Some(Self::Imports(DependencySpecInner {
-                wit: (
-                    ns,
-                    pkg,
-                    iface,
-                    version.map(VersionCoverage::SemVer).unwrap_or_default(),
-                ),
+                wit: WitInterfaceSpec {
+                    namespace: ns,
+                    package: pkg,
+                    interface: Some(iface),
+                    function: None,
+                    version,
+                },
                 delegated_to_workspace: false,
                 link_name: "default".into(),
-                image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                ..Default::default()
+                image_ref: None,
+                is_component: false,
+                configs: Default::default(),
+                secrets: Default::default(),
             })),
         }
     }
@@ -463,26 +585,13 @@ impl DependencySpec {
     }
 }
 
-/// Versions of interfaces (in this context WIT interfaces) that are covered
-///
-/// Generally, this enum is used to resolve conflicts between providers
-/// that satisfy similar (possibly just slightly differently versioned) interfaces.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-enum VersionCoverage {
-    #[default]
-    All,
-    SemVer(Version),
-}
-
 /// Specification of a dependency (possibly implied)
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct DependencySpecInner {
-    /// Relevant WIT information that represents the dependency
+    /// Specification of the WIT interface that this dependency fulfills.
     ///
-    /// The interfaces that the dependency receives
-    ///
-    /// This generally means that the component will
-    wit: (WitNamespace, WitPackage, WitInterface, VersionCoverage),
+    /// Note that this specification may cover *more than one* interface.
+    wit: WitInterfaceSpec,
 
     /// Whether this dependency should delegated to the workspace
     delegated_to_workspace: bool,
@@ -523,7 +632,12 @@ impl DependencySpecInner {
             Some(DEFAULT_HTTP_SERVER_PROVIDER_IMAGE) => "http-server".into(),
             Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE) => "blobstore-fs".into(),
             Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE) => "messaging-nats".into(),
-            _ => format!("custom-{}-{}", self.wit.0, self.wit.1),
+            _ => format!(
+                "custom-{}-{}-{}",
+                self.wit.namespace,
+                self.wit.package,
+                self.wit.interface.as_deref().unwrap_or("*"),
+            ),
         }
     }
 
@@ -535,6 +649,19 @@ impl DependencySpecInner {
     /// Retrieve whether this dependency spec is a component
     fn is_component(&self) -> bool {
         self.is_component
+    }
+
+    /// Override the contents of this dependency spec with another
+    fn override_with(&mut self, other: &Self) {
+        self.is_component = other.is_component;
+        self.delegated_to_workspace = other.delegated_to_workspace;
+        self.image_ref = other.image_ref.clone();
+        self.link_name = other.link_name.clone();
+        // NOTE: We depend on the fact that configs and secrets should be processed in order,
+        // with later entries *overriding* earlier ones
+        self.configs.extend(self.configs.clone());
+        // NOTE: we depend on the
+        self.secrets.extend(self.secrets.clone());
     }
 }
 
@@ -581,8 +708,97 @@ impl ProjectDeps {
     }
 
     /// Build a [`ProjectDeps`] from a given project/workspace configuration
-    pub fn from_project_config(_cfg: &ProjectConfig) -> Result<Self> {
-        Ok(Self::default())
+    pub fn from_project_config_overrides(
+        pkey: ProjectDependencyKey,
+        cfg: &ProjectConfig,
+    ) -> Result<Self> {
+        // If no overrides were present, we can return immediately
+        let Some(InterfaceOverrides { imports, exports }) =
+            cfg.dev.as_ref().map(|dc| &dc.overrides)
+        else {
+            return Ok(Self::default());
+        };
+
+        // Build full list of overrides with generated dep specs
+        let mut overrides_with_deps = Vec::with_capacity(imports.len() + exports.len());
+        overrides_with_deps.append(
+            &mut imports
+                .iter()
+                .map(|v| {
+                    DependencySpec::from_wit_import_iface(&v.interface_spec)
+                        .context("failed to build image ref from interface")
+                        .map(|dep| (v, dep))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        overrides_with_deps.append(
+            &mut exports
+                .iter()
+                .map(|v| {
+                    DependencySpec::from_wit_export_iface(&v.interface_spec)
+                        .context("failed to build image ref from interface")
+                        .map(|dep| (v, dep))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+
+        // Build a list of the final modified dep specs
+        let mut deps = Vec::new();
+        for (
+            InterfaceComponentOverride {
+                config,
+                secrets,
+                image_ref,
+                link_name,
+                ..
+            },
+            mut dep_spec,
+        ) in overrides_with_deps.drain(..)
+        {
+            if let Some(image_ref) = image_ref {
+                dep_spec.set_image_ref(image_ref);
+            }
+
+            if let Some(link_name) = link_name {
+                dep_spec.set_link_name(link_name);
+            }
+
+            if let Some(config) = config {
+                for config in config.iter() {
+                    match config {
+                        DevConfigSpec::Named { name } => {
+                            dep_spec.add_config(wadm_types::ConfigProperty {
+                                name: name.into(),
+                                properties: None,
+                            })
+                        }
+                        DevConfigSpec::Values { values } => {
+                            dep_spec.add_config_properties_to_existing("default", values.clone())
+                        }
+                    }
+                }
+            }
+
+            if let Some(secrets) = secrets {
+                for secret in secrets.iter() {
+                    match secret {
+                        DevSecretSpec::Existing { name, source } => {
+                            dep_spec.add_secret(wadm_types::SecretProperty {
+                                name: name.into(),
+                                properties: source.clone(),
+                            });
+                        }
+                        DevSecretSpec::Values { .. } => {
+                            bail!("overriding secret with a on-demand secret is not supported yet")
+                        }
+                    }
+                }
+            }
+
+            deps.push(dep_spec)
+        }
+
+        Self::from_known_deps(pkey, deps)
     }
 
     /// Add one or more [`DependencySpec`]s to the current [`ProjectDeps`]
@@ -615,8 +831,24 @@ impl ProjectDeps {
             );
         }
 
-        // Add dependencies from other
-        self.dependencies.extend(other.dependencies);
+        // Merge dependencies from the other bundle into this one
+        for (pkey, other_deps) in other.dependencies {
+            let existing_deps = self.dependencies.entry(pkey).or_default();
+
+            // For every dep in other, find existing deps that overlap (i.e. are *not* disjoint)
+            for other_dep in other_deps {
+                let mut converted = Vec::with_capacity(existing_deps.len());
+                let (mut rest, overlapping): (Vec<_>, Vec<_>) = existing_deps
+                    .iter_mut()
+                    .partition(|d| other_dep.wit().is_disjoint(d.wit()));
+                // All overlapping dep specs in self are overridden with the overlapping values in other
+                converted.append(&mut rest);
+                for dep in overlapping {
+                    dep.override_with(&other_dep);
+                    converted.push(dep)
+                }
+            }
+        }
 
         Ok(())
     }
@@ -665,7 +897,14 @@ impl ProjectDeps {
             // Generate links for the given component and its spec, for known interfaces
             match dep {
                 DependencySpec::Exports(DependencySpecInner {
-                    wit: (ns, pkg, iface, version),
+                    wit:
+                        WitInterfaceSpec {
+                            namespace,
+                            package,
+                            interface,
+                            version,
+                            ..
+                        },
                     ..
                 }) => {
                     // Check to see if this link (namespace, package, target) already exists,
@@ -676,11 +915,13 @@ impl ProjectDeps {
                         .iter_mut()
                         .any(|trt| {
                             if let TraitProperty::Link(link) = &mut trt.properties {
-                                if link.namespace == ns
-                                    && link.package == pkg
+                                if link.namespace == namespace
+                                    && link.package == package
                                     && link.target.name == dep_component.name
                                 {
-                                    link.interfaces.push(iface.clone());
+                                    if let Some(interface) = &interface {
+                                        link.interfaces.push(interface.into());
+                                    };
                                     return true;
                                 }
                             }
@@ -692,9 +933,12 @@ impl ProjectDeps {
 
                     // Build the relevant app->dep link trait
                     let mut link_property = LinkProperty {
-                        namespace: ns.clone(),
-                        package: pkg.clone(),
-                        interfaces: vec![iface.clone()],
+                        namespace: namespace.clone(),
+                        package: namespace.clone(),
+                        interfaces: interface
+                            .as_ref()
+                            .map(|iface| vec![iface.into()])
+                            .unwrap_or_default(),
                         target: TargetConfig {
                             name: dep_component.name.clone(),
                             ..Default::default()
@@ -703,20 +947,25 @@ impl ProjectDeps {
                     };
 
                     // Make interface-specific changes
-                    match (ns.as_ref(), pkg.as_ref(), iface.as_ref(), version) {
-                        ("wasi", "blobstore", "blobstore", _)
-                        | ("wrpc", "blobstore", "blobstore", _) => {
+                    match (
+                        namespace.as_ref(),
+                        package.as_ref(),
+                        interface.as_deref(),
+                        version,
+                    ) {
+                        ("wasi", "blobstore", Some("blobstore"), _)
+                        | ("wrpc", "blobstore", Some("blobstore"), _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: config_name(ns.as_str(), pkg.as_str()),
+                                name: config_name(namespace.as_str(), package.as_str()),
                                 properties: Some(HashMap::from([(
                                     "root".into(),
                                     DEFAULT_BLOBSTORE_ROOT_DIR.into(),
                                 )])),
                             });
                         }
-                        ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
+                        ("wasi", "keyvalue", Some("atomics" | "store" | "batch"), _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: config_name(ns.as_str(), pkg.as_str()),
+                                name: config_name(namespace.as_str(), package.as_str()),
                                 properties: Some(HashMap::from([
                                     ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
                                     ("enable_bucket_auto_create".into(), "true".into()),
@@ -735,14 +984,24 @@ impl ProjectDeps {
                     component.traits.get_or_insert(Vec::new()).push(link_trait);
                 }
                 DependencySpec::Imports(DependencySpecInner {
-                    wit: (ns, pkg, iface, version),
+                    wit:
+                        WitInterfaceSpec {
+                            namespace,
+                            package,
+                            interface,
+                            version,
+                            ..
+                        },
                     ..
                 }) => {
                     // Build the relevant dep->app link trait
                     let mut link_property = LinkProperty {
-                        namespace: ns.clone(),
-                        package: pkg.clone(),
-                        interfaces: vec![iface.clone()],
+                        namespace: namespace.clone(),
+                        package: package.clone(),
+                        interfaces: interface
+                            .as_ref()
+                            .map(|iface| vec![iface.into()])
+                            .unwrap_or_default(),
                         target: TargetConfig {
                             name: component.name.clone(),
                             ..Default::default()
@@ -751,27 +1010,32 @@ impl ProjectDeps {
                     };
 
                     // Make interface-specific tweaks to the generated trait
-                    match (ns.as_ref(), pkg.as_ref(), iface.as_ref(), version) {
-                        ("wasi", "http", "incoming-handler", _) => {
+                    match (
+                        namespace.as_ref(),
+                        package.as_ref(),
+                        interface.as_deref(),
+                        version,
+                    ) {
+                        ("wasi", "http", Some("incoming-handler"), _) => {
                             link_property
                                 .source
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: config_name(ns.as_str(), pkg.as_str()),
+                                    name: config_name(namespace.as_str(), package.as_str()),
                                     properties: Some(HashMap::from([(
                                         "address".into(),
                                         DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
                                     )])),
                                 });
                         }
-                        ("wasmcloud", "messaging", "handler", _) => {
+                        ("wasmcloud", "messaging", Some("handler"), _) => {
                             link_property
                                 .source
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: config_name(ns.as_str(), pkg.as_str()),
+                                    name: config_name(namespace.as_str(), package.as_str()),
                                     properties: Some(HashMap::from([(
                                         "subscriptions".into(),
                                         DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
@@ -1575,20 +1839,20 @@ async fn generate_manifests(
 
     let mut current_project_deps = match previous_deps {
         Some(deps) => deps.clone(),
-        None => ProjectDeps::from_known_deps(pkey, wit_implied_deps)
+        None => ProjectDeps::from_known_deps(pkey.clone(), wit_implied_deps)
             .context("failed to build project dependencies")?,
     };
 
-    // Pull and merge in implied dependencies from project-level wasmcloud.toml
-    let implied_project_deps =
-        ProjectDeps::from_project_config(project_cfg).with_context(|| {
+    // Pull and merge in overrides from project-level wasmcloud.toml
+    let project_override_deps = ProjectDeps::from_project_config_overrides(pkey, project_cfg)
+        .with_context(|| {
             format!(
                 "failed to discover project dependencies from config [{}]",
                 project_cfg.common.path.display(),
             )
         })?;
     current_project_deps
-        .merge_override(implied_project_deps)
+        .merge_override(project_override_deps)
         .context("failed to merge & override project-specified deps")?;
 
     // After we've merged, we can update the session ID to belong to this session
