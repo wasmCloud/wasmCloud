@@ -42,6 +42,7 @@ reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 rustls = { workspace = true, features = ["std"] }
 rustls-native-certs = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true }
+semver = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["std"] }
