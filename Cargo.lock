@@ -8737,13 +8737,14 @@ dependencies = [
 
 [[package]]
 name = "wrpc-transport"
-version = "0.27.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69cd9a7f848de766cfaf95cae9c70568e123c6244c7271c653e0092c10de283"
+checksum = "be9a679adc60729d287f3113e1f88842410b792156cb7129e7341ba070cee762"
 dependencies = [
  "anyhow",
  "bytes",
  "futures",
+ "pin-project-lite",
  "send-future",
  "tokio",
  "tokio-stream",
