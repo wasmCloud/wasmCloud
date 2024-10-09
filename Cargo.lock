@@ -6397,7 +6397,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -6616,9 +6616,9 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "wadm-client"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b20b6c91e0932ed74d4e0f56545dc45bdc81b83933d8d935d28d38592ec30f1"
+checksum = "96c8114e03445450680093ab57fce6f2dd3b0b31e3daa240a0560ca94efa0df0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -6637,14 +6637,13 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0109246607f23adefa98988618d2762e23801c4a7a484e49ea8db717a1820a1"
+checksum = "cf085ad337b38c46d833957c0f644b627edfb9de02eabf33f3acbb233aea8173"
 dependencies = [
  "anyhow",
  "async-nats",
  "async-trait",
- "base64 0.22.1",
  "bytes",
  "chrono",
  "cloudevents-sdk",
@@ -6667,7 +6666,7 @@ dependencies = [
  "ulid",
  "utoipa",
  "uuid 1.10.0",
- "wasmcloud-control-interface 2.1.0",
+ "wasmcloud-control-interface 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmcloud-secrets-types 0.2.0",
 ]
 
@@ -7196,29 +7195,6 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c24228587ab5677ebd3693fafaab88049ec2f2e8664584e932950ffa0e11623"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "bytes",
- "cloudevents-sdk",
- "futures",
- "oci-distribution",
- "opentelemetry",
- "opentelemetry_sdk",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "wasmcloud-core 0.11.0",
-]
-
-[[package]]
-name = "wasmcloud-control-interface"
 version = "2.2.0"
 dependencies = [
  "anyhow",
@@ -7236,6 +7212,29 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "wasmcloud-core 0.12.0",
+]
+
+[[package]]
+name = "wasmcloud-control-interface"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ca8a9d9e20c30eef3a92cf5fad7392df703b7594fc7e794d49023106e921cb4"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-trait",
+ "bytes",
+ "cloudevents-sdk",
+ "futures",
+ "oci-distribution",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "wasmcloud-core 0.11.0",
 ]
 
 [[package]]
@@ -8242,7 +8241,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
