@@ -5,7 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.35.0 (2024-10-09)
+
+### Chore
+
+ - <csr-id-28be2bc7f5cba796f46be3ae9e63e89a4614d2a4/> remove async-nats v0.33.0
+ - <csr-id-ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee/> dedup wit deps
+ - <csr-id-9df2bb1754fbffc36ed03a00098831eca49f3171/> standardize emoji usage
+
+### New Features
+
+ - <csr-id-63896d3b7860c7213d7173cd213498f9f1b87e01/> bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20
+ - <csr-id-9769a3c293a70b3b1f326d4589eaab5d1d177ef6/> log NATS config and log path
+
+### Bug Fixes
+
+ - <csr-id-f30e6cd11097f3f061de77c0dc2439c4de9d971a/> ignore failed generation of components in `wash dev`
+   This commit allows failure of WADM manifest component generation in wash dev,
+   ignoring it if it occurs.
+   
+   Generation of WADM manifest components is likely to fail for *new*
+   interfaces that may be imported or exported -- likely unknown
+   interfaces that we can't possibly generate a known component for.
+ - <csr-id-c8f39c43ea3d6a72612033e82bc2d974bd142035/> support messaging-nats dev
+ - <csr-id-1a07544c5f8959b4dcb2c7e4078984681ba72437/> differentiate config, support fast-reload
+ - <csr-id-873faa61250bbb2f7913cf1d6213efaf75c94f7f/> continue dev loop when build fails
+ - <csr-id-a59201a2226a3d005c8c98c8a6874f240eb9eaf3/> combine links
+
+### Refactor
+
+ - <csr-id-4d4c8818d1d607ba64d21ca3115d199f3176de77/> adjust for control-interface v2.2.0
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-8fbaab298a5ac5749d89259871d829bf2cbfb1f8/> remove duplicate components, ignore generated paths
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 12 commits contributed to the release over the course of 7 calendar days.
+ - 9 days passed between releases.
+ - 12 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Bump wadm 0.16.1, wasmcloud 1.3, NATS 2.10.20 ([`63896d3`](https://github.com/wasmCloud/wasmCloud/commit/63896d3b7860c7213d7173cd213498f9f1b87e01))
+    - Log NATS config and log path ([`9769a3c`](https://github.com/wasmCloud/wasmCloud/commit/9769a3c293a70b3b1f326d4589eaab5d1d177ef6))
+    - Adjust for control-interface v2.2.0 ([`4d4c881`](https://github.com/wasmCloud/wasmCloud/commit/4d4c8818d1d607ba64d21ca3115d199f3176de77))
+    - Remove async-nats v0.33.0 ([`28be2bc`](https://github.com/wasmCloud/wasmCloud/commit/28be2bc7f5cba796f46be3ae9e63e89a4614d2a4))
+    - Ignore failed generation of components in `wash dev` ([`f30e6cd`](https://github.com/wasmCloud/wasmCloud/commit/f30e6cd11097f3f061de77c0dc2439c4de9d971a))
+    - Dedup wit deps ([`ba4f6f4`](https://github.com/wasmCloud/wasmCloud/commit/ba4f6f407aa5819d18c5a1688fc6cd9a7daef1ee))
+    - Standardize emoji usage ([`9df2bb1`](https://github.com/wasmCloud/wasmCloud/commit/9df2bb1754fbffc36ed03a00098831eca49f3171))
+    - Support messaging-nats dev ([`c8f39c4`](https://github.com/wasmCloud/wasmCloud/commit/c8f39c43ea3d6a72612033e82bc2d974bd142035))
+    - Differentiate config, support fast-reload ([`1a07544`](https://github.com/wasmCloud/wasmCloud/commit/1a07544c5f8959b4dcb2c7e4078984681ba72437))
+    - Continue dev loop when build fails ([`873faa6`](https://github.com/wasmCloud/wasmCloud/commit/873faa61250bbb2f7913cf1d6213efaf75c94f7f))
+    - Combine links ([`a59201a`](https://github.com/wasmCloud/wasmCloud/commit/a59201a2226a3d005c8c98c8a6874f240eb9eaf3))
+    - Remove duplicate components, ignore generated paths ([`8fbaab2`](https://github.com/wasmCloud/wasmCloud/commit/8fbaab298a5ac5749d89259871d829bf2cbfb1f8))
+</details>
+
 ## v0.34.1 (2024-09-30)
+
+<csr-id-ce1d5d1ed7c503e2cf357047a4a849f74be7b51e/>
+<csr-id-d28ebe1783c7535ac30cccad1dacc70cb921f371/>
+<csr-id-215eeadc555dfc8a57cee96856febf63113f62a1/>
+<csr-id-e2b6287bde6c9b905d96f93f93a1a7d73940283c/>
+<csr-id-e6936ce5113db8434ffb2cc927e779e677ad0bd4/>
+<csr-id-b382e8669dd31e44855142d2b478421884710e3d/>
+<csr-id-f8de84b251122b3319f7b1c8d86cb749cb4a8e37/>
+<csr-id-6cdcf8ae093a0214787ee99132844d5cb92d8b3d/>
+<csr-id-71fc4b8f60a1f5f469912b712452f1c96a7744ef/>
 
 ### Chore
 
@@ -17,26 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-b382e8669dd31e44855142d2b478421884710e3d/> update wash dev kv provider to keyvalue-nats 0.3.0
  - <csr-id-f8de84b251122b3319f7b1c8d86cb749cb4a8e37/> update version of keyvalue-nats used to 0.2.0
 
+### Other
+
+ - <csr-id-8d4c48bed132fd33cc7f4d2aaa33b1999e2ea67a/> wash-cli v0.34.1
+
 ### New Features
+
+<csr-id-4d299c3f00ab862e0f3deed29b8f29be7099956f/>
+<csr-id-ce1569cb6423f3bc42ff645e8c062287d8b3b78f/>
+<csr-id-f0cb812a2eb719a3f69c14805ab89cdc273754e4/>
 
  - <csr-id-095b9f448d3ec37fc55050d08f1d861f127336b9/> enable undeploying and deleting multiple apps
    This commit enables wash to:
    
    - Undeploy all applications at the same time
-   - Delete all undeployed applications
-   
-   The combination of `wash app undeploy --all` and `wash app delete
-   --all-undeployed` are meant to be used to gether in order to clear all
-   apps in a given lattice.
- - <csr-id-4d299c3f00ab862e0f3deed29b8f29be7099956f/> enable using custom wasmCloud host path
-   This commit adds a `--host-path` option to `wash` that enables using a
-   custom host binary for running the wasmCloud host.
- - <csr-id-ce1569cb6423f3bc42ff645e8c062287d8b3b78f/> Implemented Humantime duration input for --watch flags
-   - Backwards compatibility with millisecond input still maintained
-   - Improved terminal handling while watching application lattice
-   - watch interval for 'app list' is now configurable with a default interval of 1000ms.
-   - Added Short flag of -w as an alternative to --watch
- - <csr-id-f0cb812a2eb719a3f69c14805ab89cdc273754e4/> Allow wash to re-use registry credentials from Docker
+- Delete all undeployed applications
+- Backwards compatibility with millisecond input still maintained
+- Improved terminal handling while watching application lattice
+- watch interval for 'app list' is now configurable with a default interval of 1000ms.
+- Added Short flag of -w as an alternative to --watch
 
 ### Bug Fixes
 
@@ -57,9 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 14 commits contributed to the release over the course of 9 calendar days.
+ - 15 commits contributed to the release over the course of 9 calendar days.
  - 10 days passed between releases.
- - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 15 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -69,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Wash-cli v0.34.1 ([`8d4c48b`](https://github.com/wasmCloud/wasmCloud/commit/8d4c48bed132fd33cc7f4d2aaa33b1999e2ea67a))
     - Improve error handling, dependency resolution ([`9243e52`](https://github.com/wasmCloud/wasmCloud/commit/9243e5248d73df5b47dff38723027c36bb6be264))
     - Add test for wash app undeploy --all ([`71fc4b8`](https://github.com/wasmCloud/wasmCloud/commit/71fc4b8f60a1f5f469912b712452f1c96a7744ef))
     - Enable undeploying and deleting multiple apps ([`095b9f4`](https://github.com/wasmCloud/wasmCloud/commit/095b9f448d3ec37fc55050d08f1d861f127336b9))
@@ -85,7 +160,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Allow wash to re-use registry credentials from Docker ([`f0cb812`](https://github.com/wasmCloud/wasmCloud/commit/f0cb812a2eb719a3f69c14805ab89cdc273754e4))
 </details>
 
+<csr-unknown>
+The combination of wash app undeploy --all and wash app delete --all-undeployed are meant to be used to gether in order to clear allapps in a given lattice. enable using custom wasmCloud host pathThis commit adds a --host-path option to wash that enables using acustom host binary for running the wasmCloud host. Implemented Humantime duration input for –watch flags Allow wash to re-use registry credentials from Docker<csr-unknown/>
+
 ## v0.34.0 (2024-09-19)
+
+<csr-id-84633c20117cab57890a62b7b2e734df78133933/>
 
 ### Other
 

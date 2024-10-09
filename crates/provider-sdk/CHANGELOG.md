@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.9.1 (2024-09-24)
+## 0.10.0 (2024-10-09)
 
 ### Chore
 
@@ -152,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+ - <csr-id-d49b6ac050f0ee3c6f25c7a35f0b05ad77365e7a/> provider-sdk v0.9.1
  - <csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/> tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0
  - <csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/> bump wasmcloud-core v0.10.0, safety bump 5 crates
    SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-tracing v0.8.0, wasmcloud-provider-sdk v0.9.0, wash-cli v0.33.0, wash-lib v0.26.0
@@ -280,8 +281,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 115 commits contributed to the release over the course of 426 calendar days.
- - 109 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 116 commits contributed to the release over the course of 441 calendar days.
+ - 110 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -291,6 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Provider-sdk v0.9.1 ([`d49b6ac`](https://github.com/wasmCloud/wasmCloud/commit/d49b6ac050f0ee3c6f25c7a35f0b05ad77365e7a))
     - Allow override of OTEL config ([`b0f1523`](https://github.com/wasmCloud/wasmCloud/commit/b0f15232ca7a2a0ce34d7bd66575afc9470eed59))
     - Tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0 ([`1ff476d`](https://github.com/wasmCloud/wasmCloud/commit/1ff476dcd61675a81d747091a1a94f1a4cd5fedb))
     - Bump wasmcloud-core v0.10.0, safety bump 5 crates ([`1af6e05`](https://github.com/wasmCloud/wasmCloud/commit/1af6e05f1a47be4e62a4c21d1704aff2e09bef89))
@@ -407,6 +409,338 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Merge pull request #396 from rvolosatovs/feat/provider-sdk ([`6ed04f0`](https://github.com/wasmCloud/wasmCloud/commit/6ed04f00a335333196f6bafb96f2c40155537df3))
     - Add new provider SDK to repo ([`ada9067`](https://github.com/wasmCloud/wasmCloud/commit/ada90674df5130be6320788bcb08b7868f3b67a5))
 </details>
+
+## 0.9.1 (2024-09-24)
+
+<csr-id-3097af2824e0fa4477792e798a6c2cda742e3fff/>
+<csr-id-8c50fa9b90424b12a81276872c6e9b5bda61dd99/>
+<csr-id-929661ae115a05ccdacbcb0eb90642cdd1ff5cea/>
+<csr-id-0b1569b42dccdf3ae0f12e0d93fa9bcedd71e6dc/>
+<csr-id-81ab5914e7d08740eb9371c9b718f13f0419c23f/>
+<csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/>
+<csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/>
+<csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/>
+<csr-id-5957fce86a928c7398370547d0f43c9498185441/>
+<csr-id-8c93b0edbf37f1d0b40e065acfafc89af936a425/>
+<csr-id-902a17ec9bd73e6bf4dc08dca109d7e11765e6e4/>
+<csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/>
+<csr-id-859663e775f5505ec8fd7ee2bbb2ada73faae0e2/>
+<csr-id-3d7b64321686139e2e266ff7c69f094bcfac1f6d/>
+<csr-id-6b369d49cd37a87dca1f92f31c4d4d3e33dec501/>
+<csr-id-435300a5d5461860ad5f9abaf2f85cdb6ca3f900/>
+<csr-id-56e48aaac4a3e11f2f5e98ff2fa136ce9bb2235c/>
+<csr-id-b9770de23b8d3b0fa1adffddb94236403d7e1d3f/>
+<csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/>
+<csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/>
+<csr-id-0023f7e86d5a40a534f623b7220743f27871549e/>
+<csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/>
+<csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/>
+<csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/>
+<csr-id-8403350432a2387d4a2bce9c096f002005ba54be/>
+<csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/>
+<csr-id-f324674facf892f5db1747d1b780ccd22383a940/>
+<csr-id-4adbf0647f1ef987e92fbf927db9d09e64d3ecd8/>
+<csr-id-0f967b065f30a0b5418f7ed519fdef3dc75a6205/>
+<csr-id-d98a317b30e352ea0d73439ad3fa790ddfb8bf3f/>
+<csr-id-cfbf23226f34f3e7245a5d36cd7bb15e1796850c/>
+<csr-id-8e92e3b292e72af232524577c3410891a749eca2/>
+<csr-id-d8ad4376cb4db282047de8c4f62f6b8b907c9356/>
+<csr-id-4e1d6da189ff49790d876cd244aed89114efba98/>
+<csr-id-1814fd52e32ed4286d8f0be838a6c525cfeccc30/>
+<csr-id-2406601fb476e6a8ab7f7b2617ab70834474891a/>
+<csr-id-1dcbeee35e180ed0334c48b2dc80c9c15ad51994/>
+<csr-id-7c664a88cd7bbaa201b9b07a2bb9ba1c215a3b56/>
+<csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/>
+<csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/>
+<csr-id-5d7383137897d28a1bc5df9b1c48f75281dab55b/>
+<csr-id-54321c7cce159b7dad073dfc254dd4f13c21d2a2/>
+<csr-id-637be5dea8c8bef72f6f76ccc673477b7b0f1d0f/>
+<csr-id-05ae20c8ef474ad2249c6ad4b6ca8cc3b7d01b01/>
+<csr-id-2e473aa8b3337179566c71a9a93a945519b467db/>
+<csr-id-68dadeddb79cc041851d2adcfeb0417a4006d296/>
+<csr-id-b6a6b04229730d6783c3fee61c6e078cd3b962ef/>
+<csr-id-aea0a282911a704ee0d70ad38f267d8d8cc00d78/>
+<csr-id-0319a9245589709d96b03786374d8026beb5d5d0/>
+<csr-id-6f0a7d848e49d4cdc66dffe38fd8b41657f32649/>
+<csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/>
+<csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/>
+<csr-id-3430c72b11564acc0624987cd3df08c629d7d197/>
+<csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/>
+<csr-id-8e15d48258489dbb94f83cbea3872d4ee946c70b/>
+<csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/>
+<csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/>
+<csr-id-e75d3e2f2da91371266715723a3229b2138bf4f9/>
+<csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/>
+<csr-id-5fd0557c7ff454211e3f590333ff4dda208a1f7a/>
+<csr-id-642874717b6aab760d4692f9e8b12803548314e2/>
+
+### Chore
+
+ - <csr-id-3097af2824e0fa4477792e798a6c2cda742e3fff/> clippy
+ - <csr-id-8c50fa9b90424b12a81276872c6e9b5bda61dd99/> update README
+ - <csr-id-929661ae115a05ccdacbcb0eb90642cdd1ff5cea/> enable otel feature for docsrs
+ - <csr-id-0b1569b42dccdf3ae0f12e0d93fa9bcedd71e6dc/> address clippy warnings
+ - <csr-id-81ab5914e7d08740eb9371c9b718f13f0419c23f/> enable `ring` feature for `async-nats`
+ - <csr-id-bd50166619b8810ccdc2bcd80c33ff80d94bc909/> address clippy warnings
+ - <csr-id-4e0313ae4cfb5cbb2d3fa0320c662466a7082c0e/> generate changelogs after 1.0.1 release
+ - <csr-id-0f03f1f91210a4ed3fa64a4b07aebe8e56627ea6/> updated with newest features
+ - <csr-id-5957fce86a928c7398370547d0f43c9498185441/> address clippy warnings
+ - <csr-id-8c93b0edbf37f1d0b40e065acfafc89af936a425/> bump to 0.4.0
+ - <csr-id-902a17ec9bd73e6bf4dc08dca109d7e11765e6e4/> mark `LinkConfig` `non_exhaustive`
+ - <csr-id-fd69df40f24ca565ace0f8c97a0c47a89db575a4/> Excises vestigal remains of wasmbus-rpc
+   There were some parts of the core crate that we no longer use,
+   especially now that we don't require claims signing anymore. This
+   removes them and bumps the core crate in preparation for 1.0
+ - <csr-id-859663e775f5505ec8fd7ee2bbb2ada73faae0e2/> remove unused braces
+ - <csr-id-3d7b64321686139e2e266ff7c69f094bcfac1f6d/> bump to 0.3
+ - <csr-id-6b369d49cd37a87dca1f92f31c4d4d3e33dec501/> use `&str` directly
+ - <csr-id-435300a5d5461860ad5f9abaf2f85cdb6ca3f900/> relax type bounds
+ - <csr-id-56e48aaac4a3e11f2f5e98ff2fa136ce9bb2235c/> remove wasmbus rpc client
+ - <csr-id-b9770de23b8d3b0fa1adffddb94236403d7e1d3f/> bump `provider-sdk` to 0.2.0
+ - <csr-id-cb0bcab822cb4290c673051ec1dd98d034a61546/> add descriptions to crates
+ - <csr-id-3ffbd3ae2770a2bb7ef2d5635489e2725b3d9daa/> replace error field name with err
+ - <csr-id-0023f7e86d5a40a534f623b7220743f27871549e/> reduce verbosity of instrumented functions
+ - <csr-id-7b9ad7b57edd06c1c62833965041634811df47eb/> fix format
+
+### New Features
+
+ - <csr-id-fa875b259c57774c44840dd3a42fbdce8f6c0ef8/> name the provider's NATS connection
+ - <csr-id-4b24e27a68cfc5fe43a993d1d9b542daf0818021/> add initialize_host_data fn
+ - <csr-id-a2f3ad5e63fa6d333bb86d73464319cb35e83f32/> support for receiving config updates
+ - <csr-id-c2bb9cb5e2ba1c6b055f6726e86ffc95dab90d2c/> set NATS queue group
+ - <csr-id-9cb1b784fe7a8892d73bdb40d1172b1879fcd932/> upgrade `wrpc`, `async-nats`, `wasmtime`
+ - <csr-id-757c8e06c053030d9c6b39e67cebb4f27786624f/> add Context::link_name
+   This commit adds a utility method `link_name` to the `Context` struct
+   made available to providers to make it a bit easier to retrieve the
+   link name.
+   
+   Since link names are not included on `Context` natively, the headers
+   availble on the context must be searched.
+ - <csr-id-e28361935ad3b09d46658488e813c809522317bf/> add support for flame graphs
+ - <csr-id-1b076b3479874dbc2f7e575fcee65bab66bd056d/> use `tracing-appender`
+   Avoid locking whole process on each logging statement
+ - <csr-id-feaf5f9cd63fa7bf8476389396808fac9ba4ce09/> allow providers to access wit metadata for links
+   This commit enables providers to easily access WIT meatadata related
+   to a link via the `LinkConfig` struct available at link time.
+ - <csr-id-f986e39450676dc598b92f13cb6e52b9c3200c0b/> generate crate changelogs
+ - <csr-id-e19f77dee5fef7d211965a4a07946a0533bbc4a0/> add macro for propagating context
+ - <csr-id-9cd2b4034f8d5688ce250429dc14120eaf61b483/> update `wrpc:keyvalue` in providers
+   part of this process is adopting `wit-bindgen-wrpc` in the host
+ - <csr-id-322f471f9a8154224a50ec33517c9f5b1716d2d5/> switch to `wit-bindgen-wrpc`
+ - <csr-id-5f3986365b322624f904260962c3a830580c7b5e/> add trace context to wrpc client
+   This commit adds tracing information (if provided) to the wRPC client
+   when creating it manually from inside a provider (and when using an
+   `InvocationHandler`).
+ - <csr-id-8ce845bec7ca3f50e211d36e62fffbb0f36a0b37/> introduce interface provider running utilities
+ - <csr-id-a84492d15d154a272de33680f6338379fc036a3a/> introduce provider interface sdk
+ - <csr-id-07b5e70a7f1321d184962d7197a8d98d1ecaaf71/> use native TLS roots along webpki
+ - <csr-id-c610c845e003400cc515c0134cf546f2c7e9f6ac/> add support for init()
+   This commit adds support for a implementer-provided provider
+   initialization hook that `provider-sdk` can call during
+   initialization.
+ - <csr-id-614af7e3ed734c56b27cd1d2aacb0789a85e8b81/> implement Redis `wrpc:keyvalue/{atomic,eventual}`
+ - <csr-id-e0dac9de4d3a74424e3138971753db9da143db5a/> implement `wasi:http/outgoing-handler` provider
+ - <csr-id-e14d0405e9f746041001e101fc24320c9e6b4f9c/> deliver full config with link
+ - <csr-id-f50af38d7fb9bda9b8e05703240e6fda55f2c6df/> introduce `run_provider_handler`
+ - <csr-id-97aff4f5f93eeb6e31a31e891f742ab252bffe3b/> export wRPC client constructor
+ - <csr-id-868570be8d94a6d73608c7cde5d2422e15f9eb0c/> Switch to using --enable-observability and --enable-<signal> flags
+ - <csr-id-76c1ed7b5c49152aabd83d27f0b8955d7f874864/> support pubsub on wRPC subjects
+   Up until now, publishing and subscribing for RPC communcations on the
+   NATS cluster happened on subjects that were related to the wasmbus
+   protocol (i.e. 'wasmbus.rpc.*').
+   
+   To support the WIT-native invocations, i.e. wRPC (#1389), we must
+   change the publication and subscription subjects to include also the
+   subjects that are expected to be used by wprc.
+   
+   This commit updates the provider-sdk to listen *additionally* to
+   subjects that are required/used by wrpc, though we do not yet have an
+   implementation for encode/deocde.
+ - <csr-id-5d19ba16a98dca9439628e8449309ccaa763ab10/> change set-target to set-link-name
+   Up until the relatively low-level `wasmcloud:bus/lattice` WIT
+   interface has used a function called `set-target` to aim invocations
+   that occurred in compliant actors and providers.
+   
+   Since wRPC (#1389)
+   enabled  wasmCloud 1.0 is going to be WIT-first going forward, all
+   WIT-driven function executions have access to the relevant
+   interface (WIT interfaces, rather than Smithy-derived ones) that they
+   call, at call time.
+   
+   Given that actor & provider side function executions have access to
+   their WIT interfaces (ex. `wasi:keyvalue/readwrite.get`), what we need
+   to do is differentiate between the case where *multiple targets*
+   might be responding to the same WIT interface-backed invocations.
+   
+   Unlike before, `set-target` only needs to really differentiate between *link
+   names*.
+   
+   This commit updates `set-target` to perform differentiate between link
+   names, building on the work already done to introduce more opaque
+   targeting via Component IDs.
+ - <csr-id-3602bdf5345ec9a75e88c7ce1ab4599585bcc2d3/> enable OTEL logs
+ - <csr-id-bf396e0cea4dcb5baa0f0cb0201af0fb078f38a5/> update provider bindgen, add kvredis smithy-WIT implementation
+ - <csr-id-813ce52a9c11270814eec051dfaa8817bf9f567d/> support chunking and dechunking of requests
+ - <csr-id-675d364d2f53f9dbf7ebb6c655d5fbbbba6c62b6/> support OTEL traces end-to-end
+ - <csr-id-c334d84d01b8b92ab9db105f8e6f0c4a6bcef8b1/> send OTEL config via HostData
+ - <csr-id-ada90674df5130be6320788bcb08b7868f3b67a5/> add new provider SDK to repo
+   This is now manually tested and in a state where I think we should have it
+   in the repo. We should be able to keep iterating from there
+
+### Bug Fixes
+
+<csr-id-2dbc392215c9fa1971b1f3bd83fab0807c60aaee/>
+<csr-id-07d818cdbd50ae350d236fb1cc309d86b75739ea/>
+<csr-id-74142c4cff683565fb321b7b65fbb158b5a9c990/>
+<csr-id-c604aca1db1017e2458cf66eab232b081d615521/>
+
+ - <csr-id-b0f15232ca7a2a0ce34d7bd66575afc9470eed59/> allow override of OTEL config
+   This commit updates the provider SDK to enable picking up overrides of
+   the OTEL prvider configuration via initial configuration (available at
+   provider startup).
+ - <csr-id-a77e20f6bf556f715dafc944c2b4d81e698b2119/> robust check link duplicates
+ - <csr-id-2eb4c9947e0300e86971d398a03f6673de031dc3/> remove configure_observability() call
+ - <csr-id-27cb86d9e86b09c2da9e23a4ebfbddf22f3abad2/> wasmcloud messaging provider directionality
+ - <csr-id-0f6a1eb97cb46a43c9b24977a8e8dc11061af330/> add messaging triggered test actor
+   This commit is the culmination of a few things that were required for
+   getting our flavor of E2E tests (in the top level `tests/` dir)
+   working for a Provider & Actor.
+   
+   This commit is quite large because it does many things:
+   
+   - Adds missing implementation to bindgen for provider -> actor invocations
+- Uncomments implementation from the host for wasmcloud:messaging
+- Adds an invoker component that reacts to messaging rather than HTTP
+- Uses messaging & keyvalue providers plus the actor in a single test
+
+### Other
+
+ - <csr-id-1ff476dcd61675a81d747091a1a94f1a4cd5fedb/> tracing v0.8.0, provider-sdk v0.9.0, wash-cli v0.33.0
+ - <csr-id-1af6e05f1a47be4e62a4c21d1704aff2e09bef89/> bump wasmcloud-core v0.10.0, safety bump 5 crates
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-tracing v0.8.0, wasmcloud-provider-sdk v0.9.0, wash-cli v0.33.0, wash-lib v0.26.0
+ - <csr-id-8403350432a2387d4a2bce9c096f002005ba54be/> bump wasmcloud-core v0.9.0, wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wasmcloud-secrets-types v0.4.0, wash-cli v0.31.0, safety bump 5 crates
+   SAFETY BUMP: wash-lib v0.24.0, wasmcloud-tracing v0.7.0, wasmcloud-provider-sdk v0.8.0, wash-cli v0.31.0, wasmcloud-secrets-client v0.4.0
+ - <csr-id-7cd2e71cb82c1e1b75d0c89bd5bda343016e75f4/> bump for test-util release
+   Bump wasmcloud-core v0.8.0, opentelemetry-nats v0.1.1, provider-archive v0.12.0, wasmcloud-runtime v0.3.0, wasmcloud-secrets-types v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, safety bump 8 crates
+   
+   SAFETY BUMP: wasmcloud-runtime v0.3.0, wasmcloud-secrets-client v0.3.0, wasmcloud-tracing v0.6.0, wasmcloud-host v0.82.0, wasmcloud-test-util v0.12.0, wasmcloud-provider-sdk v0.7.0, wash-cli v0.30.0, wash-lib v0.23.0
+ - <csr-id-f324674facf892f5db1747d1b780ccd22383a940/> clarify timeout purpose
+ - <csr-id-4adbf0647f1ef987e92fbf927db9d09e64d3ecd8/> update `async-nats` to 0.33
+ - <csr-id-0f967b065f30a0b5418f7ed519fdef3dc75a6205/> 'upstream/main' into `merge/wash`
+ - <csr-id-d98a317b30e352ea0d73439ad3fa790ddfb8bf3f/> update opentelemetry
+
+### Refactor
+
+ - <csr-id-cfbf23226f34f3e7245a5d36cd7bb15e1796850c/> efficiency, pass optional vec secrets
+ - <csr-id-8e92e3b292e72af232524577c3410891a749eca2/> rename secrets redis provider
+ - <csr-id-d8ad4376cb4db282047de8c4f62f6b8b907c9356/> improve error representations, cleanup
+ - <csr-id-4e1d6da189ff49790d876cd244aed89114efba98/> remove extra trace_level field
+ - <csr-id-1814fd52e32ed4286d8f0be838a6c525cfeccc30/> enable consumer groups with kafka provider
+   This commit enables consumer groups via link time configuration in the
+   kafka provider.
+   
+   The native Rust ecosystem for Kafka is somewhat immature, so to do
+   this we must switch to a different crate
+   `kafka-rs` (https://crates.io/crates/kafka), which implements consumer
+   groups but is otherwise missing some features.
+   
+   With this branch, one can specify CONSUMER_GROUP in link configuration
+   to control the consumer group that is used for Kafka consumers (whose
+   incoming messages will trigger downstream components).
+ - <csr-id-2406601fb476e6a8ab7f7b2617ab70834474891a/> introduce `serve_provider_exports`
+ - <csr-id-1dcbeee35e180ed0334c48b2dc80c9c15ad51994/> update observability init code
+ - <csr-id-7c664a88cd7bbaa201b9b07a2bb9ba1c215a3b56/> minor changes from pr feedback
+ - <csr-id-87eb6c8b2c0bd31def1cfdc6121c612c4dc90871/> return wrapped `WrpcClient` directly
+ - <csr-id-8082135282f66b5d56fe6d14bb5ce6dc510d4b63/> remove `ProviderHandler`
+ - <csr-id-5d7383137897d28a1bc5df9b1c48f75281dab55b/> move wasmbus RPC topic generation to core
+   This commit moves the topic generation functions that were used for
+   wasmbus RPC topics from `provider-sdk` to `core` so that they can be
+   used/referred to more widely.
+ - <csr-id-54321c7cce159b7dad073dfc254dd4f13c21d2a2/> remove `serialize` and `deserialize`
+ - <csr-id-637be5dea8c8bef72f6f76ccc673477b7b0f1d0f/> minimize API surface
+ - <csr-id-05ae20c8ef474ad2249c6ad4b6ca8cc3b7d01b01/> subscribe for control subjects in init
+ - <csr-id-2e473aa8b3337179566c71a9a93a945519b467db/> export subject constructors
+ - <csr-id-68dadeddb79cc041851d2adcfeb0417a4006d296/> extract reusable `init_provider`
+ - <csr-id-b6a6b04229730d6783c3fee61c6e078cd3b962ef/> get values from new link def constistently
+   This commit updates all providers that were marked with TODOs related
+   to using named config to use `InterfaceLinkDefinition.target_config`
+   temporarily.
+   
+   The idea is to stuff configuration into the "names"s of configs that
+   were supposed to be in use (i.e. `["NAME=VALUE", "NAME=VALUE"]` rather
+   than `["config-1", "config-2"]`), ahead of named config being ready.
+ - <csr-id-aea0a282911a704ee0d70ad38f267d8d8cc00d78/> convert blobstore-fs to bindgen
+ - <csr-id-0319a9245589709d96b03786374d8026beb5d5d0/> move chunking to core
+ - <csr-id-6f0a7d848e49d4cdc66dffe38fd8b41657f32649/> simply re-export wasmcloud_core as core
+ - <csr-id-e1d7356bb0a07af9f4e6b1626f5df33709f3ed78/> replace lazy_static with once_cell
+ - <csr-id-23f1759e818117f007df8d9b1bdfdfa7710c98c5/> construct a strongly typed HostData to send to providers
+ - <csr-id-3430c72b11564acc0624987cd3df08c629d7d197/> remove `atty` dependency
+
+### Style
+
+ - <csr-id-6de67aa1ddab22ec99fe70f2c2fdc92dc5760b06/> replace needs_chunking function with direct comparison
+
+### Test
+
+ - <csr-id-8e15d48258489dbb94f83cbea3872d4ee946c70b/> update start_provider with named config
+
+### Chore (BREAKING)
+
+ - <csr-id-bc5d296f3a58bc5e8df0da7e0bf2624d03335d9f/> remove cluster_seed/cluster_issuers
+
+### New Features (BREAKING)
+
+ - <csr-id-4095f2ead49ffd61a8bc57189ccbd8a7defa4de0/> handle hostdata xkeys, decrypt link secrets
+ - <csr-id-8ad2cde49cb52872af4c9753be7c422092ae56ee/> add trace_level option
+ - <csr-id-f643d51e1fd01209ad93e93a04eed66b268dc2e2/> handle secrets at init and link
+ - <csr-id-88aedb17e90011cb602f48845c3896a3d836c980/> support storing directional links
+ - <csr-id-abffe4bac6137371e00c0afa668db907bde082e6/> rename put_link to receive_link_config_as_*
+   This commit renames `put_link` which was a part of the
+   `ProviderHandler` trait to `receive_link_config_as_target` and
+   `receive_link_config_as_source` depending on the position of the
+   provider when the link is put.
+   
+   With both of these explicit methods, users should be able to configure
+   their providers appropriately depending on how the link has been put
+   to them.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-22fed29d67f14326ddca56a272310759dcfd1965/> change inputs of Provider::delete_link_*
+   This commit introduces new methods to the `Provider` trait for
+   deleting links -- `delete_link_as_source()` and
+   `delete_link_as_target()`.
+   
+   Thse new methods are meant to address an issue with deleting links in
+   that the name of the link was unavailable -- only the source of the
+   link was provided.
+   
+   As the signatures of these functions have changed, this is a breaking change.
+ - <csr-id-903955009340190283c813fa225bae514fb15c03/> rename actor to component
+
+### Refactor (BREAKING)
+
+ - <csr-id-e1e50d7366716b61ddce52244e3dd66758ee0b82/> remove link_name, rename provider_key
+ - <csr-id-e75d3e2f2da91371266715723a3229b2138bf4f9/> unflatten provider errors & invocation errors
+   This commit refactors areas of provider code (SDK, in-tree providers)
+   that previously used `ProviderInvocationError`s which mixed
+   `InvocationError`s and a string-based catch-all for provider-internal
+   errors to return types that are true to the WIT contracts.
+   
+   With this commit, provider developers must code to the interface that
+   matches the WIT contract (ex. `async fn operation() ->
+   T`), rather than having values that are wrapped in `ProviderInvocationResult`.
+   
+   Contracts that were ported/not originally written with failure in mind
+   (i.e. not using `result<_,_>` in WIT) should be rewritten (in the
+   future) for operations that may fail, rather than relying on the
+   previously used `ProviderInvocation(Result|Error)` structures.
+ - <csr-id-6e8faab6a6e9f9bb7327ffb71ded2a83718920f7/> rename lattice prefix to just lattice
+ - <csr-id-5fd0557c7ff454211e3f590333ff4dda208a1f7a/> make publish method crate-public
+ - <csr-id-642874717b6aab760d4692f9e8b12803548314e2/> make content_length a required field
+
+<csr-unknown>
+With this, we have an easy to understand way to test every providerthat we have in the repository. use send_request to handle request timeout add what clippy took from me attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses enable ansi feature<csr-unknown/>
 
 ## 0.9.0 (2024-09-18)
 
@@ -602,9 +936,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    This commit is quite large because it does many things:
    
    - Adds missing implementation to bindgen for provider -> actor invocations
-- Uncomments implementation from the host for wasmcloud:messaging
-- Adds an invoker component that reacts to messaging rather than HTTP
-- Uses messaging & keyvalue providers plus the actor in a single test
 
 ### Other
 
@@ -732,7 +1063,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-642874717b6aab760d4692f9e8b12803548314e2/> make content_length a required field
 
 <csr-unknown>
-With this, we have an easy to understand way to test every providerthat we have in the repository. use send_request to handle request timeout add what clippy took from me attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses enable ansi feature<csr-unknown/>
+Uncomments implementation from the host for wasmcloud:messagingAdds an invoker component that reacts to messaging rather than HTTPUses messaging & keyvalue providers plus the actor in a single testWith this, we have an easy to understand way to test every providerthat we have in the repository. use send_request to handle request timeout add what clippy took from me attach traces on inbound and outbound messagesParse headers from CTL interface and RPC messages, and publish tracing headerson CTL and RPC responses enable ansi feature<csr-unknown/>
+<csr-unknown/>
 
 ## 0.8.0 (2024-08-23)
 
