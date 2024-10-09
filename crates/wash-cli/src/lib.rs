@@ -13,7 +13,6 @@ pub mod completions;
 pub mod config;
 pub mod ctl;
 pub mod ctx;
-pub mod dev;
 pub mod down;
 pub mod drain;
 pub mod generate;
