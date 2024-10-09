@@ -7,6 +7,7 @@ use wash_lib::{
     build::monkey_patch_fetch_logging,
     cli::{CommandOutput, CommonPackageArgs},
 };
+use wasm_pkg_client::{PublishOpts, Registry};
 use wasm_pkg_core::{
     lock::LockFile,
     wit::{self, OutputType},
@@ -25,6 +26,9 @@ pub enum WitCommand {
     /// exists, it will fetch all dependencies. If a lock file exists, it will fetch any
     /// dependencies that are not in the lock file and update the lock file.
     Fetch(FetchArgs),
+    /// Publish a WIT package to a registry. This will automatically infer the package name from the
+    /// WIT package.
+    Publish(PublishArgs),
 }
 
 impl WitCommand {
@@ -32,6 +36,7 @@ impl WitCommand {
         match self {
             WitCommand::Build(args) => args.run().await,
             WitCommand::Fetch(args) => args.run().await,
+            WitCommand::Publish(args) => args.run().await,
         }
     }
 }
@@ -66,6 +71,19 @@ pub struct FetchArgs {
     pub common: CommonPackageArgs,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct PublishArgs {
+    /// The file to publish
+    file: PathBuf,
+
+    /// The registry domain to use. Overrides configuration file(s).
+    #[arg(long = "wit-registry", env = "WASH_WIT_REGISTRY")]
+    registry: Option<Registry>,
+
+    #[command(flatten)]
+    common: CommonPackageArgs,
+}
+
 impl BuildArgs {
     pub async fn run(self) -> anyhow::Result<CommandOutput> {
         let client = self.common.get_client().await?;
@@ -77,7 +95,7 @@ impl BuildArgs {
             path
         } else {
             let mut file_name = pkg_ref.to_string();
-            if let Some(version) = version {
+            if let Some(ref version) = version {
                 file_name.push_str(&format!("@{version}"));
             }
             file_name.push_str(".wasm");
@@ -87,7 +105,16 @@ impl BuildArgs {
         tokio::fs::write(&output_path, bytes).await?;
         // Now write out the lock file since everything else succeeded
         lock_file.write().await?;
-        Ok(format!("WIT package written to {}", output_path.display()).into())
+
+        Ok(CommandOutput::new(
+            format!("WIT package written to {}", output_path.display()),
+            [
+                ("path".to_string(), serde_json::to_value(output_path)?),
+                ("package".to_string(), pkg_ref.to_string().into()),
+                ("version".to_string(), version.map(|v| v.to_string()).into()),
+            ]
+            .into(),
+        ))
     }
 }
 
@@ -108,5 +135,31 @@ impl FetchArgs {
         // Now write out the lock file since everything else succeeded
         lock_file.write().await?;
         Ok("Dependencies fetched".into())
+    }
+}
+
+impl PublishArgs {
+    pub async fn run(self) -> anyhow::Result<CommandOutput> {
+        let client = self.common.get_client().await?;
+
+        let (package, version) = client
+            .client()?
+            .publish_release_file(
+                &self.file,
+                PublishOpts {
+                    registry: self.registry,
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(CommandOutput::new(
+            format!("Published {}@{}", package, version),
+            [
+                ("package".to_string(), package.to_string().into()),
+                ("version".to_string(), version.to_string().into()),
+            ]
+            .into(),
+        ))
     }
 }
