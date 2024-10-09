@@ -1,8 +1,7 @@
-package wasmcloud:postgres@0.1.0-draft;
+package wasmcloud:postgres@0.1.1-draft;
 
 /// Types used by components and providers of a SQLDB Postgres interface
 interface types {
-
   /// Errors that occur while executing queries
   variant query-error {
     /// Unknown/invalid query parameters
@@ -34,25 +33,37 @@ interface types {
   ///
   /// see: https://docs.rs/num/latest/num/trait.Float.html#tymethod.integer_decode
   type hashable-f64 = tuple<u64, s16, s8>;
+
   type hashable-f32 = hashable-f64;
 
   type point = tuple<hashable-f64, hashable-f64>;
+
   type lower-left-point = point;
+
   type upper-right-point = point;
+
   type start-point = point;
+
   type end-point = point;
+
   type center-point = point;
+
   type radius = hashable-f64;
 
   type ipv4-addr = string;
+
   type ipv6-addr = string;
+
   type subnet = string;
 
   type xmin = s64;
+
   type xmax = s64;
+
   type xip-list = list<s64>;
 
   type logfile-num = u32;
+
   type logfile-byte-offset = u32;
 
   type column-name = string;
@@ -65,7 +76,7 @@ interface types {
     A,
     B,
     C,
-    D, // default
+    D,
   }
 
   /// Represents an arbitrary precision numeric type
@@ -125,7 +136,7 @@ interface types {
   }
 
   record mac-address-eui48 {
-   bytes: tuple<u8, u8, u8, u8, u8, u8>,
+    bytes: tuple<u8, u8, u8, u8, u8, u8>,
   }
 
   record mac-address-eui64 {
@@ -140,152 +151,130 @@ interface types {
   /// NOTE: all numeric values are little-endian unless otherwise specified
   variant pg-value {
     null,
-
-    // Numeric
-    big-int(s64), int8(s64),
+    /// Numeric
+    big-int(s64),
+    int8(s64),
     int8-array(list<s64>),
-
-    big-serial(s64), serial8(s64),
-
-    %bool(bool), boolean(bool),
-    %bool-array(list<bool>),
-
-    double(hashable-f64), float8(hashable-f64),
+    big-serial(s64),
+    serial8(s64),
+    %bool(bool),
+    boolean(bool),
+    bool-array(list<bool>),
+    double(hashable-f64),
+    float8(hashable-f64),
     float8-array(list<hashable-f64>),
-
-    real(hashable-f32), float4(hashable-f32),
+    real(hashable-f32),
+    float4(hashable-f32),
     float4-array(list<hashable-f32>),
-
-    integer(s32), int(s32), int4(s32),
+    integer(s32),
+    int(s32),
+    int4(s32),
     int4-array(list<s32>),
-
-    numeric(numeric), decimal(numeric),
+    numeric(numeric),
+    decimal(numeric),
     numeric-array(list<numeric>),
-
-    serial(u32), serial4(u32),
-
-    small-int(s16), int2(s16),
+    serial(u32),
+    serial4(u32),
+    small-int(s16),
+    int2(s16),
     int2-array(list<s16>),
     int2-vector(list<s16>),
     int2-vector-array(list<list<s16>>),
-
-    small-serial(s16), serial2(s16), // note: matches tokio-postgres
-
-    // Bytes
-    //
-    // For bit & bit-varying, see the encoding scheme used by bit-vec:
-    // https://contain-rs.github.io/bit-vec/bit_vec/struct.BitVec.html#method.to_bytes
+    small-serial(s16),
+    serial2(s16),
+    /// note: matches tokio-postgres
+    /// Bytes
+    ///
+    /// For bit & bit-varying, see the encoding scheme used by bit-vec:
+    /// https://contain-rs.github.io/bit-vec/bit_vec/struct.BitVec.html#method.to_bytes
     bit(tuple<u32, list<u8>>),
     bit-array(list<tuple<u32, list<u8>>>),
-    bit-varying(tuple<option<u32>, list<u8>>), varbit(tuple<option<u32>, list<u8>>),
+    bit-varying(tuple<option<u32>, list<u8>>),
+    varbit(tuple<option<u32>, list<u8>>),
     varbit-array(list<tuple<option<u32>, list<u8>>>),
     bytea(list<u8>),
     bytea-array(list<list<u8>>),
-
-    // Characters
-    // TODO: specify text encoding, to negotiate possible component/DB mismatch?
+    /// Characters
+    /// TODO: specify text encoding, to negotiate possible component/DB mismatch?
     %char(tuple<u32, list<u8>>),
-    %char-array(list<tuple<u32, list<u8>>>),
-
+    char-array(list<tuple<u32, list<u8>>>),
     varchar(tuple<option<u32>, list<u8>>),
     varchar-array(list<tuple<option<u32>, list<u8>>>),
-
-    // Networking
+    /// Networking
     cidr(string),
     cidr-array(list<string>),
-
     inet(string),
     inet-array(list<string>),
-
-    macaddr(mac-address-eui48), // EUI-48
-    macaddr-array(list<mac-address-eui48>), // EUI-48
-
-    macaddr8(mac-address-eui64), // EUI-64 (deprecated)
-    macaddr8-array(list<mac-address-eui64>), // EUI-64 (deprecated)
-
-    // Geo
+    macaddr(mac-address-eui48),
+    /// EUI-48
+    macaddr-array(list<mac-address-eui48>),
+    /// EUI-48
+    macaddr8(mac-address-eui64),
+    /// EUI-64 (deprecated)
+    macaddr8-array(list<mac-address-eui64>),
+    /// EUI-64 (deprecated)
+    /// Geo
     box(tuple<lower-left-point, upper-right-point>),
     box-array(list<tuple<lower-left-point, upper-right-point>>),
-
     circle(tuple<center-point, radius>),
     circle-array(list<tuple<center-point, radius>>),
-
     line(tuple<start-point, end-point>),
     line-array(list<tuple<start-point, end-point>>),
-
     lseg(tuple<start-point, end-point>),
     lseg-array(list<tuple<start-point, end-point>>),
-
     path(list<point>),
     path-array(list<list<point>>),
-
     point(point),
     point-array(list<point>),
-
     polygon(list<point>),
     polygon-array(list<list<point>>),
-
-    // Date-time
+    /// Date-time
     date(date),
     date-array(list<date>),
-
     interval(interval),
     interval-array(list<interval>),
-
     time(time),
     time-array(list<time>),
-
     time-tz(time-tz),
     time-tz-array(list<time-tz>),
-
     timestamp(timestamp),
     timestamp-array(list<timestamp>),
-
     timestamp-tz(timestamp-tz),
     timestamp-tz-array(list<timestamp-tz>),
-
-    // JSON
+    /// JSON
     json(string),
     json-array(list<string>),
     jsonb(string),
     jsonb-array(list<string>),
-
-    // Money (use is discouraged)
-    //
-    // fractional precision is determined by the database's `lc_monetary` setting.
-    //
-    // NOTE: if you are storing currency amounts, consider
-    // using integer (whole number) counts of smallest indivisible pieces of currency
-    // (ex. cent amounts to represent United States Dollars; 100 cents = 1 USD)
+    /// Money (use is discouraged)
+    ///
+    /// fractional precision is determined by the database's `lc_monetary` setting.
+    ///
+    /// NOTE: if you are storing currency amounts, consider
+    /// using integer (whole number) counts of smallest indivisible pieces of currency
+    /// (ex. cent amounts to represent United States Dollars; 100 cents = 1 USD)
     money(numeric),
     money-array(list<numeric>),
-
-    // Postgres-internal
+    /// Postgres-internal
     pg-lsn(u64),
     pg-lsn-array(list<u64>),
-    // see: https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-PG-SNAPSHOT-PARTS
+    /// see: https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-PG-SNAPSHOT-PARTS
     pg-snapshot(tuple<xmin, xmax, xip-list>),
     txid-snapshot(s64),
-
-    // Text
+    /// Text
     name(string),
     name-array(list<string>),
-
     text(string),
     text-array(list<string>),
-
     xml(string),
     xml-array(list<string>),
-
-    // Full Text Search
+    /// Full Text Search
     ts-query(string),
     ts-vector(list<lexeme>),
-
-    // UUIDs
+    /// UUIDs
     uuid(string),
     uuid-array(list<string>),
-
-    // Containers
+    /// Containers
     hstore(list<tuple<string, option<string>>>),
   }
 
@@ -295,5 +284,56 @@ interface types {
     /// Value of the result column
     value: pg-value,
   }
+
   type result-row = list<result-row-entry>;
 }
+
+/// Interface for querying a Postgres database
+interface query {
+  use types.{pg-value, result-row, query-error};
+
+  /// Query a Postgres database, leaving connection/session management
+  /// to the callee/implementer of this interface (normally a provider configured with connection credentials)
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  query: func(query: string, params: list<pg-value>) -> result<list<result-row>, query-error>;
+
+  /// Perform a batch query (which could contain multiple statements) against a Postgres database,
+  /// leaving connection/session management to the callee/implementer of this interface
+  /// (normally a provider configured with connection credentials)
+  ///
+  /// No user-provided or untrusted data should be used with this query -- parameters are not allowed
+  ///
+  /// This query *can* be used to execute multi-statement queries (common in migrations).
+  query-batch: func(query: string) -> result<_, query-error>;
+}
+
+/// Interface for querying a Postgres database with prepared statements
+interface prepared {
+  use types.{pg-value, result-row, statement-prepare-error, prepared-statement-exec-error};
+
+  /// A token that represents a previously created prepared statement,
+  ///
+  /// This token can be expected to be somewhat opaque to users.
+  type prepared-statement-token = string;
+
+  /// Prepare a statement, given a connection token (which can represent a connection *or* session),
+  /// to a Postgres database.
+  ///
+  /// Queries *must* be parameterized, with named arguments in the form of `$<integer>`, for example:
+  ///
+  /// ```
+  /// SELECT email,username FROM users WHERE uuid=$1;
+  /// ```
+  ///
+  /// NOTE: To see how to obtain a `connection-token`, see `connection.wit`.
+  prepare: func(statement: string) -> result<prepared-statement-token, statement-prepare-error>;
+
+  /// Execute a prepared statement, returning the number of rows affected
+  exec: func(stmt-token: prepared-statement-token, params: list<pg-value>) -> result<u64, prepared-statement-exec-error>;
+}
+
