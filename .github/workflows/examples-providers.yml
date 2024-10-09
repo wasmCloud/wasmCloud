@@ -48,12 +48,12 @@ jobs:
       - name: build wash (current)
         if: ${{ matrix.wash-version == 'current' }}
         run: cargo build -p wash-cli --release
-      - uses: actions/upload-artifact@604373da6381bf24206979c74d06a550515601b9
+      - uses: actions/upload-artifact@84480863f228bb9747b473957fcc9e309aa96097
         if: ${{ matrix.wash-version == 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
           path: ./target/release/wash
-      - uses: actions/upload-artifact@604373da6381bf24206979c74d06a550515601b9
+      - uses: actions/upload-artifact@84480863f228bb9747b473957fcc9e309aa96097
         if: ${{ matrix.wash-version != 'current' }}
         with:
           name: wash-${{ matrix.wash-version }}
