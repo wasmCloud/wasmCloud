@@ -90,6 +90,7 @@ wash-lib = { workspace = true, features = [
     "start",
     "plugin",
 ] }
+wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true }
