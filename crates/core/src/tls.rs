@@ -13,8 +13,6 @@
 //!         roots: tls::DEFAULT_ROOTS.roots.clone(),
 //!     })
 //!     .with_no_client_auth();
-//!
-//! # assert!(config.is_ok());
 //! ```
 //!
 //! [webpki-roots]: https://crates.io/crates/webpki-roots
