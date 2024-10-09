@@ -255,7 +255,6 @@ impl DependencySpec {
                     delegated_to_workspace: false,
                     link_name: "default".into(),
                     image_ref: Some(DEFAULT_KEYVALUE_PROVIDER_IMAGE.into()),
-                    // TODO: needs config on the source->target link (Bucket name)
                     ..Default::default()
                 }))
             }
@@ -282,7 +281,6 @@ impl DependencySpec {
                     delegated_to_workspace: false,
                     link_name: "default".into(),
                     image_ref: Some(DEFAULT_BLOBSTORE_FS_PROVIDER_IMAGE.into()),
-                    // TODO: needs config on source->target link (ROOT)
                     ..Default::default()
                 }))
             }
@@ -356,7 +354,6 @@ impl DependencySpec {
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                // TODO: needs config on the provider->component link (subscriptions)
                 ..Default::default()
             })),
             // Treat all other dependencies as custom, and track them as dependencies,
@@ -372,7 +369,6 @@ impl DependencySpec {
                 delegated_to_workspace: false,
                 link_name: "default".into(),
                 image_ref: Some(DEFAULT_MESSAGING_NATS_PROVIDER_IMAGE.into()),
-                // TODO: needs config on the provider->component link (subscriptions)
                 ..Default::default()
             })),
         }
@@ -578,7 +574,6 @@ impl ProjectDeps {
 
     /// Build a [`ProjectDeps`] from a given project/workspace configuration
     pub fn from_project_config(_cfg: &ProjectConfig) -> Result<Self> {
-        // TODO: implement overrides
         Ok(Self::default())
     }
 
@@ -614,8 +609,6 @@ impl ProjectDeps {
 
         // Add dependencies from other
         self.dependencies.extend(other.dependencies);
-
-        // TODO: merge dependencies with identical keys, while implementing overrides
 
         Ok(())
     }
@@ -730,8 +723,6 @@ impl ProjectDeps {
                         properties: TraitProperty::Link(link_property),
                     };
 
-                    // TODO: Check for on-dep overrides/additional configuration to add to the link
-
                     // Add the trait to the app component
                     component.traits.get_or_insert(Vec::new()).push(link_trait);
                 }
@@ -782,8 +773,6 @@ impl ProjectDeps {
                         _ => {}
                     }
 
-                    // TODO: Check for on-dep overrides/additional configuration to add to the link
-
                     let link_trait = wadm_types::Trait {
                         trait_type: "link".into(),
                         properties: TraitProperty::Link(link_property),
@@ -827,12 +816,6 @@ impl ProjectDeps {
             spec: Specification {
                 components: components.into_values().collect(),
                 policies: Vec::with_capacity(0),
-                // TODO: When secrets are required, reenable the nats-kv policy
-                // policies: Vec::from([Policy {
-                //     name: "nats-kv".into(),
-                //     policy_type: "policy.secret.wasmcloud.dev/v1alpha1".into(),
-                //     properties: BTreeMap::from([("backend".into(), "nats-kv".into())]),
-                // }]),
             },
         });
 
@@ -1815,18 +1798,12 @@ async fn update_secret_properties_by_spec(
             }
         }
         DevSecretSpec::Values { name, values } => {
-            // TODO: Create the secret in the store
-
             // Go through all provided values and build the secret a secret
             for (k, v) in values {
-                // TODO: Support ENV-specified secrets
-                // TODO: Warn user about using secrets in plain text, for any *non* env-specified
                 ensure!(
                     !v.starts_with("$ENV:"),
                     "ENV-loaded secrets are not yet supported"
                 );
-
-                // TODO: Store the secret value in the secret store (NATS KV), with the specified key
 
                 // Add values explicitly to the bottom of the list, overriding the others
                 secrets.push(SecretProperty {
@@ -2047,7 +2024,6 @@ async fn scale_down_component(
     Ok(())
 }
 
-// TODO: A wrapper around this to ensure that we stop the children in the event of returning an error would be good
 /// Handle `wash dev`
 pub async fn handle_command(
     cmd: DevCommand,
