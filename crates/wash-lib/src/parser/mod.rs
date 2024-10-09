@@ -5,14 +5,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Display;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 use wadm_types::{Component, Properties, SecretSourceProperty};
 use wasmcloud_control_interface::RegistryCredential;
+use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -530,6 +532,9 @@ pub enum DevSecretSpec {
         source: SecretSourceProperty,
     },
     /// Explicitly specified secret values with all values presented
+    ///
+    /// NOTE: Secret names are required at all times, since secrets
+    /// *must* be named when interacting with a secret store
     Values {
         name: String,
         values: BTreeMap<String, String>,
@@ -542,14 +547,17 @@ struct RawDevConfig {
     /// Top level override of the WADM application manifest(s) to use for development
     ///
     /// If unspecified, it is up to tools to generate a manifest from available information.
-    pub manifests: Option<Vec<DevManifestComponentTarget>>,
+    pub manifests: Option<OneOrMore<DevManifestComponentTarget>>,
 
     /// Configuration values to be set up
     #[serde(alias = "configs")]
-    pub config: Option<Vec<DevConfigSpec>>,
+    pub config: Option<OneOrMore<DevConfigSpec>>,
 
     /// Configuration values to be set up
-    pub secrets: Option<Vec<DevSecretSpec>>,
+    pub secrets: Option<OneOrMore<DevSecretSpec>>,
+
+    /// Interface-driven overrides
+    pub overrides: Option<InterfaceOverrides>,
 }
 
 /// Target that specifies a single component in a given manifest path
@@ -603,6 +611,275 @@ impl DevManifestComponentTarget {
     }
 }
 
+/// Interface-based overrides used for a single component
+#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InterfaceComponentOverride {
+    /// Specification of the interface
+    ///
+    /// ex. `wasi:keyvalue@0.2.0`, `wasi:http/incoming-handler@0.2.0`
+    pub interface_spec: String,
+
+    /// Configuration that should be provided to the overriden component
+    pub config: Option<OneOrMore<DevConfigSpec>>,
+
+    /// Configuration that should be provided to the overriden component
+    pub secrets: Option<OneOrMore<DevSecretSpec>>,
+
+    /// Reference to the component
+    #[serde(alias = "uri")]
+    pub image_ref: Option<String>,
+
+    /// Link name that should be used to reference the component
+    ///
+    /// This is only required when there are *more than one* overrides that conflict (i.e. there is no "default")
+    pub link_name: Option<String>,
+}
+
+/// String that represents a specification of a WIT interface (normally used when specifying [`InterfaceComponentOverride`]s)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitInterfaceSpec {
+    /// WIT namespace
+    pub namespace: WitNamespace,
+    /// WIT package
+    pub package: WitPackage,
+    /// WIT interface
+    pub interface: Option<WitInterface>,
+    /// WIT interface
+    pub function: Option<WitFunction>,
+    /// Version of WIT interface
+    pub version: Option<Version>,
+}
+
+impl WitInterfaceSpec {
+    /// Check whether this wit interface specification "contains" another one
+    ///
+    /// Containing another WIT interface spec means the current interface (if loosely specified)
+    /// is *more* general than the `other` one.
+    ///
+    /// This means that if the `other` spec is more general, this one will count as overlapping with it.
+    ///
+    /// ```
+    /// assert!(WitInterfaceSpec::from_str("wasi:http").includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler")));
+    /// assert!(WitInterfaceSpec::from_str("wasi:http/incoming-handler").includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle")));
+    /// ```
+    pub fn is_disjoint(&self, other: &Self) -> bool {
+        if self.namespace != other.namespace {
+            return true;
+        }
+        if self.package != other.package {
+            return true;
+        }
+        // If interfaces don't match, this interface can't contain the other one
+        match (self.interface.as_ref(), other.interface.as_ref()) {
+            // If they both have no interface specified, then we do overlap
+            (None, None) |
+            // If the other has no interface, but this one does, this *does* overlap
+            (Some(_), None) |
+            // If this spec has no interface, but the other does, then we do overlap
+            (None, Some(_)) => {
+                return false;
+            }
+            // If both specify different interfaces, we don't overlap
+            (Some(iface), Some(other_iface)) if iface != other_iface => {
+                return true;
+            }
+            // The only option left is when the interfaces are the same
+            (Some(_), Some(_)) => {}
+        }
+
+        // At this point, we know that the interfaces must match
+        match (self.function.as_ref(), other.function.as_ref()) {
+            // If neither have functions, they cannot be disjoint
+            (None, None) |
+            // If only self has a function, then they are not disjoint
+            // (other contains self)
+            (Some(_), None) |
+            // If only the other has a function, then they are not disjoint
+            // (self contains other)
+            (None, Some(_)) => {
+                return false;
+            }
+            // If the functions differ, these are disjoint
+            (Some(f), Some(other_f)) if f != other_f => {
+                return true;
+            }
+            // The only option left is when the functions are the same
+            (Some(_), Some(_)) => {}
+        }
+
+        // Compare the versions
+        match (self.version.as_ref(), other.version.as_ref())  {
+            // If the neither have versions, they cannot be disjoint
+            (None, None) |
+            // If only self has a version, they cannot be disjoint
+            // (self contains other)
+            (Some(_), None) |
+            // If only the other has a version, they cannot be disjoint
+            // (other contains self)
+            (None, Some(_)) => {
+                false
+            }
+            // If the *either* version matches the other in semantic version terms, they cannot be disjoint
+            //
+            // Realistically this means that 0.2.0 and 0.2.1 are *not* disjoint, and while they could be,
+            // we assume that semantic versioning semantics should ensure that 0.2.0 and 0.2.1 are backwards compatible
+            // (though for <1.x versions, there is no such "real" guarantee)
+            //
+            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{v}")).is_ok_and(|req| req.matches(other_v)) => { false }
+            (Some(v), Some(other_v)) if VersionReq::parse(&format!("^{other_v}")).is_ok_and(|req| req.matches(v)) => {
+                false
+            }
+            // The only option left is that the versions are the same and their versions are incompatible/different
+            _ => true
+        }
+    }
+}
+
+impl std::str::FromStr for WitInterfaceSpec {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match parse_wit_package_name(s) {
+            Ok((namespace, packages, interfaces, function, version))
+                if packages.len() == 1
+                    && (interfaces.is_none()
+                        || interfaces.as_ref().is_some_and(|v| v.len() == 1)) =>
+            {
+                Ok(Self {
+                    namespace,
+                    package: packages
+                        .into_iter()
+                        .next()
+                        .context("unexpectedly missing package")?,
+                    interface: match interfaces {
+                        Some(v) => Some(
+                            v.into_iter()
+                                .next()
+                                .context("unexpectedly missing interface")?,
+                        ),
+                        None => None,
+                    },
+                    function,
+                    version,
+                })
+            }
+            Ok((_, _, _, Some(_), _)) => {
+                bail!("function-level interface overrides are not yet supported")
+            }
+            Ok(_) => bail!("nested interfaces not yet supported"),
+            Err(e) => bail!("failed to parse WIT interface spec (\"{s}\"): {e}"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WitInterfaceSpec {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Multi {
+            Stringified(String),
+            Explicit {
+                namespace: String,
+                package: String,
+                interface: Option<String>,
+                function: Option<String>,
+                version: Option<Version>,
+            },
+        }
+
+        match Multi::deserialize(deserializer)? {
+            Multi::Stringified(s) => Self::from_str(&s).map_err(|e| {
+                serde::de::Error::custom(format!(
+                    "failed to parse WIT interface specification: {e}"
+                ))
+            }),
+            Multi::Explicit {
+                namespace,
+                package,
+                interface,
+                function,
+                version,
+            } => Ok(Self {
+                namespace,
+                package,
+                interface,
+                function,
+                version,
+            }),
+        }
+    }
+}
+
+/// Facilitates *one* of a given `T` or more (primarily for serde use)
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum OneOrMore<T> {
+    /// Only one of the given type
+    One(T),
+    /// More than one T
+    More(Vec<T>),
+}
+
+impl<T> OneOrMore<T> {
+    /// Convert this `OneOrMore<T>` into a `Vec<T>`
+    fn into_vec(self) -> Vec<T> {
+        match self {
+            OneOrMore::One(t) => vec![t],
+            OneOrMore::More(ts) => ts,
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        OneOrMoreIterator {
+            inner: self,
+            idx: 0,
+        }
+    }
+}
+
+/// Iterator for [`OneOrMore`]
+pub struct OneOrMoreIterator<'a, T> {
+    inner: &'a OneOrMore<T>,
+    idx: usize,
+}
+
+impl<'a, T> Iterator for OneOrMoreIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (self.idx, self.inner) {
+            (0, OneOrMore::One(inner)) => {
+                if let Some(v) = self.idx.checked_add(1) {
+                    self.idx = v
+                }
+                Some(inner)
+            }
+            (_, OneOrMore::One(_)) => None,
+            (idx, OneOrMore::More(vs)) => {
+                if let Some(v) = self.idx.checked_add(1) {
+                    self.idx = v
+                }
+                vs.get(idx)
+            }
+        }
+    }
+}
+
+/// Configuration for imports that should be overriden
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct InterfaceOverrides {
+    /// Imports that should be overriden
+    #[serde(default)]
+    pub imports: Vec<InterfaceComponentOverride>,
+
+    /// Exports that should be overriden
+    #[serde(default)]
+    pub exports: Vec<InterfaceComponentOverride>,
+}
+
 /// Configuration for development environments and/or DX related plugins
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
 pub struct DevConfig {
@@ -618,6 +895,11 @@ pub struct DevConfig {
 
     /// Configuration values to be passed ot the
     pub secrets: Vec<DevSecretSpec>,
+
+    /// Interface-driven overrides
+    ///
+    /// Normally keyed by strings that represent an interface specification (e.g. `wasi:keyvalue/store@0.2.0-draft`)
+    pub overrides: InterfaceOverrides,
 }
 
 impl DevConfig {
@@ -627,12 +909,14 @@ impl DevConfig {
             manifests,
             config,
             secrets,
+            overrides,
         }: RawDevConfig,
     ) -> Result<Self> {
         Ok(Self {
-            manifests: manifests.unwrap_or_default(),
-            config: config.unwrap_or_default(),
-            secrets: secrets.unwrap_or_default(),
+            manifests: manifests.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
+            config: config.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
+            secrets: secrets.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
+            overrides: overrides.unwrap_or_default(),
         })
     }
 }
