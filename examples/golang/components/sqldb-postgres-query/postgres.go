@@ -25,8 +25,8 @@ SELECT * FROM example WHERE description = 'inserted example go row!';
 `
 
 // type aliases for more readable code
-type PgValue = interfaces.WasmcloudPostgres0_1_0_draft_QueryPgValue
-type RowEntry = interfaces.WasmcloudPostgres0_1_0_draft_TypesResultRowEntry
+type PgValue = interfaces.WasmcloudPostgres0_1_1_draft_QueryPgValue
+type RowEntry = interfaces.WasmcloudPostgres0_1_1_draft_TypesResultRowEntry
 
 type Component struct{}
 
@@ -42,7 +42,7 @@ func (c Component) Call() string {
 		return fmt.Sprintf("ERROR: failed to create table: %v", query.UnwrapErr())
 	}
 
-	val := interfaces.WasmcloudPostgres0_1_0_draft_TypesPgValueText("inserted example go row!")
+	val := interfaces.WasmcloudPostgres0_1_1_draft_TypesPgValueText("inserted example go row!")
 	insertResult := Query(INSERT_QUERY, []PgValue{val})
 	if insertResult.IsErr() {
 		return fmt.Sprintf("ERROR: failed to insert row: %v", insertResult.UnwrapErr())
@@ -60,12 +60,12 @@ func (c Component) Call() string {
 	return "ERROR: failed to retrieve inserted row"
 }
 
-type ResultRow = interfaces.WasmcloudPostgres0_1_0_draft_QueryResultRow
-type QueryError = interfaces.WasmcloudPostgres0_1_0_draft_QueryQueryError
+type ResultRow = interfaces.WasmcloudPostgres0_1_1_draft_QueryResultRow
+type QueryError = interfaces.WasmcloudPostgres0_1_1_draft_QueryQueryError
 
 // Helper function to assist with readability in the example when querying the database
 func Query(query string, params []PgValue) interfaces.Result[[]ResultRow, QueryError] {
-	return interfaces.WasmcloudPostgres0_1_0_draft_QueryQuery(query, params)
+	return interfaces.WasmcloudPostgres0_1_1_draft_QueryQuery(query, params)
 }
 
 //go:generate wit-bindgen tiny-go wit --out-dir=gen --gofmt
