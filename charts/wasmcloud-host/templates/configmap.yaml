@@ -16,7 +16,7 @@ data:
         remotes = [
             {
               {{- include "wasmcloud-host.nats.address" . | nindent 14 }}
-              {{- if .Values.config.natsCredentialsSecret -}}
+              {{- if .Values.config.natsCredentialsSecret }}
               credentials: "/nats/nats.creds"
               {{- end }}
             },
