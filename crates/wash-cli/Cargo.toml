@@ -117,3 +117,7 @@ wasm-pkg-client = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{name}-v{version}/wash-{ target }{ binary-ext }"
+pkg-fmt = "bin"

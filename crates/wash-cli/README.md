@@ -26,6 +26,7 @@
   - [MacOS (brew)](#macos-brew)
   - [Windows (choco)](#windows-choco)
   - [Nix](#nix)
+- [Proxy authentication](#proxy-authentication)
 - [Using wash](#using-wash)
 - [Shell auto-complete](#shell-auto-complete)
 - [Contributing to wash](#contributing-to-wash)
@@ -40,6 +41,12 @@
 
 ```bash
 cargo install wash-cli
+```
+
+or if you have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall?tab=readme-ov-file#installation):
+
+```bash
+cargo binstall wash-cli
 ```
 
 ### Linux (deb/rpm + apt)
