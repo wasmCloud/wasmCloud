@@ -25,6 +25,15 @@ async fn record_reachability(host: &str) {
 
 #[tokio::main]
 async fn main() {
+    // Determine whether docker sock is present locally
+    println!("cargo:rustc-check-cfg=cfg(var_run_docker_sock_is_present)");
+    if tokio::fs::metadata("/var/run/docker.sock")
+        .await
+        .is_ok_and(|m| m.is_file())
+    {
+        println!("cargo:rustc-cfg=var_run_docker_sock_is_present");
+    }
+
     join!(
         record_reachability("github.com"),
         record_reachability("raw.githubusercontent.com"),
