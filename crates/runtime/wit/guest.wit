@@ -1,6 +1,10 @@
 package wasmcloud:host@1.0.1;
 
 world logging {
+    export wasi:logging/logging@0.1.0-draft;
+}
+
+world unversioned-logging {
     export wasi:logging/logging;
 }
 

@@ -6,11 +6,16 @@ world interfaces {
     import wasi:keyvalue/atomics@0.2.0-draft;
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:keyvalue/batch@0.2.0-draft;
-    import wasi:logging/logging;
+    import wasi:logging/logging@0.1.0-draft;
+    
     import wasmcloud:bus/lattice@1.0.0;
     import wasmcloud:messaging/consumer@0.2.0;
     import wasmcloud:secrets/store@0.1.0-draft;
     import wasmcloud:secrets/reveal@0.1.0-draft;
+}
+
+world unversioned-interfaces {
+    import wasi:logging/logging;
 }
 
 world wrpc-interfaces {
