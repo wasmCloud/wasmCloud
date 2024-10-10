@@ -401,11 +401,13 @@ mod test {
 
         // Install and start NATS server for this test
         let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
         assert!(ensure_nats_server(NATS_SERVER_VERSION, &install_dir)
             .await
             .is_ok());
         assert!(is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
-        let config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        let mut config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        config.websocket_port = nats_ws_port;
         let mut nats_child = start_nats_server(
             install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),

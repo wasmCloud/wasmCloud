@@ -173,6 +173,7 @@ shutdown_lifetime 1 seconds
 "#;
 
     #[tokio::test]
+    #[cfg_attr(not(var_run_docker_sock_is_present), ignore = "/var/run/docker.sock is not present")]
     async fn test_download_client_with_proxy_settings() {
         // NOTE: This is intentional to avoid the two tests running in parallel
         // and contaminating each other's environment variables for configuring

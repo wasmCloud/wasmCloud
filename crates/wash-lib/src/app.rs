@@ -413,7 +413,7 @@ pub async fn load_app_manifest(source: AppManifestSource) -> anyhow::Result<AppM
 
     // Note(ahmedtadde): considered having a timeout: Option<Duration> parameter, but decided against it since, given the use case for this fn, the callers can fairly
     // assume that the manifest should be loaded within a reasonable time frame. Now, reasonable is debatable, but i think anything over 1 sec is out of the question as things stand.
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
     tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
         .await
         .context("app manifest loader timed out")?

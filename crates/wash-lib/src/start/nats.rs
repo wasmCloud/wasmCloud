@@ -115,7 +115,7 @@ where
 
 /// Configuration for a NATS server that supports running either in "standalone" or "leaf" mode.
 /// See the respective [`NatsConfig::new_standalone`] and [`NatsConfig::new_leaf`] implementations below for more information.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatsConfig {
     pub host: String,
     pub port: u16,
@@ -358,11 +358,15 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use anyhow::Result;
-    use std::env::temp_dir;
+    use anyhow::{Context as _, Result};
+    use std::{
+        env::temp_dir,
+        net::{Ipv4Addr, SocketAddrV4},
+    };
     use tokio::{
         fs::{create_dir_all, remove_dir_all},
         io::AsyncReadExt,
+        net::TcpListener,
     };
 
     use crate::common::CommandGroupUsage;
@@ -371,6 +375,16 @@ mod test {
     };
 
     const NATS_SERVER_VERSION: &str = "v2.10.7";
+
+    /// Returns an open port on the interface, searching within the range endpoints, inclusive
+    async fn find_open_port() -> Result<u16> {
+        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .context("failed to bind random port")?
+            .local_addr()
+            .map(|addr| addr.port())
+            .context("failed to get local address from opened TCP socket")
+    }
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
@@ -401,7 +415,10 @@ mod test {
         let log_path = install_dir.join("nats.log");
         let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
 
-        let config = NatsConfig::new_standalone("127.0.0.1", 10000, None);
+        let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
+        let mut config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
+        config.websocket_port = nats_ws_port;
         let child_res = start_nats_server(
             &install_dir.join(NATS_SERVER_BINARY),
             log_file,
@@ -444,7 +461,11 @@ mod test {
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok());
 
-        let config = NatsConfig::new_standalone("127.0.0.1", 10003, Some("extender".to_string()));
+        let nats_port = find_open_port().await?;
+        let nats_ws_port = find_open_port().await?;
+        let mut config =
+            NatsConfig::new_standalone("127.0.0.1", nats_port, Some("extender".to_string()));
+        config.websocket_port = nats_ws_port;
         let nats_one = start_nats_server(
             &install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),

@@ -119,6 +119,7 @@ wit-parser = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = [
+    "fs",
     "rt-multi-thread",
     "time",
     "macros",
