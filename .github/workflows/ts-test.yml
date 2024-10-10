@@ -69,7 +69,7 @@ jobs:
         run: npx playwright test
 
       - name: Upload Test Results
-        uses: actions/upload-artifact@84480863f228bb9747b473957fcc9e309aa96097
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         if: always()
         with:
           name: playwright-report-${{ matrix.wash.version }}
