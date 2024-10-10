@@ -165,8 +165,11 @@ spec:
             name: {{ include "wasmcloud-host.nats-config-name" . }}
       {{- if .Values.config.natsCredentialsSecret }}
         - name: {{ .Values.config.natsCredentialsSecret }}
-          secret: /nats/nats.creds
+          secret: 
             secretName: {{ .Values.config.natsCredentialsSecret }}
+            items:
+              - key: nats.creds
+                path: nats.creds
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
