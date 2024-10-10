@@ -110,6 +110,7 @@ macro_rules! skip_static_instances {
             | "wasi:keyvalue/atomics@0.2.0-draft"
             | "wasi:keyvalue/batch@0.2.0-draft"
             | "wasi:keyvalue/store@0.2.0-draft"
+            | "wasi:logging/logging@0.1.0-draft"
             | "wasi:logging/logging"
             | "wasi:random/insecure-seed@0.2.0"
             | "wasi:random/insecure-seed@0.2.1"
@@ -364,6 +365,8 @@ where
             .context("failed to link `wasi:keyvalue/batch`")?;
         capability::logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:logging/logging`")?;
+        capability::unversioned_logging::logging::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link unversioned `wasi:logging/logging`")?;
 
         capability::bus::lattice::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:bus/lattice`")?;
