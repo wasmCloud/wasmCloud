@@ -329,8 +329,8 @@ mod test {
 
     #[tokio::test]
     #[cfg_attr(not(can_reach_github_com), ignore = "github.com is not reachable")]
-    async fn can_download_wasmcloud_burrito() {
-        let download_dir = temp_dir().join("can_download_wasmcloud_burrito");
+    async fn can_download_wasmcloud_host() {
+        let download_dir = temp_dir().join("can_download_wasmcloud_host");
         let res = ensure_wasmcloud_for_os_arch_pair(WASMCLOUD_VERSION, &download_dir)
             .await
             .expect("Should be able to download tarball");

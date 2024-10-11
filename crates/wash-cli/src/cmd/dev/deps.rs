@@ -12,8 +12,7 @@ use wadm_types::{
 };
 use wash_lib::generate::emoji;
 use wash_lib::parser::{
-    DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, InterfaceOverrides, ProjectConfig,
-    WitInterfaceSpec,
+    DevConfigSpec, DevSecretSpec, InterfaceComponentOverride, ProjectConfig, WitInterfaceSpec,
 };
 use wasmcloud_core::{
     parse_wit_meta_from_operation, LinkName, WitInterface, WitNamespace, WitPackage,
@@ -638,11 +637,11 @@ impl ProjectDeps {
         cfg: &ProjectConfig,
     ) -> Result<Self> {
         // If no overrides were present, we can return immediately
-        let Some(InterfaceOverrides { imports, exports }) =
-            cfg.dev.as_ref().map(|dc| &dc.overrides)
-        else {
+        let imports = &cfg.dev.overrides.imports;
+        let exports = &cfg.dev.overrides.exports;
+        if imports.is_empty() && exports.is_empty() {
             return Ok(Self::default());
-        };
+        }
 
         // Build full list of overrides with generated dep specs
         let mut overrides_with_deps = Vec::with_capacity(imports.len() + exports.len());
