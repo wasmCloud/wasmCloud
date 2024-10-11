@@ -8105,6 +8105,7 @@ dependencies = [
  "tempfile",
  "term-table",
  "test-case",
+ "testcontainers",
  "thiserror",
  "time",
  "tokio",
