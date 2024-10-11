@@ -244,31 +244,27 @@ async fn augment_existing_manifests(
             *image_ref = generated_component_ref.into();
 
             // Apply config specs
-            if let Some(specs) = project_config.dev.as_ref().map(|d| &d.config) {
-                for spec in specs {
-                    update_config_properties_by_spec(config, spec)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to update secret proeprties for component [{}]",
-                                component.name
-                            )
-                        })?;
-                }
+            for spec in &project_config.dev.config {
+                update_config_properties_by_spec(config, spec)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to update secret proeprties for component [{}]",
+                            component.name
+                        )
+                    })?;
             }
 
             // Apply secret specs
-            if let Some(specs) = project_config.dev.as_ref().map(|d| &d.secrets) {
-                for spec in specs {
-                    update_secret_properties_by_spec(secrets, spec)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to update secret proeprties for component [{}]",
-                                component.name
-                            )
-                        })?;
-                }
+            for spec in &project_config.dev.secrets {
+                update_secret_properties_by_spec(secrets, spec)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to update secret proeprties for component [{}]",
+                            component.name
+                        )
+                    })?;
             }
         }
 
@@ -396,10 +392,9 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
     // Generate the manifests that we need to deploy/update
     //
     // If the project configuration specified an *existing* manifest, we must merge, not generate
-    let manifests = match state.project_cfg.dev.as_ref().map(|rdc| &rdc.manifests) {
-        // If manifest targets were present, use them and generate targets
-        Some(targets) if !targets.is_empty() => augment_existing_manifests(
-            targets,
+    let manifests = if !state.project_cfg.dev.manifests.is_empty() {
+        augment_existing_manifests(
+            &state.project_cfg.dev.manifests,
             state.project_cfg,
             state
                 .component_id
@@ -411,11 +406,12 @@ pub(crate) async fn run(state: &mut RunLoopState<'_>) -> Result<()> {
                 .context("missing component id")?,
         )
         .await
-        .context("failed to create manifest from existing [{}]")?,
+        .context("failed to create manifest from existing [{}]")?
+    } else {
         // If no manifest exists, we must generate one or more manifests
-        _ => generate_manifests(state)
+        generate_manifests(state)
             .await
-            .context("failed to generate manifests")?,
+            .context("failed to generate manifests")?
     };
 
     let component_id = state
