@@ -15,7 +15,6 @@ use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
-use etcetera::BaseStrategy;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -307,12 +306,8 @@ impl CommonPackageArgs {
         let dir = if let Some(dir) = self.cache.as_ref() {
             dir.clone()
         } else {
-            // We're using native strategy here because it matches what `dirs` does with computing the cache dir
-            etcetera::base_strategy::choose_native_strategy()
-                .context("unable to find cache directory")?
-                .cache_dir()
+            FileCache::global_cache_path().context("failed to get global cache dir")?
         };
-        let dir = dir.join("wkg");
         FileCache::new(dir).await
     }
 

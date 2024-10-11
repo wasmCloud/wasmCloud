@@ -1,5 +1,0 @@
-blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/v0.2.0-draft.tar.gz"
-http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.1.tar.gz"
-logging = "https://github.com/WebAssembly/wasi-logging/archive/3293e84de91a1ead98a1b4362f95ac8af5a16ddd.tar.gz"
-messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
-task-manager = "../../http-task-manager/wit"

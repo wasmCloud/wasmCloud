@@ -72,7 +72,7 @@ fn default_registry_type() -> String {
     "oci".to_string()
 }
 
-impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
+impl TryFrom<&RegistryCredential> for oci_client::secrets::RegistryAuth {
     type Error = anyhow::Error;
 
     fn try_from(cred: &RegistryCredential) -> Result<Self, Self::Error> {
@@ -85,7 +85,7 @@ impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
                 username: Some(username),
                 password: Some(password),
                 ..
-            } => Ok(oci_distribution::secrets::RegistryAuth::Basic(
+            } => Ok(oci_client::secrets::RegistryAuth::Basic(
                 username.clone(),
                 password.clone(),
             )),
@@ -95,7 +95,7 @@ impl TryFrom<&RegistryCredential> for oci_distribution::secrets::RegistryAuth {
                 password: None,
                 token: Some(token),
                 ..
-            } => Ok(oci_distribution::secrets::RegistryAuth::Basic(
+            } => Ok(oci_client::secrets::RegistryAuth::Basic(
                 username.clone(),
                 token.clone(),
             )),

@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
 use docker_credential::{get_credential, DockerCredential};
-use oci_distribution::Reference;
+use oci_client::Reference;
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -111,10 +111,14 @@ pub async fn registry_push(
         _ => resolve_registry_credentials(image.registry()).await,
     }?;
 
-    let annotations = match cmd.annotations {
-        Some(annotations) => input_vec_to_hashmap(annotations).ok(),
-        None => None,
-    };
+    let annotations = cmd.annotations.and_then(|annotations| {
+        Some(
+            input_vec_to_hashmap(annotations)
+                .ok()?
+                .into_iter()
+                .collect(),
+        )
+    });
 
     let (maybe_tag, digest) = push_oci_artifact(
         artifact_url.clone(),
@@ -151,7 +155,7 @@ fn resolve_artifact_ref(
     registry: &str,
     project_config: Option<PathBuf>,
 ) -> Result<Reference> {
-    // NOTE: Image URLs must be all lower case for `oci_distribution::Reference` to parse them properly
+    // NOTE: Image URLs must be all lower case for `oci_client::Reference` to parse them properly
     let url = url.trim().to_ascii_lowercase();
     let registry = registry.trim().to_ascii_lowercase();
 

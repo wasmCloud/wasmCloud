@@ -97,7 +97,7 @@ func (g *Echo) Handle(req HttpRequest, resp HttpResponseWriter) {
 			er.Body = ""
 		} else {
 			// if we received some other error, report it
-			echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelError(), "failed to read incoming body stream", fmt.Sprintf("error kind [%v]"))
+			echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelError(), "failed to read incoming body stream", fmt.Sprintf("error kind [%v]"))
 			writeHttpResponse(resp, http.StatusInternalServerError, resp_headers, []byte("{\"error\":\"failed to read incoming body stream\"}"))
 			return
 		}
@@ -107,10 +107,10 @@ func (g *Echo) Handle(req HttpRequest, resp HttpResponseWriter) {
 	}
 
 	// Log information about the request
-	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "method", er.Method)
-	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "path", er.Path)
-	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "queryString", er.QueryString)
-	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "body", er.Body)
+	echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelDebug(), "method", er.Method)
+	echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelDebug(), "path", er.Path)
+	echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelDebug(), "queryString", er.QueryString)
+	echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelDebug(), "body", er.Body)
 
 	// Marshal the EchoResponse object we've been building to JSON
 	bBody, err := json.Marshal(er)
@@ -124,7 +124,7 @@ func (g *Echo) Handle(req HttpRequest, resp HttpResponseWriter) {
 
 // Write an outgoing HTTP response (status, headers, body) to a given writer (in WIT terms a ResponseOutparam)
 func writeHttpResponse(responseOutparam HttpResponseWriter, statusCode uint16, headers Headers, body []byte) {
-	echo.WasiLoggingLoggingLog(echo.WasiLoggingLoggingLevelDebug(), "writeHttpResponse", "writing response: "+string(body))
+	echo.WasiLogging0_1_0_draft_LoggingLog(echo.WasiLogging0_1_0_draft_LoggingLevelDebug(), "writeHttpResponse", "writing response: "+string(body))
 
 	// Build the new HTTP outgoing response
 	outgoingResponse := echo.NewOutgoingResponse(headers)

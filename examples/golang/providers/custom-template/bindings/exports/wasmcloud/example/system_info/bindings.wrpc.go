@@ -61,10 +61,10 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		return nil
 	}
 
-	stop0, err := s.Serve("wasmcloud:example/system-info", "request-info", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+	stop0, err := s.Serve("wasmcloud:example/system-info@0.1.0", "request-info", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
 		defer func() {
 			if err := w.Close(); err != nil {
-				slog.DebugContext(ctx, "failed to close writer", "instance", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+				slog.DebugContext(ctx, "failed to close writer", "instance", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			}
 		}()
 		slog.DebugContext(ctx, "reading parameter", "i", 0)
@@ -106,19 +106,19 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 		}(r)
 
 		if err != nil {
-			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+			slog.WarnContext(ctx, "failed to read parameter", "i", 0, "instance", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			if err := r.Close(); err != nil {
-				slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+				slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			}
 			return
 		}
-		slog.DebugContext(ctx, "calling `wasmcloud:example/system-info.request-info` handler")
+		slog.DebugContext(ctx, "calling `wasmcloud:example/system-info@0.1.0.request-info` handler")
 		r0, err := h.RequestInfo(ctx, p0)
 		if cErr := r.Close(); cErr != nil {
-			slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 		}
 		if err != nil {
-			slog.WarnContext(ctx, "failed to handle invocation", "instance", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			return
 		}
 
@@ -147,53 +147,53 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 			return nil
 		}(r0, &buf)
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result value", "i", 0, "wasmcloud:example/system-info", "name", "request-info", "err", err)
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			return
 		}
 		if write0 != nil {
 			writes[0] = write0
 		}
-		slog.DebugContext(ctx, "transmitting `wasmcloud:example/system-info.request-info` result")
+		slog.DebugContext(ctx, "transmitting `wasmcloud:example/system-info@0.1.0.request-info` result")
 		_, err = w.Write(buf.Bytes())
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result", "wasmcloud:example/system-info", "name", "request-info", "err", err)
+			slog.WarnContext(ctx, "failed to write result", "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 			return
 		}
 		if len(writes) > 0 {
 			for index, write := range writes {
 				w, err := w.Index(index)
 				if err != nil {
-					slog.ErrorContext(ctx, "failed to index writer", "index", index, "wasmcloud:example/system-info", "name", "request-info", "err", err)
+					slog.ErrorContext(ctx, "failed to index writer", "index", index, "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 					return
 				}
 				index := index
 				write := write
 				go func() {
 					if err := write(w); err != nil {
-						slog.WarnContext(ctx, "failed to write nested result value", "index", index, "wasmcloud:example/system-info", "name", "request-info", "err", err)
+						slog.WarnContext(ctx, "failed to write nested result value", "index", index, "wasmcloud:example/system-info@0.1.0", "name", "request-info", "err", err)
 					}
 				}()
 			}
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to serve `wasmcloud:example/system-info.request-info`: %w", err)
+		return nil, fmt.Errorf("failed to serve `wasmcloud:example/system-info@0.1.0.request-info`: %w", err)
 	}
 	stops = append(stops, stop0)
 
-	stop1, err := s.Serve("wasmcloud:example/system-info", "call", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
+	stop1, err := s.Serve("wasmcloud:example/system-info@0.1.0", "call", func(ctx context.Context, w wrpc.IndexWriteCloser, r wrpc.IndexReadCloser) {
 		defer func() {
 			if err := w.Close(); err != nil {
-				slog.DebugContext(ctx, "failed to close writer", "instance", "wasmcloud:example/system-info", "name", "call", "err", err)
+				slog.DebugContext(ctx, "failed to close writer", "instance", "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 			}
 		}()
-		slog.DebugContext(ctx, "calling `wasmcloud:example/system-info.call` handler")
+		slog.DebugContext(ctx, "calling `wasmcloud:example/system-info@0.1.0.call` handler")
 		r0, err := h.Call(ctx)
 		if cErr := r.Close(); cErr != nil {
-			slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info", "name", "call", "err", err)
+			slog.ErrorContext(ctx, "failed to close reader", "instance", "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 		}
 		if err != nil {
-			slog.WarnContext(ctx, "failed to handle invocation", "instance", "wasmcloud:example/system-info", "name", "call", "err", err)
+			slog.WarnContext(ctx, "failed to handle invocation", "instance", "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 			return
 		}
 
@@ -222,37 +222,37 @@ func ServeInterface(s wrpc.Server, h Handler) (stop func() error, err error) {
 			return nil
 		}(r0, &buf)
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result value", "i", 0, "wasmcloud:example/system-info", "name", "call", "err", err)
+			slog.WarnContext(ctx, "failed to write result value", "i", 0, "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 			return
 		}
 		if write0 != nil {
 			writes[0] = write0
 		}
-		slog.DebugContext(ctx, "transmitting `wasmcloud:example/system-info.call` result")
+		slog.DebugContext(ctx, "transmitting `wasmcloud:example/system-info@0.1.0.call` result")
 		_, err = w.Write(buf.Bytes())
 		if err != nil {
-			slog.WarnContext(ctx, "failed to write result", "wasmcloud:example/system-info", "name", "call", "err", err)
+			slog.WarnContext(ctx, "failed to write result", "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 			return
 		}
 		if len(writes) > 0 {
 			for index, write := range writes {
 				w, err := w.Index(index)
 				if err != nil {
-					slog.ErrorContext(ctx, "failed to index writer", "index", index, "wasmcloud:example/system-info", "name", "call", "err", err)
+					slog.ErrorContext(ctx, "failed to index writer", "index", index, "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 					return
 				}
 				index := index
 				write := write
 				go func() {
 					if err := write(w); err != nil {
-						slog.WarnContext(ctx, "failed to write nested result value", "index", index, "wasmcloud:example/system-info", "name", "call", "err", err)
+						slog.WarnContext(ctx, "failed to write nested result value", "index", index, "wasmcloud:example/system-info@0.1.0", "name", "call", "err", err)
 					}
 				}()
 			}
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to serve `wasmcloud:example/system-info.call`: %w", err)
+		return nil, fmt.Errorf("failed to serve `wasmcloud:example/system-info@0.1.0.call`: %w", err)
 	}
 	stops = append(stops, stop1)
 	return stop, nil

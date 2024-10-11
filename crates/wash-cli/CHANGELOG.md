@@ -1132,7 +1132,7 @@ The combination of wash app undeploy --all and wash app delete --all-undeployed 
  - <csr-id-f7582160d5bd9d7f967ada2045239bc94653cb9b/> registry image URL parsing
    When URLs are submitted to `wash push` as the first argument, unless a
    `--registry` is provided, the URL is parsed as an
-   `oci_distribution::Reference`.
+   `oci_client::Reference`.
    
    It is possible for a URL like `ghcr.io/wasmCloud/img:v0.1.0` to
    correctly parse *yet* fail the the `url == image.whole()` test,
@@ -1141,7 +1141,7 @@ The combination of wash app undeploy --all and wash app delete --all-undeployed 
    
    This commit performs the lowercasing of the URL and registry (if
    supplied) consistently in `resolve_artifact_ref()`, ensuring that the
-   comparison works, and `oci_distribution::Reference`s that correctly
+   comparison works, and `oci_client::Reference`s that correctly
    parse are used.
 
 ### Reverted

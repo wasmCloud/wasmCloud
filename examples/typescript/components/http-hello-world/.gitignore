@@ -6,3 +6,5 @@
 
 # wash build output
 /build/*
+
+wit/deps/
