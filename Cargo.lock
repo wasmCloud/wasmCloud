@@ -8647,6 +8647,7 @@ dependencies = [
  "rustls-native-certs 0.8.0",
  "rustls-pemfile 2.2.0",
  "secrecy",
+ "semver",
  "serde 1.0.210",
  "serde_bytes",
  "sha2",
