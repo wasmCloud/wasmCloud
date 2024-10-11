@@ -133,4 +133,5 @@ tempfile = { workspace = true }
 wasmcloud-test-util = { workspace = true, features = ["testcontainers"] }
 test-case = { workspace = true }
 tokio = { workspace = true }
+toml = { workspace = true }
 wasmparser = { workspace = true }

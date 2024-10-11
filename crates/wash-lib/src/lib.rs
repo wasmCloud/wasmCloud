@@ -10,10 +10,10 @@
 //!
 //! | Feature Name | Default Enabled | Description |
 //! | --- | --- | --- |
-//! | start | true | Contains the [start](start) module, with utilities to start wasmCloud runtimes, NATS, and wadm |
-//! | parser | true | Contains the [parser](parser) module, with utilities to parse `wasmcloud.toml` files |
+//! | start | true | Contains the [start] module, with utilities to start wasmCloud runtimes, NATS, and wadm |
+//! | parser | true | Contains the [parser] module, with utilities to parse `wasmcloud.toml` files |
 //! | cli | false | Contains the build, cli, and generate modules with additional trait derives for usage in building CLI applications |
-//! | nats| true| Contains the [app](app), [component](component), [capture](capture), [config](config), [context](context), [drain](drain), [spier](spier) and [wait](wait) modules with a dependency on `async_nats` |
+//! | nats| true| Contains the [app], [component], [capture], [config], [context], [drain], [spier] and [wait] modules with a dependency on `async_nats` |
 
 #[cfg(feature = "nats")]
 pub mod app;

@@ -231,60 +231,6 @@ fn get_full_path(path: &str) -> String {
 }
 
 #[test]
-fn no_component_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_component.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "missing component config in {}",
-            get_full_path("./tests/parser/files/no_component.toml")
-        ),
-        err.to_string().as_str()
-    );
-}
-
-#[test]
-fn no_provider_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_provider.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "missing provider config in {}",
-            get_full_path("./tests/parser/files/no_provider.toml")
-        ),
-        err.to_string().as_str()
-    );
-}
-
-#[test]
-fn no_interface_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_interface.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "unknown project type: interface in {}",
-            get_full_path("./tests/parser/files/no_interface.toml")
-        ),
-        err.to_string().as_str()
-    );
-}
-
-#[test]
 /// When given a folder with no wasmcloud.toml file, should return an error.
 fn folder_path_with_no_config() {
     let result = get_config(Some(PathBuf::from("./tests/parser/files/noconfig")), None);

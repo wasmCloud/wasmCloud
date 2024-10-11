@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::{Version, VersionReq};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use wadm_types::{Component, Properties, SecretSourceProperty};
 use wasmcloud_control_interface::RegistryCredential;
 use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
@@ -43,32 +43,21 @@ impl TypeConfig {
     }
 }
 
-/// Project configuration, normally specified in the root keys of a wasmcloud.toml file
-#[derive(Deserialize, Debug, Clone)]
-pub struct ProjectConfig {
-    /// The language of the project, e.g. rust, tinygo. Contains specific configuration for that language.
-    pub language: LanguageConfig,
-    /// The type of project, e.g. component, provider, interface. Contains the specific configuration for that type.
-    /// This is renamed to "type" but is named project_type here to avoid clashing with the type keyword in Rust.
-    #[serde(rename = "type")]
-    pub project_type: TypeConfig,
-    /// Configuration common among all project types & languages.
-    pub common: CommonConfig,
-    /// Configuration for development environments and/or DX related plugins
-    pub dev: Option<DevConfig>,
-}
-
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ComponentConfig {
     /// The list of provider claims that this component requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
+    #[serde(default)]
     pub claims: Vec<String>,
     /// Whether to push to the registry insecurely. Defaults to false.
+    #[serde(default)]
     pub push_insecure: bool,
     /// The directory to store the private signing keys in.
+    #[serde(default = "default_key_directory")]
     pub key_directory: PathBuf,
     /// The call alias of the component.
     pub call_alias: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown" (a WASM core module).
+    #[serde(default, deserialize_with = "wasm_target")]
     pub wasm_target: WasmTarget,
     /// Path to a wasm adapter that can be used for wasip2
     pub wasip1_adapter_path: Option<PathBuf>,
@@ -86,6 +75,15 @@ pub struct ComponentConfig {
     pub destination: Option<PathBuf>,
 }
 
+/// Custom deserializer to parse the wasm target string into a [`WasmTarget`] enum
+fn wasm_target<'de, D>(target: D) -> Result<WasmTarget, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let target = String::deserialize(target)?;
+    Ok(target.as_str().into())
+}
+
 impl RustConfig {
     #[must_use]
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
@@ -96,123 +94,40 @@ impl RustConfig {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
-struct RawComponentConfig {
-    /// The list of provider claims that this component requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
-    pub claims: Option<Vec<String>>,
-    /// Whether to push to the registry insecurely. Defaults to false.
-    pub push_insecure: Option<bool>,
-    /// The directory to store the private signing keys in. Defaults to "./keys".
-    pub key_directory: Option<PathBuf>,
-    /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
-    pub wasm_target: Option<String>,
-    /// Path to a wasm adapter that can be used for wasip2
-    pub wasip1_adapter_path: Option<PathBuf>,
-    /// The call alias of the component. Defaults to no alias.
-    pub call_alias: Option<String>,
-    /// The WIT world that is implemented by the component
-    pub wit_world: Option<String>,
-    /// Tags that should be applied during the component signing process
-    pub tags: Option<HashSet<String>>,
-    /// File path `wash` can use to find the built artifact. Defaults to `./build/[name].wasm`
-    pub build_artifact: Option<PathBuf>,
-    /// Optional build override command to run instead of attempting to use the native language
-    /// toolchain to build. Keep in mind that `wash` expects for the built artifact to be located
-    /// under the `build` directory of the project root unless overridden by `build_artifact`.
-    pub build_command: Option<String>,
-    /// File path the built and signed component should be written to. Defaults to `./build/[name]_s.wasm`
-    pub destination: Option<PathBuf>,
-}
-
-impl TryFrom<RawComponentConfig> for ComponentConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_config: RawComponentConfig) -> Result<Self> {
-        let key_directory = if let Some(key_directory) = raw_config.key_directory {
-            key_directory
-        } else {
-            let home_dir = etcetera::home_dir()?;
-            home_dir.join(".wash/keys")
-        };
-        Ok(Self {
-            claims: raw_config.claims.unwrap_or_default(),
-            push_insecure: raw_config.push_insecure.unwrap_or(false),
-            key_directory,
-            wasm_target: raw_config
-                .wasm_target
-                .map(WasmTarget::from)
-                .unwrap_or_default(),
-            wasip1_adapter_path: raw_config.wasip1_adapter_path,
-            call_alias: raw_config.call_alias,
-            wit_world: raw_config.wit_world,
-            tags: raw_config.tags,
-            build_command: raw_config.build_command,
-            build_artifact: raw_config.build_artifact,
-            destination: raw_config.destination,
-        })
-    }
-}
-
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ProviderConfig {
     /// The vendor name of the provider.
+    #[serde(default = "default_vendor")]
     pub vendor: String,
     /// Optional WIT world for the provider, e.g. `wasmcloud:messaging`
     pub wit_world: Option<String>,
     /// The target operating system of the provider archive. Defaults to the current OS.
+    #[serde(default = "default_os")]
     pub os: String,
     /// The target architecture of the provider archive. Defaults to the current architecture.
+    #[serde(default = "default_arch")]
     pub arch: String,
     /// The Rust target triple to build for. Defaults to the default rust toolchain.
     pub rust_target: Option<String>,
     /// Optional override for the provider binary name, required if we cannot infer this from Cargo.toml
     pub bin_name: Option<String>,
     /// The directory to store the private signing keys in.
+    #[serde(default = "default_key_directory")]
     pub key_directory: PathBuf,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
-struct RawProviderConfig {
-    /// The vendor name of the provider.
-    pub vendor: Option<String>,
-    /// Optional WIT world for the provider, e.g. `wasmcloud:messaging`
-    pub wit_world: Option<String>,
-    /// The target operating system of the provider archive. Defaults to the current OS.
-    pub os: Option<String>,
-    /// The target architecture of the provider archive. Defaults to the current architecture.
-    pub arch: Option<String>,
-    /// The Rust target triple to build for. Defaults to the default rust toolchain.
-    pub rust_target: Option<String>,
-    /// Optional override for the provider binary name, required if we cannot infer this from Cargo.toml
-    pub bin_name: Option<String>,
-    /// The directory to store the private signing keys in.
-    pub key_directory: Option<PathBuf>,
+fn default_vendor() -> String {
+    "NoVendor".to_string()
 }
-
-impl TryFrom<RawProviderConfig> for ProviderConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_config: RawProviderConfig) -> Result<Self> {
-        let key_directory = if let Some(key_directory) = raw_config.key_directory {
-            key_directory
-        } else {
-            let home_dir = etcetera::home_dir()?;
-            home_dir.join(".wash/keys")
-        };
-        Ok(Self {
-            vendor: raw_config.vendor.unwrap_or_else(|| "NoVendor".to_string()),
-            os: raw_config
-                .os
-                .unwrap_or_else(|| std::env::consts::OS.to_string()),
-            arch: raw_config
-                .arch
-                .unwrap_or_else(|| std::env::consts::ARCH.to_string()),
-            rust_target: raw_config.rust_target,
-            bin_name: raw_config.bin_name,
-            wit_world: raw_config.wit_world,
-            key_directory,
-        })
-    }
+fn default_os() -> String {
+    std::env::consts::OS.to_string()
+}
+fn default_arch() -> String {
+    std::env::consts::ARCH.to_string()
+}
+fn default_key_directory() -> PathBuf {
+    let home_dir = etcetera::home_dir().unwrap();
+    home_dir.join(".wash/keys")
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
@@ -222,52 +137,16 @@ pub struct RustConfig {
     /// Path to cargo/rust's `target` directory. Optional, defaults to the cargo target directory for the workspace or project.
     pub target_path: Option<PathBuf>,
     // Whether to build in debug mode. Defaults to false.
+    #[serde(default)]
     pub debug: bool,
 }
 
-#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
-struct RawRustConfig {
-    /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
-    pub cargo_path: Option<PathBuf>,
-    /// Path to cargo/rust's `target` directory. Optional, defaults to `./target`.
-    pub target_path: Option<PathBuf>,
-    /// Whether to build in debug mode. Defaults to false.
-    pub debug: Option<bool>,
-}
-
-impl TryFrom<RawRustConfig> for RustConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_config: RawRustConfig) -> Result<Self> {
-        Ok(Self {
-            cargo_path: raw_config.cargo_path,
-            target_path: raw_config.target_path,
-            debug: raw_config.debug.unwrap_or_default(),
-        })
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
-struct RawRegistryConfig {
-    url: Option<String>,
-    credentials: Option<PathBuf>,
-}
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct RegistryConfig {
     pub url: Option<String>,
     pub credentials: Option<PathBuf>,
 }
 
-impl TryFrom<RawRegistryConfig> for RegistryConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_config: RawRegistryConfig) -> Result<Self> {
-        Ok(Self {
-            url: raw_config.url,
-            credentials: raw_config.credentials,
-        })
-    }
-}
 /// Configuration common amoung all project types & languages.
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
@@ -344,79 +223,14 @@ impl Display for WasmTarget {
     }
 }
 
-/// De-serialization friendly project configuration data
-///
-/// This structure is normally de-serialized from `wasmcloud.toml`
-#[derive(Deserialize, Debug)]
-struct RawProjectConfig {
-    /// The language of the project, e.g. rust, tinygo. This is used to determine which config to parse.
-    pub language: String,
-
-    /// The type of project. This is a string that is used to determine which type of config to parse.
-    /// The toml file name is just "type" but is named project_type here to avoid clashing with the type keyword in Rust.
-    #[serde(rename = "type")]
-    pub project_type: String,
-
-    /// Name of the project.
-    pub name: Option<String>,
-
-    /// Semantic version of the project.
-    pub version: Option<Version>,
-
-    /// Monotonically increasing revision number.
-    #[serde(default)]
-    pub revision: i32,
-
-    /// Confgiguration relevant to components
-    pub component: Option<RawComponentConfig>,
-
-    /// Confgiguration relevant to providers
-    pub provider: Option<RawProviderConfig>,
-
-    /// Rust configuration and options
-    pub rust: Option<RawRustConfig>,
-
-    /// TinyGo related configuration and options
-    pub tinygo: Option<RawTinyGoConfig>,
-
-    /// Golang related configuration and options
-    pub go: Option<RawGoConfig>,
-
-    /// Configuration for image registry usage
-    pub registry: Option<RawRegistryConfig>,
-
-    /// Configuration for development environments and/or DX related plugins
-    pub dev: Option<RawDevConfig>,
-}
-
 /// Configuration related to Golang configuration
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct GoConfig {
     /// The path to the go binary. Optional, will default to `go` if not specified.
     pub go_path: Option<PathBuf>,
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
-    pub disable_go_generate: bool,
-}
-
-/// De-serialization-friendly representation of Golang configuration
-#[derive(Deserialize, Debug, PartialEq, Default)]
-struct RawGoConfig {
-    /// The path to the go binary. Optional, will default to `go` if not specified.
-    pub go_path: Option<PathBuf>,
-    /// Whether to disable the `go generate` step in the build process. Defaults to false.
     #[serde(default)]
     pub disable_go_generate: bool,
-}
-
-impl TryFrom<RawGoConfig> for GoConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw: RawGoConfig) -> Result<Self> {
-        Ok(Self {
-            go_path: raw.go_path,
-            disable_go_generate: raw.disable_go_generate,
-        })
-    }
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -460,6 +274,7 @@ pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
     /// Whether to disable the `go generate` step in the build process. Defaults to false.
+    #[serde(default)]
     pub disable_go_generate: bool,
     /// The scheduler to use for the TinyGo build.
     ///
@@ -479,36 +294,6 @@ impl TinyGoConfig {
             WasmTarget::WasiP1 => "wasi",
             WasmTarget::WasiP2 => "wasip2",
         }
-    }
-}
-
-#[derive(Deserialize, Debug, PartialEq, Default)]
-struct RawTinyGoConfig {
-    /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
-    pub tinygo_path: Option<PathBuf>,
-    /// Whether to disable the `go generate` step in the build process. Defaults to false.
-    #[serde(default)]
-    pub disable_go_generate: bool,
-    /// The scheduler to use for the TinyGo build.
-    ///
-    /// Override the default scheduler (asyncify). Valid values are: none, tasks, asyncify.
-    pub scheduler: Option<TinyGoScheduler>,
-    /// The garbage collector to use for the TinyGo build.
-    ///
-    /// Override the default garbage collector (conservative). Valid values are: none, conservative, leaking.
-    pub garbage_collector: Option<TinyGoGarbageCollector>,
-}
-
-impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw: RawTinyGoConfig) -> Result<Self> {
-        Ok(Self {
-            tinygo_path: raw.tinygo_path,
-            disable_go_generate: raw.disable_go_generate,
-            scheduler: raw.scheduler,
-            garbage_collector: raw.garbage_collector,
-        })
     }
 }
 
@@ -539,25 +324,6 @@ pub enum DevSecretSpec {
         name: String,
         values: BTreeMap<String, String>,
     },
-}
-
-/// De-serialization-friendly representation of development environment configuration
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
-struct RawDevConfig {
-    /// Top level override of the WADM application manifest(s) to use for development
-    ///
-    /// If unspecified, it is up to tools to generate a manifest from available information.
-    pub manifests: Option<OneOrMore<DevManifestComponentTarget>>,
-
-    /// Configuration values to be set up
-    #[serde(alias = "configs")]
-    pub config: Option<OneOrMore<DevConfigSpec>>,
-
-    /// Configuration values to be set up
-    pub secrets: Option<OneOrMore<DevSecretSpec>>,
-
-    /// Interface-driven overrides
-    pub overrides: Option<InterfaceOverrides>,
 }
 
 /// Target that specifies a single component in a given manifest path
@@ -826,6 +592,7 @@ pub enum OneOrMore<T> {
 
 impl<T> OneOrMore<T> {
     /// Convert this `OneOrMore<T>` into a `Vec<T>`
+    #[allow(unused)]
     fn into_vec(self) -> Vec<T> {
         match self {
             OneOrMore::One(t) => vec![t],
@@ -888,46 +655,22 @@ pub struct DevConfig {
     ///
     /// If this value is specified, tooling should strive to use the provided manifest where possible.
     /// If unspecified, it is up to tools to generate a manifest from available information.
+    #[serde(default)]
     pub manifests: Vec<DevManifestComponentTarget>,
 
     /// Configuration values to be passed ot the
-    #[serde(alias = "configs")]
+    #[serde(default, alias = "configs")]
     pub config: Vec<DevConfigSpec>,
 
     /// Configuration values to be passed ot the
+    #[serde(default)]
     pub secrets: Vec<DevSecretSpec>,
 
     /// Interface-driven overrides
     ///
     /// Normally keyed by strings that represent an interface specification (e.g. `wasi:keyvalue/store@0.2.0-draft`)
+    #[serde(default)]
     pub overrides: InterfaceOverrides,
-}
-
-impl DevConfig {
-    /// Convert to a [`DevConfig`] from a [`RawDevConfig`] which likely serialized from disk
-    fn from_raw(
-        RawDevConfig {
-            manifests,
-            config,
-            secrets,
-            overrides,
-        }: RawDevConfig,
-    ) -> Result<Self> {
-        Ok(Self {
-            manifests: manifests.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
-            config: config.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
-            secrets: secrets.map(OneOrMore::<_>::into_vec).unwrap_or_default(),
-            overrides: overrides.unwrap_or_default(),
-        })
-    }
-}
-
-impl TryFrom<RawDevConfig> for DevConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: RawDevConfig) -> std::result::Result<Self, Self::Error> {
-        Self::from_raw(value)
-    }
 }
 
 /// Gets the wasmCloud project (component, provider, or interface) config.
@@ -985,14 +728,83 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         })?
         .try_deserialize::<serde_json::Value>()?;
 
-    let raw_project_config: RawProjectConfig = serde_json::from_value(json_value)?;
+    let toml_project_config: WasmcloudDotToml = serde_json::from_value(json_value)?;
 
-    raw_project_config
+    toml_project_config
         .convert(project_path)
         .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, wasmcloud_path.display()))
 }
 
-impl RawProjectConfig {
+/// The wasmcloud.toml specification format as de-serialization friendly project configuration data
+///
+/// This structure is normally directly de-serialized from `wasmcloud.toml`,
+/// and is used to build a more structured [`ProjectConfig`] object.
+///
+/// Below is an example of each option in the wasmcloud.toml file. A real example
+/// only needs to include the fields that are relevant to the project.
+///
+/// ```rust
+/// use wash_lib::parser::WasmcloudDotToml;
+///
+/// let component_toml = r#"
+/// language = "rust"
+/// type = "component"
+/// name = "testcomponent"
+/// version = "0.1.0"
+/// "#;
+/// let config: WasmcloudDotToml = toml::from_str(component_toml).expect("should deserialize");
+/// eprintln!("{config:?}");
+/// ```
+#[derive(Deserialize, Debug)]
+pub struct WasmcloudDotToml {
+    /// The language of the project, e.g. rust, tinygo. This is used to determine which config to parse.
+    pub language: String,
+
+    /// The type of project. This is a string that is used to determine which type of config to parse.
+    /// The toml file name is just "type" but is named project_type here to avoid clashing with the type keyword in Rust.
+    #[serde(rename = "type")]
+    pub project_type: String,
+
+    /// Name of the project. Optional if building a Rust project, as it can be inferred from Cargo.toml.
+    pub name: Option<String>,
+
+    /// Semantic version of the project. Optional if building a Rust project, as it can be inferred from Cargo.toml.
+    pub version: Option<Version>,
+
+    /// Monotonically increasing revision number.
+    #[serde(default)]
+    pub revision: i32,
+
+    /// Configuration relevant to components
+    #[serde(default)]
+    pub component: ComponentConfig,
+
+    /// Configuration relevant to providers
+    #[serde(default)]
+    pub provider: ProviderConfig,
+
+    /// Rust configuration and options
+    #[serde(default)]
+    pub rust: RustConfig,
+
+    /// TinyGo related configuration and options
+    #[serde(default)]
+    pub tinygo: TinyGoConfig,
+
+    /// Golang related configuration and options
+    #[serde(default)]
+    pub go: GoConfig,
+
+    /// Configuration for image registry usage
+    #[serde(default)]
+    pub registry: RegistryConfig,
+
+    /// Configuration for development environments and/or DX related plugins
+    #[serde(default)]
+    pub dev: DevConfig,
+}
+
+impl WasmcloudDotToml {
     // Given a path to a valid cargo project, build an common_config enriched with Rust-specific information
     fn build_common_config_from_cargo_project(
         project_path: PathBuf,
@@ -1047,67 +859,39 @@ impl RawProjectConfig {
 
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
-            "component" => {
-                let component_config = self.component.context("missing component config")?;
-                TypeConfig::Component(component_config.try_into()?)
-            }
-
-            "provider" => TypeConfig::Provider(
-                self.provider
-                    .context("missing provider config")?
-                    .try_into()?,
-            ),
-
-            _ => {
-                bail!("unknown project type: {}", self.project_type);
-            }
+            "component" => TypeConfig::Component(self.component),
+            "provider" => TypeConfig::Provider(self.provider),
+            project_type => bail!("unknown project type: {project_type}"),
         };
 
         let language_config = match self.language.trim().to_lowercase().as_str() {
-            "rust" => match self.rust {
-                Some(rust_config) => LanguageConfig::Rust(rust_config.try_into()?),
-                None => LanguageConfig::Rust(RustConfig::default()),
-            },
-            "go" => match self.go {
-                Some(go_config) => LanguageConfig::Go(go_config.try_into()?),
-                None => LanguageConfig::Go(GoConfig::default()),
-            },
-            "tinygo" => match self.tinygo {
-                Some(tinygo_config) => LanguageConfig::TinyGo(tinygo_config.try_into()?),
-                None => LanguageConfig::TinyGo(TinyGoConfig::default()),
-            },
+            "rust" => LanguageConfig::Rust(self.rust),
+            "go" => LanguageConfig::Go(self.go),
+            "tinygo" => LanguageConfig::TinyGo(self.tinygo),
             other => LanguageConfig::Other(other.to_string()),
         };
 
-        let registry_config = self
-            .registry
-            .map(RegistryConfig::try_from)
-            .transpose()?
-            .unwrap_or_default();
-
-        let dev = self.dev.map(DevConfig::try_from).transpose()?;
-
-        let common_config_result: Result<CommonConfig> = match language_config {
+        let common_config = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
                     project_path.clone(),
                     self.name.clone(),
                     self.version.clone(),
                     self.revision,
-                    registry_config.clone(),
+                    self.registry.clone(),
                 ) {
                     // Successfully built with cargo information
-                    Ok(cfg) => Ok(cfg),
+                    Ok(cfg) => cfg,
 
                     // Fallback to non-specific language usage if we at least have a name & version
-                    Err(_) if self.name.is_some() && self.version.is_some() => Ok(CommonConfig {
+                    Err(_) if self.name.is_some() && self.version.is_some() => CommonConfig {
                         name: self.name.unwrap(),
                         version: self.version.unwrap(),
                         revision: self.revision,
                         path: project_path,
                         wasm_bin_name: None,
-                        registry: registry_config,
-                    }),
+                        registry: self.registry,
+                    },
 
                     Err(err) => {
                         bail!("No Cargo.toml file found in the current directory, and name/version unspecified: {err}")
@@ -1116,7 +900,7 @@ impl RawProjectConfig {
             }
 
             LanguageConfig::Go(_) | LanguageConfig::TinyGo(_) | LanguageConfig::Other(_) => {
-                Ok(CommonConfig {
+                CommonConfig {
                     name: self
                         .name
                         .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
@@ -1126,18 +910,33 @@ impl RawProjectConfig {
                     revision: self.revision,
                     path: project_path,
                     wasm_bin_name: None,
-                    registry: registry_config,
-                })
+                    registry: self.registry,
+                }
             }
         };
 
         Ok(ProjectConfig {
-            language: language_config,
+            dev: self.dev,
             project_type: project_type_config,
-            common: common_config_result?,
-            dev,
+            language: language_config,
+            common: common_config,
         })
     }
+}
+
+/// Project configuration, normally specified in the root keys of a wasmcloud.toml file
+#[derive(Deserialize, Debug, Clone)]
+pub struct ProjectConfig {
+    /// The language of the project, e.g. rust, tinygo. Contains specific configuration for that language.
+    pub language: LanguageConfig,
+    /// The type of project, e.g. component, provider, interface. Contains the specific configuration for that type.
+    /// This is renamed to "type" but is named project_type here to avoid clashing with the type keyword in Rust.
+    #[serde(rename = "type")]
+    pub project_type: TypeConfig,
+    /// Configuration common among all project types & languages.
+    pub common: CommonConfig,
+    /// Configuration for development environments and/or DX related plugins
+    pub dev: DevConfig,
 }
 
 impl ProjectConfig {
