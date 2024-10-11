@@ -125,6 +125,7 @@ tokio = { workspace = true, features = [
     "macros",
     "net",
 ] }
+testcontainers = { workspace = true }
 
 [dev-dependencies]
 claims = { workspace = true }
