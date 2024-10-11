@@ -7968,7 +7968,7 @@ dependencies = [
  "ring",
  "serde 1.0.210",
  "serde_json",
- "wasm-encoder 0.218.0",
+ "wasm-encoder 0.219.0",
  "wasm-gen",
  "wasmparser 0.217.0",
 ]
@@ -8129,7 +8129,7 @@ dependencies = [
  "walkdir",
  "wascap 0.15.0",
  "wasi-preview1-component-adapter-provider",
- "wasm-encoder 0.218.0",
+ "wasm-encoder 0.219.0",
  "wasm-pkg-client",
  "wasm-pkg-core",
  "wasmcloud-control-interface 2.2.0",
@@ -8312,15 +8312,6 @@ checksum = "7b88b0814c9a2b323a9b46c687e726996c255ac8b64aa237dd11c81ed4854760"
 dependencies = [
  "leb128",
  "wasmparser 0.217.0",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.218.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22b896fa8ceb71091ace9bcb81e853f54043183a1c9667cf93422c40252ffa0a"
-dependencies = [
- "leb128",
 ]
 
 [[package]]
