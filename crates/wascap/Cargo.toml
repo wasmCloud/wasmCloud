@@ -23,4 +23,4 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 wasm-encoder = { workspace = true }
 wasm-gen = { workspace = true }
-wasmparser = { workspace = true }
+wasmparser = { workspace = true, features = [ "component-model" ] }
