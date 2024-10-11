@@ -1,5 +1,0 @@
-package wasi:io
-
-world example-world {
-    import streams
-}

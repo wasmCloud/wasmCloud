@@ -1,7 +1,7 @@
 package test-components:pinger-config;
 
 world component {
-  import test-components:testing/pingpong;
+  import test-components:testing/pingpong@0.1.0;
 
   export wasi:http/incoming-handler@0.2.2;
 }

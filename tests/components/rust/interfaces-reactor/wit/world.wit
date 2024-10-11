@@ -10,8 +10,8 @@ world component {
   // legacy imports
   import wasi:config/runtime@0.2.0-draft;
 
-  import test-components:testing/busybox;
-  import test-components:testing/pingpong;
+  import test-components:testing/busybox@0.1.0;
+  import test-components:testing/pingpong@0.1.0;
 
   export wasi:http/incoming-handler@0.2.2;
   export wasmcloud:messaging/handler@0.2.0;

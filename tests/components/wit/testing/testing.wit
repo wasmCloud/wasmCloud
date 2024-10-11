@@ -1,4 +1,4 @@
-package test-components:testing;
+package test-components:testing@0.1.0;
 
 /// Invoke a component and receive string output. Similar to wasi:cli/command.run, without args
 interface invoke {

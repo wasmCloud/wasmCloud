@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context, Result};
-use oci_distribution::Reference;
+use oci_client::Reference;
 use rand::{distributions::Alphanumeric, Rng};
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
@@ -83,8 +83,8 @@ pub async fn fetch_artifact_digest(url: &str) -> Result<String> {
     );
 
     let accept_manifest_media_types = [
-        oci_distribution::manifest::IMAGE_MANIFEST_MEDIA_TYPE,
-        oci_distribution::manifest::OCI_IMAGE_MEDIA_TYPE,
+        oci_client::manifest::IMAGE_MANIFEST_MEDIA_TYPE,
+        oci_client::manifest::OCI_IMAGE_MEDIA_TYPE,
     ]
     .join(",");
 

@@ -34,11 +34,11 @@ pub static NATIVE_ROOTS: Lazy<Arc<[rustls::pki_types::CertificateDer<'static>]>>
     });
 
 #[cfg(all(feature = "rustls-native-certs", feature = "oci"))]
-pub static NATIVE_ROOTS_OCI: Lazy<Arc<[oci_distribution::client::Certificate]>> = Lazy::new(|| {
+pub static NATIVE_ROOTS_OCI: Lazy<Arc<[oci_client::client::Certificate]>> = Lazy::new(|| {
     NATIVE_ROOTS
         .iter()
-        .map(|cert| oci_distribution::client::Certificate {
-            encoding: oci_distribution::client::CertificateEncoding::Der,
+        .map(|cert| oci_client::client::Certificate {
+            encoding: oci_client::client::CertificateEncoding::Der,
             data: cert.to_vec(),
         })
         .collect()

@@ -1,5 +1,0 @@
-config = "https://github.com/WebAssembly/wasi-config/archive/c667fe67ffa158925511810775155af582d22928.tar.gz"
-keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/v0.2.0-draft.tar.gz"
-logging = "https://github.com/WebAssembly/wasi-logging/archive/3293e84de91a1ead98a1b4362f95ac8af5a16ddd.tar.gz"
-messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0.tar.gz"
-wasmcloud = "https://github.com/wasmCloud/wasmCloud/releases/download/wit-wasmcloud-bus-v1.0.0/wit-wasmcloud-bus-1.0.0.tar.gz"

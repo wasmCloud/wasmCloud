@@ -20,7 +20,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "trace",
