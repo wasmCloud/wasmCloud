@@ -617,6 +617,7 @@ pub struct InterfaceComponentOverride {
     /// Specification of the interface
     ///
     /// ex. `wasi:keyvalue@0.2.0`, `wasi:http/incoming-handler@0.2.0`
+    #[serde(alias = "interface")]
     pub interface_spec: String,
 
     /// Configuration that should be provided to the overriden component
