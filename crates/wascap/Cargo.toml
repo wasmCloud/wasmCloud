@@ -21,6 +21,6 @@ nuid = { workspace = true }
 ring = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-wasm-encoder = { workspace = true }
+wasm-encoder = { workspace = true, features = ["component-model"] }
 wasm-gen = { workspace = true }
-wasmparser = { workspace = true }
+wasmparser = { workspace = true, features = ["component-model"] }
