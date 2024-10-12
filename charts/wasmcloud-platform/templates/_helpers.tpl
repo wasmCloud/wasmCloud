@@ -54,7 +54,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Create the name of the service account to use
 */}}
 {{- define "wasmcloud.serviceAccountName" -}}
-{{- if or .Values.serviceAccount.create .Values.wasmcloud.enableApplierSupport }}
+{{- if .Values.serviceAccount.create }}
 {{- default (include "wasmcloud.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}

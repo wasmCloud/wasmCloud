@@ -90,16 +90,3 @@ information.
 If you have deployed the host using one of the production options, it can be scaled as high as you'd
 like. The number of hosts can be scaled by setting `replicaCount` to the desired number or by using
 `kubectl scale`
-
-#### Kubernetes Applier Support
-
-This chart comes with built in support for the [Kubernetes Applier provider and
-component](https://github.com/cosmonic/kubernetes-applier). To enable support so that any applier
-provider running on these nodes automatically gets the necessary credentials, set
-`wasmcloud.enableApplierSupport` to `true`. Note that this will force usage of a pod
-`ServiceAccount`.
-
-If using the architecture described in the [applier
-documentation](https://github.com/cosmonic/kubernetes-applier/tree/main/service-applier#requirements-for-hosts-running-in-kubernetes)
-that uses router nodes, you can use the `wasmcloud.customLabels` map to set the custom labels needed
-for those hosts (such as `wasmcloud.dev/route-to: "true"`)
