@@ -34,7 +34,7 @@ dependencies:
       - wasmcloud-operator
   - name: wasmcloud-host
     alias: host
-    version: 0.8.3
+    version: 0.8.4
     repository: oci://ghcr.io/wasmcloud/charts
     condition: host.enabled
     tags:
