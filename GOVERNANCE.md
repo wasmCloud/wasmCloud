@@ -6,6 +6,8 @@ The following document outlines how the wasmCloud project governance operates.
   - [The wasmCloud Project](#the-wasmcloud-project)
   - [Maintainers Structure](#maintainers-structure)
     - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
+    - [New Maintainer Onboarding](#new-maintainer-onboarding)
+    - [Stepping down as a maintainer](#stepping-down-as-a-maintainer)
   - [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
   - [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
   - [Code of Conduct](#code-of-conduct)
@@ -65,6 +67,45 @@ Changes to org maintainers use the following:
 Once an org maintainer is elected, they remain a maintainer until stepping down (or, in rare cases,
 are removed). Voting for new maintainers occurs when necessary to fill vacancies. Any existing
 project maintainer is eligible to become an org maintainer.
+
+### New Maintainer Onboarding
+
+When a new maintainer is added, a current maintainer should take the following steps:
+
+- Add the new maintainer to the [MAINTAINERS.md](./MAINTAINERS.md) file in this repo or the
+  appropriate subproject repo
+- Add the new maintainer to the appropriate GitHub group for their project
+- Announce the new maintainer to the wasmCloud community via the wasmCloud Slack and during the
+  community call
+
+When adding a new org maintainer, a few additional steps are required:
+
+- Add the new org maintainer to the CNCF
+  [project-maintainers.csv](https://github.com/cncf/foundation/blob/main/project-maintainers.csv)
+  file via PR
+- Once the PR is merged, send an email to cncf-maintainer-changes@cncf.io noting that the new
+  maintainer has been added and that they should be added to the
+  cncf-wasmCloud-maintainers@lists.cncf.io list
+
+### Stepping down as a maintainer
+
+To step down as a maintainer, that maintainer should open a PR to remove themselves (and add
+themselves to the emeritus section) from the MAINTAINERS.md file in this repo or the appropriate
+subproject repo, declaring their intent to step down.
+
+Upon the PR being merged, another maintainer should take the following steps:
+
+- Remove the maintainer from the appropriate GitHub group for their project
+- (Optional, but suggested) Send a thank you message and announcement via the wasmCloud Slack and
+  during the community call
+
+If an org maintainer steps down, the following steps should be taken in addition to the above:
+
+- Remove the maintainer from the CNCF
+  [project-maintainers.csv](https://github.com/cncf/foundation/blob/main/project-maintainers.csv)
+  file via PR
+- Send an email to cncf-maintainer-changes@cncf.io noting that the maintainer has been removed and
+  that they should be removed from the cncf-wasmCloud-maintainers@lists.cncf.io list
 
 ## Decision Making at the wasmCloud org level
 
