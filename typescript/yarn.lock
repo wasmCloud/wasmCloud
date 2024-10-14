@@ -1743,10 +1743,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@remix-run/router@npm:1.19.2":
-  version: 1.19.2
-  resolution: "@remix-run/router@npm:1.19.2"
-  checksum: 10/31b62b66ea68bd62018189047de7b262700113438f62407df019f81a9856a08a705b2b77454be9293518e2f5f3bbf3f8b858ac19f48cb7d89f8ab56b7b630c19
+"@remix-run/router@npm:1.20.0":
+  version: 1.20.0
+  resolution: "@remix-run/router@npm:1.20.0"
+  checksum: 10/e1d2420db94a1855b97f1784898d0ae389cf3b77129b8f419e51d4833b77ca2c92ac09e2cb558015324d64580a138fd6faa31e52fcc3ba90e3cc382a1a324d4a
   languageName: node
   linkType: hard
 
@@ -2683,7 +2683,7 @@ __metadata:
     eslint-plugin-react: "npm:^7.37.1"
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.12"
-    eslint-plugin-tailwindcss: "npm:3.17.4"
+    eslint-plugin-tailwindcss: "npm:3.17.5"
     eslint-plugin-unicorn: "npm:^56.0.0"
     typescript: "npm:^5.6.2"
   peerDependencies:
@@ -2810,11 +2810,11 @@ __metadata:
     eslint-plugin-react: "npm:^7.37.1"
     eslint-plugin-react-hooks: "npm:^4.6.2"
     eslint-plugin-react-refresh: "npm:^0.4.12"
-    eslint-plugin-tailwindcss: "npm:^3.17.4"
+    eslint-plugin-tailwindcss: "npm:^3.17.5"
     eslint-plugin-unicorn: "npm:^56.0.0"
     execa: "npm:^9.4.0"
     get-port: "npm:^7.1.0"
-    lucide-react: "npm:^0.451.0"
+    lucide-react: "npm:^0.452.0"
     nats.ws: "npm:^1.29.2"
     pino: "npm:^9.4.0"
     postcss: "npm:^8.4.47"
@@ -2822,9 +2822,9 @@ __metadata:
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
     react-hook-form: "npm:^7.53.0"
-    react-router-dom: "npm:^6.26.2"
+    react-router-dom: "npm:^6.27.0"
     rollup-plugin-sourcemaps: "npm:^0.6.3"
-    tailwind-merge: "npm:^2.5.3"
+    tailwind-merge: "npm:^2.5.4"
     tailwindcss: "npm:^3.4.13"
     tailwindcss-animate: "npm:^1.0.7"
     ts-node: "npm:^10.9.2"
@@ -4526,15 +4526,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-tailwindcss@npm:3.17.4, eslint-plugin-tailwindcss@npm:^3.17.4":
-  version: 3.17.4
-  resolution: "eslint-plugin-tailwindcss@npm:3.17.4"
+"eslint-plugin-tailwindcss@npm:3.17.5, eslint-plugin-tailwindcss@npm:^3.17.5":
+  version: 3.17.5
+  resolution: "eslint-plugin-tailwindcss@npm:3.17.5"
   dependencies:
     fast-glob: "npm:^3.2.5"
     postcss: "npm:^8.4.4"
   peerDependencies:
     tailwindcss: ^3.4.0
-  checksum: 10/b8419a97a63c11156a9b4c9798312d7a302e9f7aa7072c31465a9022be5cc357367001a8cfdc40a62d72ae336b8af4c32185ef4a2c9bd9c2614219afc42a74ec
+  checksum: 10/6d3dd00c65873064fd7e3c3146b289e4ca67fd3ab5140f4bc0fb6d618e822e71361fdc9d600be2658c04251a3e0d9ac7c50173fecb58ff825577faaa7b01fe44
   languageName: node
   linkType: hard
 
@@ -6198,12 +6198,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.451.0":
-  version: 0.451.0
-  resolution: "lucide-react@npm:0.451.0"
+"lucide-react@npm:^0.452.0":
+  version: 0.452.0
+  resolution: "lucide-react@npm:0.452.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc
-  checksum: 10/55e88c68d2d17d136f49ef9081c76ead9ecaa2a9b26e95db30776b5146dba29224e67ba2542a0c681a1a18c099dbb1bd5a8f0bc35de16fbff7dd53691f2b60c2
+  checksum: 10/2ea9c050f6cde80ee252afb0e9044002f9f208675052c73b1d3982d8d97a5d247c11d83a1161f58ca27f32d87ea397512482025292f05a2b326208c38dcb96b0
   languageName: node
   linkType: hard
 
@@ -7283,27 +7283,27 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-router-dom@npm:^6.26.2":
-  version: 6.26.2
-  resolution: "react-router-dom@npm:6.26.2"
+"react-router-dom@npm:^6.27.0":
+  version: 6.27.0
+  resolution: "react-router-dom@npm:6.27.0"
   dependencies:
-    "@remix-run/router": "npm:1.19.2"
-    react-router: "npm:6.26.2"
+    "@remix-run/router": "npm:1.20.0"
+    react-router: "npm:6.27.0"
   peerDependencies:
     react: ">=16.8"
     react-dom: ">=16.8"
-  checksum: 10/4eee37839bd1a660807c090b4d272e4aa9b95d8a9a932cdcdf7c5b10735f39b6db73bad79b08a3012386a7e225ff6bf60435e2741fb7c68e137ac5a6295d4308
+  checksum: 10/cfbcbc1d387d3341a335e3a075e487cc09dcbb62f1b83bc827fc3eec937523d5647a2c4488c804dc61581e65561823d0166d17b5dbc8579998c25b5a0bcabad6
   languageName: node
   linkType: hard
 
-"react-router@npm:6.26.2":
-  version: 6.26.2
-  resolution: "react-router@npm:6.26.2"
+"react-router@npm:6.27.0":
+  version: 6.27.0
+  resolution: "react-router@npm:6.27.0"
   dependencies:
-    "@remix-run/router": "npm:1.19.2"
+    "@remix-run/router": "npm:1.20.0"
   peerDependencies:
     react: ">=16.8"
-  checksum: 10/496e855b53e61066c1791e354f5d79eab56a128d9722fdc6486c3ecd3b3a0bf9968e927028f429893b157f3cc10fc09e890a055847723ee242663e7995fedc9d
+  checksum: 10/352e3af2075cdccf9d114b7e06d94a1b46a2147ba9d6e8643787a92464f5fd9ead950252a98d551f99f21860288bcf3a4f088cb5f46b28d1274a4e2ba24cc0f9
   languageName: node
   linkType: hard
 
@@ -8172,10 +8172,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tailwind-merge@npm:^2.5.3":
-  version: 2.5.3
-  resolution: "tailwind-merge@npm:2.5.3"
-  checksum: 10/6cc4dd6dd9f042046869e7399e6a5691c9a1f87637705f17fcd4833b7e0b3e7686e1e99dbf88d975ff5040cb0d0bfc828e72b5a239729151bfc2698713231ec1
+"tailwind-merge@npm:^2.5.4":
+  version: 2.5.4
+  resolution: "tailwind-merge@npm:2.5.4"
+  checksum: 10/2bf6585a30c0ab2e4e8c4bfe0d0a14edbf8e1d88bb8ce68c79f7185e8a7e410893903a98f5819cf8843f1afbe87639e1989af28456cbb0240ddec3468f303727
   languageName: node
   linkType: hard
 
