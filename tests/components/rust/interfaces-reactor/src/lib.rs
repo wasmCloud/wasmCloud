@@ -1,7 +1,7 @@
 wit_bindgen::generate!({
     with: {
-        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
+        "wasi:http/types@0.2.2": wasmcloud_component::wasi::http::types,
+        "wasi:io/streams@0.2.2": wasmcloud_component::wasi::io::streams,
         "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
     },
     generate_all,
@@ -80,8 +80,8 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "random_32": HostRng::random32(),
         "random_in_range": HostRng::random_in_range(min, max),
         "long_value": "1234567890".repeat(10000),
-        "config_value": config::runtime::get(&config_key).expect("failed to get config value"),
-        "all_config": config::runtime::get_all().expect("failed to get all config values"),
+        "config_value": config::store::get(&config_key).expect("failed to get config value"),
+        "all_config": config::store::get_all().expect("failed to get all config values"),
         "ping": pong,
         "meaning_of_universe": meaning_of_universe,
         "split": other,

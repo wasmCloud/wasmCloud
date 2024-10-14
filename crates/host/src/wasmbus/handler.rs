@@ -10,7 +10,7 @@ use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
-use wasmcloud_runtime::capability::config::runtime::ConfigError;
+use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
@@ -202,7 +202,10 @@ impl wrpc_transport::Invoke for Handler {
 #[async_trait]
 impl Config for Handler {
     #[instrument(level = "debug", skip_all)]
-    async fn get(&self, key: &str) -> anyhow::Result<Result<Option<String>, ConfigError>> {
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<String>, capability::config::store::Error>> {
         let lock = self.config_data.read().await;
         let conf = lock.get_config().await;
         let data = conf.get(key).cloned();
@@ -210,7 +213,9 @@ impl Config for Handler {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn get_all(&self) -> anyhow::Result<Result<Vec<(String, String)>, ConfigError>> {
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, String)>, capability::config::store::Error>> {
         Ok(Ok(self
             .config_data
             .read()

@@ -66,6 +66,17 @@ mod unversioned_logging_bindings {
     });
 }
 
+#[allow(missing_docs)]
+mod config_legacy {
+    wasmtime::component::bindgen!({
+        path: "wit/config-legacy",
+        world: "wasi:config/imports@0.2.0-draft",
+        async: true,
+        tracing: true,
+        trappable_imports: true,
+    });
+}
+
 #[allow(clippy::doc_markdown)]
 #[allow(missing_docs)]
 /// wRPC interface bindings
@@ -80,8 +91,14 @@ pub mod wrpc {
     });
 }
 
+/// `wasi:config` bindings
+pub mod config {
+    pub use super::config_legacy::wasi::config::runtime;
+    pub use super::wasmtime_bindings::wasi::config::store;
+}
+
 pub use unversioned_logging_bindings::wasi::logging as unversioned_logging;
-pub use wasmtime_bindings::wasi::{blobstore, config, keyvalue, logging0_1_0_draft as logging};
+pub use wasmtime_bindings::wasi::{blobstore, keyvalue, logging0_1_0_draft as logging};
 pub use wasmtime_bindings::wasmcloud::{bus, messaging, secrets};
 pub use wasmtime_bindings::Interfaces;
 pub use wasmtime_wasi_http::bindings::http;

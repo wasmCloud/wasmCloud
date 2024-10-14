@@ -2,10 +2,10 @@ package wasmcloud:host@1.0.1;
 
 world interfaces {
     import wasi:blobstore/blobstore@0.2.0-draft;
-    import wasi:config/runtime@0.2.0-draft;
+    import wasi:config/store@0.2.0-draft;
     import wasi:keyvalue/atomics@0.2.0-draft;
-    import wasi:keyvalue/store@0.2.0-draft;
     import wasi:keyvalue/batch@0.2.0-draft;
+    import wasi:keyvalue/store@0.2.0-draft;
     import wasi:logging/logging@0.1.0-draft;
     
     import wasmcloud:bus/lattice@1.0.0;
