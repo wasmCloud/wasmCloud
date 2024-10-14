@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt as _;
 use tokio::process::Child;
 use tokio::{select, sync::mpsc};
+use tracing::debug;
 use wash_lib::app::AppManifest;
 use wash_lib::cli::stop::stop_provider;
 use wash_lib::common::CommandGroupUsage;
@@ -32,7 +33,7 @@ use wadm_types::{
 };
 use wash_lib::build::{build_project, SignConfig};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{cfg_dir, downloads_dir};
+use wash_lib::config::downloads_dir;
 use wash_lib::generate::emoji;
 use wash_lib::id::ServerId;
 use wash_lib::parser::{get_config, ProjectConfig, TypeConfig};
@@ -63,7 +64,6 @@ const DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION: &str = "wasmcloud.dev";
 const DEFAULT_BLOBSTORE_ROOT_DIR: &str = "/tmp";
 const DEFAULT_KEYVALUE_BUCKET: &str = "wasmcloud";
 
-const WASH_DEV_DIR: &str = "dev";
 const WASH_SESSIONS_FILE_NAME: &str = "wash-dev-sessions.json";
 
 const SESSIONS_FILE_VERSION: Version = Version::new(0, 1, 0);
@@ -90,6 +90,12 @@ pub struct DevCommand {
     /// Path to code directory
     #[clap(name = "code-dir", long = "work-dir", env = "WASH_DEV_CODE_DIR")]
     pub code_dir: Option<PathBuf>,
+
+    /// Directories to ignore when watching for changes. This should be set
+    /// to directories where generated files are placed, such as `target/` or `dist/`.
+    /// Can be specified multiple times.
+    #[clap(name = "ignore-dir", long = "ignore-dir")]
+    pub ignore_dirs: Vec<PathBuf>,
 
     /// Whether to leave the host running after dev
     #[clap(
@@ -120,7 +126,7 @@ pub struct DevCommand {
 ///
 /// let workspace_key = ProjectDependencyKey::Workspace; // alternatively ProjectDependencyKey::default()
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum ProjectDependencyKey {
     #[allow(unused)]
     RootWorkspace { name: String, path: PathBuf },
@@ -437,7 +443,7 @@ impl DependencySpec {
     }
 
     /// Convert to a component that can be used in a [`Manifest`] with a given suffix for uniqueness
-    fn generate_component(&self, suffix: &str) -> Result<Component> {
+    fn generate_dep_component(&self, suffix: &str) -> Result<Component> {
         let name = format!("{}-dep-{}", suffix, self.name());
         let properties = self
             .generate_properties(suffix)
@@ -537,7 +543,7 @@ struct ProjectDeps {
     pub(crate) session_id: Option<String>,
 
     /// Lookup of dependencies by project key, with lookups into the pool
-    dependencies: HashMap<ProjectDependencyKey, Vec<DependencySpec>>,
+    dependencies: BTreeMap<ProjectDependencyKey, Vec<DependencySpec>>,
 
     /// The component to which dependencies belong
     ///
@@ -548,10 +554,10 @@ struct ProjectDeps {
     /// Dependencies that receive invocations for given interfaces (i.e. `keyvalue-nats` receiving a `wasi:keyvalue/get`)
     ///
     /// The keys to this structure are indices into the `dependencies` member.
-    exporters: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+    exporters: BTreeMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
 
     /// Dependencies that perform invocations for given interfaces (i.e. `http-server` invoking a component's `wasi:http/incoming-handler` export)
-    importers: HashMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
+    importers: BTreeMap<(WitNamespace, WitPackage, WitInterface, Option<Version>), Vec<usize>>,
 }
 
 impl ProjectDeps {
@@ -629,18 +635,25 @@ impl ProjectDeps {
             .context("missing/invalid component under test")?;
         let app_name = format!("dev-{}", component.name.to_lowercase().replace(" ", "-"));
 
-        // Generate components for all the dependencies
-        let mut components = Vec::new();
-
-        // TODO: Deps that have the same properties other than interface should be combined
-        // into a single link
+        // Generate components for all the dependencies, using a map from component name to component
+        // to remove duplicates
+        let mut components = HashMap::new();
 
         // For each dependency, go through and generate the component along with necessary links
         for dep in self.dependencies.values().flatten() {
             let dep = dep.clone();
-            let mut dep_component = dep
-                .generate_component(session_id)
-                .context("failed to generate component")?;
+            // If a dependency could not be generated into a component, skip it
+            let Ok(mut dep_component) = dep
+                .generate_dep_component(session_id)
+                .context("failed to generate component")
+            else {
+                eprintln!(
+                    "{} Failed to generate component for dep [{}]",
+                    emoji::WARN,
+                    dep.name()
+                );
+                continue;
+            };
 
             // Generate links for the given component and its spec, for known interfaces
             match dep {
@@ -648,6 +661,28 @@ impl ProjectDeps {
                     wit: (ns, pkg, iface, version),
                     ..
                 }) => {
+                    // Check to see if this link (namespace, package, target) already exists,
+                    // and if so, add the interface to the existing link
+                    if component
+                        .traits
+                        .get_or_insert(Vec::new())
+                        .iter_mut()
+                        .any(|trt| {
+                            if let TraitProperty::Link(link) = &mut trt.properties {
+                                if link.namespace == ns
+                                    && link.package == pkg
+                                    && link.target.name == dep_component.name
+                                {
+                                    link.interfaces.push(iface.clone());
+                                    return true;
+                                }
+                            }
+                            false
+                        })
+                    {
+                        continue;
+                    }
+
                     // Build the relevant app->dep link trait
                     let mut link_property = LinkProperty {
                         namespace: ns.clone(),
@@ -665,7 +700,7 @@ impl ProjectDeps {
                         ("wasi", "blobstore", "blobstore", _)
                         | ("wrpc", "blobstore", "blobstore", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: "default".into(),
+                                name: config_name(ns.as_str(), pkg.as_str()),
                                 properties: Some(HashMap::from([(
                                     "root".into(),
                                     DEFAULT_BLOBSTORE_ROOT_DIR.into(),
@@ -674,7 +709,7 @@ impl ProjectDeps {
                         }
                         ("wasi", "keyvalue", "atomics" | "store" | "batch", _) => {
                             link_property.target.config.push(ConfigProperty {
-                                name: "default".into(),
+                                name: config_name(ns.as_str(), pkg.as_str()),
                                 properties: Some(HashMap::from([
                                     ("bucket".into(), DEFAULT_KEYVALUE_BUCKET.into()),
                                     ("enable_bucket_auto_create".into(), "true".into()),
@@ -718,7 +753,7 @@ impl ProjectDeps {
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: "default".into(),
+                                    name: config_name(ns.as_str(), pkg.as_str()),
                                     properties: Some(HashMap::from([(
                                         "address".into(),
                                         DEFAULT_INCOMING_HANDLER_ADDRESS.into(),
@@ -731,7 +766,7 @@ impl ProjectDeps {
                                 .get_or_insert(Default::default())
                                 .config
                                 .push(ConfigProperty {
-                                    name: "default".into(),
+                                    name: config_name(ns.as_str(), pkg.as_str()),
                                     properties: Some(HashMap::from([(
                                         "subscriptions".into(),
                                         DEFAULT_MESSAGING_HANDLER_SUBSCRIPTION.into(),
@@ -757,11 +792,15 @@ impl ProjectDeps {
             }
 
             // Add the dependency component after we've made necessary links
-            components.push(dep_component);
+            if let Some(c) = components.insert(dep_component.name.clone(), dep_component) {
+                debug!("replacing duplicate component [{}]", c.name);
+            }
         }
 
         // Add the application component after we've made necessary links
-        components.push(component);
+        if let Some(c) = components.insert(component.name.clone(), component) {
+            debug!("replacing duplicate component [{}]", c.name);
+        }
 
         manifests.push(Manifest {
             api_version: "core.oam.dev/v1beta1".into(),
@@ -769,10 +808,18 @@ impl ProjectDeps {
             metadata: Metadata {
                 name: app_name,
                 annotations: BTreeMap::from([("version".into(), "v0.0.0".into())]),
-                labels: BTreeMap::from([("wasmcloud.dev/generated-by".into(), "wash dev".into())]),
+                labels: BTreeMap::from([(
+                    "wasmcloud.dev/generated-by".into(),
+                    format!(
+                        "wash-dev{}",
+                        std::env::var("CARGO_PKG_VERSION")
+                            .map(|s| format!("-{}", s))
+                            .unwrap_or_default()
+                    ),
+                )]),
             },
             spec: Specification {
-                components,
+                components: components.into_values().collect(),
                 policies: Vec::with_capacity(0),
                 // TODO: When secrets are required, reenable the nats-kv policy
                 // policies: Vec::from([Policy {
@@ -820,13 +867,15 @@ impl ProjectDeps {
 fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
     matches!(
         (ns, pkg, iface),
-        ("wasi", "http", "types")
+        ("wasi", "blobstore", "container" | "types")
+            | ("wasi", "http", "types")
             | ("wasi", "runtime", "config")
             | (
                 "wasi",
                 "cli" | "clocks" | "filesystem" | "io" | "logging" | "random" | "sockets",
                 _
             )
+            | ("wasmcloud", "messaging", "types")
             | ("wasmcloud", "secrets" | "bus", _)
     )
 }
@@ -968,11 +1017,13 @@ fn generate_component_from_project_cfg(
     })
 }
 
+fn config_name(ns: &str, pkg: &str) -> String {
+    format!("{}-{}-config", ns, pkg)
+}
+
 /// The path to the dev directory for wash
 async fn dev_dir() -> Result<PathBuf> {
-    let dir = cfg_dir()
-        .context("failed to resolve config dir")?
-        .join(WASH_DEV_DIR);
+    let dir = wash_lib::config::dev_dir().context("failed to resolve config dir")?;
     if !tokio::fs::try_exists(&dir)
         .await
         .context("failed to check if dev dir exists")?
@@ -1263,7 +1314,7 @@ impl WashDevSession {
         let wadm_version = &wadm_opts.wadm_version.unwrap_or(WADM_VERSION.to_string());
         let wadm_binary = ensure_wadm(wadm_version, &install_dir).await?;
         let wadm_child = match start_wadm(
-            &session_dir,
+            &install_dir,
             &wadm_binary,
             wadm_log_file.into_std().await,
             Some(config),
@@ -1383,7 +1434,7 @@ fn find_provider_source_trait_config_value<'a>(
     if let Some(link_traits) = component
         .traits
         .as_ref()
-        .map(|ts| ts.iter().filter(|t| t.trait_type == "link"))
+        .map(|ts| ts.iter().filter(|t| t.is_link()))
     {
         // Find the first link config that is named "default" and has "address"
         for link_trait in link_traits {
@@ -1418,12 +1469,14 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                     .image
                     .starts_with("ghcr.io/wasmcloud/http-server") =>
             {
-                if let Some(address) =
-                    find_provider_source_trait_config_value(component, "default", "address")
-                {
+                if let Some(address) = find_provider_source_trait_config_value(
+                    component,
+                    &config_name("wasi", "http"),
+                    "address",
+                ) {
                     lines.push(format!(
                         "{} {}",
-                        emoji::INFO_SQUARE,
+                        emoji::SPARKLE,
                         style(format!(
                             "HTTP Server: Access your application at {}",
                             if address.starts_with("http") {
@@ -1442,12 +1495,14 @@ fn generate_help_text_for_manifest(manifest: &Manifest) -> Vec<String> {
                     .image
                     .starts_with("ghcr.io/wasmcloud/messaging-nats") =>
             {
-                if let Some(subscriptions) =
-                    find_provider_source_trait_config_value(component, "default", "subscriptions")
-                {
+                if let Some(subscriptions) = find_provider_source_trait_config_value(
+                    component,
+                    &config_name("wasmcloud", "messaging"),
+                    "subscriptions",
+                ) {
                     lines.push(format!(
                         "{} {}",
-                        emoji::INFO,
+                        emoji::SPARKLE,
                         style(format!(
                             "Messaging NATS: Listening on the following subscriptions [{}]",
                             subscriptions.split(",").collect::<Vec<&str>>().join(", "),
@@ -1493,22 +1548,35 @@ async fn run_dev_loop(
         emoji::CONSTRUCTION_BARRIER,
         style("Building project...").bold(),
     );
-    let artifact_path = build_project(project_cfg, Some(&SignConfig::default()))
-        .await
-        .context("failed to build project")?
-        .canonicalize()
-        .context("failed to canonicalize path")?;
+    let artifact_path = match build_project(project_cfg, Some(&SignConfig::default())).await {
+        Ok(artifact_path) => artifact_path,
+        Err(e) => {
+            eprintln!(
+                "{} {}\n{}",
+                emoji::ERROR,
+                style("Failed to build project:").red(),
+                e
+            );
+            // Failing to build the project can be corrected by changing the code and shouldn't
+            // stop the development loop
+            return Ok(());
+        }
+    };
     eprintln!(
-        "✅ successfully built project at [{}]",
+        "{} Successfully built project at [{}]",
+        emoji::GREEN_CHECK,
         artifact_path.display()
     );
     let component_ref = format!("file://{}", artifact_path.display());
 
     // After the project is built, we must ensure dependencies are set up and running
     let (resolve, world_id) = if let TypeConfig::Component(_) = project_cfg.project_type {
-        let component_bytes = tokio::fs::read(&artifact_path)
-            .await
-            .context("failed to read component bytes from built artifact path")?;
+        let component_bytes = tokio::fs::read(&artifact_path).await.with_context(|| {
+            format!(
+                "failed to read component bytes from built artifact path {}",
+                artifact_path.display()
+            )
+        })?;
         parse_component_wit(&component_bytes).context("failed to parse WIT from component")?
     } else {
         parse_project_wit(project_cfg).context("failed to parse WIT from project dir")?
@@ -1518,11 +1586,12 @@ async fn run_dev_loop(
     let wit_implied_deps = discover_dependencies_from_wit(resolve, world_id)
         .context("failed to resolve dependent components")?;
     eprintln!(
-        "Detected component dependencies: {:?}",
+        "{} Detected component dependencies: {:?}",
+        emoji::INFO_SQUARE,
         wit_implied_deps
             .iter()
             .map(DependencySpec::name)
-            .collect::<Vec<String>>()
+            .collect::<BTreeSet<String>>()
     );
     let pkey =
         ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
@@ -1551,14 +1620,16 @@ async fn run_dev_loop(
         session_id,
         project_cfg.common.name.to_lowercase().replace(" ", "-"),
     );
-    let component = generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
-        .context("failed to generate app component")?;
+    current_project_deps.component = Some(
+        generate_component_from_project_cfg(project_cfg, &component_id, &component_ref)
+            .context("failed to generate app component")?,
+    );
 
-    // If deps haven't changed, then we can simply restart the component and return
-    if previous_deps
+    let project_deps_unchanged = previous_deps
         .as_ref()
-        .is_some_and(|deps| *deps == current_project_deps)
-    {
+        .is_some_and(|deps| deps.eq(&current_project_deps));
+    // If deps haven't changed, then we can simply restart the component and return
+    if project_deps_unchanged {
         eprintln!(
             "{} {}",
             emoji::RECYCLE,
@@ -1584,8 +1655,6 @@ async fn run_dev_loop(
         return Ok(());
     }
 
-    current_project_deps.component = Some(component);
-
     // Convert the project deps into a fully-baked WADM manifests
     let manifests = current_project_deps
         .generate_wadm_manifests()
@@ -1601,27 +1670,31 @@ async fn run_dev_loop(
         let model_json =
             serde_json::to_string(&manifest).context("failed to convert manifest to JSON")?;
 
-        // Write out manifests to local file if provided
-        if let Some(output_dir) = manifest_output_dir {
-            ensure!(
-                tokio::fs::metadata(output_dir)
-                    .await
-                    .context("failed to get manifest output dir metadata")
-                    .is_ok_and(|f| f.is_dir()),
-                "manifest output directory [{}] must be a folder",
-                output_dir.display()
-            );
-            tokio::fs::write(
-                output_dir.join(format!("{}.yaml", manifest.metadata.name)),
-                serde_yaml::to_string(&manifest).context("failed to convert manifest to YAML")?,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write out manifest YAML to output dir [{}]",
-                    output_dir.display(),
+        // Write out manifests to local file if provided and manifest dependencies changed
+        match manifest_output_dir {
+            Some(output_dir) if !project_deps_unchanged => {
+                ensure!(
+                    tokio::fs::metadata(output_dir)
+                        .await
+                        .context("failed to get manifest output dir metadata")
+                        .is_ok_and(|f| f.is_dir()),
+                    "manifest output directory [{}] must exist and be a folder",
+                    output_dir.display()
+                );
+                tokio::fs::write(
+                    output_dir.join(format!("{}.yaml", manifest.metadata.name)),
+                    serde_yaml::to_string(&manifest)
+                        .context("failed to convert manifest to YAML")?,
                 )
-            })?
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to write out manifest YAML to output dir [{}]",
+                        output_dir.display(),
+                    )
+                })?
+            }
+            _ => {}
         }
 
         // Put the manifest
@@ -1653,8 +1726,10 @@ async fn run_dev_loop(
             .bold(),
         );
 
-        // Print all help text lines
-        eprintln!("{}", help_text_lines.join("\n"));
+        // Print all help text lines (as long as there are some)
+        if !help_text_lines.is_empty() {
+            eprintln!("{}", help_text_lines.join("\n"));
+        }
     }
 
     eprintln!(
@@ -1749,7 +1824,10 @@ pub async fn handle_command(
         .await
         .context("failed to build wash dev session")?;
     let session_id = wash_dev_session.id.clone();
-    eprintln!("{} Resolved wash session ID [{session_id}]", emoji::INFO);
+    eprintln!(
+        "{} Resolved wash session ID [{session_id}]",
+        emoji::INFO_SQUARE
+    );
 
     let (mut nats_child, mut wadm_child, mut wasmcloud_child) = (None, None, None);
 
@@ -1824,20 +1902,38 @@ pub async fn handle_command(
     let watcher_paused = pause_watch.clone();
 
     // Spawn a file watcher to listen for changes and send on reload_tx
+    let project_path_notify = project_path.clone();
     let mut watcher = notify::recommended_watcher(move |res: _| match res {
         Ok(event) => match event {
             NotifyEvent {
                 kind: EventKind::Create(_),
+                paths,
                 ..
             }
             | NotifyEvent {
                 kind: EventKind::Modify(ModifyKind::Data(_)),
+                paths,
                 ..
             }
             | NotifyEvent {
                 kind: EventKind::Remove(_),
+                paths,
                 ..
             } => {
+                // Ensure that paths that take place in ignored directories don't trigger a reload
+                if paths.iter().any(|p| {
+                    p.strip_prefix(project_path_notify.as_path())
+                        .is_ok_and(|p| {
+                            // Ignore Rust target directories
+                            p.starts_with("target")
+                                // Ignore wasmCloud build directories
+                                || p.starts_with("build")
+                                // Ignore user specifieddirectories
+                                || cmd.ignore_dirs.iter().any(|ignore| p.starts_with(ignore))
+                        })
+                }) {
+                    return;
+                }
                 // If watch has been paused for any reason, skip notifications
                 if watcher_paused.load(Ordering::SeqCst) {
                     return;
@@ -1848,7 +1944,7 @@ pub async fn handle_command(
             _ => {}
         },
         Err(e) => {
-            eprintln!("[error] watch failed: {:?}", e);
+            eprintln!("{} Watch failed: {:?}", emoji::ERROR, e);
         }
     })?;
     watcher.watch(&project_path.clone(), RecursiveMode::Recursive)?;
@@ -1878,7 +1974,10 @@ pub async fn handle_command(
     }
 
     // Watch FS for changes and listen for Ctrl + C in tandem
-    eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
+    eprintln!(
+        "{} Watching for file changes (press Ctrl+c to stop)...",
+        emoji::EYES
+    );
     loop {
         select! {
             // Process a file change/reload
@@ -1897,13 +1996,13 @@ pub async fn handle_command(
                     .await
                     .context("failed to run dev loop iteration")?;
                 pause_watch.store(false, Ordering::SeqCst);
-                eprintln!("\n👀 Watching for file changes (press Ctrl+c to stop)...");
+                eprintln!("\n{} Watching for file changes (press Ctrl+c to stop)...", emoji::EYES);
             },
 
             // Process a stop
             _ = stop_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                eprintln!("🛑 Received Ctrl + c, stopping devloop...");
+                eprintln!("\n{} Received Ctrl + c, stopping devloop...", emoji::STOP);
 
                 // Update the sessions file with the fact that this session stopped
                 wash_dev_session.in_use = false;
@@ -1911,13 +2010,13 @@ pub async fn handle_command(
 
                 // Delete manifests related to the application
                 if let Some(dependencies) = dependencies {
-                    eprintln!("🧹 Cleaning up deployed WADM application(s)...");
+                    eprintln!("{} Cleaning up deployed WADM application(s)...", emoji::BROOM);
                     dependencies.delete_manifests(&nats_client, lattice).await?;
                 }
 
                 // Stop the host, unless explicitly instructed to leave host running
                 if !cmd.leave_host_running {
-                    eprintln!("⏳ Stopping wasmCloud instance...");
+                    eprintln!("{} Stopping wasmCloud instance...", emoji::HOURGLASS_DRAINING);
 
                     // Stop host via the control interface
                     if let Some((ref host_id, _log_file)) = wash_dev_session.host_data.as_ref() {
@@ -1948,6 +2047,7 @@ pub async fn handle_command(
 
                     // Stop WADM
                     if let Some(mut wadm) = wadm_child {
+                        eprintln!("{} Stopping wadm...", emoji::HOURGLASS_DRAINING);
                         wadm
                             .kill()
                             .await
@@ -1959,9 +2059,11 @@ pub async fn handle_command(
 
                     // Stop NATS
                     if let Some(mut nats) = nats_child {
+                        eprintln!("{} Stopping NATS...", emoji::HOURGLASS_DRAINING);
                         nats.kill().await?;
                     }
                 }
+                eprintln!("{} Dev session exited successfully", emoji::GREEN_CHECK);
 
                 break Ok(CommandOutput::default());
             },

@@ -5,7 +5,7 @@ version = "0.1.0"
 
 [component]
 wit_world = "hello"
-wasm_target = "wasm32-wasi-preview2"
+wasm_target = "wasm32-wasip2"
 
 build_command = "npm run build"
 build_artifact = "dist/http-hello-world.wasm"

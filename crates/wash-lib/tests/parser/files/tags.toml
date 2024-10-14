@@ -5,7 +5,7 @@ version = "0.1.0"
 
 [component]
 claims = ["wasmcloud:httpserver"]
-wasm_target = "wasm32-wasi-preview2"
+wasm_target = "wasm32-wasip2"
 wit_world = "test-world"
 tags = [
      "test",

@@ -133,9 +133,14 @@ impl OtelConfig {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+// TODO(joonas): In a future release we should enable this renaming once we
+// are comfortable with the fact there are no providers being used that have
+// the case sensitive handling still in place.
+// #[serde(rename_all = "lowercase")]
 pub enum OtelProtocol {
+    #[serde(alias = "grpc", alias = "Grpc")]
     Grpc,
+    #[serde(alias = "http", alias = "Http")]
     Http,
 }
 

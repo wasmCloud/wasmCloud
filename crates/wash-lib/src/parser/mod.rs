@@ -67,8 +67,8 @@ pub struct ComponentConfig {
     pub call_alias: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown" (a WASM core module).
     pub wasm_target: WasmTarget,
-    /// Path to a wasm adapter that can be used for preview2
-    pub wasi_preview2_adapter_path: Option<PathBuf>,
+    /// Path to a wasm adapter that can be used for wasip2
+    pub wasip1_adapter_path: Option<PathBuf>,
     /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
     /// Tags that should be applied during the component signing process
@@ -88,7 +88,7 @@ impl RustConfig {
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasm32-wasip1",
+            WasmTarget::WasiP1 | WasmTarget::WasiP2 => "wasm32-wasip1",
         }
     }
 }
@@ -103,8 +103,8 @@ struct RawComponentConfig {
     pub key_directory: Option<PathBuf>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
     pub wasm_target: Option<String>,
-    /// Path to a wasm adapter that can be used for preview2
-    pub wasi_preview2_adapter_path: Option<PathBuf>,
+    /// Path to a wasm adapter that can be used for wasip2
+    pub wasip1_adapter_path: Option<PathBuf>,
     /// The call alias of the component. Defaults to no alias.
     pub call_alias: Option<String>,
     /// The WIT world that is implemented by the component
@@ -140,7 +140,7 @@ impl TryFrom<RawComponentConfig> for ComponentConfig {
                 .wasm_target
                 .map(WasmTarget::from)
                 .unwrap_or_default(),
-            wasi_preview2_adapter_path: raw_config.wasi_preview2_adapter_path,
+            wasip1_adapter_path: raw_config.wasip1_adapter_path,
             call_alias: raw_config.call_alias,
             wit_world: raw_config.wit_world,
             tags: raw_config.tags,
@@ -305,19 +305,23 @@ pub enum WasmTarget {
         alias = "wasm32-wasi-preview1",
         alias = "wasm32-wasip1"
     )]
-    WasiPreview1,
-    #[serde(alias = "wasm32-wasi-preview2", alias = "wasm32-wasip2")]
-    WasiPreview2,
+    WasiP1,
+    #[serde(
+        alias = "wasm32-wasip2",
+        alias = "wasm32-wasi-preview2",
+        alias = "wasm32-preview2"
+    )]
+    WasiP2,
 }
 
 impl From<&str> for WasmTarget {
     fn from(value: &str) -> Self {
         match value {
-            "wasm32-wasi-preview1" => WasmTarget::WasiPreview1,
-            "wasm32-wasip1" => WasmTarget::WasiPreview1,
-            "wasm32-wasi" => WasmTarget::WasiPreview1,
-            "wasm32-wasi-preview2" => WasmTarget::WasiPreview2,
-            "wasm32-wasip2" => WasmTarget::WasiPreview2,
+            "wasm32-wasi-preview1" => WasmTarget::WasiP1,
+            "wasm32-wasip1" => WasmTarget::WasiP1,
+            "wasm32-wasi" => WasmTarget::WasiP1,
+            "wasm32-wasi-preview2" => WasmTarget::WasiP2,
+            "wasm32-wasip2" => WasmTarget::WasiP2,
             _ => WasmTarget::CoreModule,
         }
     }
@@ -333,8 +337,8 @@ impl Display for WasmTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match &self {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            WasmTarget::WasiPreview1 => "wasm32-wasip1",
-            WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
+            WasmTarget::WasiP1 => "wasm32-wasip1",
+            WasmTarget::WasiP2 => "wasm32-wasip2",
         })
     }
 }
@@ -410,8 +414,8 @@ impl TinyGoConfig {
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm",
-            WasmTarget::WasiPreview1 => "wasi",
-            WasmTarget::WasiPreview2 => "wasip2",
+            WasmTarget::WasiP1 => "wasi",
+            WasmTarget::WasiP2 => "wasip2",
         }
     }
 }

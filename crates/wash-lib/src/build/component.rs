@@ -46,9 +46,9 @@ pub async fn build_component(
                 let rust_wasm_path =
                     build_rust_component(common_config, rust_config, component_config).await?;
                 match component_config.wasm_target {
-                    WasmTarget::CoreModule | WasmTarget::WasiPreview1 => rust_wasm_path,
-                    WasmTarget::WasiPreview2 => {
-                        adapt_component_to_wasi_preview2(&rust_wasm_path, component_config)?
+                    WasmTarget::CoreModule | WasmTarget::WasiP1 => rust_wasm_path,
+                    WasmTarget::WasiP2 => {
+                        adapt_component_to_wasip2(&rust_wasm_path, component_config)?
                     }
                 }
             }
@@ -59,7 +59,7 @@ pub async fn build_component(
                 match component_config.wasm_target {
                     // NOTE(lxf): historically, wasip1 was being adapted to p2 which is different from rust target.
                     // We continue to do so here.
-                    WasmTarget::CoreModule | WasmTarget::WasiPreview1 => {
+                    WasmTarget::CoreModule | WasmTarget::WasiP1 => {
                         embed_wasm_component_metadata(
                         &common_config.path,
                         component_config
@@ -69,10 +69,10 @@ pub async fn build_component(
                         &go_wasm_path,
                         &go_wasm_path,
                 )?;
-                        adapt_component_to_wasi_preview2(&go_wasm_path, component_config)?
+                        adapt_component_to_wasip2(&go_wasm_path, component_config)?
                     }
-                    WasmTarget::WasiPreview2 => {
-                        // NOTE(lxf): tinygo takes over wit world embedding for preview2 target
+                    WasmTarget::WasiP2 => {
+                        // NOTE(lxf): tinygo takes over wit world embedding for wasip2 target
                         go_wasm_path
                     }
                 }
@@ -105,22 +105,22 @@ pub async fn build_component(
     }
 }
 
-pub(crate) fn adapt_component_to_wasi_preview2(
+pub(crate) fn adapt_component_to_wasip2(
     component_wasm_path: impl AsRef<Path>,
     component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let adapted_wasm_path = component_wasm_path.as_ref();
-    let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(component_config)?;
-    let wasm_bytes = adapt_wasi_preview1_component(adapted_wasm_path, adapter_wasm_bytes)
-        .with_context(|| {
+    let adapter_wasm_bytes = get_wasip2_adapter_bytes(component_config)?;
+    let wasm_bytes =
+        adapt_wasip1_component(adapted_wasm_path, adapter_wasm_bytes).with_context(|| {
             format!(
-                "failed to adapt component at [{}] to WASI preview2",
+                "failed to adapt component at [{}] to WASIP2",
                 adapted_wasm_path.display(),
             )
         })?;
     fs::write(adapted_wasm_path, wasm_bytes).with_context(|| {
         format!(
-            "failed to write WASI preview2 adapted bytes to path [{}]",
+            "failed to write WASIP2 adapted bytes to path [{}]",
             adapted_wasm_path.display(),
         )
     })?;
@@ -134,10 +134,10 @@ pub fn sign_component_wasm(
     signing_config: &SignConfig,
     component_wasm_path: impl AsRef<Path>,
 ) -> Result<PathBuf> {
-    // If we're building for WASI preview1 or preview2, we're targeting components-first
+    // If we're building for WASIP1 or WASIP2, we're targeting components-first
     // functionality, and the signed module should be marked as experimental
     let mut tags = component_config.tags.clone().unwrap_or_default();
-    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &component_config.wasm_target {
+    if let WasmTarget::WasiP1 | WasmTarget::WasiP2 = &component_config.wasm_target {
         tags.insert(WASMCLOUD_WASM_TAG_EXPERIMENTAL.into());
     };
 
@@ -286,7 +286,7 @@ async fn build_tinygo_component(
     }
 
     let build_args = match &component_config.wasm_target {
-        WasmTarget::WasiPreview1 | WasmTarget::CoreModule => vec![
+        WasmTarget::WasiP1 | WasmTarget::CoreModule => vec![
             "build",
             "-o",
             filename.as_str(),
@@ -297,7 +297,7 @@ async fn build_tinygo_component(
             "-no-debug",
             ".",
         ],
-        WasmTarget::WasiPreview2 => vec![
+        WasmTarget::WasiP2 => vec![
             "build",
             "-o",
             filename.as_str(),
@@ -424,9 +424,9 @@ async fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-/// Adapt a core module/preview1 component to a preview2 wasm component
+/// Adapt a core module/wasip2 component to a wasip2 wasm component
 /// returning the bytes that are the adapted wasm module
-fn adapt_wasi_preview1_component(
+fn adapt_wasip1_component(
     wasm_path: impl AsRef<Path>,
     adapter_wasm_bytes: impl AsRef<[u8]>,
 ) -> Result<Vec<u8>> {
@@ -462,12 +462,12 @@ fn adapt_wasi_preview1_component(
         .context("failed to serialize encoded component")
 }
 
-/// Retrieve bytes for WASI preview2 adapter given a project configuration,
+/// Retrieve bytes for WASIP2 adapter given a project configuration,
 /// if required by project configuration
-pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ComponentConfig) -> Result<Vec<u8>> {
+pub(crate) fn get_wasip2_adapter_bytes(config: &ComponentConfig) -> Result<Vec<u8>> {
     if let ComponentConfig {
-        wasm_target: WasmTarget::WasiPreview2,
-        wasi_preview2_adapter_path: Some(path),
+        wasm_target: WasmTarget::WasiP2,
+        wasip1_adapter_path: Some(path),
         ..
     } = config
     {
@@ -672,7 +672,7 @@ func main() {}
     }
 
     /// Ensure that components which get signed contain any tags specified
-    /// *and* experimental tag in claims when preview1 or preview2 targets are signed
+    /// *and* experimental tag in claims when waspi1 or waspi2 targets are signed
     #[test]
     fn sign_component_includes_experimental() -> Result<()> {
         // Build project path, including WIT dir
@@ -682,8 +682,8 @@ func main() {}
         // Check targets that should have experimental tag set
         for wasm_target in [
             WasmTarget::CoreModule,
-            WasmTarget::WasiPreview1,
-            WasmTarget::WasiPreview2,
+            WasmTarget::WasiP1,
+            WasmTarget::WasiP2,
         ] {
             let updated_wasm_path = sign_component_wasm(
                 &CommonConfig {
@@ -726,9 +726,9 @@ func main() {}
                     !tags.contains(&String::from(WASMCLOUD_WASM_TAG_EXPERIMENTAL)),
                     "experimental tag should not be present on core modules"
                 ),
-                WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => assert!(
+                WasmTarget::WasiP1 | WasmTarget::WasiP2 => assert!(
                     tags.contains(&String::from(WASMCLOUD_WASM_TAG_EXPERIMENTAL)),
-                    "experimental tag should be present on preview1/preview2 components"
+                    "experimental tag should be present on wasip1/wasip2 components"
                 ),
             }
         }
