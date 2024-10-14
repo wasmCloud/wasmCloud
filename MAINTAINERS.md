@@ -30,6 +30,10 @@ Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Cosmonic
 
+Name: Colin Murphy
+GitHub: @cdmurph32
+Organization: Adobe
+
 ## @wasmCloud/host-maintainers
 
 Name: Kevin Hoffman  
@@ -95,6 +99,10 @@ Organization: Google
 Name: Victor Adossi  
 GitHub: @vados-cosmonic
 Organization: Cosmonic
+
+Name: Colin Murphy
+GitHub: @cdmurph32
+Organization: Adobe
 
 ## @wasmCloud/washboard-maintainers
 
