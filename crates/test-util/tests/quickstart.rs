@@ -15,12 +15,12 @@ async fn test_quickstart() -> Result<()> {
     let (nats_server, nats_url, nats_client) = start_nats().await?;
 
     let lattice = "default";
-    let host = WasmCloudTestHost::start(nats_url, lattice)
+    let host = WasmCloudTestHost::start(nats_url, vec![lattice.to_string()])
         .await
         .context("failed to start host")?;
 
     let ctl_client = ClientBuilder::new(nats_client)
-        .lattice(host.lattice_name().to_string())
+        .lattice(lattice.to_string())
         .build();
 
     assert_config_put(
