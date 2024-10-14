@@ -2,6 +2,8 @@ name: wasmcloud
 
 on:
   pull_request:
+    paths-ignore:
+      - '*.md'
   merge_group:
   workflow_dispatch:
     inputs:
