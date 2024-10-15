@@ -338,7 +338,7 @@ warp = { version = "0.3", default-features = false }
 wascap = { version = "^0.15.0", path = "./crates/wascap", default-features = false }
 wash-cli = { version = "0", path = "./crates/wash-cli", default-features = false }
 wash-lib = { version = "^0.28.0", path = "./crates/wash-lib", default-features = false }
-wasi = { version = "0.13.2", default-features = false }
+wasi = { version = "0.13.3", default-features = false }
 wasm-pkg-client = { version = "0.7.4", default-features = false }
 wasm-pkg-core = { version = "0.7.4", default-features = false }
 wasi-preview1-component-adapter-provider = { version = "25", default-features = false }
