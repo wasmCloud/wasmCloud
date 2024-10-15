@@ -119,7 +119,7 @@ impl RuntimeBuilder {
     ) -> anyhow::Result<(
         Runtime,
         thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
     )> {
         let mut pooling_config = PoolingAllocationConfig::default();
 
@@ -173,13 +173,16 @@ impl RuntimeBuilder {
                 wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?
             }
         };
-        let (epoch_tx, epoch_rx) = oneshot::channel();
+        let (epoch_tx, mut epoch_rx) = oneshot::channel();
         let epoch = {
             let engine = engine.weak();
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_secs(1));
+                if let Ok(()) = epoch_rx.try_recv() {
+                    return Ok(());
+                }
                 let Some(engine) = engine.upgrade() else {
-                    return epoch_tx.send(());
+                    return Ok(());
                 };
                 engine.increment_epoch();
             })
@@ -191,7 +194,7 @@ impl RuntimeBuilder {
                 max_execution_time: self.max_execution_time,
             },
             epoch,
-            epoch_rx,
+            epoch_tx,
         ))
     }
 }
@@ -200,7 +203,7 @@ impl TryFrom<RuntimeBuilder>
     for (
         Runtime,
         thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
     )
 {
     type Error = anyhow::Error;
@@ -238,7 +241,7 @@ impl Runtime {
     pub fn new() -> anyhow::Result<(
         Self,
         thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
     )> {
         Self::builder().try_into()
     }
