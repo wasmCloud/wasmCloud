@@ -1,0 +1,6 @@
+package wasmcloud:examples;
+
+world starter-kit {
+    // You can import or export any additional WIT interfaces here
+    export wasmcloud:messaging/handler@0.2.0;
+}
