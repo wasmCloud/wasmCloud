@@ -1,0 +1,30 @@
+name: wasmcloud
+
+on:
+  pull_request:
+    paths-ignore:
+      - '*.lock'
+      - '*.nix'
+      - '*.toml'
+      - 'crates/**'
+      - 'examples/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'wit/**'
+
+jobs:
+  build-bin:
+    strategy:
+      matrix:
+        target:
+          - aarch64-unknown-linux-musl,
+          - aarch64-apple-darwin,
+          - aarch64-linux-android,
+          - riscv64gc-unknown-linux-gnu-fhs,
+          - x86_64-apple-darwin,
+          - x86_64-unknown-linux-musl,
+
+    name: wasmcloud-${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    steps:
+      - run: echo 'skipping testing ${{ matrix.target }}'

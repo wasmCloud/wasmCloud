@@ -2,8 +2,15 @@ name: wasmcloud
 
 on:
   pull_request:
-    paths-ignore:
-      - '*.md'
+    paths:
+      - '*.lock'
+      - '*.nix'
+      - '*.toml'
+      - 'crates/**'
+      - 'examples/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'wit/**'
   merge_group:
   workflow_dispatch:
     inputs:
