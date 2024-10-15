@@ -5531,9 +5531,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.11.0"
+version = "1.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38200e5ee88914975b69f657f0801b6f6dccafd44fd9326302a4aaeecfacb1d8"
+checksum = "4219d74c6b67a3654a9fbebc4b419e22126d13d2f3c4a07ee0cb61ff79a79619"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -7724,9 +7724,9 @@ dependencies = [
 
 [[package]]
 name = "wadm-types"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf085ad337b38c46d833957c0f644b627edfb9de02eabf33f3acbb233aea8173"
+checksum = "26744d0b4030b8ec1b477628b587eadd47fbe6f4897ae723425bb987025ac929"
 dependencies = [
  "anyhow",
  "async-nats",
