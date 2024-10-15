@@ -1,6 +1,6 @@
 // a Container is a collection of objects
 interface container {
-  use wasi:io/streams@0.2.0.{
+  use wasi:io/streams@0.2.1.{
     input-stream,
     output-stream,
   };

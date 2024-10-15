@@ -10,7 +10,7 @@ world component {
   import wasmcloud:task-manager/tasks@0.1.0-draft;
 
   // Used for retrieving remote images
-  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:http/outgoing-handler@0.2.1;
 
   export wasmcloud:messaging/handler@0.2.0;
 }
