@@ -7,7 +7,6 @@ use core::time::Duration;
 use std::thread;
 
 use anyhow::Context;
-use tokio::sync::oneshot;
 use wasmtime::{InstanceAllocationStrategy, PoolingAllocationConfig};
 
 /// Default max linear memory for a component (256 MiB)
@@ -114,13 +113,7 @@ impl RuntimeBuilder {
     ///
     /// Fails if the configuration is not valid
     #[allow(clippy::type_complexity)]
-    pub fn build(
-        mut self,
-    ) -> anyhow::Result<(
-        Runtime,
-        thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
-    )> {
+    pub fn build(mut self) -> anyhow::Result<(Runtime, thread::JoinHandle<Result<(), ()>>)> {
         let mut pooling_config = PoolingAllocationConfig::default();
 
         // Right now we assume tables_per_component is the same as memories_per_component just like
@@ -173,13 +166,12 @@ impl RuntimeBuilder {
                 wasmtime::Engine::new(&self.engine_config).context("failed to construct engine")?
             }
         };
-        let (epoch_tx, epoch_rx) = oneshot::channel();
         let epoch = {
             let engine = engine.weak();
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_secs(1));
                 let Some(engine) = engine.upgrade() else {
-                    return epoch_tx.send(());
+                    return Ok(());
                 };
                 engine.increment_epoch();
             })
@@ -191,18 +183,11 @@ impl RuntimeBuilder {
                 max_execution_time: self.max_execution_time,
             },
             epoch,
-            epoch_rx,
         ))
     }
 }
 
-impl TryFrom<RuntimeBuilder>
-    for (
-        Runtime,
-        thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
-    )
-{
+impl TryFrom<RuntimeBuilder> for (Runtime, thread::JoinHandle<Result<(), ()>>) {
     type Error = anyhow::Error;
 
     fn try_from(builder: RuntimeBuilder) -> Result<Self, Self::Error> {
@@ -235,11 +220,7 @@ impl Runtime {
     ///
     /// Returns an error if the default configuration is invalid
     #[allow(clippy::type_complexity)]
-    pub fn new() -> anyhow::Result<(
-        Self,
-        thread::JoinHandle<Result<(), ()>>,
-        oneshot::Receiver<()>,
-    )> {
+    pub fn new() -> anyhow::Result<(Self, thread::JoinHandle<Result<(), ()>>)> {
         Self::builder().try_into()
     }
 
