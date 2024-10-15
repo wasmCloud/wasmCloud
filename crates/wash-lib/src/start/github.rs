@@ -1,11 +1,13 @@
 //! Reusable code for downloading tarballs from GitHub releases
 
-use anyhow::{anyhow, bail, Result};
-use async_compression::tokio::bufread::GzipDecoder;
-#[cfg(target_family = "unix")]
-use std::os::unix::prelude::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::{ffi::OsStr, io::Cursor};
+
+#[cfg(target_family = "unix")]
+use std::os::unix::prelude::PermissionsExt;
+
+use anyhow::{anyhow, bail, Context as _, Result};
+use async_compression::tokio::bufread::GzipDecoder;
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio_stream::StreamExt;
 use tokio_tar::Archive;
@@ -13,6 +15,43 @@ use wasmcloud_core::tls::NativeRootsExt;
 
 const DOWNLOAD_CLIENT_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
+/// Helper for creating and permissioning some binary file output
+async fn create_and_permission(
+    output_path: impl AsRef<Path>,
+    mut bytes: impl tokio::io::AsyncRead + std::marker::Unpin,
+) -> Result<()> {
+    let output_path = output_path.as_ref();
+    // Ensure parent directory exists
+    if let Some(parent) = output_path.parent() {
+        create_dir_all(parent)
+            .await
+            .context("failed to ensure target path exists")?;
+    }
+    let mut bin_file = File::create(output_path)
+        .await
+        .context("failed to create binary file")?;
+    // Make binary executable
+    #[cfg(target_family = "unix")]
+    {
+        let mut permissions = bin_file
+            .metadata()
+            .await
+            .context("failed to get metadata")?
+            .permissions();
+        // Read/write/execute for owner and read/execute for others. This is what `cargo install` does
+        permissions.set_mode(0o755);
+        bin_file
+            .set_permissions(permissions)
+            .await
+            .context("failed to set permissions")?;
+    }
+
+    tokio::io::copy(&mut bytes, &mut bin_file)
+        .await
+        .context("failed to copy binary data into output file")?;
+    Ok(())
+}
 
 /// Reusable function to download a release tarball from GitHub and extract an embedded binary to a specified directory
 ///
@@ -39,42 +78,45 @@ where
     let bin_path = dir.as_ref().join(bin_name);
     // Download release tarball
     let body = match get_download_client()?.get(url).send().await {
-        Ok(resp) => resp.bytes().await?,
         Err(e) => bail!("Failed to request release tarball: {:?}", e),
+        Ok(resp) if !resp.status().is_success() => bail!("artifact download request failed"),
+        Ok(resp) => resp.bytes().await?,
     };
     let cursor = Cursor::new(body);
-    let mut bin_tarball = Archive::new(Box::new(GzipDecoder::new(cursor)));
 
-    // Look for binary within tarball and only extract that
-    let mut entries = bin_tarball.entries()?;
-    while let Some(res) = entries.next().await {
-        let mut entry = res.map_err(|e| {
+    // If the downloaded binary is tarballed & gzipped, then find the binary inside
+    if url.ends_with(".tar.gz") {
+        let mut bin_tarball = Archive::new(Box::new(GzipDecoder::new(cursor)));
+
+        // Look for binary within tarball and only extract that
+        let mut entries = bin_tarball.entries()?;
+        while let Some(res) = entries.next().await {
+            let entry = res.map_err(|e| {
             anyhow!(
                 "Failed to retrieve file from archive, ensure {bin_name} exists. Original error: {e}",
             )
         })?;
-        if let Ok(tar_path) = entry.path() {
-            match tar_path.file_name() {
-                Some(name) if name == OsStr::new(bin_name) => {
-                    // Ensure target directory exists
-                    create_dir_all(&dir).await?;
-                    let mut bin_file = File::create(&bin_path).await?;
-                    // Make binary executable
-                    #[cfg(target_family = "unix")]
-                    {
-                        let mut permissions = bin_file.metadata().await?.permissions();
-                        // Read/write/execute for owner and read/execute for others. This is what `cargo install` does
-                        permissions.set_mode(0o755);
-                        bin_file.set_permissions(permissions).await?;
+            if let Ok(tar_path) = entry.path() {
+                match tar_path.file_name() {
+                    Some(name) if name == OsStr::new(bin_name) => {
+                        if create_and_permission(&bin_path, entry).await.is_ok() {
+                            return Ok(bin_path);
+                        }
                     }
-
-                    tokio::io::copy(&mut entry, &mut bin_file).await?;
-                    return Ok(bin_path);
+                    // Ignore all other files in the tarball
+                    _ => (),
                 }
-                // Ignore all other files in the tarball
-                _ => (),
             }
         }
+    } else {
+        // For all other files, try to create a binary with the right permissions
+        if create_and_permission(&bin_path, cursor)
+            .await
+            .with_context(|| format!("failed to create binary at [{}]", bin_path.display()))
+            .is_ok()
+        {
+            return Ok(bin_path);
+        };
     }
 
     bail!("{bin_name} binary could not be installed, please see logs")
