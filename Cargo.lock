@@ -8076,6 +8076,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "sanitize-filename",
+ "secrets-nats-kv",
  "semver",
  "serde 1.0.210",
  "serde_bytes",

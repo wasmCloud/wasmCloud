@@ -175,7 +175,7 @@ where
 }
 
 /// Configuration that must be translated to CLI invocations of `secrets-nats-kv run`
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct Config {
     /// The name of the secrets backend, defaults to `nats-kv`
     pub secrets_backend_name: Option<String>,
@@ -191,6 +191,12 @@ pub struct Config {
 
     /// NATS credentials file path
     pub nats_creds_file: Option<PathBuf>,
+
+    /// XKey seed for use during transit
+    pub transit_xkey_seed: Option<String>,
+
+    /// XKey seed for use during encryption at rest
+    pub encryption_xkey_seed: Option<String>,
 }
 
 /// Helper function to execute the binary binary with optional arguments.
@@ -226,6 +232,8 @@ where
         nats_address,
         secrets_api_version,
         nats_creds_file,
+        encryption_xkey_seed,
+        transit_xkey_seed,
     }) = config
     {
         if let Some(name) = secrets_backend_name {
@@ -242,6 +250,12 @@ where
         }
         if let Some(p) = nats_creds_file {
             cmd.args(["--nats-creds-file", &format!("{}", p.display())]);
+        }
+        if let Some(k) = transit_xkey_seed {
+            cmd.env("TRANSIT_XKEY_SEED", k);
+        }
+        if let Some(k) = encryption_xkey_seed {
+            cmd.env("ENCRYPTION_XKEY_SEED", k);
         }
     }
 

@@ -8,7 +8,7 @@ use tracing::debug;
 
 use wadm_types::{
     CapabilityProperties, Component, ComponentProperties, ConfigProperty, LinkProperty, Manifest,
-    Metadata, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
+    Metadata, Policy, Properties, SecretProperty, Specification, TargetConfig, TraitProperty,
 };
 use wash_lib::generate::emoji;
 use wash_lib::parser::{
@@ -588,7 +588,6 @@ impl DependencySpecInner {
         // NOTE: We depend on the fact that configs and secrets should be processed in order,
         // with later entries *overriding* earlier ones
         self.configs.extend(self.configs.clone());
-        // NOTE: we depend on the
         self.secrets.extend(self.secrets.clone());
     }
 }
@@ -1023,7 +1022,11 @@ impl ProjectDeps {
             },
             spec: Specification {
                 components: components.into_values().collect(),
-                policies: Vec::with_capacity(0),
+                policies: vec![Policy {
+                    name: "nats-kv".into(),
+                    policy_type: "policy.secret.wasmcloud.dev/v1alpha1".into(),
+                    properties: BTreeMap::from([("backend".to_string(), "nats-kv".to_string())]),
+                }],
             },
         });
 

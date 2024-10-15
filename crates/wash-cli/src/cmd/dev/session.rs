@@ -20,11 +20,14 @@ use wash_lib::start::{
     NatsConfig, WadmConfig, NATS_SERVER_BINARY,
 };
 
+use crate::cmd::dev::NATS_KV_SECRETS_VERSION;
 use crate::cmd::up::{remove_wadm_pidfile, start_nats, NatsOpts, WadmOpts, WasmcloudOpts};
 use crate::config::{configure_host_env, DEFAULT_NATS_HOST};
 use crate::down::stop_nats;
 
-use super::{dev_dir, sessions_file_path, SESSIONS_FILE_VERSION, SESSION_ID_LEN};
+use super::{
+    dev_dir, sessions_file_path, SecretsNatsKvOpts, SESSIONS_FILE_VERSION, SESSION_ID_LEN,
+};
 
 /// Metadata related to a single `wash dev` session
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +171,15 @@ impl Default for SessionMetadata {
     }
 }
 
+/// Child processes that are related to a session that has been started
+#[derive(Default)]
+pub(crate) struct SessionProcesses {
+    pub(crate) nats: Option<Child>,
+    pub(crate) wadm: Option<Child>,
+    pub(crate) nats_kv_secrets: Option<Child>,
+    pub(crate) wasmcloud: Option<Child>,
+}
+
 impl WashDevSession {
     /// Get the directory into which all related log files/ancillary data should be stored
     pub(crate) async fn base_dir(&self) -> Result<PathBuf> {
@@ -224,9 +236,10 @@ impl WashDevSession {
         mut wasmcloud_opts: WasmcloudOpts,
         nats_opts: NatsOpts,
         wadm_opts: WadmOpts,
-    ) -> Result<(Option<Child>, Option<Child>, Option<Child>)> {
+        secrets_nats_kv_opts: SecretsNatsKvOpts,
+    ) -> Result<SessionProcesses> {
         if self.host_data.is_some() {
-            return Ok((None, None, None));
+            return Ok(SessionProcesses::default());
         }
 
         eprintln!(
@@ -314,6 +327,37 @@ impl WashDevSession {
             Err(e) => bail!("failed to start wadm for wash dev: {e}"),
         };
 
+        // Start NATS KV secrets provider
+        let nats_kv_secrets_log_path = session_dir.join("nats-kv-secrets.log");
+        let nats_kv_secrets_log_file =
+            tokio::fs::File::create(&wadm_log_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to create NATS KV secrets log file @ [{}]",
+                        nats_kv_secrets_log_path.display()
+                    )
+                })?;
+        let nats_kv_secrets_binary =
+            wash_lib::start::secrets_nats_kv::ensure_binary(NATS_KV_SECRETS_VERSION, &install_dir)
+                .await?;
+        let nats_kv_secrets_child = match wash_lib::start::secrets_nats_kv::start_binary(
+            &install_dir,
+            &nats_kv_secrets_binary,
+            nats_kv_secrets_log_file.into_std().await,
+            secrets_nats_kv_opts
+                .try_into()
+                .map(Some)
+                .context("failed to convert opts into secrets-nats-kv config")?,
+            CommandGroupUsage::CreateNew,
+        )
+        .await
+        {
+            Ok(c) => Some(c),
+            Err(e) if e.to_string().contains("already listening") => None,
+            Err(e) => bail!("failed to start nats-kv-secrets for wash dev: {e}"),
+        };
+
         // Start the host in detached mode, w/ custom log file
         let wasmcloud_log_path = session_dir.join("wasmcloud.log");
         let wasmcloud_binary =
@@ -379,6 +423,7 @@ impl WashDevSession {
                     .await
                     .context("failed to read line from file")?
                 {
+                    eprintln!("LINE: {line}");
                     if let Some(host_id) = line
                         .split_once("host_id=\"")
                         .map(|(_, rhs)| &rhs[0..rhs.len() - 1])
@@ -404,6 +449,11 @@ impl WashDevSession {
 
         self.host_data = Some((host_id, wasmcloud_log_path));
 
-        Ok((nats_child, wadm_child, wasmcloud_child))
+        Ok(SessionProcesses {
+            nats: nats_child,
+            wadm: wadm_child,
+            nats_kv_secrets: nats_kv_secrets_child,
+            wasmcloud: wasmcloud_child,
+        })
     }
 }
