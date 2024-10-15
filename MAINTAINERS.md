@@ -10,10 +10,6 @@ Name: Bailey Hayes
 GitHub: @ricochet  
 Organization: Cosmonic
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict  
-Organization: Synadia
-
 Name: Liam Randall  
 GitHub: @LiamRandall  
 Organization: Cosmonic
@@ -36,10 +32,6 @@ Organization: Adobe
 
 ## @wasmCloud/host-maintainers
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict  
-Organization: Synadia
-
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
 Organization: Cosmonic
@@ -58,10 +50,6 @@ Organization: Cosmonic
 
 ## @wasmCloud/capability-provider-maintainers
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict  
-Organization: Synadia
-
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
 Organization: Cosmonic
@@ -79,10 +67,6 @@ GitHub: @vados-cosmonic
 Organization: Cosmonic
 
 ## @wasmCloud/wash-maintainers
-
-Name: Kevin Hoffman  
-GitHub: @autodidaddict  
-Organization: Synadia
 
 Name: Taylor Thomas  
 GitHub: @thomastaylor312  
@@ -223,6 +207,10 @@ Organization: Synadia
 ## Emeritus Maintainers
 
 These individuals have contributed significantly to the project but are no longer actively maintaining it.
+
+
+Name: Kevin Hoffman  
+GitHub: @autodidaddict  
 
 Name: Steve Schoettler  
 GitHub: @stevelr  
