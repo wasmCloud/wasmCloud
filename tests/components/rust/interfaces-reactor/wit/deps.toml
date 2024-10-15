@@ -1,3 +1,4 @@
+config-legacy = "https://github.com/WebAssembly/wasi-config/archive/c667fe67ffa158925511810775155af582d22928.tar.gz"
 http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.2.tar.gz"
 messaging = "https://github.com/wasmCloud/messaging/archive/v0.2.0-rc.1.tar.gz"
 testing = "../../../wit/testing"
