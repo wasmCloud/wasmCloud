@@ -45,6 +45,7 @@ pub async fn registry_pull(
             allow_latest: cmd.allow_latest,
             user: credentials.username().map(String::from),
             password: credentials.password().map(String::from),
+            concurrency: cmd.concurrency,
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
         },
@@ -126,6 +127,7 @@ pub async fn registry_push(
             password: credentials.password().map(String::from),
             insecure: cmd.opts.insecure,
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
+            concurrency: cmd.concurrency,
             annotations,
         },
     )

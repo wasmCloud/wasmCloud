@@ -38,6 +38,8 @@ pub struct OciPullOptions {
     pub password: Option<String>,
     /// Whether or not to allow pulling from non-https registries
     pub insecure: bool,
+    /// The number of concurrent chunk downloads to allow
+    pub concurrency: usize,
     /// Whether or not OCI registry's certificate will be checked for validity. This will make your HTTPS connections insecure.
     pub insecure_skip_tls_verify: bool,
 }
@@ -57,6 +59,8 @@ pub struct OciPushOptions {
     pub insecure: bool,
     /// Whether or not OCI registry's certificate will be checked for validity. This will make your HTTPS connections insecure.
     pub insecure_skip_tls_verify: bool,
+    /// The number of concurrent chunk uploads to allow
+    pub concurrency: usize,
     /// Optional annotations you'd like to add to the pushed artifact
     pub annotations: Option<HashMap<String, String>>,
 }
@@ -137,6 +141,7 @@ pub async fn pull_oci_artifact(image_ref: &Reference, options: OciPullOptions) -
         },
         extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         accept_invalid_certificates: options.insecure_skip_tls_verify,
+        max_concurrent_download: options.concurrency,
         ..Default::default()
     });
 
@@ -228,6 +233,7 @@ pub async fn push_oci_artifact(
         },
         extra_root_certificates: tls::NATIVE_ROOTS_OCI.to_vec(),
         accept_invalid_certificates: options.insecure_skip_tls_verify,
+        max_concurrent_upload: options.concurrency,
         ..Default::default()
     });
 

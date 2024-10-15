@@ -63,6 +63,10 @@ pub struct RegistryPullCommand {
     #[clap(long = "allow-latest")]
     pub allow_latest: bool,
 
+    /// Maximum concurrent chunk downloads
+    #[clap(long = "concurrency", default_value_t = 16)]
+    pub concurrency: usize,
+
     #[clap(flatten)]
     pub opts: AuthOpts,
 }
@@ -88,6 +92,10 @@ pub struct RegistryPushCommand {
     /// Allow latest artifact tags
     #[clap(long = "allow-latest")]
     pub allow_latest: bool,
+
+    /// Maximum concurrent chunk uploads
+    #[clap(long = "concurrency", default_value_t = 16)]
+    pub concurrency: usize,
 
     /// Optional set of annotations to apply to the OCI artifact manifest
     #[clap(short = 'a', long = "annotation", name = "annotations")]
