@@ -73,6 +73,16 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     // Record / struct argument
     let is_good_boy = busybox::is_good_boy(&doggo);
 
+    let config_value = config::store::get(&config_key).expect("failed to get config value");
+    let config_value_legacy =
+        wasi::config::runtime::get(&config_key).expect("failed to get config value");
+    assert_eq!(config_value, config_value_legacy);
+
+    let all_config = config::store::get_all().expect("failed to get all config values");
+    let all_config_legacy =
+        wasi::config::runtime::get_all().expect("failed to get all config values");
+    assert_eq!(all_config, all_config_legacy);
+
     let res = json!({
         "get_random_bytes": random::get_random_bytes(8),
         "get_random_u64": random::get_random_u64(),
@@ -80,8 +90,8 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "random_32": HostRng::random32(),
         "random_in_range": HostRng::random_in_range(min, max),
         "long_value": "1234567890".repeat(10000),
-        "config_value": config::store::get(&config_key).expect("failed to get config value"),
-        "all_config": config::store::get_all().expect("failed to get all config values"),
+        "config_value": config_value,
+        "all_config": all_config,
         "ping": pong,
         "meaning_of_universe": meaning_of_universe,
         "split": other,

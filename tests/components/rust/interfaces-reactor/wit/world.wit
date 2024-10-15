@@ -7,6 +7,9 @@ world component {
   import wasi:sockets/udp-create-socket@0.2.2;
   import wasi:sockets/udp@0.2.2;
 
+  // legacy imports
+  import wasi:config/runtime@0.2.0-draft;
+
   import test-components:testing/busybox;
   import test-components:testing/pingpong;
 
