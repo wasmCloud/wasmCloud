@@ -1,5 +1,5 @@
 [blobstore]
-url = "https://github.com/WebAssembly/wasi-blobstore/archive/ef387e4bd5226c40cc9b62ce86fa0158ebfcff95.tar.gz"
+url = "https://github.com/WebAssembly/wasi-blobstore/archive/v0.2.0-draft.tar.gz"
 sha256 = "20cef78d42a6b933a6fd46b06275119219e22197dc33c4426df3b2a4c5562dbc"
 sha512 = "f0ae942f356f6ec5ff23451dddf638042ab120cf8aea858b45dae5f467b3f60f5442802912963e6cd9ede84a216aabaee930917f062c0906fe2124e52d5d118b"
 deps = ["io"]
@@ -27,7 +27,7 @@ sha256 = "2a74bd811adc46b5a0f19827ddbde89870e52b17615f4d0873f06fd977250caf"
 sha512 = "94624f00c66e66203592cee820f80b1ba91ecdb71f682c154f25eaf71f8d8954197dcb64503bc21e72ed5e812af7eae876df47b7eb727b02db3a74a7ce0aefca"
 
 [logging]
-url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+url = "https://github.com/WebAssembly/wasi-logging/archive/3293e84de91a1ead98a1b4362f95ac8af5a16ddd.tar.gz"
 sha256 = "9676b482485bb0fd2751a390374c1108865a096b7037f4b5dbe524f066bfb06e"
 sha512 = "30a621a6d48a0175e8047c062e618523a85f69c45a7c31918da2b888f7527fce1aca67fa132552222725d0f6cdcaed95be7f16c28488d9468c0fad00cb7450b9"
 
