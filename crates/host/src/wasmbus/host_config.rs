@@ -34,8 +34,7 @@ pub struct Host {
     /// Whether to require TLS for RPC connection
     pub rpc_tls: bool,
     /// The lattices the host belongs to
-    /// TODO: should this actually be Vec<Arc<str>>?
-    pub lattices: Vec<String>,
+    pub lattices: Arc<[Box<str>]>,
     /// The domain to use for host Jetstream operations
     pub js_domain: Option<String>,
     /// Labels (key-value pairs) to add to the host
@@ -101,7 +100,7 @@ impl Default for Host {
             rpc_jwt: None,
             rpc_key: None,
             rpc_tls: false,
-            lattices: vec!["default".to_string()],
+            lattices: Arc::new(["default".to_string().into_boxed_str()]),
             js_domain: None,
             labels: HashMap::default(),
             host_key: None,
