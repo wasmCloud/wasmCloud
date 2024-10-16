@@ -70,7 +70,7 @@ const columns = [
     header: 'Health',
     cell: (info) => {
       const healthSummary: 'Running' | 'Pending' | 'Failed' = Object.values(info.getValue()).reduce(
-        (summary, currentStatus): 'Running' | 'Pending' | 'Failed' => {
+        (currentStatus, summary ): 'Running' | 'Pending' | 'Failed' => {
           // health status can be 'Running', 'Pending' or 'Failed'
           if (summary === 'Failed') {
             return summary;
