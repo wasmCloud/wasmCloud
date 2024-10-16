@@ -8535,6 +8535,7 @@ dependencies = [
  "bytes",
  "clap",
  "clap-markdown",
+ "cloudevents-sdk",
  "file-guard",
  "futures",
  "http-body-util",

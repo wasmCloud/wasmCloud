@@ -5,6 +5,7 @@ use core::time::Duration;
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use anyhow::{ensure, Context as _};
 use base64::Engine as _;
@@ -78,7 +79,7 @@ async fn interfaces() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
+    let host = WasmCloudTestHost::start(&nats_url, Arc::from(vec![Box::from(LATTICE)]))
         .await
         .context("failed to start test host")?;
 

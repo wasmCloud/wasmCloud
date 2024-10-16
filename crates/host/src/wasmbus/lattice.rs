@@ -1,17 +1,5 @@
-use crate::wasmbus::host_config::PolicyService;
-use crate::wasmbus::{
-    component_import_links, create_bucket, event, fetch_component, handler::Handler,
-    injector_to_headers, load_supplemental_config, merge_registry_config, serialize_ctl_response,
-    Annotations, Claims, Component, ComponentSpecification, Provider, Queue, StoredClaims,
-    SupplementalConfig, WrpcServer, MAX_INVOCATION_CHANNEL_SIZE, MIN_INVOCATION_CHANNEL_SIZE,
-};
-use crate::WasmbusHostConfig;
-
-use std::collections::hash_map::{self};
-use url::Url;
-use wasmcloud_core::logging::Level as LogLevel;
-
 use std::collections::btree_map::Entry as BTreeMapEntry;
+use std::collections::hash_map::{self};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::num::NonZeroUsize;
@@ -36,6 +24,7 @@ use tokio::time::{Instant, Interval};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
+use url::Url;
 use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
@@ -44,6 +33,7 @@ use wasmcloud_control_interface::{
     ProviderAuctionRequest, ProviderDescription, RegistryCredential, ScaleComponentCommand,
     StartProviderCommand, StopProviderCommand, UpdateComponentCommand,
 };
+use wasmcloud_core::logging::Level as LogLevel;
 use wasmcloud_core::{
     provider_config_update_subject, ComponentId, HealthCheckResponse, HostData, OtelConfig,
 };
@@ -55,12 +45,19 @@ use wasmcloud_tracing::context::TraceContextInjector;
 use wasmcloud_tracing::KeyValue;
 
 use crate::registry::RegistryCredentialExt;
+use crate::wasmbus::config::{BundleGenerator, ConfigBundle};
+use crate::wasmbus::host_config::PolicyService;
+use crate::wasmbus::{
+    component_import_links, create_bucket, event, fetch_component, handler::Handler,
+    injector_to_headers, load_supplemental_config, merge_registry_config, serialize_ctl_response,
+    Annotations, Claims, Component, ComponentSpecification, Provider, Queue, StoredClaims,
+    SupplementalConfig, WrpcServer, MAX_INVOCATION_CHANNEL_SIZE, MIN_INVOCATION_CHANNEL_SIZE,
+};
+use crate::WasmbusHostConfig;
 use crate::{
     HostMetrics, OciConfig, PolicyHostInfo, PolicyManager, PolicyResponse, RegistryConfig,
     SecretsManager,
 };
-
-use crate::wasmbus::config::{BundleGenerator, ConfigBundle};
 
 /// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
@@ -169,6 +166,10 @@ impl Lattice {
         heartbeat_interval: Interval,
         host_token: jwt::Token<jwt::Host>,
     ) -> anyhow::Result<Arc<Self>> {
+        if name.contains('>') || name.contains('*') || name.contains('.') {
+            bail!("invalid lattice name: must not contain `>` or `*` or `.`. All of those are reserved characters in NATS and cannot be used.");
+        }
+
         let (stop_tx, stop_rx) = watch::channel(None);
 
         let bucket = format!("LATTICEDATA_{}", name.clone());
@@ -399,32 +400,13 @@ impl Lattice {
         self.queue_abort.abort();
         self.heartbeat_abort.abort();
         self.policy_manager.policy_changes.abort();
-        // TODO add this back in
-        //let _ = try_join!(queue, data_watch).context("failed to await tasks")?;
 
         self.rpc_nats
             .flush()
             .await
             .context("failed to flush NATS connection")?;
-        // NOTE: Epoch interrupt thread will only stop once there are no more references to the engine
         Ok(())
     }
-
-    /// Waits for host to be stopped via lattice commands and returns the shutdown deadline on
-    /// success
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if internal stop channel is closed prematurely
-    //#[instrument(level = "debug", skip_all)]
-    //pub async fn stopped(&self) -> anyhow::Result<Option<Instant>> {
-    //    self.stop_rx
-    //        .clone()
-    //        .changed()
-    //        .await
-    //        .context("failed to wait for stop")?;
-    //    Ok(*self.stop_rx.borrow())
-    //}
 
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn inventory(&self) -> (Vec<ComponentDescription>, Vec<ProviderDescription>) {
@@ -836,52 +818,6 @@ impl Lattice {
         component_claims.insert(claims.subject.clone(), claims);
         Ok(())
     }
-
-    //#[instrument(level = "debug", skip_all)]
-    //async fn handle_stop_host(
-    //    &self,
-    //    payload: impl AsRef<[u8]>,
-    //    transport_host_id: &str,
-    //) -> anyhow::Result<CtlResponse<()>> {
-    //    // Allow an empty payload to be used for stopping hosts
-    //    let timeout = if payload.as_ref().is_empty() {
-    //        None
-    //    } else {
-    //        let cmd = serde_json::from_slice::<StopHostCommand>(payload.as_ref())
-    //            .context("failed to deserialize stop command")?;
-    //        let timeout = cmd.timeout();
-    //        let host_id = cmd.host_id();
-
-    //        // If the Host ID was provided (i..e not the empty string, due to #[serde(default)]), then
-    //        // we should check it against the known transport-provided host_id, and this actual host's ID
-    //        if !host_id.is_empty() {
-    //            anyhow::ensure!(
-    //                host_id == transport_host_id && host_id == self.host_key,
-    //                "invalid host_id [{host_id}]"
-    //            );
-    //        }
-    //        timeout
-    //    };
-
-    //    // It *should* be impossible for the transport-derived host ID to not match at this point
-    //    anyhow::ensure!(
-    //        transport_host_id == self.host_key,
-    //        "invalid host_id [{transport_host_id}]"
-    //    );
-
-    //    info!(?timeout, "handling stop host");
-
-    //    self.heartbeat.abort();
-    //    self.data_watch.abort();
-    //    self.queue.abort();
-    //    self.policy_manager.policy_changes.abort();
-    //    let deadline =
-    //        timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
-    //    self.stop_tx.send_replace(deadline);
-    //    Ok(CtlResponse::<()>::success(
-    //        "successfully handled stop host".into(),
-    //    ))
-    //}
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_scale_component(

@@ -53,7 +53,7 @@ pub struct WasmCloudTestHost {
     cluster_key: Arc<KeyPair>,
     host_key: Arc<KeyPair>,
     nats_url: ServerAddr,
-    lattice_names: Vec<String>,
+    lattice_names: Arc<[Box<str>]>,
     host: Arc<Host>,
     shutdown_hook: Pin<Box<dyn Future<Output = Result<()>>>>,
 }
@@ -66,7 +66,10 @@ impl WasmCloudTestHost {
     ///
     /// * `nats_url` - URL of the NATS instance to which we should connect (ex. "nats://localhost:4222")
     /// * `lattice_names` - wasmCloud lattices to which we should connect (ex. "default")
-    pub async fn start(nats_url: impl AsRef<str>, lattice_names: Vec<String>) -> Result<Self> {
+    pub async fn start(
+        nats_url: impl AsRef<str>,
+        lattice_names: impl Into<Arc<[Box<str>]>>,
+    ) -> Result<Self> {
         Self::start_custom(nats_url, lattice_names, None, None, None, None).await
     }
 
@@ -82,21 +85,21 @@ impl WasmCloudTestHost {
     /// * `secrets_backend_topic` - Topic for the host to use for secrets requests
     pub async fn start_custom(
         nats_url: impl AsRef<str>,
-        lattice_names: Vec<String>,
+        lattice_names: impl Into<Arc<[Box<str>]>>,
         cluster_key: Option<KeyPair>,
         host_key: Option<KeyPair>,
         policy_service_config: Option<PolicyService>,
         secrets_topic_prefix: Option<String>,
     ) -> Result<Self> {
         let nats_url = Url::try_from(nats_url.as_ref()).context("failed to parse NATS URL")?;
-        //let lattice_names = lattice_name.as_ref();
         let cluster_key = Arc::new(cluster_key.unwrap_or(KeyPair::new_cluster()));
         let host_key = Arc::new(host_key.unwrap_or(KeyPair::new_server()));
+        let l2 = Arc::clone(&lattice_names.into());
 
         let mut host_config = HostConfig {
             ctl_nats_url: nats_url.clone(),
             rpc_nats_url: nats_url.clone(),
-            lattices: lattice_names.clone(),
+            lattices: Arc::clone(&l2),
             host_key: Some(Arc::clone(&host_key)),
             provider_shutdown_delay: Some(Duration::from_millis(300)),
             allow_file_load: true,
@@ -116,7 +119,7 @@ impl WasmCloudTestHost {
             host_key,
             nats_url: ServerAddr::from_url(nats_url.clone())
                 .context("failed to build NATS server address from URL")?,
-            lattice_names,
+            lattice_names: Arc::clone(&l2),
             host,
             shutdown_hook: Box::pin(shutdown_hook),
         })
@@ -135,7 +138,7 @@ impl WasmCloudTestHost {
         nats_client: Option<NatsClient>,
         lattice: &str,
     ) -> Result<WasmcloudCtlClient> {
-        if !self.lattice_names.contains(&lattice.to_string()) {
+        if !self.lattice_names.contains(&Box::from(lattice)) {
             return Err(anyhow!("host not running workloads for lattice {lattice}"));
         }
         let nats_client = match nats_client {
@@ -163,7 +166,7 @@ impl WasmCloudTestHost {
 
     /// Get the lattices for the host
     #[must_use]
-    pub fn lattices(&self) -> Vec<String> {
+    pub fn lattices(&self) -> Arc<[Box<str>]> {
         self.lattice_names.clone()
     }
 }

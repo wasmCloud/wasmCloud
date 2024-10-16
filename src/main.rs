@@ -460,10 +460,15 @@ async fn main() -> anyhow::Result<()> {
         .collect::<HashSet<String>>()
         .into_iter()
         .collect::<Vec<String>>();
+    let lattices = lattices
+        .iter()
+        .map(|l| l.clone().into_boxed_str())
+        .collect::<Vec<Box<str>>>();
+    let l = &lattices[..];
 
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
-        lattices,
+        lattices: Arc::from(l),
         host_key,
         config_service_enabled: args.config_service_enabled,
         js_domain: args.js_domain,

@@ -119,11 +119,11 @@ impl Queue {
     async fn new_host(
         nats: &async_nats::Client,
         topic_prefix: &str,
-        lattices: &Vec<String>,
+        lattices: Arc<[Box<str>]>,
         host_id: &str,
     ) -> anyhow::Result<Self> {
         let mut subscriptions = Vec::new();
-        for lattice in lattices {
+        for lattice in lattices.iter() {
             subscriptions.push(nats.subscribe(format!(
                 "{topic_prefix}.{CTL_API_VERSION_1}.{lattice}.host.ping",
             )));
@@ -377,7 +377,7 @@ pub struct Host {
     #[allow(unused)]
     max_execution_time: Duration,
     /// Map of lattice names to their respective lattice configurations
-    lattices: HashMap<String, Arc<Lattice>>,
+    lattices: HashMap<Box<str>, Arc<Lattice>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -758,7 +758,7 @@ impl Host {
                 let queue = Queue::new_host(
                     &ctl_nats,
                     &config.ctl_topic_prefix,
-                    &config.lattices,
+                    config.lattices.clone(),
                     &host_key.public_key(),
                 )
                 .await
@@ -825,11 +825,11 @@ impl Host {
         let mut lattices = HashMap::new();
         let exec_time = config.max_execution_time;
         let (event_tx, mut event_rx) = mpsc::channel(100);
-        for lattice_name in &config.lattices {
+        for lattice_name in config.lattices.iter() {
             let heartbeat_interval = interval_at(heartbeat_start_at, heartbeat_interval);
             let cfg = LatticeConfig::from(config.clone());
             let lattice = Lattice::new(
-                lattice_name.clone(),
+                lattice_name.to_string(),
                 rpc_nats.clone(),
                 ctl_nats.clone(),
                 ctl_jetstream.clone(),
@@ -895,7 +895,7 @@ impl Host {
             }
         });
 
-        spawn({
+        let event_relay = spawn({
             let host = Arc::clone(&host);
             async move {
                 loop {
@@ -925,7 +925,7 @@ impl Host {
 
         Ok((Arc::clone(&host), async move {
             queue_abort.abort();
-            let _ = try_join!(queue).context("failed to await tasks")?;
+            let _ = try_join!(queue, event_relay).context("failed to await tasks")?;
             for lattice in lattice_names {
                 let deadline = host.stop_rx.borrow().unwrap_or_else(|| {
                     let now = Instant::now();

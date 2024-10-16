@@ -57,7 +57,7 @@ async fn link_deletes() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let _host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
+    let _host = WasmCloudTestHost::start(&nats_url, Arc::from(vec![Box::from(LATTICE)]))
         .await
         .context("failed to start test host")?;
 
@@ -200,7 +200,7 @@ async fn link_name_support() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
+    let host = WasmCloudTestHost::start(&nats_url, Arc::from(vec![Box::from(LATTICE)]))
         .await
         .context("failed to start test host")?;
 
@@ -389,7 +389,7 @@ async fn valid_and_invalid() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let _host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
+    let _host = WasmCloudTestHost::start(&nats_url, Arc::from(vec![Box::from(LATTICE)]))
         .await
         .context("failed to start test host")?;
 

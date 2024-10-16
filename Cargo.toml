@@ -138,6 +138,7 @@ wasmcloud-tracing = { workspace = true, features = ["otel"] }
 async-nats = { workspace = true, features = ["ring"] }
 bytes = { workspace = true }
 base64 = { workspace = true }
+cloudevents-sdk = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
