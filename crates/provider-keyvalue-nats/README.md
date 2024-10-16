@@ -18,11 +18,11 @@ To configure this provider, use the following settings in link definitions:
 
 | **Property**                | **Description**                                                                                                                                                                                                                                                                                         |
 |:----------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `BUCKET`                    | **Required**: The name of an existing NATS Kv Store. Additional links could be added if access to more Kv stores is needed; the buckets could be referenced by their respective `link_names` (please see the Rust **_keyvalue-messaging_** example for a comprehensive demonstration of this approach). |
-| `CLUSTER_URI`               | NATS cluster connection URI. If not specified, the default is `nats://0.0.0.0:4222`                                                                                                                                                                                                                     |
-| `JS_DOMAIN`                 | Optional NATS Jetstream domain to connect to.                                                                                                                                                                                                                                                           |
-| `TLS_CA_FILE`               | Alternatively, the path qualified name of the CA public key could be provided. If both are provided, the `TLS_CA` will be used.                                                                                                                                                                         |
-| `ENABLE_BUCKET_AUTO_CREATE` | Enable automatic creation of buckets when links are established. If a bucket cannot be created, a warning is produced.                                                                                                                                                                                                                                        |
+| `bucket`                    | **Required**: The name of an existing NATS Kv Store. Additional links could be added if access to more Kv stores is needed; the buckets could be referenced by their respective `link_names` (please see the Rust **_keyvalue-messaging_** example for a comprehensive demonstration of this approach). |
+| `cluster_uri`               | NATS cluster connection URI. If not specified, the default is `nats://0.0.0.0:4222`                                                                                                                                                                                                                     |
+| `js_domain`                 | Optional NATS Jetstream domain to connect to.                                                                                                                                                                                                                                                           |
+| `tls_ca_file`               | Alternatively, the path qualified name of the CA public key could be provided. If both are provided, the `tls_ca` will be used.                                                                                                                                                                         |
+| `enable_bucket_auto_create` | Enable automatic creation of buckets when links are established. If a bucket cannot be created, a warning is produced.                                                                                                                                                                                                                                        |
 
 ## Link Definition Secret Settings
 
@@ -30,6 +30,6 @@ While the provider supports receiving the following values via configuration (si
 
 | **Property**  | **Description**                                                                                                 |
 | :------------ | :-------------------------------------------------------------------------------------------------------------- |
-| `CLIENT_JWT`  | Optional JWT auth token. For JWT authentication, both `CLIENT_JWT` and `CLIENT_SEED` must be provided.          |
-| `CLIENT_SEED` | Private seed for JWT authentication.                                                                            |
-| `TLS_CA`      | To secure communications with the NATS server, the public key of its CA could be provided as an encoded string. |
+| `client_jwt`  | Optional JWT auth token. For JWT authentication, both `client_jwt` and `client_seed` must be provided.          |
+| `client_seed` | Private seed for JWT authentication.                                                                            |
+| `tls_ca`      | To secure communications with the NATS server, the public key of its CA could be provided as an encoded string. |
