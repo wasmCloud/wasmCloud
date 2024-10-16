@@ -1,6 +1,7 @@
 use core::time::Duration;
 
 use anyhow::Context as _;
+use std::sync::Arc;
 
 use wasmcloud_host::wasmbus::host_config::PolicyService;
 use wasmcloud_test_util::provider::{assert_start_provider, StartProviderArgs};
@@ -37,7 +38,7 @@ async fn policy_always_deny() -> anyhow::Result<()> {
     // Build the host
     let host = WasmCloudTestHost::start_custom(
         &nats_url,
-        vec![LATTICE.to_string()],
+        Arc::from(vec![Box::from(LATTICE)]),
         None,
         None,
         // Since if a policy service is specified, the requests are deny-by-default

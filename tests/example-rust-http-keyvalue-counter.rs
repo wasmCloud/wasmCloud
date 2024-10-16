@@ -4,6 +4,7 @@ use core::str;
 use core::time::Duration;
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use tokio::time::sleep;
@@ -64,7 +65,7 @@ async fn example_rust_http_keyvalue_counter() -> anyhow::Result<()> {
         .lattice(LATTICE.to_string())
         .build();
     // Build the host
-    let host = WasmCloudTestHost::start(&nats_url, vec![LATTICE.to_string()])
+    let host = WasmCloudTestHost::start(&nats_url, Arc::from(vec![Box::from(LATTICE)]))
         .await
         .context("failed to start test host")?;
 

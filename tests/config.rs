@@ -155,7 +155,7 @@ async fn config_e2e() -> anyhow::Result<()> {
     // Build the host
     let host = WasmCloudTestHost::start_custom(
         &nats_url,
-        vec![LATTICE.to_string()],
+        Arc::from(vec![Box::from(LATTICE)]),
         None,
         None,
         None,
