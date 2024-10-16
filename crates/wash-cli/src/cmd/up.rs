@@ -516,7 +516,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
             out_json.insert("success".to_string(), json!(true));
             let _ = write!(
                 out_text,
-                "\n🕸  NATS is running in the background at http://{nats_listen_address}"
+                "\n🕸  NATS is running in the background at {nats_listen_address}"
             );
 
             let _ = write!(
@@ -695,7 +695,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 
         let _ = write!(
             out_text,
-            "\n🕸  NATS is running in the background at http://{nats_listen_address}"
+            "\n🕸  NATS is running in the background at {nats_listen_address}"
         );
 
         let _ = write!(
