@@ -8,7 +8,7 @@ use tokio::sync::{
     watch::{self, Receiver, Sender},
     RwLock, RwLockReadGuard,
 };
-use tracing::{error, Instrument};
+use tracing::{error, warn, Instrument};
 
 type LockedConfig = Arc<RwLock<HashMap<String, String>>>;
 /// A cache of named config mapped to an existing receiver
@@ -136,7 +136,7 @@ impl ConfigBundle {
                                         .await;
                                 }
                                 Err(e) => {
-                                    error!(error = %e, %name, "Config updater has failed!");
+                                    warn!(error = %e, %name, "config sender dropped, updates will not be delivered");
                                     return;
                                 }
                             }
