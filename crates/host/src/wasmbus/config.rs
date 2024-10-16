@@ -56,6 +56,9 @@ pub struct ConfigBundle {
     ///
     /// These are `drop()`ed when the bundle is dropped
     _handles: Arc<AbortHandles>,
+    /// The sender that is used to notify the receiver that the config has changed, this
+    /// must not be dropped until the receiver is dropped so we ensure it's kept alive
+    _changed_notifier: Arc<Sender<()>>,
 }
 
 impl Clone for ConfigBundle {
@@ -69,6 +72,7 @@ impl Clone for ConfigBundle {
             merged_config: self.merged_config.clone(),
             config_names: self.config_names.clone(),
             changed_receiver,
+            _changed_notifier: self._changed_notifier.clone(),
             _handles: self._handles.clone(),
         }
     }
@@ -98,17 +102,18 @@ impl ConfigBundle {
                 .unzip();
         // Now that we've set initial config, create the bundle and update the merged config with the latest values
         let (changed_notifier, changed_receiver) = watch::channel(());
+        let changed_notifier = Arc::new(changed_notifier);
         let mut bundle = ConfigBundle {
             merged_config: Arc::default(),
             config_names: receivers.iter().map(|r| r.name.clone()).collect(),
             changed_receiver,
+            _changed_notifier: changed_notifier.clone(),
             _handles: Arc::new(AbortHandles {
                 handles: abort_handles,
             }),
         };
         let ordered_configs: Arc<Vec<Receiver<HashMap<String, String>>>> =
             Arc::new(receivers.iter().map(|r| r.receiver.clone()).collect());
-        let changed_notifier = Arc::new(changed_notifier);
         update_merge(&bundle.merged_config, &changed_notifier, &ordered_configs).await;
         // Move all the receivers into spawned tasks to update the config
         for ConfigReceiver { name, mut receiver } in receivers {
