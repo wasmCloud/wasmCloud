@@ -66,6 +66,10 @@ pub struct InspectCliCommand {
     #[clap(long = "insecure-skip-tls-verify")]
     pub insecure_skip_tls_verify: bool,
 
+    /// Maximum number of concurrent chunks to download from an OCI registry
+    #[clap(long = "concurrency", default_value_t = 16)]
+    pub concurrency: usize,
+
     /// skip the local OCI cache and pull the artifact from the registry to inspect
     #[clap(long = "no-cache")]
     pub no_cache: bool,
@@ -98,6 +102,7 @@ pub async fn handle_command(
                 password: command.password.clone(),
                 insecure: command.insecure,
                 insecure_skip_tls_verify: command.insecure_skip_tls_verify,
+                concurrency: command.concurrency,
             },
         )
         .await?;
@@ -425,6 +430,7 @@ mod test {
             insecure_skip_tls_verify,
             no_cache,
             wit,
+            concurrency,
         } = inspect_long.command;
         assert_eq!(target, LOCAL);
         assert_eq!(digest.unwrap(), "sha256:blah");
@@ -433,6 +439,7 @@ mod test {
         assert!(!insecure_skip_tls_verify);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "secret");
+        assert_eq!(concurrency, 16);
         assert!(jwt_only);
         assert!(no_cache);
         assert!(!wit);
@@ -463,12 +470,14 @@ mod test {
             insecure_skip_tls_verify,
             no_cache,
             wit,
+            concurrency,
         } = inspect_short.command;
         assert_eq!(target, REMOTE);
         assert_eq!(digest.unwrap(), "sha256:blah");
         assert!(allow_latest);
         assert!(insecure);
         assert!(!insecure_skip_tls_verify);
+        assert_eq!(concurrency, 16);
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "secret");
         assert!(jwt_only);
@@ -502,6 +511,7 @@ mod test {
             insecure_skip_tls_verify,
             no_cache,
             wit,
+            concurrency,
         } = cmd.command;
         assert_eq!(target, SUBSCRIBER_OCI);
         assert_eq!(
@@ -510,6 +520,7 @@ mod test {
         );
         assert_eq!(user.unwrap(), "name");
         assert_eq!(password.unwrap(), "opensesame");
+        assert_eq!(concurrency, 16);
         assert!(allow_latest);
         assert!(insecure);
         assert!(!insecure_skip_tls_verify);
@@ -539,6 +550,7 @@ mod test {
             jwt_only,
             digest,
             allow_latest,
+            concurrency,
             user,
             password,
             insecure,
@@ -552,6 +564,7 @@ mod test {
             "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
         );
         assert_eq!(user.unwrap(), "name");
+        assert_eq!(concurrency, 16);
         assert_eq!(password.unwrap(), "opensesame");
         assert!(allow_latest);
         assert!(insecure);

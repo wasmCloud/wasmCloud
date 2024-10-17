@@ -84,6 +84,10 @@ pub struct InspectCommand {
     #[clap(long = "insecure-skip-tls-verify")]
     pub insecure_skip_tls_verify: bool,
 
+    /// Maximum number of concurrent chunks to download from an OCI registry
+    #[clap(long = "concurrency", default_value_t = 16)]
+    pub concurrency: usize,
+
     /// skip the local OCI cache
     #[clap(long = "no-cache")]
     pub(crate) no_cache: bool,
@@ -341,6 +345,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
             password: cmd.password,
             insecure: cmd.insecure,
             insecure_skip_tls_verify: cmd.insecure_skip_tls_verify,
+            concurrency: cmd.concurrency,
             no_cache: cmd.no_cache,
         }
     }
@@ -807,6 +812,7 @@ mod test {
                 insecure_skip_tls_verify,
                 no_cache,
                 wit,
+                concurrency,
             }) => {
                 assert_eq!(module, SUBSCRIBER_OCI);
                 assert_eq!(
@@ -815,6 +821,7 @@ mod test {
                 );
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
+                assert_eq!(concurrency, 16);
                 assert!(allow_latest);
                 assert!(insecure);
                 assert!(!insecure_skip_tls_verify);
@@ -853,6 +860,7 @@ mod test {
                 password,
                 insecure,
                 insecure_skip_tls_verify,
+                concurrency,
                 no_cache,
                 wit,
             }) => {
@@ -863,6 +871,7 @@ mod test {
                 );
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
+                assert_eq!(concurrency, 16);
                 assert!(allow_latest);
                 assert!(insecure);
                 assert!(insecure_skip_tls_verify);
