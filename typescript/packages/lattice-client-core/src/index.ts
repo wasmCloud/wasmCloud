@@ -1,5 +1,5 @@
 export {LatticeClient, type LatticeClientOptions} from './lattice-client';
-export {canConnect, getManifestFrom, getCombinedInventoryFromHosts} from './helpers';
+export {canConnect, getManifestFrom, getCombinedInventoryFromHostsAndProviders} from './helpers';
 export type {
   ApplicationSummary,
   ApplicationDetail,
@@ -13,6 +13,7 @@ export type {
   WasmCloudHostRef,
   WasmCloudLink,
   WasmCloudProvider,
+  WasmCloudProviderState
 } from '@/types';
 export type {LatticeConnection, LatticeConnectionStatus} from '@/connection/lattice-connection';
 export {NatsWsLatticeConnection} from '@/connection/nats-ws-lattice-connection';
