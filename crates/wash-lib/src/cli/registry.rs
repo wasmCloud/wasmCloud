@@ -81,9 +81,13 @@ pub struct RegistryPushCommand {
     #[clap(short = 'r', long = "registry", env = "WASH_REG_URL")]
     pub registry: Option<String>,
 
-    /// Path to config file, if omitted will default to a blank configuration
+    /// Path to OCI config file, if omitted will default to a blank configuration
     #[clap(short = 'c', long = "config")]
     pub config: Option<PathBuf>,
+
+    /// Path to wasmcloud.toml file to use to find registry configuration, defaults to searching
+    /// for a wasmcloud.toml file in the current directory
+    pub project_config: Option<PathBuf>,
 
     /// Allow latest artifact tags
     #[clap(long = "allow-latest")]
