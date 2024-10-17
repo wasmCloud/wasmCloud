@@ -8,6 +8,7 @@ The following document outlines how the wasmCloud project governance operates.
     - [wasmCloud Org Maintainers](#wasmcloud-org-maintainers)
     - [New Maintainer Onboarding](#new-maintainer-onboarding)
     - [Stepping down as a maintainer](#stepping-down-as-a-maintainer)
+    - [Taking a leave from being a maintainer](#taking-a-leave-from-being-a-maintainer)
   - [Decision Making at the wasmCloud org level](#decision-making-at-the-wasmcloud-org-level)
   - [Decision Making at the wasmCloud project level](#decision-making-at-the-wasmcloud-project-level)
   - [Code of Conduct](#code-of-conduct)
@@ -106,6 +107,28 @@ If an org maintainer steps down, the following steps should be taken in addition
   file via PR
 - Send an email to cncf-maintainer-changes@cncf.io noting that the maintainer has been removed and
   that they should be removed from the cncf-wasmCloud-maintainers@lists.cncf.io list
+
+### Taking a leave from being a maintainer
+
+There are many reasons why an active maintainer may need to take a break. Any maintainer of a
+wasmCloud project (including org maintainers) are welcome to take leave from being a maintainer, for
+any reason (which they are not required to disclose). At the end of the leave, they can resume their
+duties as a maintainer with no additional votes or governance. The maximum amount of leave is 6
+months (2 times the maximum amount of time a maintainer can be absent before being considered
+inactive). A leave can be extended for an additional 6 months beyond that based on a majority vote
+by the other project maintainers of the project to which they belong (i.e. if someone maintains the
+host, the host maintainers would make the decision). These decisions can be overriden by a
+super-majority of the org maintainers. If a maintainer is marked as being on leave and has not
+contacted other maintainers after 6 months, they will be moved to emeritus status in the same way as
+if they had been inactive.
+
+To take a break from being a maintainer, the maintainer should open a PR to mark themselves as "on
+leave" (in parenthesis next to their name) in the appropriate MAINTAINERS.md file or ask a fellow
+maintainer to do so if circumstances prevent them from doing it themselves. If possible (but not
+required), the maintainer should give an approximate length of leave in the PR. If the time is not
+specified, the "expected" length defaults to 6 months. 
+
+Upon returning from leave, the maintainer should open a PR to remove the "on leave" designation.
 
 ## Decision Making at the wasmCloud org level
 
