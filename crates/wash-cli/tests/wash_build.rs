@@ -540,6 +540,79 @@ async fn integration_build_handles_dashed_names() -> Result<()> {
     Ok(())
 }
 
+/// Ensure that wash build can handle absolute and relative paths changing for the
+/// project directory, build directory, WIT directory, and wasmcloud.toml file.
+#[tokio::test]
+#[cfg_attr(not(can_reach_ghcr_io), ignore = "ghcr.io is not reachable")]
+async fn integration_build_tinygo_component_separate_paths() -> Result<()> {
+    let test_setup = init_path(
+        /* component_name= */ "hello-world-tinygo",
+        /* template_name= */ "examples/golang/components/http-client-tinygo",
+    )
+    .await?;
+    let project_dir = test_setup.project_dir.clone();
+
+    // Change directory into the project directory
+    std::env::set_current_dir(&project_dir).context("failed to change to project dir")?;
+
+    // Rename the WIT directory
+    tokio::fs::rename("wit", "wow")
+        .await
+        .context("failed to rename wit directory")?;
+    // Move the wasmcloud.toml to a different directory
+    tokio::fs::remove_file("wasmcloud.toml")
+        .await
+        .context("failed to remove wasmcloud.toml")?;
+    tokio::fs::create_dir("config")
+        .await
+        .context("failed to create config directory")?;
+    tokio::fs::write(
+        "config/wasmcloud.toml",
+        r#"
+    name = "tinygo-moved"
+    version = "0.1.0"
+    language = "tinygo"
+    type = "component"
+    path = "../"
+    wit = "wow"
+    build = "artifacts"
+    
+    [component]
+    wit_world = "hello"
+    wasm_target = "wasm32-wasi"
+    "#,
+    )
+    .await
+    .context("failed to update wasmcloud.toml file content for test case")?;
+
+    // Make sure the go generate command uses the `wow` WIT directory
+    let tiny_go_main_dot_go = tokio::fs::read_to_string("hello.go")
+        .await
+        .context("failed to read tinygo hello.go")?;
+    let new_main_dot_go =
+        tiny_go_main_dot_go.replace("wit-bindgen tiny-go wit", "wit-bindgen tiny-go wow");
+    tokio::fs::write("hello.go", new_main_dot_go)
+        .await
+        .context("failed to write new main.go")?;
+
+    let status = test_setup
+        .base_command()
+        .args(["build", "-p", "config/wasmcloud.toml"])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to build project")?;
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("artifacts/tinygo-moved.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("artifacts/tinygo-moved_s.wasm");
+    assert!(signed_file.exists(), "signed file not found!");
+    let lock_file = project_dir.join(LOCK_FILE_NAME);
+    assert!(lock_file.exists(), "lock file not found!");
+    Ok(())
+}
+
 // TODO(thomastaylor312): Reenable this test once we have pushed all wit to OCI
 
 // #[tokio::test]

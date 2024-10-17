@@ -59,10 +59,7 @@ pub(crate) async fn build_provider(
         return Ok(provider_path_buf);
     };
 
-    let destination = common_config
-        .path
-        .join("build")
-        .join(format!("{bin_name}.par.gz"));
+    let destination = common_config.build_path.join(format!("{bin_name}.par.gz"));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
