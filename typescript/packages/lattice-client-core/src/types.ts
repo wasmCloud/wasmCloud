@@ -21,6 +21,7 @@ export type ControlResponse<ResponseType = never> = [ResponseType] extends [neve
       response: ResponseType;
     };
 
+export type WasmCloudProviderState = "Pending" | "Failed" | "Running";
 export type WasmCloudComponent = {
   id: string;
   name?: string;
@@ -29,14 +30,15 @@ export type WasmCloudComponent = {
   annotations: Record<string, string>;
   max_instances: number;
   revision: number;
+  state?: WasmCloudProviderState
 };
 
 export type WasmCloudProvider = {
   id: string;
   name?: string;
-  image_ref?: string;
+  reference?: string;
   annotations: Record<string, string>;
-  hosts: string[];
+  hosts: Record<string, WasmCloudProviderState>;
 };
 
 export type WasmCloudLink = {
