@@ -45,12 +45,6 @@ impl TypeConfig {
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ComponentConfig {
-    /// The list of provider claims that this component requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
-    #[serde(default)]
-    pub claims: Vec<String>,
-    /// Whether to push to the registry insecurely. Defaults to false.
-    #[serde(default)]
-    pub push_insecure: bool,
     /// The directory to store the private signing keys in.
     #[serde(default = "default_key_directory")]
     pub key_directory: PathBuf,
