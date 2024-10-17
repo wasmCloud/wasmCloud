@@ -92,7 +92,7 @@ pub async fn build_project(
             wasm_pkg_core::config::Config::default()
         };
 
-        monkey_patch_fetch_logging(wkg_conf, &config.common.path, &mut lock, client)
+        monkey_patch_fetch_logging(wkg_conf, &config.common.wit_path, &mut lock, client)
             .await
             .context("Failed to patch logging dependency")?;
 
@@ -128,11 +128,10 @@ pub async fn build_project(
 #[doc(hidden)]
 pub async fn monkey_patch_fetch_logging(
     mut wkg_conf: wasm_pkg_core::config::Config,
-    project_path: impl AsRef<Path>,
+    wit_dir: impl AsRef<Path>,
     lock: &mut LockFile,
     client: CachingClient<FileCache>,
 ) -> Result<()> {
-    let wit_dir = project_path.as_ref().join("wit");
     let wasi_logging_name: PackageRef = "wasi:logging".parse().unwrap();
     // This is inefficient since we have to load this again when we fetch deps, but we need to do
     // this to get the list of packages from the package
@@ -171,7 +170,10 @@ pub async fn monkey_patch_fetch_logging(
 
     wasm_pkg_core::wit::fetch_dependencies(
         &wkg_conf,
-        patch_dir.as_ref().map(|t| t.path()).unwrap_or(&wit_dir),
+        patch_dir
+            .as_ref()
+            .map(|t| t.path())
+            .unwrap_or(wit_dir.as_ref()),
         lock,
         client,
         OutputType::Wit,
@@ -192,7 +194,7 @@ pub async fn monkey_patch_fetch_logging(
             .await
             .context("Unable to write patched logging dependency")?;
         // Remove the destination deps
-        let dest_deps_dir = wit_dir.join("deps");
+        let dest_deps_dir = wit_dir.as_ref().join("deps");
         match tokio::fs::remove_dir_all(&dest_deps_dir).await {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

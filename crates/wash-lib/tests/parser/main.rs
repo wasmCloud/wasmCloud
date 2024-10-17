@@ -28,12 +28,8 @@ fn rust_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -49,6 +45,14 @@ fn rust_component() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -79,12 +83,8 @@ fn rust_component_with_revision() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
@@ -101,6 +101,14 @@ fn rust_component_with_revision() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -153,12 +161,8 @@ fn tinygo_component_module() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -174,6 +178,14 @@ fn tinygo_component_module() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -192,12 +204,8 @@ fn tinygo_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::WasiP2,
             ..ComponentConfig::default()
@@ -228,60 +236,6 @@ fn get_full_path(path: &str) -> String {
         Ok(path) => path.to_str().unwrap().to_string(),
         Err(_) => panic!("get_full_path helper error. Could not find path: {path}"),
     }
-}
-
-#[test]
-fn no_component_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_component.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "missing component config in {}",
-            get_full_path("./tests/parser/files/no_component.toml")
-        ),
-        err.to_string().as_str()
-    );
-}
-
-#[test]
-fn no_provider_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_provider.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "missing provider config in {}",
-            get_full_path("./tests/parser/files/no_provider.toml")
-        ),
-        err.to_string().as_str()
-    );
-}
-
-#[test]
-fn no_interface_config() {
-    let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/no_interface.toml")),
-        None,
-    );
-
-    let err = assert_err!(result);
-
-    assert_eq!(
-        format!(
-            "unknown project type: interface in {}",
-            get_full_path("./tests/parser/files/no_interface.toml")
-        ),
-        err.to_string().as_str()
-    );
 }
 
 #[test]
@@ -370,12 +324,8 @@ fn minimal_rust_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: expected_key_dir,
             destination: None,
-            call_alias: None,
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -390,6 +340,14 @@ fn minimal_rust_component() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
+                .join("wit"),
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
@@ -424,12 +382,8 @@ fn cargo_toml_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: expected_key_dir,
             destination: None,
-            call_alias: None,
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -444,6 +398,14 @@ fn cargo_toml_component() {
             path: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/withcargotoml")
+                .canonicalize()
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/withcargotoml")
+                .canonicalize()
+                .unwrap()
+                .join("wit"),
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
@@ -471,7 +433,6 @@ fn minimal_rust_component_p2() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
             key_directory: expected_default_key_dir,
             wasm_target: WasmTarget::WasiP2,
             wit_world: Some("test-world".to_string()),
@@ -535,5 +496,51 @@ fn tags() {
             tags,
             ..
         }) if tags == Some(HashSet::from(["test".into(), "wasmcloud.com/experimental".into()])),
+    ));
+}
+
+/// Projects with overridden paths should be properly handled
+#[test]
+fn separate_project_paths() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/separate_project_paths.toml",
+        )),
+        None,
+    );
+    let config = assert_ok!(result);
+    // Different project path handled
+    assert_eq!(
+        config.common.path,
+        PathBuf::from("./tests/parser")
+            .canonicalize()
+            .expect("failed to canonicalize test path")
+    );
+    // Absolute paths properly handled
+    assert_eq!(
+        config.common.build_path,
+        PathBuf::from("/tmp/some/other/build")
+    );
+    assert_eq!(config.common.wit_path, PathBuf::from("/tmp/nested/wit"));
+
+    // Relative paths properly handled
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Component(ComponentConfig {
+            build_artifact: Some(build_artifact),
+            destination: Some(destination),
+            ..
+        }) if build_artifact == PathBuf::from("build/testcomponent_raw.wasm")
+        && destination == PathBuf::from("./build/testcomponent.wasm")
+    ));
+
+    assert!(matches!(
+        config.language,
+        LanguageConfig::Rust(RustConfig {
+            cargo_path: Some(cargo_path),
+            target_path: Some(target_path),
+            debug: false,
+        }) if cargo_path == PathBuf::from("../cargo")
+        && target_path == PathBuf::from("./target")
     ));
 }

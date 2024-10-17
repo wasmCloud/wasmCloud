@@ -316,7 +316,7 @@ impl ComponentMetadata {
                     .collect::<Vec<String>>(),
                 None => self.tags,
             },
-            call_alias: self.call_alias.or(component_config.call_alias),
+            call_alias: self.call_alias,
             common: GenerateCommon {
                 directory: self
                     .common
@@ -1222,14 +1222,8 @@ mod test {
         assert_eq!(
             project_config.project_type,
             TypeConfig::Component(ComponentConfig {
-                claims: vec![
-                    "wasmcloud:httpserver".to_string(),
-                    "wasmcloud:httpclient".to_string(),
-                    "lexcorp:quantum-simulator".to_string()
-                ],
                 key_directory: PathBuf::from("./keys"),
                 destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-                call_alias: Some("test-component".to_string()),
                 tags: Some(HashSet::from([
                     "wasmcloud.com/experimental".into(),
                     "test".into(),
@@ -1247,6 +1241,14 @@ mod test {
                 path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
+                build_path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap()
+                    .join("build"),
+                wit_path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap()
+                    .join("wit"),
                 wasm_bin_name: None,
                 registry: RegistryConfig::default(),
             }
@@ -1327,7 +1329,6 @@ mod test {
                     .contains(&"wasmcloud.com/experimental".to_string())); // from project_config
                 assert_eq!(cmd.metadata.rev.unwrap(), 777);
                 assert_eq!(cmd.metadata.ver.unwrap(), "0.2.0");
-                assert_eq!(cmd.metadata.call_alias.unwrap(), "test-component"); // from project_config
             }
 
             _ => unreachable!("claims constructed incorrect command"),
@@ -1378,10 +1379,18 @@ mod test {
                 name: "testprovider".to_string(),
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
+                wasm_bin_name: None,
                 path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
-                wasm_bin_name: None,
+                build_path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap()
+                    .join("build"),
+                wit_path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap()
+                    .join("wit"),
                 registry: RegistryConfig::default(),
             }
         );

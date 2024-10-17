@@ -83,10 +83,13 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             let component_path = if command.sign_only {
                 std::env::set_current_dir(&config.common.path)?;
                 let component_wasm_path =
-                    if let Some(path) = component_config.build_artifact.clone() {
-                        path
+                    if let Some(path) = component_config.build_artifact.as_ref() {
+                        path.clone()
                     } else {
-                        PathBuf::from(format!("build/{}.wasm", config.common.wasm_bin_name()))
+                        config
+                            .common
+                            .build_path
+                            .join(format!("{}.wasm", config.common.wasm_bin_name()))
                     };
                 let signed_path = sign_component_wasm(
                     &config.common,
@@ -95,7 +98,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     &sign_config.context("cannot supply --build-only and --sign-only")?,
                     component_wasm_path,
                 )?;
-                config.common.path.join(signed_path)
+                config.common.build_path.join(signed_path)
             } else {
                 build_project(
                     &config,
