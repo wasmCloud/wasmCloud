@@ -201,18 +201,23 @@ async fn build_rust_component(
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
+    // Build for a specified target if provided, or the default rust target
+    let mut build_args = Vec::with_capacity(4);
+    build_args.push("build");
+
+    if !rust_config.debug {
+        build_args.push("--release");
+    }
+
     let build_target: &str = rust_config.build_target(&component_config.wasm_target);
-    let result = command
-        .args(["build", "--release", "--target", build_target])
-        .status()
-        .await
-        .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                anyhow!("{:?} command is not found", command.as_std().get_program())
-            } else {
-                anyhow!(e)
-            }
-        })?;
+    build_args.extend_from_slice(&["--target", build_target]);
+    let result = command.args(build_args).status().await.map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            anyhow!("{:?} command is not found", command.as_std().get_program())
+        } else {
+            anyhow!(e)
+        }
+    })?;
 
     if !result.success() {
         bail!("Compiling component failed: {}", result.to_string())
@@ -234,7 +239,11 @@ async fn build_rust_component(
         .clone()
         .unwrap_or_else(|| PathBuf::from(metadata.target_directory.as_std_path()));
     wasm_path_buf.push(build_target);
-    wasm_path_buf.push("release");
+    if rust_config.debug {
+        wasm_path_buf.push("debug");
+    } else {
+        wasm_path_buf.push("release");
+    }
     wasm_path_buf.push(format!("{wasm_bin_name}.wasm"));
 
     // Ensure the file exists, normalize uses the fs and file must exist
@@ -247,7 +256,7 @@ async fn build_rust_component(
         ),
     };
 
-    // move the file out into the build/ folder for parity with tinygo and convienience for users.
+    // move the file out into the build/ folder for parity with tinygo and convenience for users.
     let copied_wasm_file = PathBuf::from(format!("build/{wasm_bin_name}.wasm"));
     if let Some(p) = copied_wasm_file.parent() {
         fs::create_dir_all(p)?;
