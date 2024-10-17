@@ -1242,6 +1242,9 @@ mod test {
                 path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
+                wit_path: PathBuf::from("./tests/parser/files/wit/")
+                    .canonicalize()
+                    .unwrap(),
                 wasm_bin_name: None,
                 registry: RegistryConfig::default(),
             }
@@ -1377,6 +1380,9 @@ mod test {
                     .canonicalize()
                     .unwrap(),
                 wasm_bin_name: None,
+                wit_path: PathBuf::from("./tests/parser/files/wit/")
+                    .canonicalize()
+                    .unwrap(),
                 registry: RegistryConfig::default(),
             }
         );

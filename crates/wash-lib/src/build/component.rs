@@ -710,6 +710,7 @@ func main() {}
                     name: "test".into(),
                     version: Version::parse("0.1.0")?,
                     revision: 0,
+                    wit_path: project_dir.path().join("wit"),
                     path: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
                     registry: RegistryConfig::default(),

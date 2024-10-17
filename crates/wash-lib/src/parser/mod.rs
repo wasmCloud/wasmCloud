@@ -139,6 +139,9 @@ pub struct RustConfig {
 pub struct RegistryConfig {
     pub url: Option<String>,
     pub credentials: Option<PathBuf>,
+    /// Whether or not to push to the registry insecurely with http
+    #[serde(default)]
+    pub push_insecure: bool,
 }
 
 /// Configuration common amoung all project types & languages.
@@ -150,8 +153,11 @@ pub struct CommonConfig {
     pub version: Version,
     /// Monotonically increasing revision number
     pub revision: i32,
-    /// Path to the project directory to determine where built and signed artifacts should be
+    /// Path to the project root to determine where build commands should be run.
     pub path: PathBuf,
+    /// Path to the directory where the WIT world and dependencies can be found. Defaults to a `wit`
+    /// directory in the project root.
+    pub wit_path: PathBuf,
     /// Expected name of the wasm module binary that will be generated
     /// (if not present, name is expected to be used as a fallback)
     pub wasm_bin_name: Option<String>,
@@ -667,7 +673,7 @@ pub struct DevConfig {
     pub overrides: InterfaceOverrides,
 }
 
-/// Gets the wasmCloud project (component, provider, or interface) config.
+/// Gets the wasmCloud project (component or provider) config.
 ///
 /// The config can come from multiple sources: a specific toml file path, a folder with a `wasmcloud.toml` file inside it, or by default it looks for a `wasmcloud.toml` file in the current directory.
 ///
@@ -678,7 +684,9 @@ pub struct DevConfig {
 /// * `opt_path` - The path to the config file. If None, it will look for a wasmcloud.toml file in the current directory.
 /// * `use_env` - Whether to use the environment variables or not. If false, it will not attempt to use environment variables. Defaults to true.
 pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<ProjectConfig> {
-    let mut path = opt_path.unwrap_or_else(|| PathBuf::from("."));
+    let mut path = opt_path
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     if !path.exists() {
         bail!("path {} does not exist", path.display());
@@ -769,6 +777,14 @@ pub struct WasmcloudDotToml {
     #[serde(default)]
     pub revision: i32,
 
+    /// Path to the directory where the project is located. Defaults to the current directory.
+    /// This path is where build commands will be run.
+    pub path: Option<PathBuf>,
+
+    /// Path to the directory where the WIT world and dependencies can be found. Defaults to a `wit`
+    /// directory in the project root.
+    pub wit: Option<PathBuf>,
+
     /// Configuration relevant to components
     #[serde(default)]
     pub component: ComponentConfig,
@@ -805,6 +821,7 @@ impl WasmcloudDotToml {
         name: Option<String>,
         version: Option<Version>,
         revision: i32,
+        wit_path: PathBuf,
         registry: RegistryConfig,
     ) -> Result<CommonConfig> {
         let cargo_toml_path = project_path.join("Cargo.toml");
@@ -845,6 +862,7 @@ impl WasmcloudDotToml {
             name,
             version,
             revision,
+            wit_path,
             path: project_path,
             wasm_bin_name,
             registry,
@@ -865,6 +883,10 @@ impl WasmcloudDotToml {
             other => LanguageConfig::Other(other.to_string()),
         };
 
+        // Use the provided `path` in the wasmcloud.toml file, or default to the current directory
+        let project_path = self.path.unwrap_or(project_path);
+        let wit_path = self.wit.unwrap_or_else(|| project_path.join("wit"));
+
         let common_config = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
@@ -872,6 +894,7 @@ impl WasmcloudDotToml {
                     self.name.clone(),
                     self.version.clone(),
                     self.revision,
+                    wit_path.clone(),
                     self.registry.clone(),
                 ) {
                     // Successfully built with cargo information
@@ -884,6 +907,7 @@ impl WasmcloudDotToml {
                         revision: self.revision,
                         path: project_path,
                         wasm_bin_name: None,
+                        wit_path,
                         registry: self.registry,
                     },
 
@@ -904,6 +928,7 @@ impl WasmcloudDotToml {
                     revision: self.revision,
                     path: project_path,
                     wasm_bin_name: None,
+                    wit_path,
                     registry: self.registry,
                 }
             }

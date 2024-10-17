@@ -10,7 +10,7 @@ use tracing::warn;
 
 use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
 use wash_lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
-use wash_lib::parser::get_config;
+use wash_lib::parser::{get_config, ProjectConfig};
 use wash_lib::registry::{
     identify_artifact, pull_oci_artifact, push_oci_artifact, ArtifactType, OciPullOptions,
     OciPushOptions,
@@ -91,10 +91,11 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
+    let project_config = get_config(cmd.project_config, Some(true)).ok();
     let image: Reference = resolve_artifact_ref(
         &cmd.url,
         &cmd.registry.unwrap_or_default(),
-        cmd.config.clone(),
+        project_config.as_ref(),
     )?;
     let artifact_url = image.whole();
     if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
@@ -128,7 +129,8 @@ pub async fn registry_push(
             allow_latest: cmd.allow_latest,
             user: credentials.username().map(String::from),
             password: credentials.password().map(String::from),
-            insecure: cmd.opts.insecure,
+            insecure: cmd.opts.insecure
+                || project_config.is_some_and(|c| c.common.registry.push_insecure),
             insecure_skip_tls_verify: cmd.opts.insecure_skip_tls_verify,
             annotations,
         },
@@ -153,7 +155,7 @@ pub async fn registry_push(
 fn resolve_artifact_ref(
     url: &str,
     registry: &str,
-    project_config: Option<PathBuf>,
+    project_config: Option<&ProjectConfig>,
 ) -> Result<Reference> {
     // NOTE: Image URLs must be all lower case for `oci_client::Reference` to parse them properly
     let url = url.trim().to_ascii_lowercase();
@@ -167,35 +169,32 @@ fn resolve_artifact_ref(
         return Ok(image);
     }
 
-    if !url.is_empty() && !registry.is_empty() {
-        let image: Reference = format!("{}/{}", registry, url)
-            .parse()
-            .context("failed to parse artifact url from specified registry and repository")?;
-
-        return Ok(image);
-    }
-
-    if !url.is_empty() && registry.is_empty() {
-        let project_config = get_config(project_config, Some(true))?;
-        let registry = project_config
-            .common
-            .registry
-            .url
-            .clone()
-            .unwrap_or_default();
-
-        if registry.is_empty() {
-            bail!("Missing or invalid registry url configuration")
+    match project_config {
+        _ if !url.is_empty() && registry.is_empty() => {
+            let image: Reference = format!("{}/{}", registry, url)
+                .parse()
+                .context("failed to parse artifact url from specified registry and repository")?;
+            Ok(image)
         }
+        Some(project_config) if !url.is_empty() && registry.is_empty() => {
+            let registry = project_config
+                .common
+                .registry
+                .url
+                .clone()
+                .unwrap_or_default();
 
-        let image: Reference = format!("{}/{}", registry, url).parse().context(
-            "failed to parse artifact url from specified repository and registry url configuration",
-        )?;
+            if registry.is_empty() {
+                bail!("Missing or invalid registry url configuration")
+            }
 
-        return Ok(image);
+            let image: Reference = format!("{}/{}", registry, url).parse().context(
+                "failed to parse artifact url from specified repository and registry url configuration",
+            )?;
+            Ok(image)
+        }
+        _ => bail!("Unable to resolve artifact url from specified registry and repository"),
     }
-
-    bail!("Unable to resolve artifact url from specified registry and repository")
 }
 
 async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
