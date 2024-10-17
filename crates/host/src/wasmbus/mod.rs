@@ -1062,12 +1062,21 @@ impl Host {
                 // epoch ticks operate on a second precision
                 now.checked_add(Duration::from_secs(1)).unwrap_or(now)
             });
-            // NOTE: Epoch interrupt thread will only stop once there are no more references to the engine
-            drop(host);
-            match timeout_at(deadline, epoch_end).await {
+            epoch_end
+                .send(())
+                .map_err(|_| anyhow::anyhow!("failed to stop epoch interrupt thread"))?;
+            match timeout_at(deadline, async {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    if epoch.is_finished() {
+                        break;
+                    }
+                }
+            })
+            .await
+            {
                 Err(_) => bail!("epoch interrupt thread timed out"),
-                Ok(Err(_)) => bail!("epoch interrupt end receiver dropped"),
-                Ok(Ok(())) => {
+                Ok(()) => {
                     if let Err(_err) = epoch.join() {
                         bail!("epoch interrupt thread panicked")
                     }
