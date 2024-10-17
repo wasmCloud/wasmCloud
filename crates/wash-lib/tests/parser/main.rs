@@ -28,9 +28,6 @@ fn rust_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
@@ -47,6 +44,9 @@ fn rust_component() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wit_path: PathBuf::from("./tests/parser/files/wit/")
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
@@ -79,9 +79,6 @@ fn rust_component_with_revision() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
@@ -99,6 +96,9 @@ fn rust_component_with_revision() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 666,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wit_path: PathBuf::from("./tests/parser/files/wit/")
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
@@ -153,9 +153,6 @@ fn tinygo_component_module() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
@@ -172,6 +169,9 @@ fn tinygo_component_module() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wit_path: PathBuf::from("./tests/parser/files/wit/")
                 .canonicalize()
                 .unwrap(),
             wasm_bin_name: None,
@@ -192,9 +192,6 @@ fn tinygo_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
             call_alias: Some("testcomponent".to_string()),
@@ -316,9 +313,6 @@ fn minimal_rust_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: expected_key_dir,
             destination: None,
             call_alias: None,
@@ -334,6 +328,9 @@ fn minimal_rust_component() {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wit_path: PathBuf::from("./tests/parser/files/wit/")
                 .canonicalize()
                 .unwrap(),
             revision: 0,
@@ -370,9 +367,6 @@ fn cargo_toml_component() {
     assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
-
-            push_insecure: false,
             key_directory: expected_key_dir,
             destination: None,
             call_alias: None,
@@ -388,6 +382,9 @@ fn cargo_toml_component() {
             name: "withcargotoml".to_string(),
             version: Version::parse("0.200.0").unwrap(),
             path: PathBuf::from("./tests/parser/files/withcargotoml")
+                .canonicalize()
+                .unwrap(),
+            wit_path: PathBuf::from("./tests/parser/files/wit/")
                 .canonicalize()
                 .unwrap(),
             revision: 0,
@@ -414,9 +411,9 @@ fn minimal_rust_component_p2() {
         etcetera::home_dir().expect("Unable to determine the user's home directory");
     expected_default_key_dir.push(".wash/keys");
 
+    assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
-            claims: vec!["wasmcloud:httpserver".to_string()],
             key_directory: expected_default_key_dir,
             wasm_target: WasmTarget::WasiP2,
             wit_world: Some("test-world".to_string()),
