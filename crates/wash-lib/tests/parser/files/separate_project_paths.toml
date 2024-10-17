@@ -4,11 +4,10 @@ language = "rust"
 type = "component"
 name = "testcomponent"
 version = "0.1.0"
-# Absolute paths
-path = "/tmp/myprojectpath"
+path = "../"
 # Absolute paths to other directories
-build = "/tmp/myprojectpath/some/other/build"
-wit = "/tmp/myprojectpath/nested/wit"
+build = "/tmp/some/other/build"
+wit = "/tmp/nested/wit"
 
 [component]
 # Relative paths (to the project path)

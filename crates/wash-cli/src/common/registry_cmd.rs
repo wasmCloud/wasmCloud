@@ -170,7 +170,7 @@ fn resolve_artifact_ref(
     }
 
     match project_config {
-        _ if !url.is_empty() && registry.is_empty() => {
+        _ if !url.is_empty() && !registry.is_empty() => {
             let image: Reference = format!("{}/{}", registry, url)
                 .parse()
                 .context("failed to parse artifact url from specified registry and repository")?;

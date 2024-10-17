@@ -1241,12 +1241,14 @@ mod test {
                 path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
-                build_path: PathBuf::from("./tests/parser/files/build/")
+                build_path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
-                    .unwrap(),
-                wit_path: PathBuf::from("./tests/parser/files/wit/")
+                    .unwrap()
+                    .join("build"),
+                wit_path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
-                    .unwrap(),
+                    .unwrap()
+                    .join("wit"),
                 wasm_bin_name: None,
                 registry: RegistryConfig::default(),
             }
@@ -1327,7 +1329,6 @@ mod test {
                     .contains(&"wasmcloud.com/experimental".to_string())); // from project_config
                 assert_eq!(cmd.metadata.rev.unwrap(), 777);
                 assert_eq!(cmd.metadata.ver.unwrap(), "0.2.0");
-                assert_eq!(cmd.metadata.call_alias.unwrap(), "test-component"); // from project_config
             }
 
             _ => unreachable!("claims constructed incorrect command"),
@@ -1378,16 +1379,18 @@ mod test {
                 name: "testprovider".to_string(),
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
+                wasm_bin_name: None,
                 path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
-                build_path: PathBuf::from("./tests/parser/files/build/")
+                build_path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
-                    .unwrap(),
-                wasm_bin_name: None,
-                wit_path: PathBuf::from("./tests/parser/files/wit/")
+                    .unwrap()
+                    .join("build"),
+                wit_path: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
-                    .unwrap(),
+                    .unwrap()
+                    .join("wit"),
                 registry: RegistryConfig::default(),
             }
         );

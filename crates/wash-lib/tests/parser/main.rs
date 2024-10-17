@@ -45,12 +45,14 @@ fn rust_component() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/build/")
+            build_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
-            wit_path: PathBuf::from("./tests/parser/files/wit/")
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -99,12 +101,14 @@ fn rust_component_with_revision() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/build/")
+            build_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
-            wit_path: PathBuf::from("./tests/parser/files/wit/")
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -174,12 +178,14 @@ fn tinygo_component_module() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/build/")
+            build_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
-            wit_path: PathBuf::from("./tests/parser/files/wit/")
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
+                .unwrap()
+                .join("wit"),
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
         }
@@ -334,12 +340,14 @@ fn minimal_rust_component() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/build/")
+            build_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
-            wit_path: PathBuf::from("./tests/parser/files/wit/")
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
-                .unwrap(),
+                .unwrap()
+                .join("wit"),
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
@@ -390,12 +398,14 @@ fn cargo_toml_component() {
             path: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/build/")
+            build_path: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
-                .unwrap(),
-            wit_path: PathBuf::from("./tests/parser/files/wit/")
+                .unwrap()
+                .join("build"),
+            wit_path: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
-                .unwrap(),
+                .unwrap()
+                .join("wit"),
             revision: 0,
             wasm_bin_name: None,
             registry: RegistryConfig::default(),
@@ -499,16 +509,19 @@ fn separate_project_paths() {
         None,
     );
     let config = assert_ok!(result);
+    // Different project path handled
+    assert_eq!(
+        config.common.path,
+        PathBuf::from("./tests/parser")
+            .canonicalize()
+            .expect("failed to canonicalize test path")
+    );
     // Absolute paths properly handled
-    assert_eq!(config.common.path, PathBuf::from("/tmp/myprojectpath"));
     assert_eq!(
         config.common.build_path,
-        PathBuf::from("/tmp/myprojectpath/some/other/build")
+        PathBuf::from("/tmp/some/other/build")
     );
-    assert_eq!(
-        config.common.wit_path,
-        PathBuf::from("/tmp/myprojectpath/nested/wit")
-    );
+    assert_eq!(config.common.wit_path, PathBuf::from("/tmp/nested/wit"));
 
     // Relative paths properly handled
     assert!(matches!(
