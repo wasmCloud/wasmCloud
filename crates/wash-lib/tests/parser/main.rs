@@ -30,7 +30,6 @@ fn rust_component() {
         TypeConfig::Component(ComponentConfig {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -44,6 +43,9 @@ fn rust_component() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/build/")
                 .canonicalize()
                 .unwrap(),
             wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -81,7 +83,6 @@ fn rust_component_with_revision() {
         TypeConfig::Component(ComponentConfig {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
@@ -96,6 +97,9 @@ fn rust_component_with_revision() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 666,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/build/")
                 .canonicalize()
                 .unwrap(),
             wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -155,7 +159,6 @@ fn tinygo_component_module() {
         TypeConfig::Component(ComponentConfig {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -169,6 +172,9 @@ fn tinygo_component_module() {
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/build/")
                 .canonicalize()
                 .unwrap(),
             wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -194,7 +200,6 @@ fn tinygo_component() {
         TypeConfig::Component(ComponentConfig {
             key_directory: PathBuf::from("./keys"),
             destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-            call_alias: Some("testcomponent".to_string()),
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::WasiP2,
             ..ComponentConfig::default()
@@ -315,7 +320,6 @@ fn minimal_rust_component() {
         TypeConfig::Component(ComponentConfig {
             key_directory: expected_key_dir,
             destination: None,
-            call_alias: None,
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -328,6 +332,9 @@ fn minimal_rust_component() {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/build/")
                 .canonicalize()
                 .unwrap(),
             wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -369,7 +376,6 @@ fn cargo_toml_component() {
         TypeConfig::Component(ComponentConfig {
             key_directory: expected_key_dir,
             destination: None,
-            call_alias: None,
             wasip1_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             ..ComponentConfig::default()
@@ -382,6 +388,9 @@ fn cargo_toml_component() {
             name: "withcargotoml".to_string(),
             version: Version::parse("0.200.0").unwrap(),
             path: PathBuf::from("./tests/parser/files/withcargotoml")
+                .canonicalize()
+                .unwrap(),
+            build_path: PathBuf::from("./tests/parser/files/build/")
                 .canonicalize()
                 .unwrap(),
             wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -477,5 +486,48 @@ fn tags() {
             tags,
             ..
         }) if tags == Some(HashSet::from(["test".into(), "wasmcloud.com/experimental".into()])),
+    ));
+}
+
+/// Projects with overridden paths should be properly handled
+#[test]
+fn separate_project_paths() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/separate_project_paths.toml",
+        )),
+        None,
+    );
+    let config = assert_ok!(result);
+    // Absolute paths properly handled
+    assert_eq!(config.common.path, PathBuf::from("/tmp/myprojectpath"));
+    assert_eq!(
+        config.common.build_path,
+        PathBuf::from("/tmp/myprojectpath/some/other/build")
+    );
+    assert_eq!(
+        config.common.wit_path,
+        PathBuf::from("/tmp/myprojectpath/nested/wit")
+    );
+
+    // Relative paths properly handled
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Component(ComponentConfig {
+            build_artifact: Some(build_artifact),
+            destination: Some(destination),
+            ..
+        }) if build_artifact == PathBuf::from("build/testcomponent_raw.wasm")
+        && destination == PathBuf::from("./build/testcomponent.wasm")
+    ));
+
+    assert!(matches!(
+        config.language,
+        LanguageConfig::Rust(RustConfig {
+            cargo_path: Some(cargo_path),
+            target_path: Some(target_path),
+            debug: false,
+        }) if cargo_path == PathBuf::from("../cargo")
+        && target_path == PathBuf::from("./target")
     ));
 }
