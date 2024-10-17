@@ -254,21 +254,13 @@ Differences are noted below.
 
 ## Proposing an Idea
 
-Before proposing a new idea to a wasmCloud project, please make sure to write up an [Architectural
-Decision Record](https://wasmcloud.github.io/adr/). An Architectural Decision Record is a design
-document that describes a new feature for a wasmCloud project. The proposal should provide a concise
+Before proposing a new idea to a wasmCloud project, please make sure to write up a [Request For Comments (RFC)]([https://wasmcloud.github.io/adr/](https://github.com/wasmCloud/wasmCloud/issues/new?assignees=&labels=RFC,rfc-proposed&projects=&template=rfc-template.yaml&title=%5BRFC%5D+%3Ctitle%3E)). An RFC is a design document that describes a new feature for a wasmCloud project. The proposal should provide a concise
 technical specification and rationale for the feature.
 
 It is also worth considering vetting your idea with the community via Slack. Vetting an idea
 publicly before going as far as writing a proposal is meant to save the potential author time.
 
-ADRs are submitted to the [wasmcloud/adr repository](https://github.com/wasmCloud/adr/tree/gh-pages)
-(submitted against the `gh-pages` branch). See
-[ADR0000](https://wasmcloud.github.io/adr/0000-use-markdown-architectural-decision-records.html) for
-a the specific structure chosen and the [provided
-template](https://wasmcloud.github.io/adr/template.html) to write your own
-
-After your proposal has been approved, you can go ahead and get started implementing it!
+After your proposal has been approved (with an `rfc-accepted` label), you can go ahead and get started implementing it! Once your RFC is implemented and integrated into wasmCloud, the maintainers may ask you to write an [Architectural Decision Log (ADR)](https://github.com/wasmCloud/wasmCloud/blob/main/adr) that formally captures the RFC. Please refer to [ADR-0012](https://github.com/wasmCloud/wasmCloud/blob/main/adr/0012-rfc-management.md#decision-outcome) for how to write an ADR, and don't hesitate to ask for a template to get started.
 
 ## Labels
 
