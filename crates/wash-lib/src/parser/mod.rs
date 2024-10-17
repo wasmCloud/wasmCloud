@@ -48,8 +48,6 @@ pub struct ComponentConfig {
     /// The directory to store the private signing keys in.
     #[serde(default = "default_key_directory")]
     pub key_directory: PathBuf,
-    /// The call alias of the component.
-    pub call_alias: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown" (a WASM core module).
     #[serde(default, deserialize_with = "wasm_target")]
     pub wasm_target: WasmTarget,
@@ -155,6 +153,9 @@ pub struct CommonConfig {
     pub revision: i32,
     /// Path to the project root to determine where build commands should be run.
     pub path: PathBuf,
+    /// Path to the directory where built artifacts should be written. Defaults to a `build` directory
+    /// in the project root.
+    pub build_path: PathBuf,
     /// Path to the directory where the WIT world and dependencies can be found. Defaults to a `wit`
     /// directory in the project root.
     pub wit_path: PathBuf,
@@ -785,6 +786,10 @@ pub struct WasmcloudDotToml {
     /// directory in the project root.
     pub wit: Option<PathBuf>,
 
+    /// Path to the directory where the built artifacts should be written. Defaults to a `build`
+    /// directory in the project root.
+    pub build: Option<PathBuf>,
+
     /// Configuration relevant to components
     #[serde(default)]
     pub component: ComponentConfig,
@@ -817,14 +822,15 @@ pub struct WasmcloudDotToml {
 impl WasmcloudDotToml {
     // Given a path to a valid cargo project, build an common_config enriched with Rust-specific information
     fn build_common_config_from_cargo_project(
-        project_path: PathBuf,
+        path: PathBuf,
+        build_path: PathBuf,
+        wit_path: PathBuf,
         name: Option<String>,
         version: Option<Version>,
         revision: i32,
-        wit_path: PathBuf,
         registry: RegistryConfig,
     ) -> Result<CommonConfig> {
-        let cargo_toml_path = project_path.join("Cargo.toml");
+        let cargo_toml_path = path.join("Cargo.toml");
         if !cargo_toml_path.is_file() {
             bail!(
                 "missing/invalid Cargo.toml path [{}]",
@@ -836,7 +842,7 @@ impl WasmcloudDotToml {
         let mut cargo_toml = Manifest::from_path(cargo_toml_path)?;
 
         // Populate Manifest with lib/bin information
-        cargo_toml.complete_from_path(&project_path)?;
+        cargo_toml.complete_from_path(&path)?;
 
         let cargo_pkg = cargo_toml
             .package
@@ -863,7 +869,8 @@ impl WasmcloudDotToml {
             version,
             revision,
             wit_path,
-            path: project_path,
+            build_path,
+            path,
             wasm_bin_name,
             registry,
         })
@@ -884,17 +891,32 @@ impl WasmcloudDotToml {
         };
 
         // Use the provided `path` in the wasmcloud.toml file, or default to the current directory
-        let project_path = self.path.unwrap_or(project_path);
+        let project_path = self
+            .path
+            .map(|p| {
+                // If the path in the wasmcloud.toml is absolute, use that directly.
+                // Otherwise, join it with the project_path so that it's relative to the wasmcloud.toml
+                if p.is_absolute() {
+                    p
+                } else {
+                    project_path.join(p)
+                }
+            })
+            .unwrap_or(project_path)
+            .canonicalize()
+            .context("failed to canonicalize project path")?;
+        let build_path = self.build.unwrap_or_else(|| project_path.join("build"));
         let wit_path = self.wit.unwrap_or_else(|| project_path.join("wit"));
 
         let common_config = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
                     project_path.clone(),
+                    build_path.clone(),
+                    wit_path.clone(),
                     self.name.clone(),
                     self.version.clone(),
                     self.revision,
-                    wit_path.clone(),
                     self.registry.clone(),
                 ) {
                     // Successfully built with cargo information
@@ -905,9 +927,10 @@ impl WasmcloudDotToml {
                         name: self.name.unwrap(),
                         version: self.version.unwrap(),
                         revision: self.revision,
-                        path: project_path,
                         wasm_bin_name: None,
+                        path: project_path,
                         wit_path,
+                        build_path,
                         registry: self.registry,
                     },
 
@@ -929,6 +952,7 @@ impl WasmcloudDotToml {
                     path: project_path,
                     wasm_bin_name: None,
                     wit_path,
+                    build_path,
                     registry: self.registry,
                 }
             }

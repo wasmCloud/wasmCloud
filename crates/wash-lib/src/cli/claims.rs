@@ -316,7 +316,7 @@ impl ComponentMetadata {
                     .collect::<Vec<String>>(),
                 None => self.tags,
             },
-            call_alias: self.call_alias.or(component_config.call_alias),
+            call_alias: self.call_alias,
             common: GenerateCommon {
                 directory: self
                     .common
@@ -1224,7 +1224,6 @@ mod test {
             TypeConfig::Component(ComponentConfig {
                 key_directory: PathBuf::from("./keys"),
                 destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
-                call_alias: Some("test-component".to_string()),
                 tags: Some(HashSet::from([
                     "wasmcloud.com/experimental".into(),
                     "test".into(),
@@ -1240,6 +1239,9 @@ mod test {
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
                 path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap(),
+                build_path: PathBuf::from("./tests/parser/files/build/")
                     .canonicalize()
                     .unwrap(),
                 wit_path: PathBuf::from("./tests/parser/files/wit/")
@@ -1377,6 +1379,9 @@ mod test {
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
                 path: PathBuf::from("./tests/parser/files/")
+                    .canonicalize()
+                    .unwrap(),
+                build_path: PathBuf::from("./tests/parser/files/build/")
                     .canonicalize()
                     .unwrap(),
                 wasm_bin_name: None,

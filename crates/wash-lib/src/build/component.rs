@@ -67,14 +67,14 @@ pub async fn build_component(
                     // We continue to do so here.
                     WasmTarget::CoreModule | WasmTarget::WasiP1 => {
                         embed_wasm_component_metadata(
-                        &common_config.path,
-                        component_config
-                        .wit_world
-                        .as_ref()
-                        .context("missing `wit_world` in wasmcloud.toml ([component] section) for creating preview1 or preview2 components")?,
-                        &go_wasm_path,
-                        &go_wasm_path,
-                )?;
+                            &common_config.wit_path,
+                            component_config
+                            .wit_world
+                            .as_ref()
+                            .context("missing `wit_world` in wasmcloud.toml ([component] section) for creating preview1 or preview2 components")?,
+                            &go_wasm_path,
+                            &go_wasm_path,
+                        )?;
                         adapt_component_to_wasip2(&go_wasm_path, component_config)?
                     }
                     WasmTarget::WasiP2 => {
@@ -167,7 +167,7 @@ pub fn sign_component_wasm(
             name: Some(common_config.name.clone()),
             ver: Some(common_config.version.to_string()),
             rev: Some(common_config.revision),
-            call_alias: component_config.call_alias.clone(),
+            call_alias: None,
             issuer: signing_config.issuer.clone(),
             subject: signing_config.subject.clone(),
             common: GenerateCommon {
@@ -256,8 +256,10 @@ async fn build_rust_component(
         ),
     };
 
-    // move the file out into the build/ folder for parity with tinygo and convenience for users.
-    let copied_wasm_file = PathBuf::from(format!("build/{wasm_bin_name}.wasm"));
+    // move the file into the build folder for parity with tinygo and convenience for users.
+    let copied_wasm_file = common_config
+        .build_path
+        .join(format!("{wasm_bin_name}.wasm"));
     if let Some(p) = copied_wasm_file.parent() {
         fs::create_dir_all(p)?;
     }
@@ -265,7 +267,7 @@ async fn build_rust_component(
     fs::remove_file(&wasm_file)?;
 
     // Return the full path to the compiled Wasm file
-    Ok(common_config.path.join(&copied_wasm_file))
+    Ok(copied_wasm_file)
 }
 
 /// Builds a tinygo component and returns the path to the file.
@@ -274,8 +276,9 @@ async fn build_tinygo_component(
     tinygo_config: &TinyGoConfig,
     component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
-    let filename = format!("build/{}.wasm", common_config.name);
-    let file_path = PathBuf::from(&filename);
+    let wasm_file_path = common_config
+        .build_path
+        .join(format!("{}.wasm", common_config.name));
 
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
@@ -287,24 +290,23 @@ async fn build_tinygo_component(
 
     // Ensure the target directory which will contain the eventual filename exists
     // this usually means creating the build folder in the golang project root
-    let build_dir = file_path.parent().unwrap_or(&common_config.path);
+    let build_dir = wasm_file_path.parent().unwrap_or(&common_config.build_path);
     if !build_dir.exists() {
         fs::create_dir_all(build_dir)?;
     }
-    let parent_dir = build_dir.join("..");
 
-    let wit_directory = common_config.path.join("wit");
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
-        generate_tinygo_bindgen(parent_dir)
+        generate_tinygo_bindgen(common_config.path.as_path())
             .await
             .context("generating golang bindgen code failed")?;
     }
 
+    let output_file_path = wasm_file_path.to_string_lossy();
     let build_args = match &component_config.wasm_target {
         WasmTarget::WasiP1 | WasmTarget::CoreModule => vec![
             "build",
             "-o",
-            filename.as_str(),
+            &output_file_path,
             "-target",
             tinygo_config.build_target(&component_config.wasm_target),
             "-scheduler",
@@ -316,17 +318,16 @@ async fn build_tinygo_component(
             let mut args = vec![
             "build",
             "-o",
-            filename.as_str(),
+            &output_file_path,
             "-target",
             tinygo_config.build_target(&component_config.wasm_target),
             "-wit-package",
-            wit_directory.to_str().context("missing wit directory")?,
+            common_config.wit_path.to_str().context("missing wit directory")?,
             "-wit-world",
             component_config.wit_world.as_ref().context(
                 "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
             )?,
         ];
-
             if let Some(scheduler) = &tinygo_config.scheduler {
                 args.push("-scheduler");
                 args.push(scheduler.as_str());
@@ -354,16 +355,14 @@ async fn build_tinygo_component(
         bail!("Compiling component failed: {}", result.to_string())
     }
 
-    let wasm_file = PathBuf::from(filename);
-
-    if !wasm_file.exists() {
+    if !wasm_file_path.exists() {
         bail!(
             "Could not find compiled wasm file to sign: {}",
-            wasm_file.display()
+            wasm_file_path.display()
         );
     }
 
-    Ok(common_config.path.join(wasm_file))
+    Ok(wasm_file_path)
 }
 
 /// Builds a wasmCloud component using a custom override command, then returns the path to the file.
@@ -412,8 +411,8 @@ async fn build_custom_component(
         })
         .unwrap_or_else(|| {
             common_config
-                .path
-                .join(format!("build/{}.wasm", common_config.wasm_bin_name()))
+                .build_path
+                .join(format!("{}.wasm", common_config.wasm_bin_name()))
         });
     if std::fs::metadata(component_path.as_path()).is_err() {
         warn!(
@@ -425,13 +424,14 @@ async fn build_custom_component(
 }
 
 /// Generate the bindgen code that `TinyGo` components need
-async fn generate_tinygo_bindgen(user_dir: impl AsRef<Path>) -> Result<()> {
-    if !user_dir.as_ref().exists() {
+async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
+    if !project_dir.as_ref().exists() {
         bail!(
             "directory @ [{}] does not exist",
-            user_dir.as_ref().display(),
+            project_dir.as_ref().display(),
         );
     }
+    std::env::set_current_dir(project_dir.as_ref())?;
 
     let mut command = tokio::process::Command::new("go");
     let result = command
@@ -508,22 +508,21 @@ pub(crate) fn get_wasip2_adapter_bytes(config: &ComponentConfig) -> Result<Vec<u
 
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
-    project_path: impl AsRef<Path>,
+    wit_path: impl AsRef<Path>,
     wit_world: impl AsRef<str>,
     input_wasm: impl AsRef<Path>,
     output_wasm: impl AsRef<Path>,
 ) -> Result<()> {
-    // Find the the WIT directory for the project
-    let wit_dir = project_path.as_ref().join("wit");
-    if !wit_dir.is_dir() {
+    let wit_path = wit_path.as_ref();
+    if !wit_path.is_dir() {
         bail!(
             "expected 'wit' directory under project path at [{}] is missing",
-            wit_dir.display()
+            wit_path.display()
         );
     };
 
     let (resolver, world_id) =
-        convert_wit_dir_to_world(wit_dir, wit_world).context("failed to resolve WIT world")?;
+        convert_wit_dir_to_world(wit_path, wit_world).context("failed to resolve WIT world")?;
 
     // Encode the metadata
     let encoded_metadata =
@@ -682,8 +681,13 @@ func main() {}
         let wasm_path = setup_build_component(&project_dir)?;
 
         // Embed component metadata into the wasm module, to build a component
-        embed_wasm_component_metadata(&project_dir, "test-world", &wasm_path, &wasm_path)
-            .context("failed to embed wasm component metadata")?;
+        embed_wasm_component_metadata(
+            project_dir.path().join("wit"),
+            "test-world",
+            &wasm_path,
+            &wasm_path,
+        )
+        .context("failed to embed wasm component metadata")?;
 
         let wasm_bytes = fs::read(&wasm_path)
             .with_context(|| format!("failed to read test wasm @ [{}]", wasm_path.display()))?;
@@ -720,6 +724,7 @@ func main() {}
                     version: Version::parse("0.1.0")?,
                     revision: 0,
                     wit_path: project_dir.path().join("wit"),
+                    build_path: project_dir.path().join("build"),
                     path: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
                     registry: RegistryConfig::default(),
