@@ -1222,11 +1222,6 @@ mod test {
         assert_eq!(
             project_config.project_type,
             TypeConfig::Component(ComponentConfig {
-                claims: vec![
-                    "wasmcloud:httpserver".to_string(),
-                    "wasmcloud:httpclient".to_string(),
-                    "lexcorp:quantum-simulator".to_string()
-                ],
                 key_directory: PathBuf::from("./keys"),
                 destination: Some(PathBuf::from("./build/testcomponent.wasm".to_string())),
                 call_alias: Some("test-component".to_string()),
