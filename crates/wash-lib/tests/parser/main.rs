@@ -414,7 +414,6 @@ fn minimal_rust_component_p2() {
         etcetera::home_dir().expect("Unable to determine the user's home directory");
     expected_default_key_dir.push(".wash/keys");
 
-    assert_eq!(
         config.project_type,
         TypeConfig::Component(ComponentConfig {
             claims: vec!["wasmcloud:httpserver".to_string()],
