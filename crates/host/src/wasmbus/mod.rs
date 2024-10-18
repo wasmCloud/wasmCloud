@@ -29,7 +29,7 @@ use serde_json::json;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, watch, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{interval_at, timeout_at, Instant};
+use tokio::time::{interval_at, Instant};
 use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn, Instrument as _};
@@ -802,7 +802,7 @@ impl Host {
 
         let (stop_tx, stop_rx) = watch::channel(None);
 
-        let (runtime, epoch, epoch_end) = Runtime::builder()
+        let (runtime, _epoch) = Runtime::builder()
             .max_execution_time(config.max_execution_time)
             .max_linear_memory(config.max_linear_memory)
             .max_components(config.max_components)
@@ -1057,22 +1057,6 @@ impl Host {
             // thought were sent (like the host_stopped event)
             try_join!(host.ctl_nats.flush(), host.rpc_nats.flush(),)
                 .context("failed to flush NATS clients")?;
-            let deadline = host.stop_rx.borrow().unwrap_or_else(|| {
-                let now = Instant::now();
-                // epoch ticks operate on a second precision
-                now.checked_add(Duration::from_secs(1)).unwrap_or(now)
-            });
-            // NOTE: Epoch interrupt thread will only stop once there are no more references to the engine
-            drop(host);
-            match timeout_at(deadline, epoch_end).await {
-                Err(_) => bail!("epoch interrupt thread timed out"),
-                Ok(Err(_)) => bail!("epoch interrupt end receiver dropped"),
-                Ok(Ok(())) => {
-                    if let Err(_err) = epoch.join() {
-                        bail!("epoch interrupt thread panicked")
-                    }
-                }
-            }
             Ok(())
         }))
     }
