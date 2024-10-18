@@ -1,3 +1,10 @@
+import * as v from "valibot";
+import type {
+  Options as PasswordCheckOptions,
+  FirstOption as PasswordChecKFirstOption,
+} from "check-password-strength";
+import { passwordStrength } from "check-password-strength";
+
 import {
   IncomingRequest,
   ResponseOutparam,
@@ -6,16 +13,13 @@ import {
   Fields,
 } from "wasi:http/types@0.2.0";
 
-import * as v from "valibot";
-import { passwordStrength } from "check-password-strength";
-import type {
-  Options as PasswordCheckOptions,
-  FirstOption as PasswordChecKFirstOption,
-} from "check-password-strength";
+import * as secretsReveal from "wasmcloud:secrets/reveal@0.1.0-draft";
+import * as secretsStore from "wasmcloud:secrets/store@0.1.0-draft";
 
 /** Amount to read from a wasi:io stream */
 const WASI_IO_READ_MAX_BYTES = 4096n;
 
+/** Basic descriptions of password strength */
 enum PasswordStrength {
   VeryWeak = "very-weak",
   Weak = "weak",
@@ -64,8 +68,7 @@ class PasswordCheckRequest {
   // For use when checking a value that exists in the secret store
   // but is pointed to by the API request
   public secret?: {
-    name?: string;
-    key?: string;
+    key: string;
     field?: string;
   };
 
@@ -77,8 +80,7 @@ class PasswordCheckRequest {
     return v.object({
       secret: v.optional(
         v.object({
-          name: v.optional(v.string()),
-          key: v.optional(v.string()),
+          key: v.string(),
           field: v.optional(v.string()),
         })
       ),
@@ -106,9 +108,9 @@ class PasswordCheckRequest {
         PasswordCheckRequest.schema(),
         new TextDecoder("utf8").decode(bytes)
       );
-    } catch {
+    } catch (err) {
       throw new Error(
-        "failed to parse incoming data as a PasswordCheckRequest"
+        `failed to parse incoming data as a PasswordCheckRequest: ${err?.toString()}`
       );
     }
   }
@@ -123,6 +125,7 @@ enum ResponseStatus {
 /** Error code that encompasses all the errors the API can emit */
 enum ErrorCode {
   UnexpectedError = "unexpected-error",
+  InvalidRequest = "invalid-request",
 }
 
 /** Generic envelope container for responses */
@@ -186,26 +189,55 @@ interface CheckResult {
  * @param {PasswordCheckRequest} cr - The Check request to complete
  * @returns {Promise<CheckResult>} A promise that resolves to the HTTP response with the check result
  */
-async function handleSecretCheck(
+async function handlePasswordCheck(
   cr: PasswordCheckRequest
 ): Promise<Response<CheckResult>> {
-  if (cr.value) {
-    const {
-      id,
-      value: strength,
-      contains,
-      length,
-    } = passwordStrength(cr.value, PASSWORD_CHECK_RULES);
-    return Response.ok({
-      strength,
-      length,
-      contains,
-    });
+  if (!cr.value && !cr.secret) {
+    throw new Error("value or secret must be provided");
   }
 
-  // TODO: implement secret checking
+  // Determine the value
+  let value: string;
+  if (cr.value) {
+    // For directly usable values, we can just take the value
+    value = cr.value;
+  } else {
+    if (!cr.secret) {
+      throw new Error("Unexpectedly missing request secret");
+    }
 
-  throw new Error("SECRET EXTRACTION NOT YET IMPLEMENTED");
+    // Retrieve the secret
+    let secret: secretsStore.Secret;
+    try {
+      secret = secretsStore.get(cr.secret.key);
+    } catch (err) {
+      throw new Error("failed to get secret");
+    }
+
+    // Reveal the secret
+    try {
+      const revealed = secretsReveal.reveal(secret);
+      if (revealed.tag != "string") {
+        throw new Error("unexpected tag, secret should be a string");
+      }
+      value = revealed.val;
+    } catch (err) {
+      throw new Error(`failed to get secret: ${err?.toString()}`);
+    }
+  }
+
+  const {
+    id,
+    value: strength,
+    contains,
+    length,
+  } = passwordStrength(value, PASSWORD_CHECK_RULES);
+
+  return Response.ok({
+    strength,
+    length,
+    contains,
+  });
 }
 
 /**
@@ -234,23 +266,35 @@ export const incomingHandler = {
         try {
           cr = await PasswordCheckRequest.fromRequest(req);
         } catch (err) {
-          await sendResponseJSON(resp, 400, {
+          return await sendResponseJSON(resp, 400, {
             status: "error",
             message: "invalid request body",
           });
-          return;
         }
 
         // Perform the check
-        let checkResponse = await handleSecretCheck(cr);
+        let result;
+        try {
+          result = await handlePasswordCheck(cr);
+        } catch (err) {
+          return await sendResponseJSON(
+            resp,
+            500,
+            Response.error(
+              ErrorCode.UnexpectedError,
+              `failed to check secret: ${err?.toString()}`
+            )
+          );
+        }
+        await sendResponseJSON(resp, 200, Response.ok(result));
+        break;
 
-        // Send the HTTP response
-        await sendResponseJSON(resp, 200, checkResponse);
       default:
-        await sendResponseJSON(resp, 400, {
-          status: "error",
-          message: "invalid API request",
-        });
+        await sendResponseJSON(
+          resp,
+          400,
+          Response.error(ErrorCode.InvalidRequest, "invalid API request")
+        );
     }
   },
 };
