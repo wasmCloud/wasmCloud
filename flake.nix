@@ -17,7 +17,7 @@
   ];
 
   inputs.nixify.inputs.nixlib.follows = "nixlib";
-  inputs.nixify.url = "github:rvolosatovs/nixify";
+  inputs.nixify.url = "github:rvolosatovs/nixify/003d2cccb42b778c06fa82a1f8cf1468b578a746";
   inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
@@ -34,6 +34,8 @@
     with nixify.lib;
       rust.mkFlake {
         src = ./.;
+
+        withToolchain = rust.withRustOverlayToolchain;
 
         nixpkgsConfig.allowUnfree = true;
 
@@ -97,6 +99,7 @@
         targets.s390x-unknown-linux-gnu = false;
         targets.wasm32-unknown-unknown = false;
         targets.wasm32-wasip1 = false;
+        targets.wasm32-wasip2 = false;
 
         build.packages = [
           "wash-cli"
