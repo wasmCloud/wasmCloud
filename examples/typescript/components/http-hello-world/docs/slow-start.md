@@ -1,6 +1,6 @@
 # Slow Start
 
-Want to do more of the steps manually without using `wash dev`? You've come to the rihgt place.
+Want to do more of the steps manually without using `wash dev`? You've come to the right place.
 
 ## Install NodeJS dependencies
 
