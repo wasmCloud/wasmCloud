@@ -161,8 +161,6 @@ where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
-    let pid_file = state_dir.as_ref().parent().map(|p| p.join(WADM_PID));
-
     let mut cmd = Command::new(bin_path.as_ref());
     cmd.stderr(stderr).stdin(Stdio::null());
 
@@ -191,10 +189,10 @@ where
     let pid = child
         .id()
         .context("unexpectedly missing pid for spawned process")?;
-    if let Some(pid_path) = pid_file {
-        if let Err(e) = tokio::fs::write(pid_path, pid.to_string()).await {
-            warn!("Couldn't write wadm pidfile: {e}");
-        }
+
+    let pid_path = state_dir.as_ref().join(WADM_PID);
+    if let Err(e) = tokio::fs::write(pid_path, pid.to_string()).await {
+        warn!("Couldn't write wadm pidfile: {e}");
     }
 
     Ok(child)
@@ -276,6 +274,11 @@ mod test {
         assert!(child_res.unwrap().wait().await.is_ok());
         let log_contents = tokio::fs::read_to_string(&log_path).await?;
         // wadm couldn't connect to NATS but that's okay
+
+        // Assert that the pid file get created in the expected state_dir,
+        // which in this case is set to install_dir.
+        let pid_path = install_dir.join(WADM_PID);
+        assert!(tokio::fs::try_exists(pid_path).await?);
 
         // Different OS-es have different error codes, but all I care about is that wadm executed at all
         #[cfg(target_os = "macos")]
