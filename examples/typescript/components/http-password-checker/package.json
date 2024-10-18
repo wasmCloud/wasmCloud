@@ -1,0 +1,41 @@
+{
+  "name": "ts-http-password-checker",
+  "version": "0.1.0",
+  "description": "",
+  "main": "dist/http-password-checker.js",
+  "type": "module",
+  "scripts": {
+    "generate:types": "jco types wit/ -o generated/types",
+    "build:ts": "rollup -c",
+    "build:js": "jco componentize -w wit -o dist/http-password-checker.wasm dist/http-password-checker.js",
+    "build:component": "wash build --sign-only --config-path wasmcloud.toml",
+    "build": "npm run build:ts && npm run build:js && npm run build:component",
+    "install-and-build": "npm install && npm run build",
+    "dev": "wash dev",
+    "component:start": "wash start component file://build/http_password_checker_s.wasm --auction-timeout-ms 10000 --timeout-ms 10000",
+    "component:stop": "wash stop component ts-http-password-checker",
+    "wadm:start": "wash app deploy wadm.yaml",
+    "wadm:stop": "wash app delete wadm.yaml",
+    "start": "npm run build && npm run wadm:start",
+    "reload": "npm run build && npm run wadm:stop && npm run wadm:start",
+    "stop": "npm run wadm:stop",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.13.0",
+    "@bytecodealliance/jco": "^1.7.0",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-typescript": "^12.1.1",
+    "@types/node": "^22.7.6",
+    "rollup": "^4.24.0",
+    "tslib": "^2.8.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "check-password-strength": "^2.0.10",
+    "valibot": "^0.42.1"
+  }
+}
