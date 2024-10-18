@@ -12,6 +12,7 @@ use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer};
+use tracing::warn;
 use wadm_types::{Component, Properties, SecretSourceProperty};
 use wasmcloud_control_interface::RegistryCredential;
 use wasmcloud_core::{parse_wit_package_name, WitFunction, WitInterface, WitNamespace, WitPackage};
@@ -81,7 +82,8 @@ impl RustConfig {
     pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
         match wasm_target {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
-            WasmTarget::WasiP1 | WasmTarget::WasiP2 => "wasm32-wasip1",
+            WasmTarget::WasiP1 => "wasm32-wasip1",
+            WasmTarget::WasiP2 => "wasm32-wasip2",
         }
     }
 }
@@ -203,7 +205,11 @@ impl From<&str> for WasmTarget {
             "wasm32-wasi" => WasmTarget::WasiP1,
             "wasm32-wasi-preview2" => WasmTarget::WasiP2,
             "wasm32-wasip2" => WasmTarget::WasiP2,
-            _ => WasmTarget::CoreModule,
+            "wasm32-unknown-unknown" => WasmTarget::CoreModule,
+            _ => {
+                warn!("Unknown wasm_target `{value}`, expected wasm32-wasip2 or wasm32-wasip1. Defaulting to wasm32-unknown-unknown");
+                WasmTarget::CoreModule
+            }
         }
     }
 }
