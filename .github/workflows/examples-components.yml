@@ -53,7 +53,7 @@ jobs:
       - run: rustup show
       - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
-          shared-key: "ubuntu-22.04-shared-cache"
+          shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
         uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
@@ -86,70 +86,71 @@ jobs:
           - current
         project:
           # Golang example components
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-echo-tinygo"
+          - lang: 'golang'
+            lang_version: '1.21'
+            name: 'http-echo-tinygo'
             test_deploy: wadm.yaml
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-hello-world"
+          - lang: 'golang'
+            lang_version: '1.21'
+            name: 'http-hello-world'
             test_deploy: wadm.yaml
-          - name: "sqldb-postgres-query"
-            lang: "golang"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+          - name: 'sqldb-postgres-query'
+            lang: 'golang'
+            lang_version: '1.21'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
             test_deploy: local.wadm.yaml
           # Rust example components
-          - name: "blobby"
-            lang: "rust"
-            wasm-bin: "blobby_s.wasm"
-          - name: "dog-fetcher"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
+          - name: 'blobby'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
+          - name: 'dog-fetcher'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "echo-messaging"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
+          - name: 'echo-messaging'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "ferris-says"
-            lang: "rust"
-            wasm-bin: "ferris_says_s.wasm"
+          - name: 'ferris-says'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "http-blobstore"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
+          - name: 'http-blobstore'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "http-hello-world"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
+          - name: 'http-hello-world'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "http-jsonify"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
+          - name: 'http-jsonify'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "http-keyvalue-counter"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
+          - name: 'http-keyvalue-counter'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "keyvalue-messaging"
-            lang: "rust"
-            wasm-bin: "keyvalue_messaging_s.wasm"
+          - name: 'keyvalue-messaging'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "sqldb-postgres-query"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
+          - name: 'sqldb-postgres-query'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
             test_deploy: local.wadm.yaml
-          - name: "http-task-manager"
-            lang: "rust"
-            wasm-bin: "http_task_manager_s.wasm"
+          - name: 'http-task-manager'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
             test_deploy: local.wadm.yaml
           # Python example components
-          - name: "http-hello-world"
-            lang: "python"
-            lang_version: "3.10"
+          - name: 'http-hello-world'
+            lang: 'python'
+            lang_version: '3.10'
           # Typescript example components
-          - name: "http-hello-world"
-            lang: "typescript"
-            lang_version: "20.x"
+          - name: 'http-hello-world'
+            lang: 'typescript'
+            lang_version: '20.x'
             test_deploy: wadm.yaml
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
@@ -171,8 +172,8 @@ jobs:
       - uses: acifani/setup-tinygo@b2ba42b249c7d3efdfe94166ec0f48b3191404f7
         if: ${{ matrix.project.lang == 'golang' }}
         with:
-          tinygo-version: "0.30.0"
-          install-binaryen: "false"
+          tinygo-version: '0.33.0'
+          install-binaryen: 'false'
       - uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         if: ${{ matrix.project.lang == 'golang' }}
         with:
@@ -256,46 +257,46 @@ jobs:
           - 0.34.1
         project:
           # Go example components (to publish)
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-echo-tinygo"
-          - lang: "golang"
-            lang_version: "1.20"
-            name: "http-hello-world"
+          - lang: 'golang'
+            lang_version: '1.20'
+            name: 'http-echo-tinygo'
+          - lang: 'golang'
+            lang_version: '1.20'
+            name: 'http-hello-world'
           # Rust example components (to publish)
-          - name: "blobby"
-            lang: "rust"
-            wasm-bin: "blobby_s.wasm"
-          - name: "dog-fetcher"
-            lang: "rust"
-            wasm-bin: "dog_fetcher_s.wasm"
-          - name: "echo-messaging"
-            lang: "rust"
-            wasm-bin: "echo_messaging_s.wasm"
-          - name: "ferris-says"
-            lang: "rust"
-            wasm-bin: "ferris_says_s.wasm"
-          - name: "http-blobstore"
-            lang: "rust"
-            wasm-bin: "http_blobstore_s.wasm"
-          - name: "http-hello-world"
-            lang: "rust"
-            wasm-bin: "http_hello_world_s.wasm"
-          - name: "http-jsonify"
-            lang: "rust"
-            wasm-bin: "http_jsonify_s.wasm"
-          - name: "http-keyvalue-counter"
-            lang: "rust"
-            wasm-bin: "http_keyvalue_counter_s.wasm"
-          - name: "keyvalue-messaging"
-            lang: "rust"
-            wasm-bin: "keyvalue_messaging_s.wasm"
-          - name: "sqldb-postgres-query"
-            lang: "rust"
-            wasm-bin: "sqldb_postgres_query_s.wasm"
-          - name: "http-task-manager"
-            lang: "rust"
-            wasm-bin: "http_task_manager_s.wasm"
+          - name: 'blobby'
+            lang: 'rust'
+            wasm-bin: 'blobby_s.wasm'
+          - name: 'dog-fetcher'
+            lang: 'rust'
+            wasm-bin: 'dog_fetcher_s.wasm'
+          - name: 'echo-messaging'
+            lang: 'rust'
+            wasm-bin: 'echo_messaging_s.wasm'
+          - name: 'ferris-says'
+            lang: 'rust'
+            wasm-bin: 'ferris_says_s.wasm'
+          - name: 'http-blobstore'
+            lang: 'rust'
+            wasm-bin: 'http_blobstore_s.wasm'
+          - name: 'http-hello-world'
+            lang: 'rust'
+            wasm-bin: 'http_hello_world_s.wasm'
+          - name: 'http-jsonify'
+            lang: 'rust'
+            wasm-bin: 'http_jsonify_s.wasm'
+          - name: 'http-keyvalue-counter'
+            lang: 'rust'
+            wasm-bin: 'http_keyvalue_counter_s.wasm'
+          - name: 'keyvalue-messaging'
+            lang: 'rust'
+            wasm-bin: 'keyvalue_messaging_s.wasm'
+          - name: 'sqldb-postgres-query'
+            lang: 'rust'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
+          - name: 'http-task-manager'
+            lang: 'rust'
+            wasm-bin: 'http_task_manager_s.wasm'
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       # Determine tag version (if this is a release tag), without the 'v'
