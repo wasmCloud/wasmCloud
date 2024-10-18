@@ -52,10 +52,10 @@ pub async fn build_component(
                 let rust_wasm_path =
                     build_rust_component(common_config, rust_config, component_config).await?;
                 match component_config.wasm_target {
-                    WasmTarget::CoreModule | WasmTarget::WasiP1 => rust_wasm_path,
-                    WasmTarget::WasiP2 => {
+                    WasmTarget::CoreModule | WasmTarget::WasiP1 => {
                         adapt_component_to_wasip2(&rust_wasm_path, component_config)?
                     }
+                    WasmTarget::WasiP2 => rust_wasm_path,
                 }
             }
             LanguageConfig::TinyGo(tinygo_config) => {
