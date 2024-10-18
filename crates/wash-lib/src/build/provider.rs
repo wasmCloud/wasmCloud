@@ -59,7 +59,7 @@ pub(crate) async fn build_provider(
         return Ok(provider_path_buf);
     };
 
-    let destination = common_config.build_path.join(format!("{bin_name}.par.gz"));
+    let destination = common_config.build_dir.join(format!("{bin_name}.par.gz"));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -88,7 +88,7 @@ pub(crate) async fn build_provider(
     Ok(if destination.is_absolute() {
         destination
     } else {
-        common_config.path.join(destination)
+        common_config.project_dir.join(destination)
     })
 }
 
@@ -106,12 +106,11 @@ fn build_rust_provider(
     };
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
-    trace!("Building provider in {:?}", common_config.path);
+    std::env::set_current_dir(&common_config.project_dir)?;
+    trace!("Building provider in {:?}", common_config.project_dir);
 
     // Build for a specified target if provided, or the default rust target
-    let mut build_args = Vec::with_capacity(4);
-    build_args.push("build");
+    let mut build_args = vec!["build"];
 
     if !rust_config.debug {
         build_args.push("--release");
@@ -183,8 +182,8 @@ fn build_go_provider(
     };
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
-    trace!("Building provider in {:?}", common_config.path);
+    std::env::set_current_dir(&common_config.project_dir)?;
+    trace!("Building provider in {:?}", common_config.project_dir);
 
     // Generate interfaces, if not disabled
     if !go_config.disable_go_generate {

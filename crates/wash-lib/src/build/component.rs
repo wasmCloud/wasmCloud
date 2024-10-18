@@ -67,7 +67,7 @@ pub async fn build_component(
                     // We continue to do so here.
                     WasmTarget::CoreModule | WasmTarget::WasiP1 => {
                         embed_wasm_component_metadata(
-                            &common_config.wit_path,
+                            &common_config.wit_dir,
                             component_config
                             .wit_world
                             .as_ref()
@@ -183,7 +183,7 @@ pub fn sign_component_wasm(
     Ok(if destination.is_absolute() {
         destination
     } else {
-        common_config.path.join(destination)
+        common_config.project_dir.join(destination)
     })
 }
 
@@ -199,11 +199,10 @@ async fn build_rust_component(
     };
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
+    std::env::set_current_dir(&common_config.project_dir)?;
 
     // Build for a specified target if provided, or the default rust target
-    let mut build_args = Vec::with_capacity(4);
-    build_args.push("build");
+    let mut build_args = vec!["build"];
 
     if !rust_config.debug {
         build_args.push("--release");
@@ -258,7 +257,7 @@ async fn build_rust_component(
 
     // move the file into the build folder for parity with tinygo and convenience for users.
     let copied_wasm_file = common_config
-        .build_path
+        .build_dir
         .join(format!("{wasm_bin_name}.wasm"));
     if let Some(p) = copied_wasm_file.parent() {
         fs::create_dir_all(p)?;
@@ -277,11 +276,11 @@ async fn build_tinygo_component(
     component_config: &ComponentConfig,
 ) -> Result<PathBuf> {
     let wasm_file_path = common_config
-        .build_path
+        .build_dir
         .join(format!("{}.wasm", common_config.name));
 
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
+    std::env::set_current_dir(&common_config.project_dir)?;
 
     let mut command = match &tinygo_config.tinygo_path {
         Some(path) => tokio::process::Command::new(path),
@@ -290,18 +289,19 @@ async fn build_tinygo_component(
 
     // Ensure the target directory which will contain the eventual filename exists
     // this usually means creating the build folder in the golang project root
-    let build_dir = wasm_file_path.parent().unwrap_or(&common_config.build_path);
+    let build_dir = wasm_file_path.parent().unwrap_or(&common_config.build_dir);
     if !build_dir.exists() {
         fs::create_dir_all(build_dir)?;
     }
 
     if component_config.wit_world.is_some() && !tinygo_config.disable_go_generate {
-        generate_tinygo_bindgen(common_config.path.as_path())
+        generate_tinygo_bindgen(common_config.project_dir.as_path())
             .await
             .context("generating golang bindgen code failed")?;
     }
 
-    let output_file_path = wasm_file_path.to_string_lossy();
+    let output_file_path = format!("{}", wasm_file_path.display());
+    let wit_dir = format!("{}", common_config.wit_dir.display());
     let build_args = match &component_config.wasm_target {
         WasmTarget::WasiP1 | WasmTarget::CoreModule => vec![
             "build",
@@ -316,18 +316,18 @@ async fn build_tinygo_component(
         ],
         WasmTarget::WasiP2 => {
             let mut args = vec![
-            "build",
-            "-o",
-            &output_file_path,
-            "-target",
-            tinygo_config.build_target(&component_config.wasm_target),
-            "-wit-package",
-            common_config.wit_path.to_str().context("missing wit directory")?,
-            "-wit-world",
-            component_config.wit_world.as_ref().context(
-                "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
-            )?,
-        ];
+                "build",
+                "-o",
+                &output_file_path,
+                "-target",
+                tinygo_config.build_target(&component_config.wasm_target),
+                "-wit-package",
+                &wit_dir,
+                "-wit-world",
+                component_config.wit_world.as_ref().context(
+                    "missing `wit_world` in wasmcloud.toml ([component] section) to run go bindgen generate",
+                )?,
+            ];
             if let Some(scheduler) = &tinygo_config.scheduler {
                 args.push("-scheduler");
                 args.push(scheduler.as_str());
@@ -372,7 +372,7 @@ async fn build_custom_component(
     raw_command: &str,
 ) -> Result<PathBuf> {
     // Change directory into the project directory
-    std::env::set_current_dir(&common_config.path)?;
+    std::env::set_current_dir(&common_config.project_dir)?;
     let (command, args) = parse_custom_command(raw_command)?;
     let mut command = tokio::process::Command::new(command);
     // All remaining elements of the split command are interpreted as arguments
@@ -406,12 +406,12 @@ async fn build_custom_component(
             if p.is_absolute() {
                 p
             } else {
-                common_config.path.join(p)
+                common_config.project_dir.join(p)
             }
         })
         .unwrap_or_else(|| {
             common_config
-                .build_path
+                .build_dir
                 .join(format!("{}.wasm", common_config.wasm_bin_name()))
         });
     if std::fs::metadata(component_path.as_path()).is_err() {
@@ -425,13 +425,11 @@ async fn build_custom_component(
 
 /// Generate the bindgen code that `TinyGo` components need
 async fn generate_tinygo_bindgen(project_dir: impl AsRef<Path>) -> Result<()> {
-    if !project_dir.as_ref().exists() {
-        bail!(
-            "directory @ [{}] does not exist",
-            project_dir.as_ref().display(),
-        );
+    let project_dir = project_dir.as_ref();
+    if !tokio::fs::try_exists(project_dir).await.unwrap_or_default() {
+        bail!("directory @ [{}] does not exist", project_dir.display(),);
     }
-    std::env::set_current_dir(project_dir.as_ref())?;
+    std::env::set_current_dir(project_dir)?;
 
     let mut command = tokio::process::Command::new("go");
     let result = command
@@ -508,21 +506,21 @@ pub(crate) fn get_wasip2_adapter_bytes(config: &ComponentConfig) -> Result<Vec<u
 
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
-    wit_path: impl AsRef<Path>,
+    wit_dir: impl AsRef<Path>,
     wit_world: impl AsRef<str>,
     input_wasm: impl AsRef<Path>,
     output_wasm: impl AsRef<Path>,
 ) -> Result<()> {
-    let wit_path = wit_path.as_ref();
-    if !wit_path.is_dir() {
+    let wit_dir = wit_dir.as_ref();
+    if !wit_dir.is_dir() {
         bail!(
             "expected 'wit' directory under project path at [{}] is missing",
-            wit_path.display()
+            wit_dir.display()
         );
     };
 
     let (resolver, world_id) =
-        convert_wit_dir_to_world(wit_path, wit_world).context("failed to resolve WIT world")?;
+        convert_wit_dir_to_world(wit_dir, wit_world).context("failed to resolve WIT world")?;
 
     // Encode the metadata
     let encoded_metadata =
@@ -723,9 +721,9 @@ func main() {}
                     name: "test".into(),
                     version: Version::parse("0.1.0")?,
                     revision: 0,
-                    wit_path: project_dir.path().join("wit"),
-                    build_path: project_dir.path().join("build"),
-                    path: project_dir.path().into(),
+                    wit_dir: project_dir.path().join("wit"),
+                    build_dir: project_dir.path().join("build"),
+                    project_dir: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
                     registry: RegistryConfig::default(),
                 },

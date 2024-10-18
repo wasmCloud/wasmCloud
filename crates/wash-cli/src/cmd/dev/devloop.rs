@@ -81,9 +81,11 @@ pub(crate) async fn generate_manifests(
             .map(DependencySpec::name)
             .collect::<BTreeSet<String>>()
     );
-    let pkey =
-        ProjectDependencyKey::from_project(&project_cfg.common.name, &project_cfg.common.path)
-            .context("failed to build key for project")?;
+    let pkey = ProjectDependencyKey::from_project(
+        &project_cfg.common.name,
+        &project_cfg.common.project_dir,
+    )
+    .context("failed to build key for project")?;
 
     let mut current_project_deps = match previous_deps {
         Some(deps) => deps.clone(),
@@ -96,7 +98,7 @@ pub(crate) async fn generate_manifests(
         .with_context(|| {
             format!(
                 "failed to discover project dependencies from config [{}]",
-                project_cfg.common.path.display(),
+                project_cfg.common.project_dir.display(),
             )
         })?;
     current_project_deps

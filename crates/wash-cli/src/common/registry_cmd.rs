@@ -10,7 +10,7 @@ use tracing::warn;
 
 use wash_lib::cli::registry::{RegistryPullCommand, RegistryPushCommand};
 use wash_lib::cli::{input_vec_to_hashmap, CommandOutput, OutputKind};
-use wash_lib::parser::{get_config, ProjectConfig};
+use wash_lib::parser::{load_config, ProjectConfig};
 use wash_lib::registry::{
     identify_artifact, pull_oci_artifact, push_oci_artifact, ArtifactType, OciPullOptions,
     OciPushOptions,
@@ -91,7 +91,7 @@ pub async fn registry_push(
     cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let project_config = get_config(cmd.project_config, Some(true)).ok();
+    let project_config = load_config(cmd.project_config, Some(true)).ok();
     let image: Reference = resolve_artifact_ref(
         &cmd.url,
         &cmd.registry.unwrap_or_default(),
@@ -198,7 +198,7 @@ fn resolve_artifact_ref(
 }
 
 async fn resolve_registry_credentials(registry: &str) -> Result<RegistryCredential> {
-    let credentials = if let Ok(credentials) = get_config(None, Some(true))
+    let credentials = if let Ok(credentials) = load_config(None, Some(true))
         .and_then(|config| config.resolve_registry_credentials(registry))
     {
         credentials
