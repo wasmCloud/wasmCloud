@@ -1,14 +1,15 @@
 {
-  "name": "ts-example",
-  "version": "1.0.0",
-  "description": "",
-  "main": "http-hello-world.js",
+  "name": "http-hello-world",
+  "version": "0.1.0",
+  "description": "A WebAssembly Component that responds to HTTP requests using the `wasi:http` WIT interface",
+  "main": "dist/http-hello-world.js",
   "scripts": {
     "build:tsc": "tsc",
     "build:js": "jco componentize -w wit -o dist/http-hello-world.wasm dist/http-hello-world.js",
     "build:component": "wash build --sign-only --config-path wasmcloud.toml",
     "build": "npm run build:tsc && npm run build:js && npm run build:component",
-    "component:start": "wash start component file://$(realpath build/http_hello_world_s.wasm) --auction-timeout-ms 10000 --timeout-ms 10000",
+    "install-and-build": "npm install && npm run build",
+    "component:start": "wash start component file://build/http_hello_world_s.wasm --auction-timeout-ms 10000 --timeout-ms 10000",
     "component:stop": "wash stop component typescript-hello-world",
     "wadm:start": "wash app deploy wadm.yaml",
     "wadm:stop": "wash app delete typescript-hello-world v0.0.1",
@@ -21,9 +22,9 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@bytecodealliance/componentize-js": "^0.7.0",
-    "@bytecodealliance/jco": "^1.0",
-    "@types/node": "^20.10.8",
-    "typescript": "^5.3.3"
+    "@bytecodealliance/componentize-js": "^0.13.0",
+    "@bytecodealliance/jco": "^1.7.0",
+    "@types/node": "^22.7.6",
+    "typescript": "^5.6.3"
   }
 }
