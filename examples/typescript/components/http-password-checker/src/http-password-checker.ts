@@ -4,6 +4,7 @@ import {
   OutgoingBody,
   OutgoingResponse,
   Fields,
+  MethodGet,
 } from "wasi:http/types@0.2.0";
 
 /**
@@ -12,8 +13,23 @@ import {
 export const incomingHandler = {
   // Implementation of wasi-http incoming-handler
   async handle(req: IncomingRequest, resp: ResponseOutparam) {
-    // Handle the incoming request
+    // Only allow GET requests
+    if (req.method().tag != "get") {
+      await sendResponseText(
+        resp,
+        400,
+        JSON.stringify({
+          status: "error",
+          message: "invalid request, must be GET",
+        })
+      );
+      return;
+    }
+
+    let pathWithQuery = req.pathWithQuery();
+
     // TODO: Check the URL, route to different handlers
+
     await sendResponseText(resp, 200, "This is a test!");
   },
 };
