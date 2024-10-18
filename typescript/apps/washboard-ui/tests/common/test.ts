@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/rules-of-hooks -- Disabling rules-of-hooks since these are Playwright extensions */
+
 import {test as base} from '@playwright/test';
 
 import {logger} from './logger';
