@@ -7,7 +7,7 @@ use serde_json::json;
 use wash_lib::{
     build::{build_project, sign_component_wasm, SignConfig},
     cli::{CommandOutput, CommonPackageArgs},
-    parser::{get_config, TypeConfig},
+    parser::{load_config, TypeConfig},
 };
 
 /// Build (and sign) a wasmCloud component, provider, or interface
@@ -62,7 +62,7 @@ pub struct BuildCommand {
 }
 
 pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
-    let config = get_config(command.config_path, Some(true))?;
+    let config = load_config(command.config_path, Some(true))?;
 
     match config.project_type {
         TypeConfig::Component(ref component_config) => {
@@ -81,14 +81,14 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             };
 
             let component_path = if command.sign_only {
-                std::env::set_current_dir(&config.common.path)?;
+                std::env::set_current_dir(&config.common.project_dir)?;
                 let component_wasm_path =
                     if let Some(path) = component_config.build_artifact.as_ref() {
                         path.clone()
                     } else {
                         config
                             .common
-                            .build_path
+                            .build_dir
                             .join(format!("{}.wasm", config.common.wasm_bin_name()))
                     };
                 let signed_path = sign_component_wasm(
@@ -98,7 +98,7 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                     &sign_config.context("cannot supply --build-only and --sign-only")?,
                     component_wasm_path,
                 )?;
-                config.common.build_path.join(signed_path)
+                config.common.build_dir.join(signed_path)
             } else {
                 build_project(
                     &config,

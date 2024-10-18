@@ -3,13 +3,13 @@ use std::{collections::HashSet, fs, path::PathBuf};
 use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
-    get_config, CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig,
+    load_config, CommonConfig, ComponentConfig, LanguageConfig, RegistryConfig, RustConfig,
     TinyGoConfig, TinyGoGarbageCollector, TinyGoScheduler, TypeConfig, WasmTarget,
 };
 
 #[test]
 fn rust_component() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from("./tests/parser/files/rust_component.toml")),
         None,
     );
@@ -42,14 +42,14 @@ fn rust_component() {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
-            path: PathBuf::from("./tests/parser/files/")
+            project_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/")
+            build_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("build"),
-            wit_path: PathBuf::from("./tests/parser/files/")
+            wit_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("wit"),
@@ -62,7 +62,7 @@ fn rust_component() {
 #[test]
 /// When given a specific toml file's path, it should parse the file and return a `ProjectConfig`.
 fn rust_component_with_revision() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/rust_component_with_revision.toml",
         )),
@@ -98,14 +98,14 @@ fn rust_component_with_revision() {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 666,
-            path: PathBuf::from("./tests/parser/files/")
+            project_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/")
+            build_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("build"),
-            wit_path: PathBuf::from("./tests/parser/files/")
+            wit_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("wit"),
@@ -117,7 +117,7 @@ fn rust_component_with_revision() {
 
 #[test]
 fn tinygo_component_module_scheduler_gc() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/tinygo_component_scheduler_gc.toml",
         )),
@@ -139,7 +139,7 @@ fn tinygo_component_module_scheduler_gc() {
 
 #[test]
 fn tinygo_component_module() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/tinygo_component_module.toml",
         )),
@@ -175,14 +175,14 @@ fn tinygo_component_module() {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
             revision: 0,
-            path: PathBuf::from("./tests/parser/files/")
+            project_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/")
+            build_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("build"),
-            wit_path: PathBuf::from("./tests/parser/files/")
+            wit_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("wit"),
@@ -194,7 +194,7 @@ fn tinygo_component_module() {
 
 #[test]
 fn tinygo_component() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from("./tests/parser/files/tinygo_component.toml")),
         None,
     );
@@ -216,7 +216,7 @@ fn tinygo_component() {
 #[test]
 /// When given a folder, should automatically grab a wasmcloud.toml file inside it and parse it.
 fn folder_path() {
-    let result = get_config(Some(PathBuf::from("./tests/parser/files/folder")), None);
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/folder")), None);
 
     let config = assert_ok!(result);
 
@@ -241,7 +241,7 @@ fn get_full_path(path: &str) -> String {
 #[test]
 /// When given a folder with no wasmcloud.toml file, should return an error.
 fn folder_path_with_no_config() {
-    let result = get_config(Some(PathBuf::from("./tests/parser/files/noconfig")), None);
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/noconfig")), None);
 
     let err = assert_err!(result);
     assert_eq!(
@@ -256,7 +256,7 @@ fn folder_path_with_no_config() {
 #[test]
 /// When given a random file, should return an error.
 fn random_file() {
-    let result = get_config(Some(PathBuf::from("./tests/parser/files/random.txt")), None);
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/random.txt")), None);
 
     let err = assert_err!(result);
     assert_eq!(
@@ -271,7 +271,7 @@ fn random_file() {
 #[test]
 /// When given a nonexistent file or path, should return an error.
 fn nonexistent_file() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from("./tests/parser/files/nonexistent.toml")),
         None,
     );
@@ -285,7 +285,7 @@ fn nonexistent_file() {
 
 #[test]
 fn nonexistent_folder() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from("./tests/parser/files/nonexistent/")),
         None,
     );
@@ -299,7 +299,7 @@ fn nonexistent_folder() {
 
 #[test]
 fn minimal_rust_component() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component.toml",
         )),
@@ -337,14 +337,14 @@ fn minimal_rust_component() {
         CommonConfig {
             name: "testcomponent".to_string(),
             version: Version::parse("0.1.0").unwrap(),
-            path: PathBuf::from("./tests/parser/files/")
+            project_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/")
+            build_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("build"),
-            wit_path: PathBuf::from("./tests/parser/files/")
+            wit_dir: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap()
                 .join("wit"),
@@ -357,7 +357,7 @@ fn minimal_rust_component() {
 
 #[test]
 fn cargo_toml_component() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/withcargotoml/minimal_rust_component_with_cargo.toml",
         )),
@@ -395,14 +395,14 @@ fn cargo_toml_component() {
         CommonConfig {
             name: "withcargotoml".to_string(),
             version: Version::parse("0.200.0").unwrap(),
-            path: PathBuf::from("./tests/parser/files/withcargotoml")
+            project_dir: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap(),
-            build_path: PathBuf::from("./tests/parser/files/withcargotoml")
+            build_dir: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap()
                 .join("build"),
-            wit_path: PathBuf::from("./tests/parser/files/withcargotoml")
+            wit_dir: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap()
                 .join("wit"),
@@ -417,7 +417,7 @@ fn cargo_toml_component() {
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
 fn minimal_rust_component_p2() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_wasip2.toml",
         )),
@@ -445,7 +445,7 @@ fn minimal_rust_component_p2() {
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
 fn minimal_rust_component_wasip1() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_wasip1.toml",
         )),
@@ -466,7 +466,7 @@ fn minimal_rust_component_wasip1() {
 /// see: https://github.com/wasmCloud/wash/issues/640
 #[test]
 fn minimal_rust_component_core_module() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/minimal_rust_component_core_module.toml",
         )),
@@ -487,7 +487,7 @@ fn minimal_rust_component_core_module() {
 /// see: https://github.com/wasmCloud/wash/pull/951
 #[test]
 fn tags() {
-    let result = get_config(Some(PathBuf::from("./tests/parser/files/tags.toml")), None);
+    let result = load_config(Some(PathBuf::from("./tests/parser/files/tags.toml")), None);
 
     let config = assert_ok!(result);
     assert!(matches!(
@@ -502,7 +502,7 @@ fn tags() {
 /// Projects with overridden paths should be properly handled
 #[test]
 fn separate_project_paths() {
-    let result = get_config(
+    let result = load_config(
         Some(PathBuf::from(
             "./tests/parser/files/separate_project_paths.toml",
         )),
@@ -511,17 +511,17 @@ fn separate_project_paths() {
     let config = assert_ok!(result);
     // Different project path handled
     assert_eq!(
-        config.common.path,
+        config.common.project_dir,
         PathBuf::from("./tests/parser")
             .canonicalize()
             .expect("failed to canonicalize test path")
     );
     // Absolute paths properly handled
     assert_eq!(
-        config.common.build_path,
+        config.common.build_dir,
         PathBuf::from("/tmp/some/other/build")
     );
-    assert_eq!(config.common.wit_path, PathBuf::from("/tmp/nested/wit"));
+    assert_eq!(config.common.wit_dir, PathBuf::from("/tmp/nested/wit"));
 
     // Relative paths properly handled
     assert!(matches!(

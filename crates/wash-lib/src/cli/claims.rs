@@ -20,7 +20,7 @@ use crate::{
     cli::inspect,
     common::boxed_err_to_anyhow,
     config::WashConnectionOptions,
-    parser::{get_config, ComponentConfig, ProjectConfig, ProviderConfig, TypeConfig},
+    parser::{load_config, ComponentConfig, ProjectConfig, ProviderConfig, TypeConfig},
 };
 
 #[derive(Debug, Clone, Subcommand)]
@@ -350,7 +350,7 @@ pub async fn handle_command(
     command: ClaimsCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let project_config = get_config(None, Some(true)).ok();
+    let project_config = load_config(None, Some(true)).ok();
     match command {
         ClaimsCliCommand::Inspect(inspectcmd) => {
             warn!("claims inspect will be deprecated in future versions. Use inspect instead.");
@@ -1201,7 +1201,7 @@ mod test {
 
     #[test]
     fn rust_component_metadata_with_project_config_overrides() -> anyhow::Result<()> {
-        let result = get_config(
+        let result = load_config(
             Some(PathBuf::from(
                 "./tests/parser/files/rust_component_claims_metadata.toml",
             )),
@@ -1238,14 +1238,14 @@ mod test {
                 name: "testcomponent".to_string(),
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
-                path: PathBuf::from("./tests/parser/files/")
+                project_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
-                build_path: PathBuf::from("./tests/parser/files/")
+                build_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap()
                     .join("build"),
-                wit_path: PathBuf::from("./tests/parser/files/")
+                wit_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap()
                     .join("wit"),
@@ -1263,7 +1263,7 @@ mod test {
                 name: Some("testcomponent".to_string()),
                 ver: Some(Version::parse("0.1.0")?.to_string()),
                 rev: Some(666),
-                call_alias: Some("test-component".to_string()),
+                call_alias: None,
                 tags: vec!["test".to_string(), "wasmcloud.com/experimental".to_string()],
                 common: GenerateCommon {
                     directory: Some(PathBuf::from("./keys")),
@@ -1339,7 +1339,7 @@ mod test {
 
     #[test]
     fn rust_provider_metadata_with_project_config_overrides() -> anyhow::Result<()> {
-        let result = get_config(
+        let result = load_config(
             Some(PathBuf::from(
                 "./tests/parser/files/rust_provider_claims_metadata.toml",
             )),
@@ -1380,14 +1380,14 @@ mod test {
                 version: Version::parse("0.1.0").unwrap(),
                 revision: 666,
                 wasm_bin_name: None,
-                path: PathBuf::from("./tests/parser/files/")
+                project_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap(),
-                build_path: PathBuf::from("./tests/parser/files/")
+                build_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap()
                     .join("build"),
-                wit_path: PathBuf::from("./tests/parser/files/")
+                wit_dir: PathBuf::from("./tests/parser/files/")
                     .canonicalize()
                     .unwrap()
                     .join("wit"),

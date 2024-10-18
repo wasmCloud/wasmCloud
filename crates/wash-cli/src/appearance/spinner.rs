@@ -39,19 +39,15 @@ impl Spinner {
     /// Handles updating the spinner for text output
     /// JSON output will be corrupted with a spinner
     pub fn update_spinner_message(&self, msg: impl Into<Cow<'static, str>>) {
-        match &self.spinner {
-            Some(spinner) => {
-                spinner.set_prefix(">>>");
-                spinner.set_message(msg);
-            }
-            None => {}
+        if let Some(spinner) = &self.spinner {
+            spinner.set_prefix(">>>");
+            spinner.set_message(msg);
         }
     }
 
     pub fn finish_and_clear(&self) {
-        match &self.spinner {
-            Some(progress_bar) => progress_bar.finish_and_clear(),
-            None => {}
+        if let Some(progress_bar) = &self.spinner {
+            progress_bar.finish_and_clear()
         }
     }
 }

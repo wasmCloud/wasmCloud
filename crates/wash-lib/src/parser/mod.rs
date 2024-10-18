@@ -152,13 +152,13 @@ pub struct CommonConfig {
     /// Monotonically increasing revision number
     pub revision: i32,
     /// Path to the project root to determine where build commands should be run.
-    pub path: PathBuf,
+    pub project_dir: PathBuf,
     /// Path to the directory where built artifacts should be written. Defaults to a `build` directory
     /// in the project root.
-    pub build_path: PathBuf,
+    pub build_dir: PathBuf,
     /// Path to the directory where the WIT world and dependencies can be found. Defaults to a `wit`
     /// directory in the project root.
-    pub wit_path: PathBuf,
+    pub wit_dir: PathBuf,
     /// Expected name of the wasm module binary that will be generated
     /// (if not present, name is expected to be used as a fallback)
     pub wasm_bin_name: Option<String>,
@@ -684,7 +684,7 @@ pub struct DevConfig {
 /// # Arguments
 /// * `opt_path` - The path to the config file. If None, it will look for a wasmcloud.toml file in the current directory.
 /// * `use_env` - Whether to use the environment variables or not. If false, it will not attempt to use environment variables. Defaults to true.
-pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<ProjectConfig> {
+pub fn load_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<ProjectConfig> {
     let mut path = opt_path
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
@@ -694,7 +694,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     }
 
     path = fs::canonicalize(path)?;
-    let (project_path, wasmcloud_path) = if path.is_dir() {
+    let (wasmcloud_toml_dir, wasmcloud_toml_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {
             bail!("failed to find wasmcloud.toml in [{}]", path.display());
@@ -714,7 +714,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         );
     };
 
-    let mut config = Config::builder().add_source(config::File::from(wasmcloud_path.clone()));
+    let mut config = Config::builder().add_source(config::File::from(wasmcloud_toml_path.clone()));
 
     if use_env.unwrap_or(true) {
         config = config.add_source(config::Environment::with_prefix("WASMCLOUD"));
@@ -724,7 +724,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         .build()
         .map_err(|e| {
             if e.to_string().contains("is not of a registered file format") {
-                return anyhow!("invalid config file: {}", wasmcloud_path.display());
+                return anyhow!("invalid config file: {}", wasmcloud_toml_path.display());
             }
 
             anyhow!("{}", e)
@@ -734,8 +734,8 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let toml_project_config: WasmcloudDotToml = serde_json::from_value(json_value)?;
 
     toml_project_config
-        .convert(project_path)
-        .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, wasmcloud_path.display()))
+        .convert(wasmcloud_toml_dir)
+        .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, wasmcloud_toml_path.display()))
 }
 
 /// The wasmcloud.toml specification format as de-serialization friendly project configuration data
@@ -822,15 +822,15 @@ pub struct WasmcloudDotToml {
 impl WasmcloudDotToml {
     // Given a path to a valid cargo project, build an common_config enriched with Rust-specific information
     fn build_common_config_from_cargo_project(
-        path: PathBuf,
-        build_path: PathBuf,
-        wit_path: PathBuf,
+        project_dir: PathBuf,
+        build_dir: PathBuf,
+        wit_dir: PathBuf,
         name: Option<String>,
         version: Option<Version>,
         revision: i32,
         registry: RegistryConfig,
     ) -> Result<CommonConfig> {
-        let cargo_toml_path = path.join("Cargo.toml");
+        let cargo_toml_path = project_dir.join("Cargo.toml");
         if !cargo_toml_path.is_file() {
             bail!(
                 "missing/invalid Cargo.toml path [{}]",
@@ -842,7 +842,7 @@ impl WasmcloudDotToml {
         let mut cargo_toml = Manifest::from_path(cargo_toml_path)?;
 
         // Populate Manifest with lib/bin information
-        cargo_toml.complete_from_path(&path)?;
+        cargo_toml.complete_from_path(&project_dir)?;
 
         let cargo_pkg = cargo_toml
             .package
@@ -868,15 +868,15 @@ impl WasmcloudDotToml {
             name,
             version,
             revision,
-            wit_path,
-            build_path,
-            path,
+            wit_dir,
+            build_dir,
+            project_dir,
             wasm_bin_name,
             registry,
         })
     }
 
-    pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
+    pub fn convert(self, wasmcloud_toml_dir: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "component" => TypeConfig::Component(self.component),
             "provider" => TypeConfig::Provider(self.provider),
@@ -899,21 +899,25 @@ impl WasmcloudDotToml {
                 if p.is_absolute() {
                     p
                 } else {
-                    project_path.join(p)
+                    wasmcloud_toml_dir.join(p)
                 }
             })
-            .unwrap_or(project_path)
-            .canonicalize()
-            .context("failed to canonicalize project path")?;
-        let build_path = self.build.unwrap_or_else(|| project_path.join("build"));
-        let wit_path = self.wit.unwrap_or_else(|| project_path.join("wit"));
+            .unwrap_or(wasmcloud_toml_dir);
+        let project_path = project_path.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize project path: [{}]",
+                project_path.display()
+            )
+        })?;
+        let build_dir = self.build.unwrap_or_else(|| project_path.join("build"));
+        let wit_dir = self.wit.unwrap_or_else(|| project_path.join("wit"));
 
         let common_config = match language_config {
             LanguageConfig::Rust(_) => {
                 match Self::build_common_config_from_cargo_project(
                     project_path.clone(),
-                    build_path.clone(),
-                    wit_path.clone(),
+                    build_dir.clone(),
+                    wit_dir.clone(),
                     self.name.clone(),
                     self.version.clone(),
                     self.revision,
@@ -928,9 +932,9 @@ impl WasmcloudDotToml {
                         version: self.version.unwrap(),
                         revision: self.revision,
                         wasm_bin_name: None,
-                        path: project_path,
-                        wit_path,
-                        build_path,
+                        project_dir: project_path,
+                        wit_dir,
+                        build_dir,
                         registry: self.registry,
                     },
 
@@ -949,10 +953,10 @@ impl WasmcloudDotToml {
                         .version
                         .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
                     revision: self.revision,
-                    path: project_path,
+                    project_dir: project_path,
                     wasm_bin_name: None,
-                    wit_path,
-                    build_path,
+                    wit_dir,
+                    build_dir,
                     registry: self.registry,
                 }
             }

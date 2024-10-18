@@ -158,7 +158,7 @@ impl FromStr for AppManifestSource {
 /// Undeploy a model, instructing wadm to no longer manage the given application
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application is managed on, defaults to `default`
 /// * `model_name` - Model name to undeploy
 pub async fn undeploy_model(
@@ -178,7 +178,7 @@ pub async fn undeploy_model(
 /// Deploy a model, instructing wadm to manage the application
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application will be managed on, defaults to `default`
 /// * `model_name` - Model name to deploy
 /// * `version` - Version to deploy, defaults to deploying the latest "put" version
@@ -202,7 +202,7 @@ pub async fn deploy_model(
 /// Put a model definition, instructing wadm to store the application manifest for later deploys
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest will be stored on, defaults to `default`
 /// * `model` - The full YAML or JSON string containing the OAM wadm manifest
 ///
@@ -226,7 +226,7 @@ pub async fn put_model(
 /// Deploy a model, instructing wadm to manage the application
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application will be managed on, defaults to `default`
 /// * `model` - The full YAML or JSON string containing the OAM wadm manifest
 ///
@@ -250,7 +250,7 @@ pub async fn put_and_deploy_model(
 /// Query wadm for the history of a given model name
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve history for
 pub async fn get_model_history(
@@ -270,7 +270,7 @@ pub async fn get_model_history(
 /// Query wadm for the status of a given model by name
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve status for
 pub async fn get_model_status(
@@ -290,7 +290,7 @@ pub async fn get_model_status(
 /// Query wadm for details on a given model
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model to retrieve history for
 /// * `version` - Version to retrieve, defaults to retrieving the latest "put" version
@@ -314,7 +314,7 @@ pub async fn get_model_details(
 /// Delete a model version from wadm
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifest is stored on, defaults to `default`
 /// * `model_name` - Name of the model
 /// * `version` - Version to retrieve, defaults to deleting the latest "put" version (or all if `delete_all` is specified)
@@ -338,7 +338,7 @@ pub async fn delete_model_version(
 /// Query wadm for all application manifests
 ///
 /// # Arguments
-/// * `client` - The [Client] to use in order to send the request message
+/// * `client` - The [`Client`] to use in order to send the request message
 /// * `lattice` - Optional lattice name that the application manifests are stored on, defaults to `default`
 pub async fn get_models(client: &Client, lattice: Option<String>) -> Result<Vec<ModelSummary>> {
     let wadm_client = wadm_client::Client::from_nats_client(

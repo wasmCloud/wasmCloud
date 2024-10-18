@@ -73,7 +73,10 @@ pub async fn build_project(
     if !skip_fetch {
         // Fetch dependencies for the component before building
         let client = package_args.get_client().await?;
-        let lock_path = &config.common.path.join(wasm_pkg_core::lock::LOCK_FILE_NAME);
+        let lock_path = &config
+            .common
+            .project_dir
+            .join(wasm_pkg_core::lock::LOCK_FILE_NAME);
         let mut lock = if tokio::fs::try_exists(&lock_path).await? {
             LockFile::load_from_path(lock_path, false).await?
         } else {
@@ -84,7 +87,7 @@ pub async fn build_project(
         };
         let conf_path = &config
             .common
-            .path
+            .project_dir
             .join(wasm_pkg_core::config::CONFIG_FILE_NAME);
         let wkg_conf = if tokio::fs::try_exists(&conf_path).await? {
             wasm_pkg_core::config::Config::load_from_path(conf_path).await?
@@ -92,7 +95,7 @@ pub async fn build_project(
             wasm_pkg_core::config::Config::default()
         };
 
-        monkey_patch_fetch_logging(wkg_conf, &config.common.wit_path, &mut lock, client)
+        monkey_patch_fetch_logging(wkg_conf, &config.common.wit_dir, &mut lock, client)
             .await
             .context("Failed to patch logging dependency")?;
 

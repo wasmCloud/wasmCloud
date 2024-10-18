@@ -18,7 +18,7 @@ pub(crate) fn parse_component_wit(component: &[u8]) -> Result<(Resolve, WorldId)
 /// Parse Build a [`wit_parser::Resolve`] from a provided directory
 /// and select a given world
 pub(crate) fn parse_project_wit(project_cfg: &ProjectConfig) -> Result<(Resolve, WorldId)> {
-    let project_dir = &project_cfg.common.path;
+    let project_dir = &project_cfg.common.project_dir;
     let wit_dir = project_dir.join("wit");
     let world = project_cfg.project_type.wit_world();
 
