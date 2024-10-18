@@ -1,0 +1,24 @@
+{
+  /* Visit https://aka.ms/tsconfig to read more about this file */
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "esnext",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
+    "module": "es2022",                                /* Specify what module code is generated. */
+
+    /* Source code */
+    "paths": {
+      "wasi:http/types@0.2.0": [ "./generated/types/wasi-http-types.d.ts" ]
+    },                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
+    "allowJs": false,
+
+    /* Generation */
+    "outDir": "./dist",
+    "forceConsistentCasingInFileNames": true,            /* Ensure that casing is correct in imports. */
+
+    /* Type Checking */
+    "strict": true,                                      /* Enable all strict type-checking options. */
+
+    /* Completeness */
+    "skipLibCheck": true                                 /* Skip type checking all .d.ts files. */
+  }
+}
