@@ -4,10 +4,10 @@ This repository contains a hello world HTTP component, written in [Typescript][t
 
 This component:
 
-- Uses Typescript for it's implementation
+- Uses [Typescript][ts] for it's implementation
 - Uses the [`wasi:http`][wasi-http] standard WIT definitions
 - Relies on the [`httpserver` capability provider][httpserver-provider] (which exposes the [`wasmcloud:httpserver` interface][httpserver-interface])
-- Return `"hello from Typescript"` to all HTTP requests
+- Returns `"hello from Typescript"` to all HTTP requests
 - Can be declaratively provisioned with [`wadm`][wadm]
 
 [ts]: https://www.typescriptlang.org/
@@ -18,10 +18,10 @@ This component:
 
 # Dependencies
 
-This relies on the following installed software:
+Building this project relies on the following software:
 
 | Name   | Description                                                                                                 |
-| ------ | ----------------------------------------------------------------------------------------------------------- |
+|--------|-------------------------------------------------------------------------------------------------------------|
 | `wash` | [Wasmcloud Shell][wash] controls your [wasmcloud][wasmcloud] host instances and enables building components |
 | `npm`  | [Node Package Manager (NPM)][npm] which manages packages for for the NodeJS ecosystem                       |
 | `node` | [NodeJS runtime][nodejs] (see `.nvmrc` for version)                                                         |
@@ -30,76 +30,36 @@ This relies on the following installed software:
 [node]: https://nodejs.org
 [npm]: https://github.com/npm/cli
 
-# Get started
+# Quickstart
 
-## Install NodeJS dependencies
-
-If you have the basic dependencies installed, you can install NodeJS-level dependcies:
+To get started developing this repository quickly, clone the repo and run `wash dev`:
 
 ```console
-npm install
+wash dev
 ```
 
-## Start a wasmcloud host
+`wash dev` does many things for you:
 
-To start a wasmcloud host you can use `wash`:
+- Starts the [wasmCloud host][wasmcloud-host] that can run your WebAssembly component
+- Builds this project (including necessary `npm` script targets)
+- Builds a declarative WADM manifest consisting of:
+  - Your locally built component
+  - A [HTTP server provider][httpserver-provider] which will receive requests from the outside world (on port 8000 by default)
+  - Necessary links between providers and your component so your component can handle web traffic
+- Deploys the built manifest (i.e all dependencies to run this application) locally
+- Watches your code for changes and re-deploys when necessary.
 
-```console
-wash up
-```
+> [!NOTE]
+> To do things more manually, see [`docs/slow-start.md`](./docs/slow-start.md).
 
-This command won't return (as it's the running host process), but you can view the output of the host.
-
-## Build the component
-
-To build the [component][wasmcloud-component], we can use `wash`:
-
-```console
-wash build
-```
-
-This will build and sign the component and place a signed [WebAssembly component][wasm-component] at `build/index_s.wasm`.
-
-`build` performs many substeps (see `package.json` for details):
-
-- (`build:tsc`) transpiles Typescript code into Javascript code
-- (`build:js`) builds a javascript module runnable in NodeJS from a [WebAssembly component][wasm-component] using the [`jco` toolchain][jco]
-- (`build:component`) build and sign a WebAssembly component for this component using `wash`
-
-[wasmcloud-component]: https://wasmcloud.com/docs/concepts/webassembly-components
-[wasm-component]: https://component-model.bytecodealliance.org/
-[jco]: https://github.com/bytecodealliance/jco
-
-## Start the component along with the HTTP server provider
-
-To start the component, HTTP server provider and everything we need to run:
-
-```console
-npm run wadm:start
-```
-
-This command will deploy the application to your running wasmcloud host, using [`wadm`][wadm], a declarative WebAssembly orchestrator.
+[wasmcloud-host]: https://wasmcloud.com/docs/concepts/hosts
 
 ## Send a request to the running component
 
-To send a request to the running component (via the HTTP server provider):
+Once `wash dev` is serving your component, to send a request to the running component (via the HTTP server provider):
 
 ```console
-curl localhost:8081
-```
-
-> [!NOTE]
-> Confused as to why it is port 8081?
->
-> See `typescript-http-hello-world.wadm.yaml` for more information on the pieces of the architecture;
-> components, providers, and link definitions.
-
-## (Optional) reload on code change
-
-To quickly reload your application after changing the code in `index.ts`:
-
-```console
-npm run reload
+curl localhost:8080
 ```
 
 ## Adding Capabilities
