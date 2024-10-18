@@ -143,6 +143,10 @@ pub struct InspectCommand {
     #[clap(long = "insecure-skip-tls-verify")]
     pub insecure_skip_tls_verify: bool,
 
+    /// Maximum number of concurrent chunks to download from an OCI registry
+    #[clap(long = "concurrency", default_value_t = 16)]
+    pub concurrency: usize,
+
     /// skip the local OCI cache
     #[clap(long = "no-cache")]
     no_cache: bool,
@@ -206,6 +210,7 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
             password: cmd.password,
             insecure: cmd.insecure,
             insecure_skip_tls_verify: cmd.insecure_skip_tls_verify,
+            concurrency: cmd.concurrency,
             no_cache: cmd.no_cache,
         }
     }
@@ -599,6 +604,7 @@ mod test {
                 insecure,
                 insecure_skip_tls_verify,
                 no_cache,
+                concurrency: _c,
             }) => {
                 assert_eq!(archive, LOCAL);
                 assert_eq!(digest.unwrap(), "sha256:blah");
@@ -636,6 +642,7 @@ mod test {
                 insecure,
                 insecure_skip_tls_verify,
                 no_cache,
+                concurrency: _c,
             }) => {
                 assert_eq!(archive, REMOTE);
                 assert_eq!(digest.unwrap(), "sha256:blah");
