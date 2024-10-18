@@ -4,10 +4,63 @@ import {
   OutgoingBody,
   OutgoingResponse,
   Fields,
-  MethodGet,
 } from "wasi:http/types@0.2.0";
 
-class CheckRequest {
+import * as v from "valibot";
+import { passwordStrength } from "check-password-strength";
+import type {
+  Options as PasswordCheckOptions,
+  FirstOption as PasswordChecKFirstOption,
+} from "check-password-strength";
+
+/** Amount to read from a wasi:io stream */
+const WASI_IO_READ_MAX_BYTES = 4096n;
+
+enum PasswordStrength {
+  VeryWeak = "very-weak",
+  Weak = "weak",
+  Medium = "medium",
+  Strong = "strong",
+}
+
+/**
+ * Default rules to use for password checking
+ *
+ * See: https://www.npmjs.com/package/check-password-strength
+ */
+const PASSWORD_CHECK_RULES: PasswordCheckOptions<PasswordStrength> = [
+  {
+    id: 0,
+    value: PasswordStrength.VeryWeak,
+    minDiversity: 0,
+    minLength: 0,
+  },
+  {
+    id: 1,
+    value: PasswordStrength.VeryWeak,
+    minDiversity: 1,
+    minLength: 8,
+  },
+  {
+    id: 2,
+    value: PasswordStrength.VeryWeak,
+    minDiversity: 3,
+    minLength: 10,
+  },
+  {
+    id: 3,
+    value: PasswordStrength.VeryWeak,
+    minDiversity: 4,
+    minLength: 15,
+  },
+];
+
+/**
+ * Represents an API request for checking a password
+ *
+ * @class
+ */
+class PasswordCheckRequest {
   // For use when checking a value that exists in the secret store
   // but is pointed to by the API request
   public secret?: {
@@ -19,9 +72,45 @@ class CheckRequest {
   // Used when checking a value directly submitted in the API request
   public value?: string;
 
-  /** Parse a CheckRequest from a wasi:http `IncomingRequest` */
-  static async fromRequest(req: IncomingRequest): Promise<CheckRequest> {
-    throw new Error("NOT IMPLEMENTED");
+  /** Schema that can be used to parse an object */
+  static schema() {
+    return v.object({
+      secret: v.optional(
+        v.object({
+          name: v.optional(v.string()),
+          key: v.optional(v.string()),
+          field: v.optional(v.string()),
+        })
+      ),
+      value: v.optional(v.string()),
+    });
+  }
+
+  /** Parse a PasswordCheckRequest from a wasi:http `IncomingRequest` */
+  static async fromRequest(
+    req: IncomingRequest
+  ): Promise<PasswordCheckRequest> {
+    let stream = req.consume().stream();
+    let buf = [];
+    while (true) {
+      const chunk = stream.blockingRead(WASI_IO_READ_MAX_BYTES);
+      buf.push(...chunk);
+      if (!chunk || chunk.length == 0) {
+        break;
+      }
+    }
+    const bytes = new Uint8Array(buf);
+
+    try {
+      return v.parse(
+        PasswordCheckRequest.schema(),
+        new TextDecoder("utf8").decode(bytes)
+      );
+    } catch {
+      throw new Error(
+        "failed to parse incoming data as a PasswordCheckRequest"
+      );
+    }
   }
 }
 
@@ -63,11 +152,20 @@ class Response<T> {
   }
 }
 
-enum PasswordStrength {
-  VeryWeak = "very-weak",
-  Weak = "weak",
-  Medium = "medium",
-  Strong = "strong",
+/** Create a PasswordStrength enum value from a ID provided by `check-password-strength` */
+function passwordStrengthFromID(id: number): PasswordStrength {
+  switch (id) {
+    case 0:
+      return PasswordStrength.VeryWeak;
+    case 1:
+      return PasswordStrength.Weak;
+    case 2:
+      return PasswordStrength.Medium;
+    case 3:
+      return PasswordStrength.Strong;
+    default:
+      throw new Error(`invalid check-password-strength ID [${id}]`);
+  }
 }
 
 /** API response for a check result */
@@ -85,13 +183,29 @@ interface CheckResult {
  *
  * This function can check a password whether it's been provided or is a secret.
  *
- * @param {CheckRequest} cr - The Check request to complete
+ * @param {PasswordCheckRequest} cr - The Check request to complete
  * @returns {Promise<CheckResult>} A promise that resolves to the HTTP response with the check result
  */
 async function handleSecretCheck(
-  cr: CheckRequest
+  cr: PasswordCheckRequest
 ): Promise<Response<CheckResult>> {
-  throw new Error("NOT IMPLEMENTED");
+  if (cr.value) {
+    const {
+      id,
+      value: strength,
+      contains,
+      length,
+    } = passwordStrength(cr.value, PASSWORD_CHECK_RULES);
+    return Response.ok({
+      strength,
+      length,
+      contains,
+    });
+  }
+
+  // TODO: implement secret checking
+
+  throw new Error("SECRET EXTRACTION NOT YET IMPLEMENTED");
 }
 
 /**
@@ -116,9 +230,9 @@ export const incomingHandler = {
     switch (path) {
       case "/api/v1/check":
         // Parse the check request from the body
-        let cr: CheckRequest;
+        let cr: PasswordCheckRequest;
         try {
-          cr = await CheckRequest.fromRequest(req);
+          cr = await PasswordCheckRequest.fromRequest(req);
         } catch (err) {
           await sendResponseJSON(resp, 400, {
             status: "error",
