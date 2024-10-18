@@ -321,7 +321,7 @@ tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.24", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
-unicase = { version = "2.7.0", default-features = false }
+unicase = { version = "2.8.0", default-features = false }
 # We enable default features for URL by default here to help with the no-std
 # transition for url. We should be able to remove default features and explicitly
 # enable "std" above soon (tm).
