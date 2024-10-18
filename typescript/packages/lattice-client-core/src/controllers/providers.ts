@@ -1,5 +1,5 @@
+import type {WasmCloudProvider,  ControlResponse} from '@/types';
 import {BaseController} from '@/controllers/base-controller';
-import {type ControlResponse} from '@/types';
 
 type StartProviderBody = {
   /** The ID of the host to start the provider on */
@@ -53,6 +53,21 @@ class ProvidersController extends BaseController {
       `${this.config.ctlTopic}.provider.stop.${body.host_id}`,
       JSON.stringify(body),
     );
+  }
+
+  /**
+   * Retrieves a list of all providers currently running in the lattice
+   * @returns a list of providers
+   */
+  async list(): Promise<ControlResponse<Record<string, WasmCloudProvider>>> {
+    try {
+      const response = await this.connection.getBucketEntry<
+        Record<string, WasmCloudProvider>
+      >("wadm_state", "provider_default");
+      return {success: true, message: "Provider data successfully fetched", response};
+    } catch {
+      return {success: false, message: "There was an error fetching the providers", response: {}};
+    }
   }
 }
 

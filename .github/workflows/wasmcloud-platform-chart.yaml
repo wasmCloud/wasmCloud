@@ -67,8 +67,14 @@ jobs:
           version: ${{ env.HELM_VERSION }}
 
       - name: Package
+        env:
+          CHART_DIR: charts/wasmcloud-platform
         run: |
-          helm package charts/wasmcloud-platform -d .helm-charts
+          helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+          cd $CHART_DIR
+          helm dependency build
+          cd -
+          helm package $CHART_DIR -d .helm-charts
 
       - name: Login to GHCR
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567

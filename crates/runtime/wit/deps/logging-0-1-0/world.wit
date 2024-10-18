@@ -1,5 +1,0 @@
-package wasi:logging@0.1.0-draft;
-
-world imports {
-    import logging;
-}

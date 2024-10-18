@@ -10,7 +10,7 @@
 //!   import wasmcloud:postgres/query@0.1.1-draft;
 //!
 //!   export tasks;
-//!   export wasi:http/incoming-handler@0.2.0;
+//!   export wasi:http/incoming-handler@0.2.1;
 //! }
 //! ```
 //!

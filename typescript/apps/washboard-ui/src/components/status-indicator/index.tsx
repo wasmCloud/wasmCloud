@@ -1,9 +1,10 @@
+import type {WasmCloudProviderState} from '@wasmcloud/lattice-client-core';
 import {cva} from 'class-variance-authority';
 import * as React from 'react';
 import {cn} from '@/helpers';
 
 type StatusIndicatorProps = React.HTMLAttributes<HTMLDivElement> & {
-  status?: 'Running' | 'Pending' | 'Failed';
+  status?: WasmCloudProviderState;
 };
 
 const styles = cva('inline-block size-2 rounded-full bg-current', {

@@ -32,7 +32,10 @@ export async function canConnect(url: string): Promise<boolean> {
   }
 }
 
-export function getCombinedInventoryFromHosts(hosts: Record<string, WasmCloudHost>) {
+export function getCombinedInventoryFromHostsAndProviders(
+  hosts: Record<string, WasmCloudHost>,
+  providersData: Record<string, WasmCloudProvider>,
+) {
   const inventory: {
     components: Record<string, WasmCloudComponent>;
     providers: Record<string, WasmCloudProvider>;
@@ -60,17 +63,25 @@ export function getCombinedInventoryFromHosts(hosts: Record<string, WasmCloudHos
     }
 
     for (const [key, provider] of Object.entries(host.providers)) {
+      const providerWithHostStatus = providersData[provider.id];
       const existingProvider = inventory.providers[key];
       if (existingProvider === undefined) {
         inventory.providers[key] = {
           id: provider.id,
           name: provider.name,
           annotations: provider.annotations ?? {},
-          image_ref: provider.image_ref ?? '',
-          hosts: [host.host_id],
+          reference: provider.image_ref,
+          hosts: providerWithHostStatus?.hosts ?? {},
         };
       } else {
-        existingProvider.hosts = [...(existingProvider.hosts ?? []), host.host_id];
+        existingProvider.hosts = {
+          ...existingProvider.hosts,
+          ...providerWithHostStatus?.hosts,
+        };
+        existingProvider.annotations = {
+          ...existingProvider.annotations,
+          ...provider.annotations,
+        };
       }
     }
   }

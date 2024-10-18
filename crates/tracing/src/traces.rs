@@ -325,7 +325,7 @@ fn get_log_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
             .add_directive("async_nats=info".parse().unwrap())
             .add_directive("cranelift_codegen=warn".parse().unwrap())
             .add_directive("hyper=info".parse().unwrap())
-            .add_directive("oci_distribution=info".parse().unwrap());
+            .add_directive("oci_client=info".parse().unwrap());
 
         // Allow RUST_LOG to override the other directives
         if let Ok(rust_log) = env::var("RUST_LOG") {

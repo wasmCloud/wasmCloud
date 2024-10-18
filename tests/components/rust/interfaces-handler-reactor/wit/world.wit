@@ -1,8 +1,8 @@
 package test-components:interfaces-handler;
 
 world component {
-  export test-components:testing/pingpong;
-  export test-components:testing/busybox;
+  export test-components:testing/pingpong@0.1.0;
+  export test-components:testing/busybox@0.1.0;
 
   export wasmcloud:messaging/handler@0.2.0;
 }

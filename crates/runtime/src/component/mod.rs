@@ -24,12 +24,14 @@ use wrpc_runtime_wasmtime::{
 };
 
 pub use bus::Bus;
+pub use bus1_0_0::Bus as Bus1_0_0;
 pub use config::Config;
 pub use logging::Logging;
 pub use secrets::Secrets;
 
 pub(crate) mod blobstore;
 mod bus;
+mod bus1_0_0;
 mod config;
 mod http;
 mod keyvalue;
@@ -67,72 +69,105 @@ macro_rules! skip_static_instances {
             | "wasi:blobstore/types@0.2.0-draft"
             | "wasi:cli/environment@0.2.0"
             | "wasi:cli/environment@0.2.1"
+            | "wasi:cli/environment@0.2.2"
             | "wasi:cli/exit@0.2.0"
             | "wasi:cli/exit@0.2.1"
+            | "wasi:cli/exit@0.2.2"
             | "wasi:cli/stderr@0.2.0"
             | "wasi:cli/stderr@0.2.1"
+            | "wasi:cli/stderr@0.2.2"
             | "wasi:cli/stdin@0.2.0"
             | "wasi:cli/stdin@0.2.1"
+            | "wasi:cli/stdin@0.2.2"
             | "wasi:cli/stdout@0.2.0"
             | "wasi:cli/stdout@0.2.1"
+            | "wasi:cli/stdout@0.2.2"
             | "wasi:cli/terminal-input@0.2.0"
             | "wasi:cli/terminal-input@0.2.1"
+            | "wasi:cli/terminal-input@0.2.2"
             | "wasi:cli/terminal-output@0.2.0"
             | "wasi:cli/terminal-output@0.2.1"
+            | "wasi:cli/terminal-output@0.2.2"
             | "wasi:cli/terminal-stderr@0.2.0"
             | "wasi:cli/terminal-stderr@0.2.1"
+            | "wasi:cli/terminal-stderr@0.2.2"
             | "wasi:cli/terminal-stdin@0.2.0"
             | "wasi:cli/terminal-stdin@0.2.1"
+            | "wasi:cli/terminal-stdin@0.2.2"
             | "wasi:cli/terminal-stdout@0.2.0"
             | "wasi:cli/terminal-stdout@0.2.1"
+            | "wasi:cli/terminal-stdout@0.2.2"
             | "wasi:clocks/monotonic-clock@0.2.0"
             | "wasi:clocks/monotonic-clock@0.2.1"
+            | "wasi:clocks/monotonic-clock@0.2.2"
             | "wasi:clocks/timezone@0.2.1"
+            | "wasi:clocks/timezone@0.2.2"
             | "wasi:clocks/wall-clock@0.2.0"
             | "wasi:clocks/wall-clock@0.2.1"
+            | "wasi:clocks/wall-clock@0.2.2"
             | "wasi:config/runtime@0.2.0-draft"
+            | "wasi:config/store@0.2.0-draft"
             | "wasi:filesystem/preopens@0.2.0"
             | "wasi:filesystem/preopens@0.2.1"
+            | "wasi:filesystem/preopens@0.2.2"
             | "wasi:filesystem/types@0.2.0"
             | "wasi:filesystem/types@0.2.1"
+            | "wasi:filesystem/types@0.2.2"
             | "wasi:http/incoming-handler@0.2.0"
             | "wasi:http/incoming-handler@0.2.1"
+            | "wasi:http/incoming-handler@0.2.2"
             | "wasi:http/outgoing-handler@0.2.0"
             | "wasi:http/outgoing-handler@0.2.1"
+            | "wasi:http/outgoing-handler@0.2.2"
             | "wasi:http/types@0.2.0"
             | "wasi:http/types@0.2.1"
+            | "wasi:http/types@0.2.2"
             | "wasi:io/error@0.2.0"
             | "wasi:io/error@0.2.1"
+            | "wasi:io/error@0.2.2"
             | "wasi:io/poll@0.2.0"
             | "wasi:io/poll@0.2.1"
+            | "wasi:io/poll@0.2.2"
             | "wasi:io/streams@0.2.0"
             | "wasi:io/streams@0.2.1"
+            | "wasi:io/streams@0.2.2"
             | "wasi:keyvalue/atomics@0.2.0-draft"
             | "wasi:keyvalue/batch@0.2.0-draft"
             | "wasi:keyvalue/store@0.2.0-draft"
-            | "wasi:logging/logging@0.1.0-draft"
             | "wasi:logging/logging"
+            | "wasi:logging/logging@0.1.0-draft"
             | "wasi:random/insecure-seed@0.2.0"
             | "wasi:random/insecure-seed@0.2.1"
+            | "wasi:random/insecure-seed@0.2.2"
             | "wasi:random/insecure@0.2.0"
             | "wasi:random/insecure@0.2.1"
+            | "wasi:random/insecure@0.2.2"
             | "wasi:random/random@0.2.0"
             | "wasi:random/random@0.2.1"
+            | "wasi:random/random@0.2.2"
             | "wasi:sockets/instance-network@0.2.0"
             | "wasi:sockets/instance-network@0.2.1"
+            | "wasi:sockets/instance-network@0.2.2"
             | "wasi:sockets/ip-name-lookup@0.2.0"
             | "wasi:sockets/ip-name-lookup@0.2.1"
+            | "wasi:sockets/ip-name-lookup@0.2.2"
             | "wasi:sockets/network@0.2.0"
             | "wasi:sockets/network@0.2.1"
+            | "wasi:sockets/network@0.2.2"
             | "wasi:sockets/tcp-create-socket@0.2.0"
             | "wasi:sockets/tcp-create-socket@0.2.1"
+            | "wasi:sockets/tcp-create-socket@0.2.2"
             | "wasi:sockets/tcp@0.2.0"
             | "wasi:sockets/tcp@0.2.1"
+            | "wasi:sockets/tcp@0.2.2"
             | "wasi:sockets/udp-create-socket@0.2.0"
             | "wasi:sockets/udp-create-socket@0.2.1"
+            | "wasi:sockets/udp-create-socket@0.2.2"
             | "wasi:sockets/udp@0.2.0"
             | "wasi:sockets/udp@0.2.1"
+            | "wasi:sockets/udp@0.2.2"
             | "wasmcloud:bus/lattice@1.0.0"
+            | "wasmcloud:bus/lattice@2.0.0"
             | "wasmcloud:messaging/consumer@0.2.0"
             | "wasmcloud:messaging/handler@0.2.0"
             | "wasmcloud:messaging/types@0.2.0"
@@ -357,6 +392,8 @@ where
             .context("failed to link `wasi:blobstore/types`")?;
         capability::config::runtime::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:config/runtime`")?;
+        capability::config::store::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasi:config/store`")?;
         capability::keyvalue::atomics::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasi:keyvalue/atomics`")?;
         capability::keyvalue::store::add_to_linker(&mut linker, |ctx| ctx)
@@ -368,8 +405,10 @@ where
         capability::unversioned_logging::logging::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link unversioned `wasi:logging/logging`")?;
 
+        capability::bus1_0_0::lattice::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:bus/lattice@1.0.0`")?;
         capability::bus::lattice::add_to_linker(&mut linker, |ctx| ctx)
-            .context("failed to link `wasmcloud:bus/lattice`")?;
+            .context("failed to link `wasmcloud:bus/lattice@2.0.0`")?;
         capability::messaging::consumer::add_to_linker(&mut linker, |ctx| ctx)
             .context("failed to link `wasmcloud:messaging/consumer`")?;
         capability::secrets::reveal::add_to_linker(&mut linker, |ctx| ctx)
@@ -470,10 +509,9 @@ where
             .exports(&self.engine)
         {
             match (name, ty) {
-                (
-                    "wasi:http/incoming-handler@0.2.0" | "wasi:http/incoming-handler@0.2.1",
-                    types::ComponentItem::ComponentInstance(..),
-                ) => {
+                (_, types::ComponentItem::ComponentInstance(..))
+                    if name.starts_with("wasi:http/incoming-handler@0.2") =>
+                {
                     let instance = instance.clone();
                     let [(_, _, handle)] = wrpc_interface_http::bindings::exports::wrpc::http::incoming_handler::serve_interface(
                         srv,

@@ -1,4 +1,4 @@
-import {type LatticeClient, getCombinedInventoryFromHosts} from '@wasmcloud/lattice-client-core';
+import {type LatticeClient, getCombinedInventoryFromHostsAndProviders} from '@wasmcloud/lattice-client-core';
 import * as React from 'react';
 import {useLatticeClient} from '@/context/use-lattice-client';
 
@@ -25,9 +25,10 @@ function useLatticeData() {
 
 async function fetchInventories(client: LatticeClient) {
   const result = await client.hosts.list({expand: true});
+  const {response: rawProviders} = await client.providers.list();
   const hostsList = result.response;
   const hosts = Object.fromEntries(hostsList.map((host) => [host.host_id, host]));
-  const {components, providers} = getCombinedInventoryFromHosts(hosts);
+  const {components, providers} = getCombinedInventoryFromHostsAndProviders(hosts, rawProviders);
   return {hosts, components, providers};
 }
 

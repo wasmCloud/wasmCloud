@@ -1,3 +1,0 @@
-blobstore = "https://github.com/WebAssembly/wasi-blobstore/archive/ef387e4bd5226c40cc9b62ce86fa0158ebfcff95.tar.gz"
-http = "https://github.com/WebAssembly/wasi-http/archive/v0.2.1.tar.gz"
-logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"

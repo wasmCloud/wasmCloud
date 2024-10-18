@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{bail, Context as _};
-use oci_distribution::client::ClientProtocol;
-use oci_distribution::client::ImageData;
-use oci_distribution::Reference;
+use oci_client::client::ClientProtocol;
+use oci_client::client::ImageData;
+use oci_client::Reference;
 use oci_wasm::WASM_LAYER_MEDIA_TYPE;
 use oci_wasm::WASM_MANIFEST_MEDIA_TYPE;
 use tokio::fs;
@@ -36,7 +36,7 @@ pub struct OciFetcher {
     additional_ca_paths: Vec<PathBuf>,
     allow_latest: bool,
     allow_insecure: bool,
-    auth: oci_distribution::secrets::RegistryAuth,
+    auth: oci_client::secrets::RegistryAuth,
 }
 
 impl Default for OciFetcher {
@@ -45,7 +45,7 @@ impl Default for OciFetcher {
             additional_ca_paths: Vec::default(),
             allow_latest: false,
             allow_insecure: false,
-            auth: oci_distribution::secrets::RegistryAuth::Anonymous,
+            auth: oci_client::secrets::RegistryAuth::Anonymous,
         }
     }
 }
@@ -158,13 +158,13 @@ impl OciFetcher {
                 tls::load_certs_from_paths(&self.additional_ca_paths)
                     .context("failed to load CA certs from provided paths")?
                     .iter()
-                    .map(|cert| oci_distribution::client::Certificate {
-                        encoding: oci_distribution::client::CertificateEncoding::Der,
+                    .map(|cert| oci_client::client::Certificate {
+                        encoding: oci_client::client::CertificateEncoding::Der,
                         data: cert.to_vec(),
                     }),
             );
         }
-        let c = oci_distribution::Client::new(oci_distribution::client::ClientConfig {
+        let c = oci_client::Client::new(oci_client::client::ClientConfig {
             protocol,
             extra_root_certificates: certs,
             ..Default::default()

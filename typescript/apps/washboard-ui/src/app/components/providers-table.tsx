@@ -1,5 +1,7 @@
 import {
   SortingState,
+  Table as ReactTable,
+  Row as ReactTableRow,
   createColumnHelper,
   flexRender,
   getCoreRowModel,
@@ -8,7 +10,11 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
-import {useLatticeData, WasmCloudProvider} from '@wasmcloud/lattice-client-react';
+import {
+  useLatticeData,
+  type WasmCloudProvider,
+  type WasmCloudProviderState,
+} from '@wasmcloud/lattice-client-react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useMemo, useState} from 'react';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/collapsible';
@@ -69,21 +75,12 @@ const columns = [
     id: 'health',
     header: 'Health',
     cell: (info) => {
-      const healthSummary: 'Running' | 'Pending' | 'Failed' = Object.values(info.getValue()).reduce(
-        (summary, currentStatus): 'Running' | 'Pending' | 'Failed' => {
-          // health status can be 'Running', 'Pending' or 'Failed'
-          if (summary === 'Failed') {
-            return summary;
-          } else if (summary === 'Pending') {
-            return currentStatus === 'Failed' ? 'Failed' : 'Pending';
-          } else if (currentStatus === 'Running') {
-            return currentStatus;
-          } else {
-            return 'Pending';
-          }
-        },
-        'Running',
-      ) as 'Running' | 'Pending' | 'Failed';
+      const healthSummary = Object.values(info.getValue()).reduce((summary, currentStatus) => {
+        if (summary === 'Failed' || currentStatus === 'Failed') return 'Failed';
+        if (summary === 'Pending' || currentStatus === 'Pending') return 'Pending';
+        if (summary === 'Running' && currentStatus === 'Running') return 'Running';
+        return 'Pending';
+      }, 'Running');
       return (
         <div className="flex place-items-center">
           <StatusIndicator status={healthSummary} className="me-2" /> {healthSummary}
@@ -102,8 +99,13 @@ const columns = [
     meta: {
       baseRow: 'hidden',
       expandedRow: 'visible',
-      expandedCell: (_host, status: string) => () => {
-        return status;
+      expandedCell: (key: string) => (info) => {
+        const providerHealth = info.getValue()[key];
+        return (
+          <div className="flex place-items-center">
+            <StatusIndicator status={providerHealth} className="me-2" /> {providerHealth}
+          </div>
+        );
       },
     },
   }),
@@ -122,6 +124,81 @@ const columns = [
     cell: (info) => WadmManagedIndicator(info.getValue()),
   }),
 ];
+
+const ProvidersTableMainRow = (row: ReactTableRow<WasmCloudProvider>) => {
+  return (
+    <TableRow>
+      {row
+        .getVisibleCells()
+        .map((cell) =>
+          cell.column.columnDef.meta?.baseRow === 'hidden' ? null : (
+            <TableCell key={cell.id}>
+              {cell.column.columnDef.meta?.baseRow !== 'empty' &&
+                flexRender(cell.column.columnDef.cell, cell.getContext())}
+            </TableCell>
+          ),
+        )}
+    </TableRow>
+  );
+};
+
+const ProvidersTableExpandedRow = (row: ReactTableRow<WasmCloudProvider>) => {
+  const hostStates = row.getValue('hosts') as Record<string, WasmCloudProviderState>;
+  if (!hostStates) return null;
+
+  const orderedHostIDs = Object.keys(hostStates).sort((a, b) => (a > b ? 1 : -1));
+
+  return (
+    <>
+      {orderedHostIDs.map((hostId) => (
+        <TableRow key={`${row.id}-${hostId}`} data-expanded="true">
+          {row
+            .getVisibleCells()
+            .map((cell) =>
+              cell.column.columnDef.meta?.expandedRow === 'hidden' ? null : (
+                <TableCell key={cell.id}>
+                  {cell.column.columnDef.meta?.expandedRow === 'empty'
+                    ? null
+                    : flexRender(
+                        cell.column.columnDef.meta?.expandedCell?.(hostId, hostId) ??
+                          cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                </TableCell>
+              ),
+            )}
+        </TableRow>
+      ))}
+    </>
+  );
+};
+
+const ProviderTableBody = (table: ReactTable<WasmCloudProvider>) => {
+  return (
+    <TableBody>
+      {table.getRowModel().rows?.length ? (
+        table.getRowModel().rows.map((row) => (
+          <Collapsible key={row.id} asChild>
+            <>
+              <ProvidersTableMainRow {...row} />
+              <CollapsibleContent asChild>
+                <Fragment>
+                  <ProvidersTableExpandedRow {...row} />
+                </Fragment>
+              </CollapsibleContent>
+            </>
+          </Collapsible>
+        ))
+      ) : (
+        <TableRow>
+          <TableCell colSpan={columns.length} className="h-24 text-center">
+            No results.
+          </TableCell>
+        </TableRow>
+      )}
+    </TableBody>
+  );
+};
 
 export function ProvidersTable(): ReactElement {
   const {providers} = useLatticeData();
@@ -169,64 +246,7 @@ export function ProvidersTable(): ReactElement {
                 </TableRow>
               ))}
             </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows?.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <Collapsible key={row.id} asChild>
-                    <Fragment>
-                      <TableRow>
-                        {row
-                          .getVisibleCells()
-                          .map((cell) =>
-                            cell.column.columnDef.meta?.baseRow === 'hidden' ? null : (
-                              <TableCell key={cell.id}>
-                                {cell.column.columnDef.meta?.baseRow === 'empty'
-                                  ? null
-                                  : flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </TableCell>
-                            ),
-                          )}
-                      </TableRow>
-                      <CollapsibleContent asChild>
-                        <Fragment>
-                          {(row.getValue('hosts') as string[]).length > 0 &&
-                            (row.getValue('hosts') as string[])
-                              .sort((a, b) => (a > b ? 1 : -1))
-                              .map((hostId) => (
-                                <TableRow key={row.id + '-' + hostId} data-expanded="true">
-                                  {row
-                                    .getVisibleCells()
-                                    .map((cell) =>
-                                      cell.column.columnDef.meta?.expandedRow ===
-                                      'hidden' ? null : (
-                                        <TableCell key={cell.id}>
-                                          {cell.column.columnDef.meta?.expandedRow === 'empty'
-                                            ? null
-                                            : flexRender(
-                                                cell.column.columnDef.meta?.expandedCell?.(
-                                                  hostId,
-                                                  hostId,
-                                                ) ?? cell.column.columnDef.cell,
-                                                cell.getContext(),
-                                              )}
-                                        </TableCell>
-                                      ),
-                                    )}
-                                </TableRow>
-                              ))}
-                        </Fragment>
-                      </CollapsibleContent>
-                    </Fragment>
-                  </Collapsible>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={columns.length} className="h-24 text-center">
-                    No results.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
+            <ProviderTableBody {...table} />
           </Table>
         </div>
       </div>

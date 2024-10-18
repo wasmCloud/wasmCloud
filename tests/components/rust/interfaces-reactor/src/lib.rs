@@ -1,7 +1,7 @@
 wit_bindgen::generate!({
     with: {
-        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
+        "wasi:http/types@0.2.2": wasmcloud_component::wasi::http::types,
+        "wasi:io/streams@0.2.2": wasmcloud_component::wasi::io::streams,
         "wasmcloud:messaging/types@0.2.0": wasmcloud_component::wasmcloud::messaging::types,
     },
     generate_all,
@@ -73,6 +73,16 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     // Record / struct argument
     let is_good_boy = busybox::is_good_boy(&doggo);
 
+    let config_value = config::store::get(&config_key).expect("failed to get config value");
+    let config_value_legacy =
+        wasi::config::runtime::get(&config_key).expect("failed to get config value");
+    assert_eq!(config_value, config_value_legacy);
+
+    let all_config = config::store::get_all().expect("failed to get all config values");
+    let all_config_legacy =
+        wasi::config::runtime::get_all().expect("failed to get all config values");
+    assert_eq!(all_config, all_config_legacy);
+
     let res = json!({
         "get_random_bytes": random::get_random_bytes(8),
         "get_random_u64": random::get_random_u64(),
@@ -80,8 +90,8 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
         "random_32": HostRng::random32(),
         "random_in_range": HostRng::random_in_range(min, max),
         "long_value": "1234567890".repeat(10000),
-        "config_value": config::runtime::get(&config_key).expect("failed to get config value"),
-        "all_config": config::runtime::get_all().expect("failed to get all config values"),
+        "config_value": config_value,
+        "all_config": all_config,
         "ping": pong,
         "meaning_of_universe": meaning_of_universe,
         "split": other,
@@ -144,12 +154,13 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     keyvalue::run_store_test(&body);
 
     eprintln!("test vault keyvalue/store...");
-    bus::lattice::set_link_name(
+    assert!(wasmcloud_component::wasmcloud::bus::lattice::set_link_name(
         "vault",
         vec![bus::lattice::CallTargetInterface::new(
             "wasi", "keyvalue", "store",
         )],
-    );
+    )
+    .is_ok());
     keyvalue::run_store_test(&body);
 
     eprintln!("test default keyvalue/atomics...");
@@ -162,15 +173,35 @@ pub fn run_test(body: &[u8]) -> (Vec<u8>, String) {
     blobstore::run_test(1, &body, "container");
 
     eprintln!("test s3 blobstore...");
-    bus::lattice::set_link_name(
+    assert!(bus::lattice::set_link_name(
         "s3",
         vec![bus::lattice::CallTargetInterface::new(
             "wasi",
             "blobstore",
             "blobstore",
         )],
-    );
+    )
+    .is_ok());
     blobstore::run_test(0, &body, "container");
+
+    // Interface that's not linked
+    assert!(bus::lattice::set_link_name(
+        "s3",
+        vec![bus::lattice::CallTargetInterface::new(
+            "wasi", "wasi", "wasi",
+        )],
+    )
+    .is_err());
+    // Link name that doesn't have the specified interface
+    assert!(bus::lattice::set_link_name(
+        "sthree",
+        vec![bus::lattice::CallTargetInterface::new(
+            "wasi",
+            "blobstore",
+            "blobstore",
+        )],
+    )
+    .is_err());
 
     (body, authority)
 }

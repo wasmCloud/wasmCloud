@@ -1,7 +1,7 @@
 wit_bindgen::generate!({
     with: {
-        "wasi:http/types@0.2.1": wasmcloud_component::wasi::http::types,
-        "wasi:io/streams@0.2.1": wasmcloud_component::wasi::io::streams,
+        "wasi:http/types@0.2.2": wasmcloud_component::wasi::http::types,
+        "wasi:io/streams@0.2.2": wasmcloud_component::wasi::io::streams,
     },
     generate_all,
 });
@@ -44,8 +44,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let pong_secret = pingpong::ping_secret();
 
         let res = json!({
-            "single_val": config::runtime::get(&config_key).expect("failed to get config value"),
-            "multi_val": config::runtime::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
+            "single_val": config::store::get(&config_key).expect("failed to get config value"),
+            "multi_val": config::store::get_all().expect("failed to get config value").into_iter().collect::<HashMap<String, String>>(),
             "pong": pong,
             "pong_secret": pong_secret,
         });

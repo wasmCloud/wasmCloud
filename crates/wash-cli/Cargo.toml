@@ -43,7 +43,7 @@ indicatif = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 nkeys = { workspace = true, features = ["xkeys"] }
 notify = { workspace = true }
-oci-distribution = { workspace = true, features = ["rustls-tls"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }

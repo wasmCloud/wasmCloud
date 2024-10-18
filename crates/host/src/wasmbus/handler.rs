@@ -1,6 +1,5 @@
-use core::ops::Deref;
-
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,13 +9,13 @@ use bytes::Bytes;
 use secrecy::Secret;
 use tokio::sync::RwLock;
 use tracing::{error, instrument, warn};
-use wasmcloud_runtime::capability::config::runtime::ConfigError;
+use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::secrets::store::SecretValue;
 use wasmcloud_runtime::capability::{secrets, CallTargetInterface};
 use wasmcloud_runtime::component::{
-    Bus, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging, ReplacedInstanceTarget,
-    Secrets,
+    Bus, Bus1_0_0, Config, InvocationErrorIntrospect, InvocationErrorKind, Logging,
+    ReplacedInstanceTarget, Secrets,
 };
 use wasmcloud_tracing::context::TraceContextInjector;
 use wrpc_transport::InvokeExt as _;
@@ -80,17 +79,13 @@ impl Handler {
 }
 
 #[async_trait]
-impl Bus for Handler {
+impl Bus1_0_0 for Handler {
     /// Set the current link name in use by the handler, which is otherwise "default".
     ///
     /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/store.get`)
     /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
     #[instrument(level = "debug", skip(self))]
-    async fn set_link_name(
-        &self,
-        link_name: String,
-        interfaces: Vec<Arc<CallTargetInterface>>,
-    ) -> anyhow::Result<()> {
+    async fn set_link_name(&self, link_name: String, interfaces: Vec<Arc<CallTargetInterface>>) {
         let interfaces = interfaces.iter().map(Deref::deref);
         let mut targets = self.targets.write().await;
         if link_name == "default" {
@@ -116,7 +111,45 @@ impl Bus for Handler {
                 );
             }
         }
-        Ok(())
+    }
+}
+
+#[async_trait]
+impl Bus for Handler {
+    /// Set the current link name in use by the handler, which is otherwise "default".
+    ///
+    /// Link names are important to set to differentiate similar operations (ex. `wasi:keyvalue/store.get`)
+    /// that should go to different targets (ex. a capability provider like `kv-redis` vs `kv-vault`)
+    #[instrument(level = "debug", skip(self))]
+    async fn set_link_name(
+        &self,
+        link_name: String,
+        interfaces: Vec<Arc<CallTargetInterface>>,
+    ) -> anyhow::Result<Result<(), String>> {
+        let links = self.instance_links.read().await;
+        // Ensure that all interfaces have an established link with the given name.
+        if let Some(interface_missing_link) = interfaces.iter().find_map(|i| {
+            let instance = i.as_instance();
+            // This could be expressed in one line as a `!(bool).then_some`, but the negation makes it confusing
+            if links
+                .get(link_name.as_str())
+                .and_then(|l| l.get(instance.as_str()))
+                .is_none()
+            {
+                Some(instance)
+            } else {
+                None
+            }
+        }) {
+            return Ok(Err(format!(
+                "interface `{interface_missing_link}` does not have an existing link with name `{link_name}`"
+            )));
+        }
+        // Explicitly drop the lock before calling `set_link_name` just to avoid holding the lock for longer than needed
+        drop(links);
+
+        Bus1_0_0::set_link_name(self, link_name, interfaces).await;
+        Ok(Ok(()))
     }
 }
 
@@ -202,7 +235,10 @@ impl wrpc_transport::Invoke for Handler {
 #[async_trait]
 impl Config for Handler {
     #[instrument(level = "debug", skip_all)]
-    async fn get(&self, key: &str) -> anyhow::Result<Result<Option<String>, ConfigError>> {
+    async fn get(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Result<Option<String>, capability::config::store::Error>> {
         let lock = self.config_data.read().await;
         let conf = lock.get_config().await;
         let data = conf.get(key).cloned();
@@ -210,7 +246,9 @@ impl Config for Handler {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn get_all(&self) -> anyhow::Result<Result<Vec<(String, String)>, ConfigError>> {
+    async fn get_all(
+        &self,
+    ) -> anyhow::Result<Result<Vec<(String, String)>, capability::config::store::Error>> {
         Ok(Ok(self
             .config_data
             .read()

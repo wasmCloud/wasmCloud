@@ -12,7 +12,7 @@ mod bindings {
             "wasi:io/error@0.2.1": ::wasi::io::error,
             "wasi:io/poll@0.2.1": ::wasi::io::poll,
             "wasi:io/streams@0.2.1": ::wasi::io::streams,
-            "wasi:logging/logging": generate,
+            "wasi:logging/logging@0.1.0-draft": generate,
         }
     });
 

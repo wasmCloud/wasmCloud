@@ -34,15 +34,15 @@ jobs:
           node-version: '18.x'
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       - run: rustup show
-      - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
           shared-key: '${{ matrix.os }}-shared-cache'
       - name: Install nextest
-        uses: taiki-e/install-action@d41099f7a5ac53711ce07431c05cad4beed1e7b0
+        uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         with:
           tool: nextest
       - name: Install wit-bindgen
-        uses: taiki-e/install-action@d41099f7a5ac53711ce07431c05cad4beed1e7b0
+        uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         with:
           tool: wit-bindgen-cli
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
       - run: rustup show
-      - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
@@ -85,11 +85,11 @@ jobs:
         with:
           cli-args: '-f ./crates/wash-cli/tools/docker-compose.yml up --detach'
       - name: Install nextest
-        uses: taiki-e/install-action@d41099f7a5ac53711ce07431c05cad4beed1e7b0
+        uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         with:
           tool: nextest
       - name: Install wit-bindgen
-        uses: taiki-e/install-action@d41099f7a5ac53711ce07431c05cad4beed1e7b0
+        uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         with:
           tool: wit-bindgen-cli
       - name: Run integration tests
@@ -111,12 +111,12 @@ jobs:
       - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
         if: ${{ matrix.wash-version == 'current' }}
       - run: rustup show
-      - uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
         with:
           shared-key: 'ubuntu-22.04-shared-cache'
       - name: install wash (previous version)
         if: ${{ matrix.wash-version != 'current' }}
-        uses: taiki-e/install-action@d41099f7a5ac53711ce07431c05cad4beed1e7b0
+        uses: taiki-e/install-action@3e1dd227d968fb9fa43ff604bd9b0ccd1b714919
         with:
           tool: wash-cli@${{ matrix.wash-version }}
       - name: install wash (current)

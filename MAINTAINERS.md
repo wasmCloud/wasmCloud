@@ -7,220 +7,216 @@ Maintainers of projects that are not in this monorepo can be found in their resp
 ## @wasmCloud/org-maintainers
 
 Name: Bailey Hayes  
-GitHub: @ricochet
+GitHub: @ricochet  
 Organization: Cosmonic
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict
-Organization: Synadia
-
 Name: Liam Randall  
-GitHub: @LiamRandall
+GitHub: @LiamRandall  
 Organization: Cosmonic
 
 Name: Jordan Rash  
-GitHub: @jordan-rash
+GitHub: @jordan-rash  
 Organization: Synadia
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
+
+Name: Colin Murphy  
+GitHub: @cdmurph32  
+Organization: Adobe
 
 ## @wasmCloud/host-maintainers
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict
-Organization: Synadia
-
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Roman Volosatovs  
-GitHub: @rvolosatovs
+GitHub: @rvolosatovs  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/capability-provider-maintainers
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict
-Organization: Synadia
-
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Roman Volosatovs  
-GitHub: @rvolosatovs
+GitHub: @rvolosatovs  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/wash-maintainers
 
-Name: Kevin Hoffman  
-GitHub: @autodidaddict
-Organization: Synadia
-
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Matt Wilkinson  
-GitHub: @mattwilkinsonn
+GitHub: @mattwilkinsonn  
 Organization: Google
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
+
+Name: Colin Murphy  
+GitHub: @cdmurph32  
+Organization: Adobe
 
 ## @wasmCloud/washboard-maintainers
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Lachlan Heywood  
-GitHub: @lachieh
+GitHub: @lachieh  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/ci-maintainers
 
 Name: Bailey Hayes  
-GitHub: @ricochet
+GitHub: @ricochet  
 Organization: Cosmonic
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Roman Volosatovs  
-GitHub: @rvolosatovs
+GitHub: @rvolosatovs  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/wascap-maintainers
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Roman Volosatovs  
-GitHub: @rvolosatovs
+GitHub: @rvolosatovs  
 Organization: Cosmonic
 
 ## @wasmCloud/observability-maintainers
 
 Name: Joonas Bergius  
-GitHub: @joonas
+GitHub: @joonas  
 Organization: Cosmonic
 
 Name: Dan Norris  
-GitHub: @protochron
+GitHub: @protochron  
 Organization: Cosmonic
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/capability-provider-sdk-maintainers
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Victor Adossi  
-GitHub: @vados-cosmonic
+GitHub: @vados-cosmonic  
 Organization: Cosmonic
 
 ## @wasmCloud/go-maintainers
 
 Name: Joonas Bergius  
-GitHub: @joonas
+GitHub: @joonas  
 Organization: Cosmonic
 
 Name: Lucas Fontes  
-GitHub: @lxfontes
+GitHub: @lxfontes  
 Organization: Cosmonic
 
 Name: Bailey Hayes  
-GitHub: @ricochet
+GitHub: @ricochet  
 Organization: Cosmonic
 
 Name: Taylor Thomas  
-GitHub: @thomastaylor312
+GitHub: @thomastaylor312  
 Organization: Cosmonic
 
 Name: Brooks Townsend  
-GitHub: @brooksmtownsend
+GitHub: @brooksmtownsend  
 Organization: Cosmonic
 
 Name: Roman Volosatovs  
-GitHub: @rvolosatovs
+GitHub: @rvolosatovs  
 Organization: Cosmonic
 
 Name: Jordan Rash  
-GitHub: @jordan-rash
+GitHub: @jordan-rash  
 Organization: Synadia
 
 ## Emeritus Maintainers
 
 These individuals have contributed significantly to the project but are no longer actively maintaining it.
 
+
+Name: Kevin Hoffman  
+GitHub: @autodidaddict  
+
 Name: Steve Schoettler  
-GitHub: @stevelr
+GitHub: @stevelr  
 
 Name: Connor Smith  
-GitHub: @connorsmith256
+GitHub: @connorsmith256  
 
 Name: Kaushik Shanadi  
-GitHub: @ks2211
+GitHub: @ks2211  

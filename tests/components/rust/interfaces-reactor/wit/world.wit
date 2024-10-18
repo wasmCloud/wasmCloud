@@ -1,15 +1,18 @@
 package test-components:interfaces;
 
 world component {
-  import wasi:sockets/instance-network@0.2.1;
-  import wasi:sockets/tcp-create-socket@0.2.1;
-  import wasi:sockets/tcp@0.2.1;
-  import wasi:sockets/udp-create-socket@0.2.1;
-  import wasi:sockets/udp@0.2.1;
+  import wasi:sockets/instance-network@0.2.2;
+  import wasi:sockets/tcp-create-socket@0.2.2;
+  import wasi:sockets/tcp@0.2.2;
+  import wasi:sockets/udp-create-socket@0.2.2;
+  import wasi:sockets/udp@0.2.2;
 
-  import test-components:testing/busybox;
-  import test-components:testing/pingpong;
+  // legacy imports
+  import wasi:config/runtime@0.2.0-draft;
 
-  export wasi:http/incoming-handler@0.2.1;
+  import test-components:testing/busybox@0.1.0;
+  import test-components:testing/pingpong@0.1.0;
+
+  export wasi:http/incoming-handler@0.2.2;
   export wasmcloud:messaging/handler@0.2.0;
 }

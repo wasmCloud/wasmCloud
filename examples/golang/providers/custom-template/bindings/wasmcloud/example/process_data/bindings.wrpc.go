@@ -111,18 +111,18 @@ func Process(ctx__ context.Context, wrpc__ wrpc.Invoker, data *Data) (r0__ strin
 	}
 	var w__ wrpc.IndexWriteCloser
 	var r__ wrpc.IndexReadCloser
-	w__, r__, err__ = wrpc__.Invoke(ctx__, "wasmcloud:example/process-data", "process", buf__.Bytes())
+	w__, r__, err__ = wrpc__.Invoke(ctx__, "wasmcloud:example/process-data@0.1.0", "process", buf__.Bytes())
 	if err__ != nil {
 		err__ = fmt.Errorf("failed to invoke `process`: %w", err__)
 		return
 	}
 	defer func() {
 		if err := r__.Close(); err != nil {
-			slog.ErrorContext(ctx__, "failed to close reader", "instance", "wasmcloud:example/process-data", "name", "process", "err", err)
+			slog.ErrorContext(ctx__, "failed to close reader", "instance", "wasmcloud:example/process-data@0.1.0", "name", "process", "err", err)
 		}
 	}()
 	if cErr__ := w__.Close(); cErr__ != nil {
-		slog.DebugContext(ctx__, "failed to close outgoing stream", "instance", "wasmcloud:example/process-data", "name", "process", "err", cErr__)
+		slog.DebugContext(ctx__, "failed to close outgoing stream", "instance", "wasmcloud:example/process-data@0.1.0", "name", "process", "err", cErr__)
 	}
 	r0__, err__ = func(r interface {
 		io.ByteReader
