@@ -149,6 +149,18 @@ type WitInformationTuple = (
 /// ```
 /// # use semver::Version;
 /// # use wasmcloud_core::parse_wit_package_name;
+/// let (ns, packages, interfaces, func, version) = parse_wit_package_name("wasi:http").unwrap();
+/// # assert_eq!(ns, "wasi".to_string());
+/// # assert_eq!(packages, vec!["http".to_string()]);
+/// # assert_eq!(interfaces, None);
+/// # assert_eq!(func, None);
+/// # assert_eq!(version, None);
+/// let (ns, packages, interfaces, func, version) = parse_wit_package_name("wasi:http@0.2.2").unwrap();
+/// # assert_eq!(ns, "wasi".to_string());
+/// # assert_eq!(packages, vec!["http".to_string()]);
+/// # assert_eq!(interfaces, None);
+/// # assert_eq!(func, None);
+/// # assert_eq!(version, Version::parse("0.2.2").ok());
 /// let (ns, packages, interfaces, func, version) = parse_wit_package_name("wasmcloud:bus/guest-config").unwrap();
 /// # assert_eq!(ns, "wasmcloud");
 /// # assert_eq!(packages, vec!["bus".to_string()]);
@@ -192,8 +204,10 @@ pub fn parse_wit_package_name(p: impl AsRef<str>) -> Result<WitInformationTuple>
     };
 
     // Read to the first '/' which should mark the first package
-    let (ns_and_pkg, interface_and_func) =
-        rest.rsplit_once('/').context("failed to parse operation")?;
+    let (ns_and_pkg, interface_and_func) = match rest.rsplit_once('/') {
+        Some((ns_and_pkg, interface_and_func)) => (ns_and_pkg, Some(interface_and_func)),
+        None => (rest, None),
+    };
 
     // Read all packages
     let ns_pkg_split = ns_and_pkg.split(':').collect::<Vec<&str>>();
@@ -204,13 +218,17 @@ pub fn parse_wit_package_name(p: impl AsRef<str>) -> Result<WitInformationTuple>
     };
 
     // Read all interfaces
-    let (mut interfaces, iface_with_fn) =
-        match interface_and_func.split('/').collect::<Vec<&str>>()[..] {
-            [] => (None, None),
-            [iface] => (Some(vec![]), Some(iface)),
-            [iface, f] => (Some(vec![iface]), Some(f)),
-            [ref ifaces @ .., f] => (Some(Vec::from(ifaces)), Some(f)),
-        };
+    let (mut interfaces, iface_with_fn) = match interface_and_func
+        .unwrap_or_default()
+        .split('/')
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<&str>>()[..]
+    {
+        [] => (None, None),
+        [iface] => (Some(vec![]), Some(iface)),
+        [iface, f] => (Some(vec![iface]), Some(f)),
+        [ref ifaces @ .., f] => (Some(Vec::from(ifaces)), Some(f)),
+    };
 
     let func = match iface_with_fn {
         Some(iface_with_fn) => match iface_with_fn.split_once('.') {
@@ -240,4 +258,66 @@ pub fn parse_wit_package_name(p: impl AsRef<str>) -> Result<WitInformationTuple>
         func.map(String::from),
         version,
     ))
+}
+
+// TODO(joonas): Remove these once doctests are run as part of CI.
+#[cfg(test)]
+mod test {
+    use semver::Version;
+
+    use super::parse_wit_package_name;
+    #[test]
+    fn test_parse_wit_package_name() {
+        let (ns, packages, interfaces, func, version) =
+            parse_wit_package_name("wasi:http").expect("should have parsed'wasi:http'");
+        assert_eq!(ns, "wasi".to_string());
+        assert_eq!(packages, vec!["http".to_string()]);
+        assert_eq!(interfaces, None);
+        assert_eq!(func, None);
+        assert_eq!(version, None);
+
+        let (ns, packages, interfaces, func, version) = parse_wit_package_name("wasi:http@0.2.2")
+            .expect("should have parsed 'wasi:http@0.2.2'");
+        assert_eq!(ns, "wasi".to_string());
+        assert_eq!(packages, vec!["http".to_string()]);
+        assert_eq!(interfaces, None);
+        assert_eq!(func, None);
+        assert_eq!(version, Version::parse("0.2.2").ok());
+
+        let (ns, packages, interfaces, func, version) =
+            parse_wit_package_name("wasmcloud:bus/guest-config")
+                .expect("should have parsed 'wasmcloud:bus/guest-config'");
+        assert_eq!(ns, "wasmcloud");
+        assert_eq!(packages, vec!["bus".to_string()]);
+        assert_eq!(interfaces, Some(vec!["guest-config".to_string()]));
+        assert_eq!(func, None);
+        assert_eq!(version, None);
+
+        let (ns, packages, interfaces, func, version) =
+            parse_wit_package_name("wasmcloud:bus/guest-config.get")
+                .expect("should have parsed 'wasmcloud:bus/guest-config.get'");
+        assert_eq!(ns, "wasmcloud");
+        assert_eq!(packages, vec!["bus".to_string()]);
+        assert_eq!(interfaces, Some(vec!["guest-config".to_string()]));
+        assert_eq!(func, Some("get".to_string()));
+        assert_eq!(version, None);
+
+        let (ns, packages, interfaces, func, version) =
+            parse_wit_package_name("wasi:http/incoming-handler@0.2.0")
+                .expect("should have parsed 'wasi:http/incoming-handler@0.2.0'");
+        assert_eq!(ns, "wasi".to_string());
+        assert_eq!(packages, vec!["http".to_string()]);
+        assert_eq!(interfaces, Some(vec!["incoming-handler".to_string()]));
+        assert_eq!(func, None);
+        assert_eq!(version, Version::parse("0.2.0").ok());
+
+        let (ns, packages, interfaces, func, version) =
+            parse_wit_package_name("wasi:keyvalue/atomics.increment@0.2.0-draft")
+                .expect("should have parsed 'wasi:keyvalue/atomics.increment@0.2.0-draft'");
+        assert_eq!(ns, "wasi".to_string());
+        assert_eq!(packages, vec!["keyvalue".to_string()]);
+        assert_eq!(interfaces, Some(vec!["atomics".to_string()]));
+        assert_eq!(func, Some("increment".to_string()));
+        assert_eq!(version, Version::parse("0.2.0-draft").ok());
+    }
 }
