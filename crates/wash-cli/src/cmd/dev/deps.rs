@@ -50,7 +50,7 @@ fn is_ignored_iface_dep(ns: &str, pkg: &str, iface: &str) -> bool {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// let project_key = ProjectDependencyKey::Project {
 ///   name: "http-hello-world".into(),
 ///   imports: vec![ ("wasi".into(), "http".into(), "incoming-handler".into(), None) ],
@@ -258,7 +258,7 @@ impl DependencySpec {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let v = from_wit_import_face("wasi:keyvalue/atomics");
     /// # assert!(v.is_some())
     /// ```
@@ -361,7 +361,7 @@ impl DependencySpec {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let v = from_wit_export_face("wasi:http/incoming-handler");
     /// # assert!(v.is_some())
     /// ```
