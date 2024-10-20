@@ -427,9 +427,15 @@ impl WitInterfaceSpec {
     /// This means that if the `other` spec is more general, this one will count as overlapping with it.
     ///
     /// ```
-    /// assert!(WitInterfaceSpec::from_str("wasi:http").includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler")));
-    /// assert!(WitInterfaceSpec::from_str("wasi:http/incoming-handler").includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle")));
+    /// use std::str::FromStr;
+    /// use wash_lib::parser::WitInterfaceSpec;
+    /// assert!(WitInterfaceSpec::from_str("wasi:http").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler").as_ref().unwrap()));
+    /// assert!(WitInterfaceSpec::from_str("wasi:http/incoming-handler").unwrap().includes(WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle").as_ref().unwrap()));
     /// ```
+    pub fn includes(&self, other: &Self) -> bool {
+        !self.is_disjoint(other)
+    }
+
     pub fn is_disjoint(&self, other: &Self) -> bool {
         if self.namespace != other.namespace {
             return true;
@@ -1027,5 +1033,25 @@ impl ProjectConfig {
         };
 
         Ok(credentials.clone())
+    }
+}
+
+// TODO(joonas): Remove these once doctests are run as part of CI.
+#[cfg(test)]
+mod tests {
+    use crate::parser::WitInterfaceSpec;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_includes() {
+        let wasi_http = WitInterfaceSpec::from_str("wasi:http")
+            .expect("should parse 'wasi:http' into WitInterfaceSpec");
+        let wasi_http_incoming_handler = WitInterfaceSpec::from_str("wasi:http/incoming-handler")
+            .expect("should parse 'wasi:http/incoming-handler' into WitInterfaceSpec");
+        let wasi_http_incoming_handler_handle =
+            WitInterfaceSpec::from_str("wasi:http/incoming-handler.handle")
+                .expect("should parse 'wasi:http/incoming-handler.handle' into WitInterfaceSpec");
+        assert!(wasi_http.includes(&wasi_http_incoming_handler));
+        assert!(wasi_http_incoming_handler.includes(&wasi_http_incoming_handler_handle));
     }
 }

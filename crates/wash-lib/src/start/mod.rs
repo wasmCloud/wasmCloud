@@ -4,6 +4,7 @@
 //! # Downloading and Starting NATS and wasmCloud
 //! ```no_run
 //! use anyhow::{anyhow, Result};
+//! use wash_lib::common::CommandGroupUsage;
 //! use wash_lib::start::{
 //!     start_wasmcloud_host,
 //!     start_nats_server,
@@ -28,6 +29,7 @@
 //!         nats_binary,
 //!         nats_log_file,
 //!         config,
+//!         CommandGroupUsage::UseParent,
 //!     ).await?;
 //!
 //!     // Download wasmCloud if not already installed
