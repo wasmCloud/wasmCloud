@@ -13,6 +13,7 @@ use wasmcloud_control_interface::{ClientBuilder as CtlClientBuilder, Host};
 mod common;
 use common::{
     find_open_port, init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
+    wait_for_no_wadm,
 };
 
 #[tokio::test]
@@ -111,6 +112,10 @@ async fn integration_dev_hello_component_serial() -> Result<()> {
     wait_for_no_nats()
         .await
         .context("nats instance failed to exit cleanly (processes still left over)")?;
+
+    wait_for_no_wadm()
+        .await
+        .context("wadm instance failed to exit cleanly (processes still left over)")?;
 
     Ok(())
 }
@@ -292,6 +297,10 @@ manifests = [
         .await
         .context("nats instance failed to exit cleanly (processes still left over)")?;
 
+    wait_for_no_wadm()
+        .await
+        .context("wadm instance failed to exit cleanly (processes still left over)")?;
+
     Ok(())
 }
 
@@ -472,7 +481,7 @@ link_name = "default"
         .components()
         .find(|c| {
             matches!(
-                c.properties, 
+                c.properties,
                 Properties::Capability { ref properties } if properties.image == "ghcr.io/wasmcloud/http-server:0.23.0")
         })
         .context("missing http provider component in manifest w/ updated image_ref")?;
@@ -506,6 +515,10 @@ link_name = "default"
     wait_for_no_nats()
         .await
         .context("nats instance failed to exit cleanly (processes still left over)")?;
+
+    wait_for_no_wadm()
+        .await
+        .context("wadm instance failed to exit cleanly (processes still left over)")?;
 
     Ok(())
 }

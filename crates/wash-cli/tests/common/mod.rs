@@ -25,8 +25,10 @@ use wash_lib::cli::output::{
     StopCommandOutput, UpCommandOutput,
 };
 use wash_lib::common::CommandGroupUsage;
-use wash_lib::config::host_pid_file;
-use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
+use wash_lib::config::{host_pid_file, wadm_pid_file};
+use wash_lib::start::{
+    ensure_nats_server, start_nats_server, NatsConfig, WADM_BINARY, WASMCLOUD_HOST_BIN,
+};
 use wasmcloud_control_interface::Host;
 
 #[allow(unused)]
@@ -1063,6 +1065,26 @@ pub async fn wait_for_no_nats() -> Result<()> {
     )
     .await
     .context("number of nats-server processes should be zero")
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_no_wadm() -> Result<()> {
+    wait_until_process_has_count(
+        WADM_BINARY,
+        |v| v == 0,
+        Duration::from_secs(15),
+        Duration::from_millis(250),
+    )
+    .await
+    .context("number of wadm processes should be zero")?;
+    let lockfile = wadm_pid_file()?;
+    if wait_for_file_to_be_removed(&lockfile).await.is_err() {
+        // If the PID file wasn't removed, attempt to delete it manually
+        tokio::fs::remove_file(&lockfile).await.with_context(|| {
+            format!("failed to delete wadm PID file at [{}]", lockfile.display())
+        })?;
+    }
+    Ok(())
 }
 
 /// Helper that gets the top level directory of a workspace.
