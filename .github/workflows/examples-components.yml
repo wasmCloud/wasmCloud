@@ -7,17 +7,37 @@ on:
       - main
     tags:
       - component-blobby-v[0-9]+.[0-9]+.[0-9]+*
+      - component-blobby-v[0-9]+.[0-9]+.[0-9]+-*
       - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+*
+      - component-dog-fetcher-v[0-9]+.[0-9]+.[0-9]+-*
       - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-echo-messaging-v[0-9]+.[0-9]+.[0-9]+-*
       - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+*
+      - component-ferris-says-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-blobstore-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-python-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-hello-world-typescript-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-jsonify-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-keyvalue-counter-v[0-9]+.[0-9]+.[0-9]+-*
       - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+*
+      - component-keyvalue-messaging-v[0-9]+.[0-9]+.[0-9]+-*
       - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+*
+      - component-sqldb-postgres-query-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+*
+      - component-sqldb-postgres-query-tinygo-v[0-9]+.[0-9]+.[0-9]+-*
       - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+*
       - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+*
+      - component-http-password-checker-typescript-v[0-9]+.[0-9]+.[0-9]+-*
+      - component-http-task-manager-v[0-9]+.[0-9]+.[0-9]+-*
   pull_request:
     branches: [main]
     paths:
@@ -94,73 +114,121 @@ jobs:
           - current
         project:
           # Golang example components
-          - lang: 'tinygo'
-            lang-version: '1.21'
-            name: 'http-echo-tinygo'
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            lang_version: '1.21'
             test_deploy: wadm.yaml
-          - lang: 'tinygo'
+
+          - folder: 'http-hello-world'
+            lang: 'tinygo'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
             lang-version: '1.23'
-            name: 'http-hello-world'
-            test_deploy: wadm.yaml
-          - name: 'sqldb-postgres-query'
+            test-deploy: wadm.yaml
+            wasm-bin: 'http_hello_world_s.wasm'
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
             lang: 'tinygo'
             lang-version: '1.21'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
-            test_deploy: local.wadm.yaml
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'tinygo'
+            lang-version: '1.21'
+            wasm-bin: 'http_echo_s.wasm'
+            test-deploy: wadm.yaml
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-tinygo-v'
+            lang: 'golang'
+            lang-version: '1.21'
+            wasm-bin: 'sqldb_postgres_query_s.wasm'
+            test-deploy: local.wadm.yaml
+
           # Rust example components
-          - name: 'blobby'
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
             lang: 'rust'
             wasm-bin: 'blobby_s.wasm'
-          - name: 'dog-fetcher'
+
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
             lang: 'rust'
             wasm-bin: 'dog_fetcher_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'echo-messaging'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
             lang: 'rust'
             wasm-bin: 'echo_messaging_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'ferris-says'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
             lang: 'rust'
             wasm-bin: 'ferris_says_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'http-blobstore'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
             lang: 'rust'
             wasm-bin: 'http_blobstore_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'http-hello-world'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
             lang: 'rust'
             wasm-bin: 'http_hello_world_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'http-jsonify'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
             lang: 'rust'
             wasm-bin: 'http_jsonify_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'http-keyvalue-counter'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-http-keyvalue-counter-v'
             lang: 'rust'
             wasm-bin: 'http_keyvalue_counter_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'keyvalue-messaging'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
             lang: 'rust'
             wasm-bin: 'keyvalue_messaging_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'sqldb-postgres-query'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
             lang: 'rust'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
-            test_deploy: local.wadm.yaml
-          - name: 'http-task-manager'
+            test-deploy: local.wadm.yaml
+
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
             lang: 'rust'
             wasm-bin: 'http_task_manager_s.wasm'
-            test_deploy: local.wadm.yaml
+            test-deploy: local.wadm.yaml
+
           # Python example components
-          - name: 'http-hello-world'
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
             lang: 'python'
             lang-version: '3.10'
+
           # Typescript example components
-          - name: 'http-hello-world'
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-typescript-v'
             lang: 'typescript'
             lang-version: '20.x'
             test_deploy: local.wadm.yaml
-          - name: "http-password-checker"
+
+          - folder: "http-password-checker"
+            tag-prefix: 'component-http-password-checker-typescript-v'
             lang: "typescript"
             lang-version: "22.x"
             test_deploy: local.wadm.yaml
@@ -177,7 +245,7 @@ jobs:
 
       # Validate example [local.]wadm.yaml if present
       - name: validate wadm.yaml
-        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
         shell: bash
         run: |
           [[ ! -f wadm.yaml ]] || wash app validate wadm.yaml
@@ -186,19 +254,19 @@ jobs:
       # Build example project(s)
       - name: build project
         run: wash build
-        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
 
       # Run the local.wadm that comes with the example
       - name: test component load
-        if: ${{ matrix.project.test_deploy && matrix.wash-version == 'current' }}
+        if: ${{ matrix.project.test-deploy && matrix.wash-version == 'current' }}
         shell: bash
-        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}
+        working-directory: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}
         run: |
           set -xe
           wash up &
           WASH_PID=$!
           sleep 3;
-          wash app deploy ${{ matrix.project.test_deploy }};
+          wash app deploy ${{ matrix.project.test-deploy }};
           TRIES=0
           while [[ $(wash get inventory --output=json | jq '.inventories[0].components | length') -eq 0 ]] ; do
             if [[ $TRIES -gt 10 ]]; then
@@ -209,16 +277,16 @@ jobs:
             sleep 1;
           done;
           echo "✅ successfully started at least one component";
-          wash app delete ${{ matrix.project.test_deploy }};
+          wash app delete ${{ matrix.project.test-deploy }};
           kill $WASH_PID;
           exit 0;
 
       # Save example as an artifact for later step(s)
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        if: ${{ startswith(github.ref, format('refs/tags/component-{0}-v', matrix.project.name)) }}
+        if: ${{ startswith(github.ref, format('refs/tags/{0}', matrix.project.tag-prefix)) }}
         with:
-          name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}
-          path: examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/build/${{ matrix.project.wasm-bin }}
+          name: wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}
+          path: examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/build/${{ matrix.project.wasm-bin }}
 
   # Publish components relevant components if they've been tagged
   publish:
@@ -240,46 +308,85 @@ jobs:
           - current
         project:
           # Go example components (to publish)
-          - lang: 'tinygo'
-            lang-version: '1.20'
-            name: 'http-echo-tinygo'
-          - lang: 'tinygo'
-            lang-version: '1.20'
-            name: 'http-hello-world'
+          - folder: 'http-echo-tinygo'
+            tag-prefix: 'component-http-echo-tinygo-v'
+            lang: 'golang'
+            lang-version: '1.21'
+            wasm-bin: 'http_echo_s.wasm'
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-tinygo-v'
+            lang: 'golang'
+            lang-version: '1.21'
+            wasm-bin: 'http_hello_world_s.wasm'
+
           # Rust example components (to publish)
-          - name: 'blobby'
+          - folder: 'blobby'
+            tag-prefix: 'component-blobby-v'
             lang: 'rust'
             wasm-bin: 'blobby_s.wasm'
-          - name: 'dog-fetcher'
+
+          - folder: 'dog-fetcher'
+            tag-prefix: 'component-dog-fetcher-v'
             lang: 'rust'
             wasm-bin: 'dog_fetcher_s.wasm'
-          - name: 'echo-messaging'
+
+          - folder: 'echo-messaging'
+            tag-prefix: 'component-echo-messaging-v'
             lang: 'rust'
             wasm-bin: 'echo_messaging_s.wasm'
-          - name: 'ferris-says'
+
+          - folder: 'ferris-says'
+            tag-prefix: 'component-ferris-says-v'
             lang: 'rust'
             wasm-bin: 'ferris_says_s.wasm'
-          - name: 'http-blobstore'
+
+          - folder: 'http-blobstore'
+            tag-prefix: 'component-http-blobstore-v'
             lang: 'rust'
             wasm-bin: 'http_blobstore_s.wasm'
-          - name: 'http-hello-world'
+
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-v'
             lang: 'rust'
             wasm-bin: 'http_hello_world_s.wasm'
-          - name: 'http-jsonify'
+
+          - folder: 'http-jsonify'
+            tag-prefix: 'component-http-jsonify-v'
             lang: 'rust'
             wasm-bin: 'http_jsonify_s.wasm'
-          - name: 'http-keyvalue-counter'
+
+          - folder: 'http-keyvalue-counter'
+            tag-prefix: 'component-keyvalue-counter-v'
             lang: 'rust'
             wasm-bin: 'http_keyvalue_counter_s.wasm'
-          - name: 'keyvalue-messaging'
+
+          - folder: 'keyvalue-messaging'
+            tag-prefix: 'component-keyvalue-messaging-v'
             lang: 'rust'
             wasm-bin: 'keyvalue_messaging_s.wasm'
-          - name: 'sqldb-postgres-query'
+
+          - folder: 'sqldb-postgres-query'
+            tag-prefix: 'component-sqldb-postgres-query-v'
             lang: 'rust'
             wasm-bin: 'sqldb_postgres_query_s.wasm'
-          - name: 'http-task-manager'
+
+          - folder: 'http-task-manager'
+            tag-prefix: 'component-http-task-manager-v'
             lang: 'rust'
             wasm-bin: 'http_task_manager_s.wasm'
+
+          # Typescript
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-typescript-v'
+            lang: 'typescript'
+            wasm-bin: 'http_hello_world_s.wasm'
+
+          # Python
+          - folder: 'http-hello-world'
+            tag-prefix: 'component-http-hello-world-python-v'
+            lang: 'python'
+            wasm-bin: 'http_hello_world_s.wasm'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       # Determine tag version (if this is a release tag), without the 'v'
@@ -288,13 +395,13 @@ jobs:
         shell: bash
         env:
           REF: ${{ github.ref }}
-          REF_PREFIX: ${{ format('refs/tags/component-{0}-v', matrix.project.name) }}
+          REF_PREFIX: ${{ format('refs/tags/{0}', matrix.project.tag-prefix) }}
         run: |
           export VERSION=${REF#$REF_PREFIX};
           echo -e "version=${VERSION}" >> $GITHUB_OUTPUT;
-          echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.name }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
+          echo "bin-name=wash-build-${{ matrix.wash-version }}-${{ matrix.project.lang }}-component-${{ matrix.project.folder }}/${{ matrix.project.wasm-bin }}" >> $GITHUB_OUTPUT;
           echo "ref-prefix=$REF_PREFIX" >> $GITHUB_OUTPUT;
-          echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.name }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
+          echo "wasmcloud-toml-path=examples/${{ matrix.project.lang }}/components/${{ matrix.project.folder }}/wasmcloud.toml" >> $GITHUB_OUTPUT;
       # Download all artifacts (wash binary and example component binaries) to work dir
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
@@ -311,27 +418,27 @@ jobs:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
       - name: Push version-tagged WebAssembly binary to GHCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) }}
         env:
           WASH_REG_USER: ${{ github.repository_owner }}
           WASH_REG_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push ghcr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
       # (wasmCloud/wasmCloud repository only)
       # Push the project to Azure Container Registry under various tags, if this is a release tag
       - name: Push SHA-tagged WebAssembly binary to AzureCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ github.sha }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
           WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
           WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}
       - name: Push version-tagged WebAssembly binary to AzureCR
         if: ${{ startsWith(github.ref, steps.meta.outputs.ref-prefix) && github.repository_owner == 'wasmCloud' }}
         run: |
-          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.name }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
+          wash push wasmcloud.azurecr.io/${{ github.repository_owner }}/components/${{ matrix.project.folder }}-${{ matrix.project.lang }}:${{ steps.meta.outputs.version }} artifacts/${{ steps.meta.outputs.bin-name }}
         env:
           WASH_REG_USER: ${{ secrets.AZURECR_PUSH_USER }}
           WASH_REG_PASSWORD: ${{ secrets.AZURECR_PUSH_PASSWORD }}

@@ -1,5 +1,5 @@
 name = "typescript-http-hello-world"
-language = "typescript" 
+language = "typescript"
 type = "component"
 version = "0.1.0"
 
